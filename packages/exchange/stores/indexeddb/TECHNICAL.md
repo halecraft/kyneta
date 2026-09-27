@@ -5,11 +5,11 @@
 > **Depends on**: `@kyneta/exchange` (peer), `@kyneta/schema` (peer)
 > **Depended on by**: Browser applications that want client-side persistent storage behind an `Exchange`.
 > **Canonical symbols**: `IndexedDBStore`, `createIndexedDBStore`, `deleteIndexedDBStore`
-> **Key invariant(s)**: Every mutating `Store` method executes within a single IDB `readwrite` transaction spanning both object stores — a crash or tab close mid-transaction leaves either the old state or the new state, never a partial write. `replace()` deletes all existing records for a doc and writes the replacements in one transaction. Structured clone preserves `Uint8Array` and `string` natively, eliminating the binary envelope needed by LevelDB.
+> **Key invariant(s)**: Every mutating `Store` method executes within a single IDB `readwrite` transaction spanning both object stores — a crash or tab close mid-transaction leaves either the old state or the new state, never a partial write. `compact()` deletes a doc's records at or before a mark and writes the new ones in one transaction. Structured clone preserves `Uint8Array` and `string` natively, eliminating the binary envelope needed by LevelDB.
 
-A browser-side implementation of `@kyneta/exchange`'s `Store` interface. Maps the exchange's per-doc append / replace / load API onto two IndexedDB object stores: `meta` (keyed by `docId`) and `records` (auto-increment primary key with a `byDoc` index). IDB's structured clone algorithm serializes `StoreRecord` values directly — no custom encoding step.
+A browser-side implementation of `@kyneta/exchange`'s `Store` interface. Maps the exchange's per-doc append / compact / load API onto two IndexedDB object stores: `meta` (keyed by `docId`) and `records` (auto-increment primary key with a `byDoc` index). IDB's structured clone algorithm serializes `StoreRecord` values directly — no custom encoding step.
 
-Consumed by browser applications wiring `stores: [await createIndexedDBStore("my-db")]` into a `new Exchange(...)`. Not imported by any other Kyneta package; it is a leaf.
+Consumed by browser applications wiring `store: await createIndexedDBStore("my-db")` into a `new Exchange(...)`. Not imported by any other Kyneta package; it is a leaf.
 
 ---
 
@@ -20,14 +20,15 @@ Consumed by browser applications wiring `stores: [await createIndexedDBStore("my
 - Why no binary envelope? → [Why structured clone eliminates the binary envelope](#why-structured-clone-eliminates-the-binary-envelope)
 - Why auto-increment keys instead of zero-padded seqNo? → [Why auto-increment keys replace zero-padded seqNo](#why-auto-increment-keys-replace-zero-padded-seqno)
 - What are the IDB Promise wrappers? → [IDB Promise wrappers](#idb-promise-wrappers)
-- How does `replace()` avoid a partial write? → [`replace` is one transaction](#replace-is-one-transaction)
+- How does `compact()` avoid a partial write? → [`compact` is one transaction](#compact-is-one-transaction)
+- Can several tabs open one database? → [Why auto-increment keys replace zero-padded seqNo](#why-auto-increment-keys-replace-zero-padded-seqno)
 - Can two tabs share one store? → [What `IndexedDBStore` is NOT](#what-indexeddbstore-is-not)
 
 ## Vocabulary
 
 | Term | Means | Not to be confused with |
 |------|-------|-------------------------|
-| `Store` | The interface defined in `@kyneta/exchange` — `append`, `loadAll`, `replace`, `delete`, `currentMeta`, `listDocIds`, `close`. | A reactive store, a database with queries — this is an append/replace log keyed by doc |
+| `Store` | The interface defined in `@kyneta/exchange` — `append`, `loadAll`, `mark`, `compact`, `delete`, `currentMeta`, `listDocIds`, `close`. | A reactive store, a database with queries — this is an append log keyed by doc, compacted by mark |
 | `IndexedDBStore` | The concrete class that implements `Store` over the browser's IndexedDB API. | IndexedDB itself — this is a thin mapping layer |
 | `StoreMeta` | JSON-serializable per-doc metadata from `@kyneta/exchange`. Stored as a row in the `meta` object store and also present as a `meta`-kind record in the `records` stream. | `StoreRecord`, which is the union of meta and entry records |
 | `StoreRecord` | Discriminated union: `{ kind: "meta", meta: StoreMeta }` or `{ kind: "entry", payload: SubstratePayload, version: string }` — one appended piece of doc state. Stored as a `RecordRow` value in the `records` object store. | `StoreMeta` — a `StoreRecord` *contains* a `StoreMeta` when `kind === "meta"` |
@@ -59,7 +60,7 @@ Object store "store_meta": (store-global metadata, e.g. format version)
   value: { key, value }
 ```
 
-The `doc_meta` store is a **materialized index** — it stores the resolved `StoreMeta` for fast lookup via `currentMeta()` without scanning the record stream. Updated on every `meta`-kind `append` and during `replace`. (Renamed from `meta` to disambiguate from `store_meta`.) The `store_meta` store holds store-global facts keyed by an opaque `key` (the on-disk format version under `key = "format"`), read by a bootstrap reader on open — never through the `Store` interface. `DB_VERSION` was bumped 1 → 2 to introduce both via `onupgradeneeded`; that structural version is orthogonal to the data-format version held in `store_meta`.
+The `doc_meta` store is a **materialized index** — it stores the resolved `StoreMeta` for fast lookup via `currentMeta()` without scanning the record stream. Updated on every `meta`-kind `append` and during `compact`. (Renamed from `meta` to disambiguate from `store_meta`.) The `store_meta` store holds store-global facts keyed by an opaque `key` (the on-disk format version under `key = "format"`), read by a bootstrap reader on open — never through the `Store` interface. `DB_VERSION` was bumped 1 → 2 to introduce both via `onupgradeneeded`; that structural version is orthogonal to the data-format version held in `store_meta`.
 
 The entire package is one class plus two factories plus three IDB Promise wrappers:
 
@@ -89,13 +90,14 @@ The entire package is one class plus two factories plus three IDB Promise wrappe
 
 ## The `Store` contract
 
-Seven methods, each of which is either a single IDB transaction or a single index query:
+Eight methods, each of which is either a single IDB transaction or a single index query:
 
 | Method | IDB mapping |
 |--------|-------------|
 | `append(docId, record: StoreRecord)` | One `readwrite` transaction over both stores. If `record.kind === "meta"`: validate via `resolveMetaFromBatch`, `put` into `meta` store, `add` into `records` store. If `record.kind === "entry"`: require existing meta (read from `meta` store), `add` into `records` store. Transaction commits atomically. |
 | `loadAll(docId)` → `AsyncIterable<StoreRecord>` | One `readonly` transaction. `index("byDoc").getAll(docId)` returns `RecordRow[]` in auto-increment key order (insertion order). Yields each `row.record`. |
-| `replace(docId, records: StoreRecord[])` | One `readwrite` transaction. Read existing meta, validate via `resolveMetaFromBatch`. Delete all existing `RecordRow`s for this doc (via `byDoc` index keys), write replacements via `add`, update `meta` store with resolved `StoreMeta`. Atomic. |
+| `mark(docId)` → `StoreMark \| null` | One `readonly` transaction. A reverse key cursor over `byDoc` for `docId` gives the highest primary key: the mark of the doc's last record. |
+| `compact(docId, records, through)` | One `readwrite` transaction. Read existing meta, validate via `resolveMetaFromBatch`. Delete the doc's `RecordRow`s whose key is at or before `through` (none when `through` is `null`), `add` the new records, update `meta` store with resolved `StoreMeta`. Atomic. |
 | `delete(docId)` | One `readwrite` transaction. Delete from `meta` store, delete all `RecordRow`s for this doc via `byDoc` index keys. |
 | `currentMeta(docId)` → `StoreMeta \| null` | One `readonly` transaction. `meta.get(docId)` → `MetaRow \| undefined`. Return `row.meta` or `null`. |
 | `listDocIds(prefix?)` → `AsyncIterable<DocId>` | One `readonly` transaction on the `meta` store. If `prefix` is given, use `IDBKeyRange.bound(prefix, prefix + "\uffff")` to scope the scan. `getAllKeys(range)` returns matching `docId` strings. |
@@ -121,15 +123,16 @@ Result: zero encoding functions, zero decoding functions, zero flags bytes. The 
 
 Source: `packages/exchange/stores/indexeddb/src/index.ts` — `RECORDS_STORE` object store with `autoIncrement: true`.
 
-LevelDB sorts keys lexicographically, so the LevelDB store zero-pads a per-doc counter (`"0000000000000001"`) to make lex order equal numeric order. This requires a seqNo cache, cold-start recovery via reverse seek, and careful reset on `replace`.
+LevelDB sorts keys lexicographically, so the LevelDB store zero-pads a per-doc counter (`"0000000000000001"`) to make lex order equal numeric order. This requires a seqNo cache and cold-start recovery via reverse seek.
 
 IndexedDB's auto-increment key generator produces monotonically increasing integers within an object store, and `getAll` on an index returns results ordered by primary key (the auto-increment `id`). This means:
 
 1. **Insertion order is preserved automatically.** Records appended first have lower `id` values and sort first.
-2. **No counter to manage.** No in-memory cache, no cold-start seek, no reset bookkeeping on `replace`.
+2. **No counter to manage.** No in-memory cache, no cold-start seek.
 3. **No padding.** IDB keys are typed — numeric comparisons, not lexicographic.
+4. **Several tabs can open one database.** The key generator belongs to the object store, shared by every connection, so appends from several tabs get distinct keys. An in-memory counter per connection would hand two tabs the same position. The key is also the store's `StoreMark`.
 
-After a `replace`, the old rows are deleted and new rows are `add`ed. The new rows get fresh auto-increment IDs that are higher than any previous ID in the store, but since all old rows for the doc were deleted, `getAll` on the `byDoc` index returns only the replacements, in insertion order.
+A `compact` deletes the rows at or before its mark and `add`s new ones, which get fresh keys higher than any before, so they sort after every row that remains, including rows another tab appended after the mark.
 
 ---
 
@@ -151,27 +154,28 @@ IndexedDB's native API is event-based (`onsuccess`, `onerror`, `oncomplete`). Th
 
 ---
 
-## `replace` is one transaction
+## `compact` is one transaction
 
-Source: `packages/exchange/stores/indexeddb/src/index.ts` → `replace`.
+Source: `packages/exchange/stores/indexeddb/src/index.ts` → `compact`.
 
-`replace(docId, records)` is used when the substrate has compacted its state — the new records represent the entire doc and all previous records are now redundant. The batch must contain at least one `meta`-kind record (validated by `resolveMetaFromBatch`). The implementation:
+`compact(docId, records, through)` is used when the exchange has compacted a document: it read the records up to the mark `through`, took them in, and writes the whole document. Records at or after the mark that it did not read (another tab's) stay. The batch must contain at least one `meta`-kind record (validated by `resolveMetaFromBatch`). The implementation:
 
 1. Open a `readwrite` transaction spanning both `meta` and `records` stores.
 2. Read existing `StoreMeta` from the `meta` store inside the transaction for consistency.
 3. Validate via `resolveMetaFromBatch(records, existingMeta)` — at least one meta present, immutable fields match.
-4. Query the `byDoc` index for all existing primary keys for this `docId`, delete each one.
-5. `add` each replacement record as a new `RecordRow`.
+4. Query the `byDoc` index for this `docId`'s primary keys, and delete each at or before `through`.
+5. `add` each new record as a new `RecordRow`.
 6. `put` the resolved `StoreMeta` into the `meta` store.
 7. Await `txDone(tx)` — IDB guarantees atomicity across the entire transaction.
 
 A crash or tab close during the transaction leaves either the old state (transaction not committed) or the new state (transaction committed). There is no intermediate state where some deletes have happened and the new records have not been written.
 
-### What `replace` is NOT
+### What `compact` is NOT
 
-- **Not a compaction.** It is a caller-level operation. IDB has no background compaction concept.
-- **Not a transaction over metadata alone.** The materialized metadata in the `meta` store *is* updated as part of the same transaction — the resolved `StoreMeta` from the replacement records is written atomically alongside the record rows.
-- **Not reversible.** Previous records are gone after the transaction commits. The substrate is responsible for ensuring the replacement records constitute valid full state.
+- **Not a background process.** It is a caller-level operation. IDB has no background compaction concept.
+- **Not a transaction over metadata alone.** The materialized metadata in the `meta` store *is* updated as part of the same transaction — the resolved `StoreMeta` from the new records is written atomically alongside the record rows.
+- **Not a deletion of what it did not read.** Only records at or before the mark go.
+- **Not reversible.** Deleted records are gone after the transaction commits. The exchange is responsible for having taken in everything it deletes.
 
 ---
 
@@ -192,11 +196,11 @@ Types imported (not defined here): `Store`, `StoreRecord`, `StoreMeta`, `DocId`,
 | File | Role |
 |------|------|
 | `src/index.ts` | Entire public surface: IDB wrappers, row shapes, `IndexedDBStore`, `createIndexedDBStore`, `deleteIndexedDBStore`. |
-| `src/__tests__/indexeddb-storage.test.ts` | Conformance suite (`describeStore`) + IndexedDB-specific tests: close+reopen persistence, append-after-reopen ordering, replace+reopen, `listDocIds` after reopen, database isolation between separate `dbName`s, `deleteDatabase` cleanup. |
+| `src/__tests__/indexeddb-storage.test.ts` | Conformance suite (`describeStore`) + IndexedDB-specific tests: close+reopen persistence, append-after-reopen ordering, compact+reopen, `listDocIds` after reopen, database isolation between separate `dbName`s, `deleteDatabase` cleanup. |
 | `src/__tests__/setup.ts` | Imports `fake-indexeddb/auto` to provide the `indexedDB` global in Node.js test environments. |
 
 ## Testing
 
-Tests run against `fake-indexeddb` — a spec-compliant in-memory IndexedDB implementation for Node.js, imported globally via the setup file. Each test creates a unique database name (`kyneta-test-{timestamp}-{counter}`) and all databases are deleted in `afterAll`. The reusable `describeStore` conformance suite validates the full `Store` contract; additional test blocks cover close+reopen persistence, append ordering across reopens, replace+reopen, `listDocIds` after reopen, two-store isolation, and `deleteDatabase` cleanup. There are no mocks beyond `fake-indexeddb` itself.
+Tests run against `fake-indexeddb` — a spec-compliant in-memory IndexedDB implementation for Node.js, imported globally via the setup file. Each test creates a unique database name (`kyneta-test-{timestamp}-{counter}`) and all databases are deleted in `afterAll`. The reusable `describeStore` conformance suite validates the full `Store` contract, including two connections to one database (`secondInstance`); additional test blocks cover close+reopen persistence, append ordering across reopens, compact+reopen, `listDocIds` after reopen, two-store isolation, and `deleteDatabase` cleanup. There are no mocks beyond `fake-indexeddb` itself.
 
 **Run with**: `cd packages/exchange/stores/indexeddb && pnpm exec vitest run`

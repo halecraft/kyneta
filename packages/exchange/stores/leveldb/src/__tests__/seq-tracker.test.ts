@@ -32,16 +32,6 @@ describe("SeqNoTracker", () => {
     expect(await tracker.next("b", async () => 9)).toBe(11)
   })
 
-  it("reset sets the base for subsequent next calls", async () => {
-    const tracker = new SeqNoTracker()
-
-    expect(await tracker.next("doc-1", async () => null)).toBe(0)
-    expect(await tracker.next("doc-1", async () => null)).toBe(1)
-
-    tracker.reset("doc-1", 0) // e.g. replace with 1 record (seq 0)
-    expect(await tracker.next("doc-1", async () => null)).toBe(1)
-  })
-
   it("remove forces re-discovery on next access", async () => {
     const tracker = new SeqNoTracker()
     let discoverCalls = 0

@@ -8,7 +8,7 @@
 // Store interface, record types, and validation
 // ---------------------------------------------------------------------------
 
-export type { Store, StoreMeta, StoreRecord } from "./store.js"
+export type { Store, StoreMark, StoreMeta, StoreRecord } from "./store.js"
 export { resolveMetaFromBatch, validateAppend } from "./store.js"
 
 // ---------------------------------------------------------------------------
@@ -26,22 +26,18 @@ export {
 } from "./store-format.js"
 
 // ---------------------------------------------------------------------------
-// SeqNoTracker — shared per-document sequence number management
-// ---------------------------------------------------------------------------
-
-export { SeqNoTracker } from "./seq-tracker.js"
-
-// ---------------------------------------------------------------------------
 // InMemoryStore — Map-backed backend for testing
 // ---------------------------------------------------------------------------
 
 export {
+  createInMemoryStoreData,
   InMemoryStore,
   type InMemoryStoreData,
+  recordsOf,
 } from "./in-memory-store.js"
 
 // ---------------------------------------------------------------------------
-// createInMemoryStore — factory function for Exchange({ stores: [...] })
+// createInMemoryStore — factory function for Exchange({ store })
 // ---------------------------------------------------------------------------
 
 export { createInMemoryStore } from "./in-memory-store.js"

@@ -42,6 +42,27 @@ describeStore(
     cleanup: async backend => {
       await backend.close()
     },
+    // Two connections to one database, as two tabs have.
+    secondInstance: {
+      refused: false,
+      open: async () => {
+        const name = uniqueDbName()
+        dbNames.push(name)
+        const first = await IndexedDBStore.open(name)
+        const opened = [first]
+        return {
+          first,
+          openSecond: async () => {
+            const second = await IndexedDBStore.open(name)
+            opened.push(second)
+            return second
+          },
+          cleanup: async () => {
+            for (const store of opened) await store.close()
+          },
+        }
+      },
+    },
   },
 )
 
@@ -108,7 +129,7 @@ describe("IndexedDBStore — close + reopen", () => {
     await store2.close()
   })
 
-  it("replace then reopen preserves the replacement records", async () => {
+  it("compact then reopen preserves the compacted records", async () => {
     const name = uniqueDbName()
     dbNames.push(name)
 
@@ -116,10 +137,11 @@ describe("IndexedDBStore — close + reopen", () => {
     await store1.append("doc-1", makeMetaRecord())
     await store1.append("doc-1", makeEntryRecord("since", "v1"))
     await store1.append("doc-1", makeEntryRecord("since", "v2"))
-    await store1.replace("doc-1", [
-      makeMetaRecord(),
-      makeEntryRecord("entirety", "v3"),
-    ])
+    await store1.compact(
+      "doc-1",
+      [makeMetaRecord(), makeEntryRecord("entirety", "v3")],
+      await store1.mark("doc-1"),
+    )
     await store1.close()
 
     const store2 = await IndexedDBStore.open(name)

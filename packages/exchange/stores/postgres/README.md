@@ -23,7 +23,7 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL })
 const store = await createPostgresStore(fromPool(pool))
 
 const exchange = new Exchange({
-  stores: [store],
+  store,
   // ...
 })
 

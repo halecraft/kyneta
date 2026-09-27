@@ -163,7 +163,7 @@ describe("two lineages of a plain document", () => {
       },
     })
     const bridge = new Bridge()
-    const loser = open("loser", [bridge], { stores: [held] })
+    const loser = open("loser", [bridge], { store: held })
     const winner = open("winner", [bridge])
     await drain()
 

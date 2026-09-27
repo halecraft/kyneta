@@ -247,15 +247,21 @@ export {
 // Storage — persistent storage adapters
 // ---------------------------------------------------------------------------
 
-export type { Store, StoreMeta, StoreRecord } from "./store/index.js"
+export type {
+  Store,
+  StoreMark,
+  StoreMeta,
+  StoreRecord,
+} from "./store/index.js"
 export {
   createInMemoryStore,
+  createInMemoryStoreData,
   decideStoreFormat,
   InMemoryStore,
   type InMemoryStoreData,
   parseStoreFormat,
+  recordsOf,
   resolveMetaFromBatch,
-  SeqNoTracker,
   STORE_META_FORMAT_KEY,
   type StoreFormatDecision,
   type StoreFormatRefusal,

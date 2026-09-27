@@ -178,7 +178,12 @@ export type SyncInput =
       supportedHashes?: readonly string[]
       event?: DocChange
     }
-  | { type: "sync/local-doc-change"; docId: DocId; version: string }
+  /**
+   * The document advanced by a route other than the network: a local write,
+   * or records a compaction took in from the store. `version` is its version
+   * now.
+   */
+  | { type: "sync/doc-advanced"; docId: DocId; version: string }
   | { type: "sync/doc-delete"; docId: DocId; event?: DocChange }
   | { type: "sync/doc-dismiss"; docId: DocId; event?: DocChange }
   | {
@@ -941,8 +946,8 @@ export function createSyncUpdate(
         return handleDocEnsure(input, model, canShare)
       case "sync/doc-defer":
         return handleDocDefer(input, model, canShare)
-      case "sync/local-doc-change":
-        return handleLocalDocChange(input, model, canShare)
+      case "sync/doc-advanced":
+        return handleDocAdvanced(input, model, canShare)
       case "sync/doc-delete":
         return handleDocDelete(input, model)
       case "sync/doc-dismiss":
@@ -1227,8 +1232,8 @@ function handleDocDefer(
   return present ? [updatedModel, present] : [updatedModel]
 }
 
-function handleLocalDocChange(
-  msg: Extract<SyncInput, { type: "sync/local-doc-change" }>,
+function handleDocAdvanced(
+  msg: Extract<SyncInput, { type: "sync/doc-advanced" }>,
   model: SyncModel,
   canShare: SyncPredicate,
 ): [SyncModel, ...SyncEffect[]] {
@@ -1237,9 +1242,9 @@ function handleLocalDocChange(
 
   const documents = new Map(model.documents)
   documents.set(msg.docId, { ...docEntry, version: msg.version })
-  // No state-advanced: the Runtime requested persistence for this change
-  // before it told us about it. State-advanced reports what the network
-  // moved.
+  // No state-advanced: the Runtime persists this advance itself, a local
+  // write through its drain and a compaction's merge by the compaction.
+  // State-advanced reports what the network moved.
   return buildPush(msg.docId, { ...model, documents }, canShare)
 }
 
@@ -1651,9 +1656,9 @@ function handleInterest(
 
   // A document can leave this peer by four paths, and all four consult
   // `canShare`: announcing it (`handlePeerAvailable`, `announceDoc`), pushing
-  // a local change (`handleLocalDocChange`), relaying an imported one
-  // (`handleDocImported`) — and this one, answering a peer that asked for it
-  // by name. If you add a fifth, gate it here too; the invariant test in
+  // a local change or a compaction's merge (`handleDocAdvanced`), relaying an
+  // imported one (`handleDocImported`) — and this one, answering a peer that
+  // asked for it by name. If you add a fifth, gate it here too; the invariant test in
   // `sync-program.test.ts` ("no outbound effect reaches a vetoed peer") is
   // what will fail if you forget.
   //

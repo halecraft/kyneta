@@ -16,6 +16,7 @@ import { Runtime } from "../runtime.js"
 import { whenHydrated } from "../settle.js"
 import {
   createInMemoryStore,
+  createInMemoryStoreData,
   type InMemoryStoreData,
 } from "../store/in-memory-store.js"
 
@@ -35,7 +36,7 @@ async function drain(ms = 50): Promise<void> {
 }
 
 function freshStore(): InMemoryStoreData {
-  return { records: new Map(), metadata: new Map() }
+  return createInMemoryStoreData()
 }
 
 /** What a test needs to write on, and read from, one backend's documents. */
@@ -62,7 +63,7 @@ function localWrites<D extends object>(backend: Backend<D>): void {
       const alice = new Exchange({
         id: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
-        stores: [createInMemoryStore({ sharedData: store })],
+        store: createInMemoryStore({ sharedData: store }),
       })
       const bob = new Exchange({
         id: "bob",
@@ -79,7 +80,7 @@ function localWrites<D extends object>(backend: Backend<D>): void {
     async function reload(store: InMemoryStoreData): Promise<D> {
       const restarted = new Exchange({
         id: "alice",
-        stores: [createInMemoryStore({ sharedData: store })],
+        store: createInMemoryStore({ sharedData: store }),
       })
       exchanges.push(restarted)
       const doc = backend.open(restarted)
@@ -311,7 +312,7 @@ describe("a destroyed document", () => {
     // would be persisted and pushed on its behalf.
     const runtime = new Runtime({
       peerId: "alice",
-      stores: [createInMemoryStore()],
+      store: createInMemoryStore(),
     })
     const old = runtime.get("doc", yjsDoc)
     await whenHydrated(old)

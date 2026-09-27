@@ -5,11 +5,11 @@
 > **Depends on**: `classic-level`, `@kyneta/exchange` (peer), `@kyneta/schema` (peer)
 > **Depended on by**: Applications that run a long-lived server process and want on-disk persistence behind an `Exchange`.
 > **Canonical symbols**: `LevelDBStore`, `createLevelDBStore`, `encodeStoreRecord`, `decodeStoreRecord`
-> **Key invariant(s)**: Every `Store` method is either an atomic LevelDB operation (`put`, `batch`) or a prefix iteration — no read-modify-write races. Both `append()` and `replace()` commit through a single `batch`: a meta-record `append` writes the record and the doc-meta index together, and `replace()` deletes every existing record and writes the replacements — so a crash can never leave a partial state (the doc-meta index advanced past its backing record, or some deletes applied without the new records).
+> **Key invariant(s)**: Every `Store` method is either an atomic LevelDB operation (`put`, `batch`) or a prefix iteration — no read-modify-write races. Both `append()` and `compact()` commit through a single `batch`: a meta-record `append` writes the record and the doc-meta index together, and `compact()` deletes the records at or before a mark and writes the new ones after the rest — so a crash can never leave a partial state (the doc-meta index advanced past its backing record, or some deletes applied without the new records).
 
-An on-disk implementation of `@kyneta/exchange`'s `Store` interface. Maps the exchange's per-doc append / replace / load API onto LevelDB keys using a FoundationDB-style null-byte separator and a zero-padded monotonic `seqNo` per doc. The seqNo is cached in memory and lazily discovered on first append after a cold start via a single reverse-iterator seek.
+An on-disk implementation of `@kyneta/exchange`'s `Store` interface. Maps the exchange's per-doc append / compact / load API onto LevelDB keys using a FoundationDB-style null-byte separator and a zero-padded monotonic `seqNo` per doc. The seqNo is cached in memory and lazily discovered on first append after a cold start via a single reverse-iterator seek.
 
-Consumed by server applications wiring `stores: [createLevelDBStore("./data")]` into a `new Exchange(...)`. Not imported by any other Kyneta package; it is a leaf.
+Consumed by server applications wiring `store: createLevelDBStore("./data")` into a `new Exchange(...)`. Not imported by any other Kyneta package; it is a leaf.
 
 ---
 
@@ -19,20 +19,21 @@ Consumed by server applications wiring `stores: [createLevelDBStore("./data")]` 
 - Why `\x00` as a key separator? → [Key-space design](#key-space-design)
 - Why zero-padded `seqNo` instead of a numeric index? → [Why zero-padded seqNo](#why-zero-padded-seqno)
 - How is the seqNo counter recovered after a restart? → [SeqNo lifecycle](#seqno-lifecycle)
-- How does `replace()` avoid a partial write? → [`replace` is one batch](#replace-is-one-batch)
+- How does `compact()` avoid a partial write? → [`compact` is one batch](#compact-is-one-batch)
+- Why may the sequence numbers live in memory here, when the SQL stores read them from the table? → [SeqNo lifecycle](#seqno-lifecycle)
 - How is a `StoreRecord` laid out on disk? → [Binary envelope v2](#binary-envelope-v2)
 
 ## Vocabulary
 
 | Term | Means | Not to be confused with |
 |------|-------|-------------------------|
-| `Store` | The interface defined in `@kyneta/exchange` — `append`, `loadAll`, `replace`, `delete`, `currentMeta`, `listDocIds`, `close`. | A reactive store, a database with queries — this is an append/replace log keyed by doc |
+| `Store` | The interface defined in `@kyneta/exchange` — `append`, `loadAll`, `mark`, `compact`, `delete`, `currentMeta`, `listDocIds`, `close`. | A reactive store, a database with queries — this is an append log keyed by doc, compacted by mark |
 | `LevelDBStore` | The concrete class that implements `Store` over `classic-level`. | LevelDB itself — this is a thin mapping layer |
 | `classic-level` | The npm package that provides the LevelDB binding used here. | `level` (older abstract-level API), `leveldown` (C++ binding alone) |
 | `StoreMeta` | JSON-serializable per-doc metadata from `@kyneta/exchange`. Materialized at `meta\x00{docId}` and also stored as a `meta`-kind record in the stream. | `StoreRecord`, which is the union of meta and entry records |
 | `StoreRecord` | Discriminated union: `{ kind: "meta", meta: StoreMeta }` or `{ kind: "entry", payload: SubstratePayload, version: string }` — one appended piece of doc state. Stored at `record\x00{docId}\x00{seqNo}`. | `StoreMeta` — a `StoreRecord` *contains* a `StoreMeta` when `kind === "meta"` |
 | `SubstratePayload` | The exchange's opaque state-transfer shape, with `kind: "entirety" \| "since"`, `encoding: "json" \| "binary"`, and `data`. Produced and consumed by the substrate; this package only serializes it. | The decoded `ChannelMsg` — payloads ride *inside* offers |
-| `seqNo` | Zero-padded 16-digit monotonic counter per doc. Resets to 0 after `replace`. | A Lamport clock, a vector clock — this is only a local disk ordering |
+| `seqNo` | Zero-padded 16-digit monotonic counter per doc, and the store's `StoreMark`. Never reset: a compaction writes after every record that remains. | A Lamport clock, a vector clock — this is only a local disk ordering |
 | `SEP` | The `\x00` null-byte separator. | A newline, a slash, a dot — null is chosen because it cannot appear in valid UTF-8 text |
 | `META_PREFIX` / `RECORD_PREFIX` | The two top-level key namespaces: `"meta\x00"` and `"record\x00"`. | Two separate databases — they share one LevelDB instance |
 
@@ -40,7 +41,7 @@ Consumed by server applications wiring `stores: [createLevelDBStore("./data")]` 
 
 ## Architecture
 
-**Thesis**: the cheapest way to persist a "per-doc append log with atomic replace" is to map it directly onto LevelDB's sorted byte key space, using a null-byte separator so docIds never need validation and a zero-padded counter so lexicographic order equals numeric order.
+**Thesis**: the cheapest way to persist a "per-doc append log with atomic compaction" is to map it directly onto LevelDB's sorted byte key space, using a null-byte separator so docIds never need validation and a zero-padded counter so lexicographic order equals numeric order.
 
 The entire package is one class plus one factory plus a pair of pure envelope functions:
 
@@ -67,13 +68,14 @@ The entire package is one class plus one factory plus a pair of pure envelope fu
 
 ## The `Store` contract
 
-Seven methods, each of which is either a single LevelDB op or a single prefix iteration:
+Eight methods, each of which is either a single LevelDB op or a single prefix iteration:
 
 | Method | LevelDB mapping |
 |--------|-----------------|
 | `append(docId, record: StoreRecord)` | Gather (existing meta, next seqNo) → pure `planAppend` → one atomic `batch`. A `meta` record: a `batch` of `{ put(recordKey(seq), encoded), put(docMetaKey, JSON) }`. An `entry` record: a one-op `batch` of `put(recordKey(seq), encoded)` (requires existing meta). Never two sequential writes. |
 | `loadAll(docId)` → `AsyncIterable<StoreRecord>` | `db.values({ gte: prefix, lt: prefix + "\xff" })` in key order |
-| `replace(docId, records: StoreRecord[])` | Collect existing record keys, issue one `batch` that deletes all and writes the replacements starting at `recordKey(0)` — atomic. Must contain at least one `meta` record; materialized index is updated. |
+| `mark(docId)` → `StoreMark \| null` | The seqNo of the doc's last record: one reverse-iterator seek, limited to one key. |
+| `compact(docId, records, through)` | Collect the record keys at or before `recordKey(through)`, issue one `batch` that deletes them and writes the new records at the next seqNos — atomic. Must contain at least one `meta` record; materialized index is updated. |
 | `delete(docId)` | Collect `[metaKey, ...recordKeys]`, one `batch` of `del`s — atomic |
 | `currentMeta(docId)` → `StoreMeta \| null` | `db.get(metaKey)`; `LEVEL_NOT_FOUND` → `null` |
 | `listDocIds(prefix?)` → `AsyncIterable<DocId>` | Iterate `meta\x00{prefix}*` keys, slice the prefix |
@@ -100,7 +102,7 @@ Two observations drove this layout:
 1. **`\x00` cannot appear in valid UTF-8 strings.** The null byte is not a legal continuation byte, not a legal start byte, and not representable in a well-formed UTF-8 string. This means no docId — whatever characters it contains — can collide with the separator or "escape" its prefix. The store imposes zero naming constraints on the exchange.
 2. **LevelDB orders keys lexicographically.** Within a record namespace, keys for one doc sort together; within one doc, keys sort by `seqNo`. Prefix iteration with `{ gte: prefix, lt: prefix + "\xff" }` scans exactly the keys in a prefix.
 
-The `meta\x00{docId}` key is a **materialized index** — it stores the resolved `StoreMeta` for fast lookup without scanning the record stream. It is updated on every `meta`-kind `append` and during `replace`.
+The `meta\x00{docId}` key is a **materialized index** — it stores the resolved `StoreMeta` for fast lookup without scanning the record stream. It is updated on every `meta`-kind `append` and during `compact`.
 
 ### What `\x00` separators are NOT
 
@@ -127,15 +129,14 @@ Sixteen digits is enough for 10^16 appends per doc — far beyond any conceivabl
 
 ## SeqNo lifecycle
 
-Source: `packages/exchange/stores/leveldb/src/index.ts` → `#seqNos`; `packages/exchange/src/store/seq-tracker.ts` → `SeqNoTracker`.
+Source: `packages/exchange/stores/leveldb/src/index.ts` → `#nextSeq`, `#lastSeq`; `src/seq-tracker.ts` → `SeqNoTracker`.
 
-The store delegates to a shared `SeqNoTracker` (`#seqNos`) — an in-memory `Map<DocId, number>` of the most recently used seqNo per doc, extracted so every backend shares one implementation. Three phases:
+The store keeps a `SeqNoTracker` (`#seqNos`) — an in-memory `Map<DocId, number>` of the most recently used seqNo per doc. A cache is sound only because `classic-level` refuses a second open of a directory, so this instance is the only writer; the stores whose storage several instances open (IndexedDB, the SQL family) take positions from the storage instead, and the conformance suite checks that a second LevelDB open fails. Two phases:
 
 | Phase | Mechanism |
 |-------|-----------|
 | Steady state | `#seqNos.next(docId, discover)` reads the cache, increments, writes back. One write per `append` (a single `batch`). |
 | Cold start (first `append` to a doc after process restart) | Cache miss. Issue a single reverse-iterator seek: `db.keys({ gte: prefix, lt: prefix + "\xff", reverse: true, limit: 1 })`. Parse the one returned key to get `maxSeq`, cache `maxSeq + 1`. |
-| After `replace(docId, records)` | Batch atomically deletes every existing record and writes the replacements starting at `seqNo = 0`. Cache is reset to `records.length - 1`. |
 
 The cold-start seek is **one** reverse iteration limited to one result. It is O(log n) in LevelDB's LSM structure, not O(n). No full scan.
 
@@ -143,29 +144,30 @@ The cold-start seek is **one** reverse iteration limited to one result. It is O(
 
 - **Not a write buffer.** Values are written straight through to LevelDB. The cache only holds the next seqNo to assign.
 - **Not consulted on reads.** `loadAll` iterates keys directly; the cache exists only to avoid a seek per append.
-- **Not shared across processes.** Single-writer assumption — another process appending to the same dbPath would fork the seqNo space and break ordering.
+- **Not shared across processes.** `classic-level` locks the directory, so no other process can append to it.
 - **Not invariably dense.** `next()` advances the in-memory counter *before* the `batch` lands. If a write fails and the process keeps running (a caught error, not a crash), the counter sits one ahead of disk, so the next append leaves a gap. This is harmless — `seqNo` is range-scanned, never indexed contiguously, and never escapes the backend — and it self-heals on reopen, where the cold-start seek re-seeds from the on-disk max. A gap is never a collision, since `next()` only increases and a skipped value is never reused within the process. (On a crash, the in-memory counter is gone entirely and is rebuilt from disk.)
 
 ---
 
-## `replace` is one batch
+## `compact` is one batch
 
-Source: `packages/exchange/stores/leveldb/src/index.ts` → `replace`.
+Source: `packages/exchange/stores/leveldb/src/index.ts` → `compact`.
 
-`replace(docId, records)` is used when the substrate has compacted its state — the new records represent the entire doc and all previous records are now redundant. The batch must contain at least one `meta`-kind record (validated by `resolveMetaFromBatch`). The implementation:
+`compact(docId, records, through)` is used when the exchange has compacted a document: it read the records up to the mark `through` (a seqNo), took them in, and writes the whole document. The batch must contain at least one `meta`-kind record (validated by `resolveMetaFromBatch`). The implementation:
 
-1. Iterate the doc's record prefix and collect existing keys into an array.
-2. Construct a single `batch` operation: one `del` per existing key, plus one `put` per new record at `recordKey(docId, 0)`, `recordKey(docId, 1)`, etc. Also `put` the resolved `StoreMeta` at `metaKey(docId)`.
+1. Iterate the doc's record keys from the prefix up to `recordKey(docId, through)`, and collect them (none when `through` is `null`).
+2. Construct a single `batch` operation: one `del` per collected key, plus one `put` per new record at the next seqNos, after every record that remains. Also `put` the resolved `StoreMeta` at `metaKey(docId)`.
 3. Call `db.batch(ops)` — LevelDB guarantees atomicity across the entire batch.
-4. Reset `#seqNos.set(docId, records.length - 1)`.
 
 A crash during the batch leaves either the old state (batch not committed) or the new state (batch committed). There is no intermediate state where some deletes have happened and the new records have not been written.
 
-### What `replace` is NOT
+The new records take the next seqNos rather than restarting at 0. The earlier `replace` wrote from 0 without resetting the counter, so a compaction that wrote more records than the counter's high mark left the next append on top of one of them.
 
-- **Not a compaction.** It is a caller-level operation. LevelDB's own SST compaction is independent and opaque.
-- **Not a transaction over metadata.** The materialized metadata index at `meta\x00{docId}` *is* updated as part of the same batch — the resolved `StoreMeta` from the replacement records is written atomically alongside the record keys.
-- **Not reversible.** Previous records are gone after the batch commits. The substrate is responsible for ensuring the replacement records constitute valid full state.
+### What `compact` is NOT
+
+- **Not LevelDB's compaction.** It is a caller-level operation. LevelDB's own SST compaction is independent and opaque.
+- **Not a transaction over metadata.** The materialized metadata index at `meta\x00{docId}` *is* updated as part of the same batch — the resolved `StoreMeta` from the new records is written atomically alongside the record keys.
+- **Not reversible.** Deleted records are gone after the batch commits. The exchange is responsible for having taken in everything it deletes.
 
 ---
 
@@ -276,7 +278,9 @@ Types imported (not defined here): `Store`, `StoreRecord`, `StoreMeta`, `DocId` 
 | File | Role |
 |------|------|
 | `src/index.ts` | Entire public surface: envelope v2, key helpers, `LevelDBStore`, `createLevelDBStore`. |
-| `src/__tests__/leveldb-storage.test.ts` | Full integration tests: conformance suite, close+reopen persistence, `currentMeta` lookup, append ordering, `loadAll` iteration order, cold-start seqNo discovery, `replace` atomicity, `delete`, `listDocIds` with prefix, envelope round-trips (meta + entry kinds, edge cases, flags-byte assertions). |
+| `src/seq-tracker.ts` | `SeqNoTracker`: the in-memory seqNo cache. LevelDB's alone, since only a store with one writer may keep one. |
+| `src/__tests__/seq-tracker.test.ts` | `SeqNoTracker`'s discovery and increments. |
+| `src/__tests__/leveldb-storage.test.ts` | Full integration tests: conformance suite (a second open refused), close+reopen persistence, `currentMeta` lookup, append ordering, `loadAll` iteration order, cold-start seqNo discovery, `compact` then reopen then append, `delete`, `listDocIds` with prefix, envelope round-trips (meta + entry kinds, edge cases, flags-byte assertions). |
 
 ## Testing
 

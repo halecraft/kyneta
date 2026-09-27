@@ -1,13 +1,12 @@
-// seq-tracker — shared per-document monotonic sequence number tracker.
+// seq-tracker — per-document monotonic sequence numbers, kept in memory.
 //
-// Manages an in-memory cache of the highest-used seqNo per document.
 // On first access for a given docId, the caller-provided `discover`
-// callback resolves the current maximum from the backend (e.g. a
-// reverse-iterator seek in LevelDB, or `SELECT MAX(seq)` in SQLite).
+// callback resolves the current maximum from disk (a reverse-iterator seek).
 // Subsequent calls return the next value from the cache without I/O.
 //
-// This pattern was originally inline in LevelDBStore. Extracting it
-// as a shared utility prevents duplication across store backends.
+// A cache is sound only for a store with one writer. LevelDB is one:
+// `classic-level` refuses a second open of a directory. Stores whose storage
+// several instances open assign positions from the storage instead.
 
 // ---------------------------------------------------------------------------
 // SeqNoTracker
@@ -33,10 +32,6 @@ export class SeqNoTracker {
     const next = (maxSeq ?? -1) + 1
     this.#cache.set(docId, next)
     return next
-  }
-
-  reset(docId: string, value: number): void {
-    this.#cache.set(docId, value)
   }
 
   remove(docId: string): void {

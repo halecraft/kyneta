@@ -2,7 +2,7 @@
 //
 // The Exchange class is the central orchestrator for substrate-agnostic
 // state synchronization. It manages document lifecycle, coordinates
-// transports and stores, and provides the main API for
+// transports and a store, and provides the main API for
 // document operations.
 //
 // Storage is coordinated via a pure Mealy machine (store-program) that
@@ -14,7 +14,7 @@
 //   const exchange = new Exchange({
 //     id: "alice",
 //     transports: [createWebsocketClient({ url: "ws://localhost:3000/ws" })],
-//     stores: [createInMemoryStore()],
+//     store: createInMemoryStore(),
 //   })
 //
 //   const TodoDoc = loro.bind(Schema.struct({ title: Schema.text() }))  // loro from @kyneta/loro-schema
@@ -129,12 +129,12 @@ export type PeerIdentityInput = {
  * {@link Runtime}. Used by the rare {@link Exchange} constructor overload:
  *
  * ```ts
- * const runtime = new Runtime({ peerId: "alice", stores: [...] })
+ * const runtime = new Runtime({ peerId: "alice", store: ... })
  * const exchange = new Exchange(runtime, { transports: [...] })
  * ```
  *
  * Excludes `id` (derived from `runtime.peerId`) and all local concerns
- * (`stores`, `lease`, `tickInterval`, `onStoreError`) — those live in the Runtime.
+ * (`store`, `lease`, `tickInterval`, `onStoreError`) — those live in the Runtime.
  */
 export type ExchangeNetworkParams = {
   transports?: AnyTransport[]
@@ -147,7 +147,7 @@ export type ExchangeNetworkParams = {
  * Options for creating an Exchange via the primary (flat) constructor.
  *
  * The Exchange is the **network shell** — it owns transports, peers,
- * governance, and the sync graph. Local concerns (stores, lease, clock)
+ * governance, and the sync graph. Local concerns (store, lease, clock)
  * are accepted here as flat fields and used to construct an internal
  * {@link Runtime}. The Runtime is an implementation detail — users of
  * this constructor never interact with it directly.
@@ -198,13 +198,13 @@ export type ExchangeParams = {
   transports?: AnyTransport[]
 
   /**
-   * Stores for persistent document storage.
+   * The store documents persist to and load from.
    *
    * ```typescript
-   * stores: [createInMemoryStore()]
+   * store: createInMemoryStore()
    * ```
    */
-  stores?: Store[]
+  store?: Store
 
   /**
    * Called when a store operation fails. Receives the docId, operation
@@ -278,7 +278,7 @@ export type { DocCacheEntry } from "./runtime.js"
  * state synchronization.
  *
  * It manages the lifecycle of documents, coordinates subsystems (transports,
- * synchronizer, stores), and provides the main public API for
+ * synchronizer, store), and provides the main public API for
  * document operations.
  *
  * A single Exchange can host documents backed by different substrate types
@@ -293,7 +293,7 @@ export type { DocCacheEntry } from "./runtime.js"
  * const exchange = new Exchange({
  *   id: "alice",
  *   transports: [createWebsocketClient({ url: "ws://localhost:3000/ws", WebSocket })],
- *   stores: [createInMemoryStore()],
+ *   store: createInMemoryStore(),
  * })
  *
  * const TodoDoc = loro.bind(Schema.struct({ title: Schema.text() }))
@@ -323,7 +323,7 @@ export class Exchange {
   readonly #capabilities: Capabilities
   readonly #synchronizer: Synchronizer
 
-  /** The local imperative shell — owns documents, stores, lease, clock. */
+  /** The local imperative shell — owns documents, store, lease, clock. */
   readonly #runtime: Runtime
 
   readonly peers: ReactiveMap<PeerId, PeerIdentityDetails, PeerChange>
@@ -332,10 +332,10 @@ export class Exchange {
   /**
    * **Primary path (90% case)** — construct an Exchange from flat params.
    * The Exchange constructs its own {@link Runtime} internally from the
-   * local concerns (`stores`, `lease`, `tickInterval`, `onStoreError`).
+   * local concerns (`store`, `lease`, `tickInterval`, `onStoreError`).
    *
    * ```typescript
-   * new Exchange({ id: "alice", transports: [...], stores: [...] })
+   * new Exchange({ id: "alice", transports: [...], store: ... })
    * ```
    */
   constructor(params: ExchangeParams)
@@ -348,7 +348,7 @@ export class Exchange {
    * The `peerId` is derived from `runtime.peerId` — do not pass `id`.
    *
    * ```typescript
-   * const runtime = new Runtime({ peerId: "alice", stores: [...] })
+   * const runtime = new Runtime({ peerId: "alice", store: ... })
    * const exchange = new Exchange(runtime, { transports: [...] })
    * ```
    */
@@ -372,7 +372,7 @@ export class Exchange {
       validatePeerId(peerId)
       this.#runtime = new Runtime({
         peerId,
-        stores: params.stores,
+        store: params.store,
         onStoreError: params.onStoreError,
         lease: params.lease,
         tickInterval: params.tickInterval,
@@ -553,11 +553,11 @@ export class Exchange {
       onDocReady: info => this.#synchronizer.registerDoc(info),
       onDocChangeset: (docId, changeset) => {
         // Observation only: the changeset feed is for readers. What leaves
-        // the process follows `onDocLocalChange`.
+        // the process follows `onDocAdvanced`.
         this.#synchronizer.observeDocChangeset(docId, changeset)
       },
-      onDocLocalChange: docId => {
-        this.#synchronizer.notifyLocalChange(docId)
+      onDocAdvanced: docId => {
+        this.#synchronizer.notifyAdvanced(docId)
       },
       onDocPublishable: docId => {
         this.#synchronizer.notifyPublishable(docId)
@@ -719,7 +719,7 @@ export class Exchange {
    * document's shape. A schema that cannot read it throws, naming the axis
    * that disagrees.
    *
-   * The ref is returned synchronously. If stores are configured,
+   * The ref is returned synchronously. If a store is configured,
    * hydration happens asynchronously — the ref starts empty and the
    * changefeed fires when stored data is merged. The synchronizer only
    * learns about the doc after hydration completes, so present/interest
@@ -1074,7 +1074,7 @@ export class Exchange {
 
   /**
    * Destroy a document — remove it locally, broadcast `dismiss` to
-   * all peers, and delete from stores.
+   * all peers, and delete from the store.
    *
    * This is the single public API for document removal. For bulk
    * teardown without per-doc notification, use `reset()` or `shutdown()`.
@@ -1088,7 +1088,7 @@ export class Exchange {
   /**
    * Suspend a document — leave the sync graph but keep all local state.
    *
-   * The document remains in `#docCache` and stores, and `exchange.has()`
+   * The document remains in `#docCache` and the store, and `exchange.has()`
    * still returns `true`. The sync model removes the document and
    * broadcasts a wire `dismiss` message to peers. Call `resume()` to
    * re-enter the sync graph.
@@ -1243,8 +1243,8 @@ export class Exchange {
    * Gracefully shut down: flush all pending store operations, then
    * disconnect all transports and clean up resources.
    *
-   * This is the recommended way to stop an Exchange when using persistent
-   * stores.
+   * This is the recommended way to stop an Exchange when using a persistent
+   * store.
    */
   async shutdown(): Promise<void> {
     await this.#runtime.shutdown()

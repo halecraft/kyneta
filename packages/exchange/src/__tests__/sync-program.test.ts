@@ -1200,7 +1200,7 @@ describe("sync-program", () => {
 
       const [, effects] = applyUpdate(
         update,
-        { type: "sync/local-doc-change", docId: "doc-1", version: "v2" },
+        { type: "sync/doc-advanced", docId: "doc-1", version: "v2" },
         model,
       )
       expect(effectsOfType(effects, "send-offers")).toEqual([])
@@ -1218,7 +1218,7 @@ describe("sync-program", () => {
       const { update, model: before } = bothInterested()
       const [pushed, effects] = applyUpdate(
         update,
-        { type: "sync/local-doc-change", docId: "doc-1", version: "v2" },
+        { type: "sync/doc-advanced", docId: "doc-1", version: "v2" },
         before,
       )
       expect(effectsOfType(effects, "send-offers")).toEqual([
@@ -1238,7 +1238,7 @@ describe("sync-program", () => {
       // which covers it.
       const [again] = applyUpdate(
         update,
-        { type: "sync/local-doc-change", docId: "doc-1", version: "v3" },
+        { type: "sync/doc-advanced", docId: "doc-1", version: "v3" },
         pushed,
       )
       expect(owed(again, "bob")).toEqual({ since: "v1" })
@@ -1254,7 +1254,7 @@ describe("sync-program", () => {
       let model = before
       ;[model] = applyUpdate(
         update,
-        { type: "sync/local-doc-change", docId: "doc-1", version: "v2" },
+        { type: "sync/doc-advanced", docId: "doc-1", version: "v2" },
         model,
       )
       // Carol's push went out; bob's was withheld.
@@ -1302,7 +1302,7 @@ describe("sync-program", () => {
       const { update, model: before } = bothInterested()
       const [pushed] = applyUpdate(
         update,
-        { type: "sync/local-doc-change", docId: "doc-1", version: "v2" },
+        { type: "sync/doc-advanced", docId: "doc-1", version: "v2" },
         before,
       )
       const vetoBob = makeUpdate({
@@ -1336,7 +1336,7 @@ describe("sync-program", () => {
       const { update, model: before } = bothInterested()
       const [pushed] = applyUpdate(
         update,
-        { type: "sync/local-doc-change", docId: "doc-1", version: "v2" },
+        { type: "sync/doc-advanced", docId: "doc-1", version: "v2" },
         before,
       )
       expect(owed(pushed, "bob")).toEqual({ since: "v1" })
@@ -1374,7 +1374,7 @@ describe("sync-program", () => {
 
       const [model, effects] = applyUpdate(
         update,
-        { type: "sync/local-doc-change", docId: "doc-1", version: "v3" },
+        { type: "sync/doc-advanced", docId: "doc-1", version: "v3" },
         relayed,
       )
       expect(effectsOfType(effects, "send-offers")).toEqual([
@@ -1450,7 +1450,7 @@ describe("sync-program", () => {
 
       const [, effects] = applyUpdate(
         update,
-        { type: "sync/local-doc-change", docId: "doc-1", version: "v2" },
+        { type: "sync/doc-advanced", docId: "doc-1", version: "v2" },
         returned,
       )
       expect(effectsOfType(effects, "send-offers")).toEqual([
@@ -1798,7 +1798,7 @@ describe("sync-program", () => {
 
       const [, effects] = applyUpdate(
         update,
-        { type: "sync/local-doc-change", docId: "doc-1", version: "v2" },
+        { type: "sync/doc-advanced", docId: "doc-1", version: "v2" },
         model,
       )
       expect(effectsOfType(effects, "send-offers")).toEqual([
@@ -2085,16 +2085,16 @@ describe("sync-program", () => {
   })
 
   // -----------------------------------------------------------------------
-  // sync/local-doc-change
+  // sync/doc-advanced
   // -----------------------------------------------------------------------
-  describe("sync/local-doc-change", () => {
+  describe("sync/doc-advanced", () => {
     it("updates doc version in model", () => {
       const update = makeUpdate()
       let model = initSync(alice)
       ;[model] = ensureDoc(update, model, "doc-1")
 
       ;[model] = update(
-        { type: "sync/local-doc-change", docId: "doc-1", version: "v2" },
+        { type: "sync/doc-advanced", docId: "doc-1", version: "v2" },
         model,
       )
 
@@ -2129,7 +2129,7 @@ describe("sync-program", () => {
 
       const [, effects] = applyUpdate(
         update,
-        { type: "sync/local-doc-change", docId: "doc-1", version: "v3" },
+        { type: "sync/doc-advanced", docId: "doc-1", version: "v3" },
         model,
       )
 
@@ -2162,7 +2162,7 @@ describe("sync-program", () => {
 
       const [, effects] = applyUpdate(
         update,
-        { type: "sync/local-doc-change", docId: "doc-1", version: "v3" },
+        { type: "sync/doc-advanced", docId: "doc-1", version: "v3" },
         model,
       )
 
@@ -2187,7 +2187,7 @@ describe("sync-program", () => {
 
       const [m2] = applyUpdate(
         update,
-        { type: "sync/local-doc-change", docId: "doc-1", version: "v2" },
+        { type: "sync/doc-advanced", docId: "doc-1", version: "v2" },
         model,
       )
 
@@ -2391,7 +2391,7 @@ describe("sync-program", () => {
       expect(defined(presentEffect, "presentEffect").to).not.toContain("carol")
     })
 
-    it("filters peers for local-doc-change pushes", () => {
+    it("filters peers for doc-advanced pushes", () => {
       const update = makeUpdate({
         canShare: (docId, peer) => {
           if (docId === "doc-1" && peer.peerId === "carol") return false
@@ -2407,7 +2407,7 @@ describe("sync-program", () => {
 
       const [, effects] = applyUpdate(
         update,
-        { type: "sync/local-doc-change", docId: "doc-1", version: "v2" },
+        { type: "sync/doc-advanced", docId: "doc-1", version: "v2" },
         model,
       )
 
@@ -2505,7 +2505,7 @@ describe("sync-program", () => {
         syncMode: SYNC_COLLABORATIVE,
         schemaHash: "abc123",
       })
-      drive({ type: "sync/local-doc-change", docId: VETOED_DOC, version: "v2" })
+      drive({ type: "sync/doc-advanced", docId: VETOED_DOC, version: "v2" })
       drive({
         type: "sync/doc-imported",
         docId: VETOED_DOC,
@@ -2541,7 +2541,7 @@ describe("sync-program", () => {
         docId: VETOED_DOC,
         sent: [{ peerId: "bob", version: "v3" }],
       })
-      drive({ type: "sync/local-doc-change", docId: VETOED_DOC, version: "v4" })
+      drive({ type: "sync/doc-advanced", docId: VETOED_DOC, version: "v4" })
       drive({ type: "sync/doc-publishable", docId: VETOED_DOC })
       drive({
         type: "sync/doc-imported",

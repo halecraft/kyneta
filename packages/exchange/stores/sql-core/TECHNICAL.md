@@ -4,10 +4,10 @@
 > **Role**: Pure helpers shared by every SQL-family `Store` backend (`@kyneta/sqlite-store`, `@kyneta/postgres-store`, `@kyneta/prisma-store`).
 > **Depends on**: `@kyneta/exchange` (peer), `@kyneta/schema` (peer). Zero runtime dependencies.
 > **Depended on by**: All three SQL-family store packages.
-> **Canonical symbols**: `RowShape`, `EntryPayloadJson`, `toRow`, `fromRow`, `normalizeBlob`, `DEFAULT_TABLES`, `TableNames`, `resolveTables`, `STORE_FORMAT_VERSION`, `AppendPlan`, `ReplacePlan`, `planAppend`, `planReplace`.
+> **Canonical symbols**: `RowShape`, `EntryPayloadJson`, `toRow`, `fromRow`, `normalizeBlob`, `DEFAULT_TABLES`, `TableNames`, `resolveTables`, `STORE_FORMAT_VERSION`, `AppendPlan`, `CompactPlan`, `planAppend`, `planCompact`.
 > **Key invariant(s)**: Pure code only — no SQL templates, no I/O, no driver knowledge. Every SQL-family backend that consumes `toRow`/`fromRow` produces a byte-identical (kind, payload, blob) triple in its records table; round-trip portability through `loadAll` is preserved across backends.
 
-A driver-agnostic foundation for the SQL-family `Store` implementations. Holds the shared serialization core (`RowShape`, `toRow`, `fromRow`, `normalizeBlob`) and a pair of pure planning functions (`planAppend`, `planReplace`) that each backend executes inside a backend-specific transaction. (Fault injection for the conformance suite lives in `@kyneta/exchange/testing` — `makeArmedFault` — not here.)
+A driver-agnostic foundation for the SQL-family `Store` implementations. Holds the shared serialization core (`RowShape`, `toRow`, `fromRow`, `normalizeBlob`) and a pair of pure planning functions (`planAppend`, `planCompact`) that each backend executes inside a backend-specific transaction. (Fault injection for the conformance suite lives in `@kyneta/exchange/testing` — `makeArmedFault` — not here.)
 
 ## What this package is NOT
 
@@ -51,13 +51,13 @@ The `kyneta_` prefix avoids collisions with application tables and signals the s
 
 ## Pure planning helpers
 
-`planAppend` and `planReplace` factor out validation and serialization from each backend's `append` / `replace` methods. They are the "plan" step in a gather → plan → execute split:
+`planAppend` and `planCompact` factor out validation and serialization from each backend's `append` / `compact` methods. They are the "plan" step in a gather → plan → execute split:
 
-1. **Gather** (per-backend): read existing meta, look up next seq number.
+1. **Gather** (per-backend, inside the write transaction): read existing meta and the document's `MAX(seq)`. Several stores may open one database, so the next seq comes from the table, read where no other writer can come between the read and the insert.
 2. **Plan** (pure, here): `planAppend(docId, record, existingMeta, nextSeq)` validates the record against existing meta and returns an `AppendPlan` describing the rows to write.
 3. **Execute** (per-backend): run the plan inside a backend-specific transaction.
 
-The win: validation, serialization, and seq math live in one tested place. Each backend's `append` / `replace` shrinks to ~5 lines of orchestration with no inline validation logic.
+The win: validation, serialization, and seq math live in one tested place. Each backend's `append` / `compact` shrinks to ~5 lines of orchestration with no inline validation logic.
 
 `AppendPlan.upsertMeta` is `{ data: string } | null` — the JSON-stringified meta, or `null` if the record is an entry. Each backend stringifies once and passes the result to its driver. Postgres uses the string directly with `INSERT … VALUES ($1::jsonb)` (Postgres parses to JSONB server-side); SQLite stores it verbatim. The string-typed plan field is uniform across backends.
 
@@ -84,6 +84,6 @@ This package no longer ships a fault-injection helper. The conformance suite's a
 - `normalizeBlob` — plain `Uint8Array` (identity) and `Buffer` (constructor-converted).
 - `resolveTables` — defaults, full overrides, partial overrides.
 - `planAppend` — meta input, entry-with-prior-meta, entry-without-prior-meta (throws), incompatible-meta (throws).
-- `planReplace` — valid batch, missing-meta (throws), conflicting-metas (throws).
+- `planCompact` — numbering from `nextSeq`, valid batch, missing-meta (throws), conflicting-metas (throws).
 
 Run with: `cd packages/exchange/stores/sql-core && pnpm verify`.

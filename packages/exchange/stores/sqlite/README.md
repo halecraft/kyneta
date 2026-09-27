@@ -25,7 +25,7 @@ const db = new Database("./data/exchange.db")
 const store = createSqliteStore(fromBetterSqlite3(db))
 
 const exchange = new Exchange({
-  stores: [store],
+  store,
   // ...
 })
 ```
@@ -41,7 +41,7 @@ const db = new Database("./data/exchange.db")
 const store = createSqliteStore(fromBunSqlite(db))
 
 const exchange = new Exchange({
-  stores: [store],
+  store,
   // ...
 })
 ```
@@ -57,8 +57,9 @@ function fromCloudflareDoSql(ctx: DurableObjectState): SqliteAdapter {
   return {
     exec: (sql, ...params) => { ctx.storage.sql.exec(sql, ...params) },
     iterate: (sql, ...params) => ctx.storage.sql.exec(sql, ...params),
-    // DO request handlers are implicitly transactional — each request runs
-    // atomically against storage. `transaction` just runs the function.
+    // A Durable Object is the only writer to its storage, and its request
+    // handlers run atomically against it, so nothing can come between a
+    // transaction's read and its write. `transaction` just runs the function.
     transaction: (fn) => fn(),
     // DO storage doesn't have an explicit close — the actor lifecycle owns it.
     close: () => {},
@@ -156,11 +157,13 @@ The store creates three tables on first use:
 
 ## Store interface
 
-See the [`Store` interface](../../src/store/store.ts) in `@kyneta/exchange` for the full contract. Seven methods: `append`, `loadAll`, `replace`, `delete`, `currentMeta`, `listDocIds`, `close`.
+See the [`Store` interface](../../src/store/store.ts) in `@kyneta/exchange` for the full contract. Eight methods: `append`, `loadAll`, `mark`, `compact`, `delete`, `currentMeta`, `listDocIds`, `close`.
+
+Several stores may open one database file. Each write reads the document's last `seq` inside its transaction and writes after it, so a custom `SqliteAdapter`'s `transaction` must take the write lock when it begins (`BEGIN IMMEDIATE`); the built-in adapters do.
 
 ## Testing
 
-The package passes the full `describeStore` conformance suite (17 contract tests) exported from `@kyneta/exchange/testing`, plus SQLite-specific tests for close/reopen persistence, sequence number continuity, replace atomicity, adapter factories, and `tables` isolation.
+The package passes the full `describeStore` conformance suite exported from `@kyneta/exchange/testing`, including two stores over one database file, plus SQLite-specific tests for close/reopen persistence, sequence number continuity, adapter factories, and `tables` isolation.
 
 ## See also
 

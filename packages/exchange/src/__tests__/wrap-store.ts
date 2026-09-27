@@ -18,7 +18,9 @@ export function wrapStore(inner: Store, overrides: Partial<Store>): Store {
   return {
     append: (docId, record) => inner.append(docId, record),
     loadAll: docId => inner.loadAll(docId),
-    replace: (docId, records) => inner.replace(docId, records),
+    mark: docId => inner.mark(docId),
+    compact: (docId, records, through) =>
+      inner.compact(docId, records, through),
     delete: docId => inner.delete(docId),
     currentMeta: docId => inner.currentMeta(docId),
     listDocIds: prefix => inner.listDocIds(prefix),

@@ -46,7 +46,7 @@ const exchange = new Exchange({
   transports: [serverTransport],
 
   /** Uncomment to add local storage persistence via LevelDB */
-  // stores: [await createLevelDBStore("./todo.db")],
+  // store: await createLevelDBStore("./todo.db"),
 })
 
 const _stop = streamObservations(exchange, line => out.write(line))

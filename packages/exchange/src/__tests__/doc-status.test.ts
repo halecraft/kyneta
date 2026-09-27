@@ -81,7 +81,7 @@ describe("docStatus — at each layer", () => {
   it("a document with a store is pending until it has loaded", async () => {
     const sharedData = await seedStoredDoc({ title: "stored", count: 42 })
     const exchange = createExchange({
-      stores: [createInMemoryStore({ sharedData })],
+      store: createInMemoryStore({ sharedData }),
     })
 
     const doc = exchange.get("doc-1", TestDoc)
@@ -100,7 +100,7 @@ describe("docStatus — at each layer", () => {
   })
 
   it("an empty store yields empty, not pending, once it has loaded", async () => {
-    const exchange = createExchange({ stores: [createInMemoryStore()] })
+    const exchange = createExchange({ store: createInMemoryStore() })
     const doc = exchange.get("doc-1", TestDoc)
 
     expect(docStatus(doc)).toBe("pending")

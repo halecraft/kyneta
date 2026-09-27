@@ -124,7 +124,7 @@ describe("settle — the storage term", () => {
   it("is false until hydration completes, then true", async () => {
     const sharedData = await seedStoredDoc({ title: "stored", count: 42 })
     const exchange = createExchange({
-      stores: [createInMemoryStore({ sharedData })],
+      store: createInMemoryStore({ sharedData }),
     })
 
     const doc = exchange.get("doc-1", TestDoc)
@@ -160,7 +160,10 @@ describe("settle — the storage term", () => {
       async *loadAll() {
         throw new Error("disk on fire")
       },
-      async replace() {},
+      async mark() {
+        return null
+      },
+      async compact() {},
       async delete() {},
       async currentMeta() {
         // Hydration reads metadata first; throwing here is the simplest
@@ -171,7 +174,7 @@ describe("settle — the storage term", () => {
       async *listDocIds() {},
       async close() {},
     }
-    const exchange = createExchange({ stores: [failing] })
+    const exchange = createExchange({ store: failing })
 
     const doc = exchange.get("doc-1", TestDoc)
     await exchange.flush().catch(() => {})
@@ -188,7 +191,7 @@ describe("settle — the storage term", () => {
     // un-settled and a naive initializer could seed over it.
     const sharedData = await seedStoredDoc({ title: "stored", count: 1 })
     const exchange = createExchange({
-      stores: [createInMemoryStore({ sharedData })],
+      store: createInMemoryStore({ sharedData }),
     })
 
     const doc = exchange.get("doc-1", TestDoc)
@@ -241,7 +244,7 @@ describe("whenSettled", () => {
   it("waits for hydration before reporting settled", async () => {
     const sharedData = await seedStoredDoc({ title: "stored", count: 7 })
     const exchange = createExchange({
-      stores: [createInMemoryStore({ sharedData })],
+      store: createInMemoryStore({ sharedData }),
     })
 
     const doc = exchange.get("doc-1", TestDoc)
@@ -271,7 +274,10 @@ describe("whenSettled", () => {
       async *loadAll() {
         throw new Error("disk on fire")
       },
-      async replace() {},
+      async mark() {
+        return null
+      },
+      async compact() {},
       async delete() {},
       async currentMeta(): Promise<never> {
         throw new Error("disk on fire")
@@ -279,7 +285,7 @@ describe("whenSettled", () => {
       async *listDocIds() {},
       async close() {},
     }
-    const exchange = createExchange({ stores: [failing] })
+    const exchange = createExchange({ store: failing })
     const doc = exchange.get("doc-1", TestDoc)
 
     await expect(whenSettled(doc)).rejects.toThrow("disk on fire")
@@ -296,7 +302,10 @@ describe("whenSettled", () => {
     const stuck: Store = {
       async append() {},
       async *loadAll() {},
-      async replace() {},
+      async mark() {
+        return null
+      },
+      async compact() {},
       async delete() {},
       currentMeta() {
         return new Promise(() => {}) // never settles
@@ -304,7 +313,7 @@ describe("whenSettled", () => {
       async *listDocIds() {},
       async close() {},
     }
-    const exchange = createExchange({ stores: [stuck] })
+    const exchange = createExchange({ store: stuck })
     const doc = exchange.get("doc-1", TestDoc)
 
     const raced = await Promise.race([
@@ -327,7 +336,7 @@ describe("readiness from a child ref", () => {
   it("matches the root while loading and after", async () => {
     const sharedData = await seedStoredDoc({ title: "stored", count: 42 })
     const exchange = createExchange({
-      stores: [createInMemoryStore({ sharedData })],
+      store: createInMemoryStore({ sharedData }),
     })
     const doc = exchange.get("doc-1", TestDoc)
 
@@ -346,7 +355,7 @@ describe("readiness from a child ref", () => {
   it("waits in whenSettled with an authority, and finds the sync handle", async () => {
     const sharedData = await seedStoredDoc({ title: "stored", count: 42 })
     const exchange = createExchange({
-      stores: [createInMemoryStore({ sharedData })],
+      store: createInMemoryStore({ sharedData }),
     })
     const doc = exchange.get("doc-1", TestDoc)
 

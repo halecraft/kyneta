@@ -486,12 +486,12 @@ describe("durable Line: storage stays bounded", () => {
     const exchangeA = createExchange({
       id: "alice",
       transports: [createBridgeTransport({ transportId: "alice", bridge })],
-      stores: [storeA],
+      store: storeA,
     })
     const exchangeB = createExchange({
       id: "bob",
       transports: [createBridgeTransport({ transportId: "bob", bridge })],
-      stores: [storeB],
+      store: storeB,
     })
 
     await exchangeA.flush()

@@ -17,7 +17,9 @@
 //     value: { key: string, value: unknown }
 //
 // Structured clone handles StoreRecord natively — no binary envelope needed.
-// Auto-increment keys preserve insertion order without manual seqNo management.
+// Auto-increment keys preserve insertion order without manual seqNo management,
+// and are the store's marks: the database assigns them, so appends from
+// several connections (tabs) over one database never collide.
 
 import {
   type DocId,
@@ -28,6 +30,7 @@ import {
   type Store,
   type StoreFormatVersion,
   StoreFormatVersionError,
+  type StoreMark,
   type StoreMeta,
   type StoreRecord,
 } from "@kyneta/exchange"
@@ -239,7 +242,18 @@ export class IndexedDBStore implements Store {
     }
   }
 
-  async replace(docId: DocId, records: StoreRecord[]): Promise<void> {
+  async mark(docId: DocId): Promise<StoreMark | null> {
+    const tx = this.#db.transaction(RECORDS_STORE, "readonly")
+    const index = tx.objectStore(RECORDS_STORE).index(BY_DOC_INDEX)
+    const last = await req(index.openKeyCursor(IDBKeyRange.only(docId), "prev"))
+    return last ? (last.primaryKey as number) : null
+  }
+
+  async compact(
+    docId: DocId,
+    records: StoreRecord[],
+    through: StoreMark | null,
+  ): Promise<void> {
     const tx = this.#db.transaction(
       [DOC_META_STORE, RECORDS_STORE],
       "readwrite",
@@ -252,10 +266,12 @@ export class IndexedDBStore implements Store {
     const existingMeta: StoreMeta | null = existing ? existing.meta : null
     const resolved = resolveMetaFromBatch(records, existingMeta)
 
-    const index = recordsStore.index(BY_DOC_INDEX)
-    const existingKeys = await req(index.getAllKeys(docId))
-    for (const key of existingKeys) {
-      recordsStore.delete(key)
+    if (through !== null) {
+      const index = recordsStore.index(BY_DOC_INDEX)
+      const keys = (await req(index.getAllKeys(docId))) as number[]
+      for (const key of keys) {
+        if (key <= through) recordsStore.delete(key)
+      }
     }
     for (const record of records) {
       recordsStore.add({ docId, record } satisfies RecordRow)
@@ -317,7 +333,7 @@ export class IndexedDBStore implements Store {
 /**
  * Create an IndexedDB storage backend for browser-side persistence.
  *
- * Returns a `Store` — pass directly to `Exchange({ stores: [...] })`.
+ * Returns a `Store` — pass directly to `Exchange({ store: ... })`.
  *
  * @param dbName - IndexedDB database name
  *
@@ -326,7 +342,7 @@ export class IndexedDBStore implements Store {
  * import { createIndexedDBStore } from "@kyneta/indexeddb-store"
  *
  * const exchange = new Exchange({
- *   stores: [await createIndexedDBStore("my-exchange-db")],
+ *   store: await createIndexedDBStore("my-exchange-db"),
  * })
  * ```
  */

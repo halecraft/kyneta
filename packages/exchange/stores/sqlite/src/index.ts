@@ -11,17 +11,17 @@ import {
   type DocId,
   decideStoreFormat,
   parseStoreFormat,
-  SeqNoTracker,
   STORE_META_FORMAT_KEY,
   type Store,
   StoreFormatVersionError,
+  type StoreMark,
   type StoreMeta,
   type StoreRecord,
 } from "@kyneta/exchange"
 import {
   fromRow,
   planAppend,
-  planReplace,
+  planCompact,
   type RowShape,
   resolveTables,
   STORE_FORMAT_VERSION,
@@ -44,6 +44,13 @@ export interface SqliteAdapter {
     sql: string,
     ...params: unknown[]
   ): Iterable<T>
+  /**
+   * Run `fn` in a transaction that takes the database's write lock when it
+   * begins (`BEGIN IMMEDIATE`), not at its first write. Several stores may
+   * open one database file; each reads a document's last sequence number
+   * inside the transaction and writes after it, which is sound only if no
+   * other writer can come between the read and the write.
+   */
   transaction<R>(fn: () => R): R
   close(): void
 }
@@ -76,7 +83,7 @@ export function fromBetterSqlite3(db: BetterSqlite3Database): SqliteAdapter {
       return db.prepare(sql).iterate(...params) as IterableIterator<T>
     },
     transaction<R>(fn: () => R): R {
-      return db.transaction(fn)()
+      return db.transaction(fn).immediate()
     },
     close(): void {
       db.close()
@@ -108,7 +115,7 @@ export function fromBunSqlite(db: BunSqliteDatabase): SqliteAdapter {
       return db.query(sql).iterate(...params) as IterableIterator<T>
     },
     transaction<R>(fn: () => R): R {
-      return db.transaction(fn)()
+      return db.transaction(fn).immediate()
     },
     close(): void {
       db.close()
@@ -126,7 +133,7 @@ interface BetterSqlite3Database {
     run(...params: unknown[]): unknown
     iterate(...params: unknown[]): IterableIterator<unknown>
   }
-  transaction<R>(fn: () => R): () => R
+  transaction<R>(fn: () => R): { immediate(): R }
   close(): void
 }
 
@@ -136,7 +143,7 @@ interface BunSqliteDatabase {
   query(sql: string): {
     iterate(...params: unknown[]): IterableIterator<unknown>
   }
-  transaction<R>(fn: () => R): () => R
+  transaction<R>(fn: () => R): { immediate(): R }
   close(): void
 }
 
@@ -162,12 +169,15 @@ export interface SqliteStoreOptions {
 
 export class SqliteStore implements Store {
   readonly #adapter: SqliteAdapter
-  readonly #seqNos = new SeqNoTracker()
   readonly #tables: TableNames
 
   constructor(adapter: SqliteAdapter, options: SqliteStoreOptions = {}) {
     this.#adapter = adapter
     this.#tables = resolveTables(options)
+    // Wait for another connection's write lock rather than fail at once,
+    // whatever the driver's default. The pragma answers with a row, so it is
+    // read rather than run.
+    Array.from(adapter.iterate("PRAGMA busy_timeout = 5000"))
     this.#ensureSchema()
     this.#assertFormat()
   }
@@ -246,20 +256,16 @@ export class SqliteStore implements Store {
   // -------------------------------------------------------------------------
 
   async append(docId: DocId, record: StoreRecord): Promise<void> {
-    const existingMeta = await this.currentMeta(docId)
-    const seq = await this.#seqNos.next(docId, async () => {
-      const [row] = this.#adapter.iterate<{ max_seq: number | null }>(
-        `SELECT MAX(seq) AS max_seq FROM ${this.#tables.records} WHERE doc_id = ?`,
-        docId,
-      )
-      return row?.max_seq ?? null
-    })
-
-    const plan = planAppend(docId, record, existingMeta, seq)
-
-    // Both writes must commit together or neither — a crash between
-    // them used to leave meta updated with no corresponding row.
+    // The meta, the next sequence number and both writes in one transaction:
+    // they commit together or not at all, and no other store over this file
+    // can take the same sequence number in between.
     this.#adapter.transaction(() => {
+      const plan = planAppend(
+        docId,
+        record,
+        this.#readMeta(docId),
+        this.#nextSeq(docId),
+      )
       if (plan.upsertMeta !== null) {
         this.#adapter.exec(
           `INSERT OR REPLACE INTO ${this.#tables.docMeta} (doc_id, data) VALUES (?, ?)`,
@@ -288,15 +294,28 @@ export class SqliteStore implements Store {
     }
   }
 
-  async replace(docId: DocId, records: StoreRecord[]): Promise<void> {
-    const existingMeta = await this.currentMeta(docId)
-    const plan = planReplace(records, existingMeta)
+  async mark(docId: DocId): Promise<StoreMark | null> {
+    return this.#lastSeq(docId)
+  }
 
+  async compact(
+    docId: DocId,
+    records: StoreRecord[],
+    through: StoreMark | null,
+  ): Promise<void> {
     this.#adapter.transaction(() => {
-      this.#adapter.exec(
-        `DELETE FROM ${this.#tables.records} WHERE doc_id = ?`,
-        docId,
+      const plan = planCompact(
+        records,
+        this.#readMeta(docId),
+        this.#nextSeq(docId),
       )
+      if (through !== null) {
+        this.#adapter.exec(
+          `DELETE FROM ${this.#tables.records} WHERE doc_id = ? AND seq <= ?`,
+          docId,
+          through,
+        )
+      }
 
       for (const { seq, row } of plan.records) {
         this.#adapter.exec(
@@ -315,13 +334,20 @@ export class SqliteStore implements Store {
         plan.upsertMeta.data,
       )
     })
+  }
 
-    // Must run after the transaction commits. If `transaction()` throws,
-    // control jumps past this line; the cache stays unmutated. Moving
-    // this inside the callback or before the call would corrupt the
-    // cache on rollback — the next append would compute a seq that
-    // collides with restored rows on the (doc_id, seq) primary key.
-    this.#seqNos.reset(docId, records.length - 1)
+  /** The document's last sequence number, read from the table. */
+  #lastSeq(docId: DocId): number | null {
+    const [row] = this.#adapter.iterate<{ max_seq: number | null }>(
+      `SELECT MAX(seq) AS max_seq FROM ${this.#tables.records} WHERE doc_id = ?`,
+      docId,
+    )
+    return row?.max_seq ?? null
+  }
+
+  /** The next sequence number. Read inside the write transaction. */
+  #nextSeq(docId: DocId): number {
+    return (this.#lastSeq(docId) ?? -1) + 1
   }
 
   async delete(docId: DocId): Promise<void> {
@@ -335,10 +361,13 @@ export class SqliteStore implements Store {
         docId,
       )
     })
-    this.#seqNos.remove(docId)
   }
 
   async currentMeta(docId: DocId): Promise<StoreMeta | null> {
+    return this.#readMeta(docId)
+  }
+
+  #readMeta(docId: DocId): StoreMeta | null {
     const [row] = this.#adapter.iterate<{ data: string }>(
       `SELECT data FROM ${this.#tables.docMeta} WHERE doc_id = ?`,
       docId,

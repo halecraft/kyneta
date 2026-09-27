@@ -5,7 +5,7 @@
 > **Depends on**: `pg` (peer, **type-only** — no runtime class coupling), `@kyneta/exchange` (peer), `@kyneta/schema` (peer), `@kyneta/sql-store-core` (peer).
 > **Depended on by**: Server applications that want Postgres durability behind an `Exchange`.
 > **Canonical symbols**: `PostgresStore`, `createPostgresStore`, `PostgresStoreOptions`, `PgAdapter`, `PgQuerier`, `fromPool`, `fromClient`.
-> **Key invariant(s)**: `append` and `replace` are atomic across meta + record writes (single transaction, owned by the injected adapter). Schema validation runs once at factory time (no auto-DDL, no runtime drift detection). The seq-tracker mutation in `replace` runs lexically after the awaited transaction — a rejection propagates past it.
+> **Key invariant(s)**: `append` and `compact` are atomic across meta + record writes (single transaction, owned by the injected adapter), and each reads the document's `MAX(seq)` inside that transaction under a per-document advisory lock, so several stores over one schema never take the same `seq`. Schema validation runs once at factory time (no auto-DDL, no runtime drift detection).
 
 ## Architecture
 
@@ -17,9 +17,10 @@ Recommended entry point is the async `createPostgresStore(fromPool(pool), option
 
 | Method | SQL |
 |--------|-----|
-| `append` | `SELECT MAX(seq)` (only on cold start per docId) → `planAppend` → `BEGIN; INSERT ON CONFLICT … (meta upsert if applicable); INSERT INTO records …; COMMIT`. |
+| `append` | `BEGIN; SELECT pg_advisory_xact_lock(…); SELECT data FROM meta …; SELECT MAX(seq) …;` → `planAppend` → `INSERT ON CONFLICT … (meta upsert if applicable); INSERT INTO records … at MAX + 1; COMMIT`. |
 | `loadAll` | `SELECT kind, payload, blob FROM records WHERE doc_id = $1 ORDER BY seq`. |
-| `replace` | `BEGIN; DELETE FROM records …; INSERT INTO records … (per row); INSERT ON CONFLICT … (meta upsert); COMMIT`. |
+| `mark` | `SELECT MAX(seq) FROM records WHERE doc_id = $1`. |
+| `compact` | `BEGIN; SELECT pg_advisory_xact_lock(…); SELECT data FROM meta …; SELECT MAX(seq) …;` → `planCompact` → `DELETE FROM records … AND seq <= $through; INSERT INTO records … (per row, from MAX + 1); INSERT ON CONFLICT … (meta upsert); COMMIT`. |
 | `delete` | `BEGIN; DELETE FROM records …; DELETE FROM meta …; COMMIT`. |
 | `currentMeta` | `SELECT data FROM meta WHERE doc_id = $1`. JSONB → JS object via `pg`'s built-in parser. |
 | `listDocIds(prefix)` | Range scan: `WHERE doc_id >= $1 AND doc_id < $2` where `$2 = successor(prefix)`. |
@@ -53,14 +54,16 @@ Schema validation runs once at factory time. If a DBA alters the schema while th
 
 The `PgAdapter` interface is `{ query, transaction }` — the two capabilities `PostgresStore` needs. Each factory owns the transaction protocol so the store never branches on connection type:
 
-- **`fromPool(pool)`** — `transaction(fn)` checks out one `PoolClient` for the duration (BEGIN…COMMIT/ROLLBACK on that single physical connection, since Postgres transactions are connection-scoped) and `release()`s it in `finally`. `query` (non-transactional reads: `currentMeta`, `loadAll`, `listDocIds`, the cold-start `MAX(seq)`) goes to the pool directly — no held connection needed.
+- **`fromPool(pool)`** — `transaction(fn)` checks out one `PoolClient` for the duration (BEGIN…COMMIT/ROLLBACK on that single physical connection, since Postgres transactions are connection-scoped) and `release()`s it in `finally`. `query` (non-transactional reads: `currentMeta`, `loadAll`, `listDocIds`, `mark`) goes to the pool directly — no held connection needed.
 - **`fromClient(client)`** — `transaction(fn)` runs BEGIN…COMMIT/ROLLBACK inline on the one connection (a standalone `Client` or an already-checked-out `PoolClient`). This is also the seam the conformance fault test wraps: `fromClient(makeArmedFault(client, { query: 1 }))`.
 
-Both re-throw on rollback so callers place post-commit work (e.g. `seqNos.reset` in `replace`) lexically after the awaited call. Replacing the former runtime `Pool`/`Client` sniff with adapter injection also fixed a bug: a bare `Client` previously mis-routed to the pool branch and threw on `release()`; now `fromClient` handles it correctly.
+Both re-throw on rollback. Replacing the former runtime `Pool`/`Client` sniff with adapter injection also fixed a bug: a bare `Client` previously mis-routed to the pool branch and threw on `release()`; now `fromClient` handles it correctly.
 
-## Multi-process namespacing
+## Several stores over one schema
 
-Each Exchange owns one `tables` pair. Multiple Exchanges (or test isolates) sharing the same database use distinct `tables` pairs; no two Exchanges should write to the same tables.
+Several stores may open one set of tables: the processes of one server fleet. Each write reads the document's `MAX(seq)` and inserts after it, inside one transaction that first takes `pg_advisory_xact_lock(hashtext('<records table>:<doc_id>'))`. Writers of one document therefore take turns, and the lock is released at commit or rollback. A `hashtext` collision only makes two documents take turns too. An earlier version cached the next `seq` per document in memory, seeded once from `MAX(seq)`; two processes then handed out the same `seq`, and the second insert failed on the primary key.
+
+Distinct `tables` sets are for separate storages in one database (test isolates, unrelated Exchanges), not for keeping instances of one deployment apart.
 
 ## Byte-portability with sqlite-store
 

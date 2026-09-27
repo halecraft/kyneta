@@ -940,18 +940,20 @@ export class Synchronizer {
   }
 
   /**
-   * Ask for a document's local changes to be pushed to peers. The push is
-   * sent when the document may leave the process (`publishable`), and owed
-   * until then. The Exchange calls this from the Runtime's `onDocLocalChange`
-   * hook, which fires for every local write, including writes made directly
-   * on the native document, so no application code needs to call it.
+   * Ask for a document that advanced by a route other than the network to be
+   * pushed to peers: a local write, or records a compaction took in from the
+   * store. The push is sent when the document may leave the process
+   * (`publishable`), and owed until then. The Exchange calls this from the
+   * Runtime's `onDocAdvanced` hook, which fires for every local write,
+   * including writes made directly on the native document, so no application
+   * code needs to call it.
    */
-  notifyLocalChange(docId: DocId): void {
+  notifyAdvanced(docId: DocId): void {
     const doc = this.#docs.get(docId)
     if (!doc) return
 
     this.#dispatchSync({
-      type: "sync/local-doc-change",
+      type: "sync/doc-advanced",
       docId,
       version: doc.replica.version().serialize(),
     })

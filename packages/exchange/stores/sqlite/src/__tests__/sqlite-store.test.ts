@@ -40,7 +40,7 @@ afterAll(() => {
 })
 
 // ---------------------------------------------------------------------------
-// Conformance suite — validates the full Store contract (17 tests)
+// Conformance suite — validates the full Store contract
 // ---------------------------------------------------------------------------
 
 describeStore(
@@ -102,6 +102,29 @@ describeStore(
           adapter.close()
         },
       }
+    },
+    // Two connections to one file: `:memory:` databases are private to
+    // their connection, so a second instance could not share one.
+    secondInstance: {
+      refused: false,
+      open: async () => {
+        const file = makeTmpFile()
+        const first = new SqliteStore(fromBetterSqlite3(new Database(file)))
+        const opened: SqliteStore[] = [first]
+        return {
+          first,
+          openSecond: async () => {
+            const second = new SqliteStore(
+              fromBetterSqlite3(new Database(file)),
+            )
+            opened.push(second)
+            return second
+          },
+          cleanup: async () => {
+            for (const store of opened) await store.close()
+          },
+        }
+      },
     },
   },
 )

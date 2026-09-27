@@ -75,8 +75,8 @@ describeIfEnabled(
       const { serverExchange, clientExchange } = await createConnectedPair(
         lifecycle,
         {
-          serverStores: [serverStore],
-          clientStores: [clientStore],
+          serverStore: serverStore,
+          clientStore: clientStore,
           schemas: [YjsDoc],
         },
       )
@@ -151,8 +151,8 @@ describeIfEnabled(
         const { serverExchange, clientExchange } = await createConnectedPair(
           lifecycle,
           {
-            serverStores: [serverStore],
-            clientStores: [clientStore],
+            serverStore: serverStore,
+            clientStore: clientStore,
             schemas: [YjsDoc],
           },
         )
@@ -179,14 +179,14 @@ describeIfEnabled(
         const serverExchange = lifecycle.registerExchange(
           new Exchange({
             id: "server",
-            stores: [serverStore],
+            store: serverStore,
             schemas: [YjsDoc],
           }),
         )
         const clientExchange = lifecycle.registerExchange(
           new Exchange({
             id: "client",
-            stores: [clientStore],
+            store: clientStore,
             schemas: [YjsDoc],
           }),
         )
@@ -212,8 +212,8 @@ describeIfEnabled(
         const { serverExchange, clientExchange } = await createConnectedPair(
           lifecycle,
           {
-            serverStores: [serverStore],
-            clientStores: [clientStore],
+            serverStore: serverStore,
+            clientStore: clientStore,
             schemas: [YjsDoc],
           },
         )
@@ -252,7 +252,7 @@ describeIfEnabled(
       const exchange = lifecycle.registerExchange(
         new Exchange({
           id: "sqlite-source",
-          stores: [sqliteStore],
+          store: sqliteStore,
           schemas: [YjsDoc],
         }),
       )
@@ -299,7 +299,7 @@ describeIfEnabled(
       const pgExchange = lifecycle.registerExchange(
         new Exchange({
           id: "pg-sink",
-          stores: [pgStore],
+          store: pgStore,
           schemas: [YjsDoc],
         }),
       )

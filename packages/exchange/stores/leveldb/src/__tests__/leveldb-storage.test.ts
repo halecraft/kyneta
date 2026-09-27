@@ -89,6 +89,20 @@ describeStore("LevelDBStore", () => createLevelDBStore(makeTmpDir()), {
       },
     }
   },
+  // `classic-level` locks the directory, so a second instance cannot open it
+  // and the store's in-memory sequence numbers are sound.
+  secondInstance: {
+    refused: true,
+    open: async () => {
+      const dir = makeTmpDir()
+      const first = await createLevelDBStore(dir)
+      return {
+        first,
+        openSecond: () => createLevelDBStore(dir),
+        cleanup: () => first.close(),
+      }
+    },
+  },
 })
 
 // ---------------------------------------------------------------------------
@@ -152,26 +166,31 @@ describe("LevelDBStore — close + reopen", () => {
     await backend2.close()
   })
 
-  it("replace then reopen preserves the replacement records", async () => {
+  it("compact then reopen preserves the compacted records, and appends after them", async () => {
     const dir = makeTmpDir()
 
     const backend1 = await createLevelDBStore(dir)
     await backend1.append("doc-1", makeMetaRecord())
     await backend1.append("doc-1", makeEntryRecord("since", "v1"))
-    await backend1.append("doc-1", makeEntryRecord("since", "v2"))
-    await backend1.replace("doc-1", [
-      makeMetaRecord(),
-      makeEntryRecord("entirety", "v3"),
-    ])
+    await backend1.compact(
+      "doc-1",
+      [
+        makeMetaRecord(),
+        makeEntryRecord("entirety", "v2"),
+        makeEntryRecord("since", "v3"),
+      ],
+      await backend1.mark("doc-1"),
+    )
     await backend1.close()
 
+    // Reopened, the store discovers its sequence numbers from disk. A
+    // compaction that wrote more records than it deleted must not leave the
+    // next append on top of one of them.
     const backend2 = await createLevelDBStore(dir)
+    await backend2.append("doc-1", makeEntryRecord("since", "v4"))
     const records = await collectAll(backend2.loadAll("doc-1"))
-    expect(records).toHaveLength(2)
-    expect(records[0]?.kind).toBe("meta")
-    expect(records[1]?.kind).toBe("entry")
-    expect((records[1] as { kind: "entry"; version: string }).version).toBe(
-      "v3",
+    expect(records.map(r => (r.kind === "entry" ? r.version : "meta"))).toEqual(
+      ["meta", "v2", "v3", "v4"],
     )
     await backend2.close()
   })

@@ -55,7 +55,7 @@ const exchange = new Exchange({
   transports: [serverTransport],
 
   /** Persist counter state to Postgres via Prisma */
-  stores: [store],
+  store,
 })
 
 // Register the counter document. When clients connect, the Exchange

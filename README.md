@@ -88,7 +88,7 @@ Every step below is additive — earlier code doesn't change.
 | **Local document** | `createDoc(schema)` — no network, no exchange; type-safe, reactive doc, with validation | — |
 | **Two peers, plain sync** | Add `Exchange` + transport | Schema, reads, writes |
 | **Switch to CRDTs** | `json.bind(schema)` → `loro.bind(schema)` | Exchange, transport, reads, writes |
-| **Add persistence** | Add `stores: [await createLevelDBStore("./data")]` to exchange config | Everything above |
+| **Add persistence** | Add `store: await createLevelDBStore("./data")` to exchange config | Everything above |
 | **Add presence** | `ephemeral.bind(schema)` alongside your collaborative docs | Everything above |
 | **Add access control** | Add a `Policy` with `canShare` / `canAccept` gates | Client code unchanged |
 | **Add a relay** | One more Exchange with `resolve: () => Replicate()` | Client code unchanged |

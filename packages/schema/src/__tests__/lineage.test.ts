@@ -2,7 +2,12 @@
 // so peers that meet two of them all settle on the same one.
 
 import { describe, expect, it } from "vitest"
-import { mintLineage, supersedes } from "../substrates/plain.js"
+import {
+  DEFAULT_LINEAGE,
+  latestLineage,
+  mintLineage,
+  supersedes,
+} from "../substrates/plain.js"
 
 describe("mintLineage", () => {
   it("is fixed-width, so string order is mint order", () => {
@@ -37,5 +42,20 @@ describe("supersedes", () => {
     expect(supersedes(x, x)).toBe(false)
     expect(supersedes(y, x) && supersedes(z, y)).toBe(true)
     expect(supersedes(z, x)).toBe(true)
+  })
+})
+
+describe("latestLineage", () => {
+  it("is genesis only when nothing else is given", () => {
+    expect(latestLineage([])).toBe(DEFAULT_LINEAGE)
+    expect(latestLineage([DEFAULT_LINEAGE])).toBe(DEFAULT_LINEAGE)
+  })
+
+  it("prefers any real lineage to genesis, and the later of two", () => {
+    const early = mintLineage(1_000)
+    const late = mintLineage(2_000)
+    expect(latestLineage([DEFAULT_LINEAGE, early])).toBe(early)
+    expect(latestLineage([late, DEFAULT_LINEAGE, early])).toBe(late)
+    expect(latestLineage([early, late])).toBe(late)
   })
 })

@@ -27,6 +27,7 @@ import { Runtime } from "../runtime.js"
 import { whenHydrated } from "../settle.js"
 import {
   createInMemoryStore,
+  createInMemoryStoreData,
   type InMemoryStoreData,
 } from "../store/in-memory-store.js"
 import type { Store } from "../store/store.js"
@@ -73,7 +74,7 @@ afterEach(async () => {
 })
 
 function freshData(): InMemoryStoreData {
-  return { records: new Map(), metadata: new Map() }
+  return createInMemoryStoreData()
 }
 
 function open(
@@ -168,7 +169,7 @@ for (const { name, get } of BACKENDS) {
     it("holds a local write from peers until the store confirms it", async () => {
       const bridge = new Bridge()
       const held = new HeldStore()
-      const writer = get(open("writer", [bridge], { stores: [held.store] }))
+      const writer = get(open("writer", [bridge], { store: held.store }))
       const reader = get(open("reader", [bridge]))
       await drain()
 
@@ -195,7 +196,7 @@ for (const { name, get } of BACKENDS) {
       const data = freshData()
       const held = new HeldStore(data)
       const host = get(open("host", [bridge]))
-      const before = open("browser", [bridge], { stores: [held.store] })
+      const before = open("browser", [bridge], { store: held.store })
       const browser = get(before)
       await drain()
 
@@ -213,7 +214,7 @@ for (const { name, get } of BACKENDS) {
         transports: [
           createBridgeTransport({ bridge, transportId: "browser-reloaded" }),
         ],
-        stores: [createInMemoryStore({ sharedData: data })],
+        store: createInMemoryStore({ sharedData: data }),
       })
       exchanges.push(after)
       const reloaded = get(after)
@@ -228,7 +229,7 @@ for (const { name, get } of BACKENDS) {
     it("answers a new peer's interest only once its own write is confirmed", async () => {
       const bridge = new Bridge()
       const held = new HeldStore()
-      const writer = get(open("writer", [bridge], { stores: [held.store] }))
+      const writer = get(open("writer", [bridge], { store: held.store }))
       await drain()
       append(writer, "x")
       await drain()
@@ -266,7 +267,7 @@ for (const { name, get } of BACKENDS) {
           await inner.append(docId, record)
         },
       })
-      const writerExchange = open("writer", [bridge], { stores: [slow] })
+      const writerExchange = open("writer", [bridge], { store: slow })
       const writer = get(writerExchange)
       const reader = get(open("reader", [bridge]))
       await drain(60)
@@ -292,7 +293,7 @@ for (const { name, get } of BACKENDS.filter(b => b.concurrent)) {
       const bc = new Bridge()
       const held = new HeldStore()
       const a = get(open("a", [ab]))
-      const b = get(open("b", [ab, bc], { stores: [held.store] }))
+      const b = get(open("b", [ab, bc], { store: held.store }))
       const c = get(open("c", [bc]))
       await drain()
 
@@ -316,7 +317,7 @@ describe("store-first (loro): a pending native write", () => {
     const bound = loro.bind(LogSchema)
     const bridge = new Bridge()
     const held = new HeldStore()
-    const writerExchange = open("writer", [bridge], { stores: [held.store] })
+    const writerExchange = open("writer", [bridge], { store: held.store })
     const writer = writerExchange.get("doc", bound)
     await drain()
     append(writer, "x")
@@ -348,7 +349,7 @@ describe("store-first (loro): a store write after a pending native write", () =>
     const data = freshData()
     const first = new Runtime({
       peerId: "solo",
-      stores: [createInMemoryStore({ sharedData: data })],
+      store: createInMemoryStore({ sharedData: data }),
       tickInterval: 0,
     })
     const doc = first.get("doc", bound)
@@ -362,7 +363,7 @@ describe("store-first (loro): a store write after a pending native write", () =>
 
     const second = new Runtime({
       peerId: "solo",
-      stores: [createInMemoryStore({ sharedData: data })],
+      store: createInMemoryStore({ sharedData: data }),
       tickInterval: 0,
     })
     const reloaded = second.get("doc", bound)
@@ -380,7 +381,7 @@ describe("store-first (yjs): a delete-only write", () => {
     const bound = yjs.bind(LogSchema)
     const bridge = new Bridge()
     const held = new HeldStore()
-    const writer = open("writer", [bridge], { stores: [held.store] }).get(
+    const writer = open("writer", [bridge], { store: held.store }).get(
       "doc",
       bound,
     )
@@ -423,7 +424,7 @@ describe("store-first: a failed write", () => {
   async function pair(flaky: FlakyStore) {
     const bridge = new Bridge()
     const writer = open("writer", [bridge], {
-      stores: [flaky.store],
+      store: flaky.store,
       tickInterval: 0,
     }).get("doc", bound)
     const reader = open("reader", [bridge]).get("doc", bound)
@@ -463,7 +464,7 @@ describe("store-first: a failed write", () => {
     const flaky = new FlakyStore()
     const bridge = new Bridge()
     const writerExchange = open("writer", [bridge], {
-      stores: [flaky.store],
+      store: flaky.store,
       tickInterval: 0,
     })
     const writer = writerExchange.get("doc", bound)
@@ -496,7 +497,7 @@ describe("store-first: a failed write", () => {
     const flaky = new FlakyStore()
     const runtime = new Runtime({
       peerId: "solo",
-      stores: [flaky.store],
+      store: flaky.store,
       tickInterval: 0,
       onStoreError: () => {},
     })
@@ -519,7 +520,7 @@ describe("store-first: a failed write", () => {
     const flaky = new FlakyStore()
     const bridge = new Bridge()
     const storing = open("storing", [bridge], {
-      stores: [flaky.store],
+      store: flaky.store,
       tickInterval: 0,
     }).get("doc", bound)
     const other = open("other", [bridge]).get("doc", bound)
@@ -546,7 +547,7 @@ describe("persistedFeed", () => {
     const held = new HeldStore()
     const runtime = new Runtime({
       peerId: "solo",
-      stores: [held.store],
+      store: held.store,
       tickInterval: 0,
     })
     const doc = runtime.get("doc", json.bind(LogSchema))

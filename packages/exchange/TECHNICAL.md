@@ -1,7 +1,7 @@
 # @kyneta/exchange — Technical Reference
 
 > **Package**: `@kyneta/exchange`
-> **Role**: Substrate-agnostic document sync runtime. Orchestrates channel topology, document convergence, and persistence above any transport and any `@kyneta/schema` substrate — via two pure TEA programs (session + sync), a Synchronizer shell that owns the serialized dispatch queue, a **Runtime** (the local imperative shell: documents + stores + lease + clock), and an **Exchange** façade (the network shell: transports + peers + governance) that composes a Runtime.
+> **Role**: Substrate-agnostic document sync runtime. Orchestrates channel topology, document convergence, and persistence above any transport and any `@kyneta/schema` substrate — via two pure TEA programs (session + sync), a Synchronizer shell that owns the serialized dispatch queue, a **Runtime** (the local imperative shell: documents + store + lease + clock), and an **Exchange** façade (the network shell: transports + peers + governance) that composes a Runtime.
 > **Depends on**: `@kyneta/schema` (peer), `@kyneta/changefeed` (peer), `@kyneta/transport` (direct)
 > **Depended on by**: `@kyneta/react` (peer), `@kyneta/leveldb-store`, `@kyneta/indexeddb-store`, `@kyneta/sqlite-store`, `@kyneta/postgres-store`, `@kyneta/prisma-store`, `@kyneta/sql-store-core`, application code, every transport package (dev)
 > **Canonical symbols**: `Exchange`, `ExchangeParams`, `Runtime`, `RuntimeParams`, `RuntimeHooks`, `DocReadyInfo`, `Synchronizer`, `SessionModel`, `SessionInput`, `SessionEffect`, `SyncModel`, `SyncInput`, `SyncEffect`, `updateSession`, `updateSync`, `Governance`, `Policy`, `composeGate`, `GatePredicate`, `EpochBoundaryPredicate`, `Line`, `LineProtocol`, `Capabilities`, `ReplicaLike`, `ReplicaFactoryLike`, `ReplicaKey`, `DEFAULT_REPLICAS`, `Interpret`, `Replicate`, `Defer`, `Reject`, `Disposition`, `PeerIdentityInput`, `PeerChange`, `DocChange`, `DocInfo`, `PeerState`, `PeerSyncState`, `PeerDocSyncState`, `Connectivity`, `deriveConnectivity`, `Store`, `StoreRecord`, `StoreMeta`, `DocMetadata`, `persistentPeerId`, `releasePeerId`, `resolveLease`, `LeaseState`, `sync` (helper), `SyncMode`, `SYNC_COLLABORATIVE`, `SYNC_AUTHORITATIVE`, `SYNC_EPHEMERAL`, `requiresBidirectionalSync`, `BindingTarget`, `createBindingTarget`
@@ -9,8 +9,8 @@
 > 1. The exchange never inspects `SubstratePayload` contents. Payloads are opaque blobs carried by `offer` messages; only the substrate produces and consumes them.
 > 2. The session program never sees documents. The sync program never sees channels, transports, or connection state. They share a single dispatch queue and communicate exclusively through `sync-event` effects the shell forwards.
 > 3. Every reactive output — `exchange.peers`, `exchange.documents`, per-doc ready state — drains at quiescence in snapshot-then-clear order.
-> 4. **FC/IS boundary:** The `Runtime` is the local imperative shell (document cache, stores, hydration, lease, tick clock). The `Exchange` is the network shell (transports, synchronizer, peers). The `Runtime` can be used standalone for local-first apps without any network. Substrates are pure math; the clock (`setInterval`) lives in the Runtime, not in substrates.
-> 5. **Runtime hooks bridge local→network:** The Runtime fires `onDocReady`, `onDocChangeset`, `onDocLocalChange`, `onDocDestroyed`, `onDocSuspended`, `onDocResumed`. The Exchange wires these into the Synchronizer. A standalone Runtime (no Exchange) leaves them unset — docs work fully without a network. Changesets feed observation only; a local change leaves the process through `onDocLocalChange`, which the Runtime fires from the substrate's local-update signal. `onDocReady` hands the Synchronizer the Runtime's own `DocReadyInfo` record, which the Synchronizer reads and never replaces: it asks the Runtime to rebuild a replica (`rebuildReplica`). Two calls run the other way: `rebuildReplica`, and `Runtime.onStateAdvanced(docId)`, which the Exchange invokes when the network advanced a document's version. That call carries a `docId` and nothing else — the Runtime resolves the document from its own cache, so the network shell never needs to hold local bookkeeping in order to make the call.
+> 4. **FC/IS boundary:** The `Runtime` is the local imperative shell (document cache, store, hydration, lease, tick clock). The `Exchange` is the network shell (transports, synchronizer, peers). The `Runtime` can be used standalone for local-first apps without any network. Substrates are pure math; the clock (`setInterval`) lives in the Runtime, not in substrates.
+> 5. **Runtime hooks bridge local→network:** The Runtime fires `onDocReady`, `onDocChangeset`, `onDocAdvanced`, `onDocDestroyed`, `onDocSuspended`, `onDocResumed`. The Exchange wires these into the Synchronizer. A standalone Runtime (no Exchange) leaves them unset — docs work fully without a network. Changesets feed observation only; a local change leaves the process through `onDocAdvanced`, which the Runtime fires from the substrate's local-update signal, and from a compaction that took in records another instance stored. It is named for an advance, not a local write: both are ways the replica moves without the network. `onDocReady` hands the Synchronizer the Runtime's own `DocReadyInfo` record, which the Synchronizer reads and never replaces: it asks the Runtime to rebuild a replica (`rebuildReplica`). Two calls run the other way: `rebuildReplica`, and `Runtime.onStateAdvanced(docId)`, which the Exchange invokes when the network advanced a document's version. That call carries a `docId` and nothing else — the Runtime resolves the document from its own cache, so the network shell never needs to hold local bookkeeping in order to make the call.
 
 A document-sync runtime for arbitrary substrates. Hands back an `Exchange` instance that accepts a schema binding (`Todo = loro.bind(...)`), returns typed document refs (`exchange.get("doc1", Todo)`), routes their changes over any registered transport, and exposes `ReactiveMap`s of peers and documents for observation.
 
@@ -38,7 +38,7 @@ Imported by applications to construct the top-level sync graph; by `@kyneta/reac
 
 | Term | Means | Not to be confused with |
 |------|-------|-------------------------|
-| `Exchange` | The top-level class. One per participant. Owns transports, stores, governance, capabilities, the `Synchronizer`, and the `ReactiveMap`s of peers/documents. | A message bus, a pub-sub hub, a database |
+| `Exchange` | The top-level class. One per participant. Owns transports, a store, governance, capabilities, the `Synchronizer`, and the `ReactiveMap`s of peers/documents. | A message bus, a pub-sub hub, a database |
 | `Synchronizer` | The imperative shell that runs the session and sync programs, owns the serialized dispatch queue, executes effects (sends, persistence, callbacks), and drains notifications at quiescence. | The session/sync programs themselves — those are pure data; `Synchronizer` is the runtime |
 | Session program | Pure `Program<SessionInput, SessionModel, SessionEffect>` in `src/session-program.ts`. Models channel topology, establish handshake, peer identity, departure. | Sync program |
 | Sync program | Pure `Program<SyncInput, SyncModel, SyncEffect>` in `src/sync-program.ts`. Models document convergence: `present`, `interest`, `offer`, `dismiss`, `vacant`, peer-sync state + the monotonic readiness accumulator, sync-mode dispatch. | Session program |
@@ -74,7 +74,7 @@ Imported by applications to construct the top-level sync graph; by `@kyneta/reac
 | `Line` | A reliable bidirectional message stream between two peers, implemented as two authoritative documents (one per direction) with automatic seqno + ack pruning. | A socket, a channel, a queue |
 | `LineProtocol` | The reified schema pair + topic from `Line.protocol(opts)`. Exposes `sender(peerId)`, `claimReceiver(peerId)`, `manager(peerId)` (client), and `listen(onReceive)` (server). | `Line` — `LineProtocol` *creates* `Line` capabilities |
 | `persistentPeerId` | Browser-only helper: assigns each tab a unique `peerId` that survives reload, via a `localStorage` CAS-based lease protocol. | A cookie, a UUID generator |
-| `Store` | The persistence interface from this package. Methods: `append`, `loadAll`, `replace`, `delete`, `currentMeta`, `listDocIds`, `close`. A `Store` instance must be owned by exactly one `Exchange` for its entire lifetime. | A reactive store — this is an append/replace log. Not shared across exchanges. |
+| `Store` | The persistence interface from this package. Methods: `append`, `loadAll`, `mark`, `compact`, `delete`, `currentMeta`, `listDocIds`, `close`. An instance is owned by one Runtime; several instances may open one storage. | A reactive store — this is an append log with compaction by mark. |
 | `StoreRecord` | Tagged union: `{ kind: "meta", meta: StoreMeta }` or `{ kind: "entry", payload: SubstratePayload, version: string }` — one durably-persisted record of doc state. | A `ChannelMsg` |
 | `StoreMeta` | `Omit<DocMetadata, "supportedHashes">` — the metadata subset persisted per-doc in the store. | `DocMetadata` — `StoreMeta` omits `supportedHashes` |
 
@@ -101,7 +101,7 @@ Plus cross-cutting facilities:
 | Capabilities | `src/capabilities.ts` | Replica-type + schema registry keyed by `ReplicaKey`. |
 | Line | `src/line.ts` | Reliable bidirectional message stream built above `exchange.get`. |
 | Persistent peer ID | `src/persistent-peer-id.ts` | Browser-only lease protocol for per-tab unique, reload-stable `peerId`. |
-| Storage | `src/store/*.ts` | `Store` interface, in-memory implementation, shared utilities (`SeqNoTracker`, `validateAppend`, `resolveMetaFromBatch`); production impls in `@kyneta/leveldb-store`, `@kyneta/indexeddb-store`, `@kyneta/sqlite-store`, `@kyneta/postgres-store`, `@kyneta/prisma-store`. SQL-family stores share pure helpers (`toRow`, `fromRow`, `planAppend`, `planReplace`) via `@kyneta/sql-store-core`. |
+| Storage | `src/store/*.ts` | `Store` interface, in-memory implementation, shared utilities (`validateAppend`, `resolveMetaFromBatch`); production impls in `@kyneta/leveldb-store`, `@kyneta/indexeddb-store`, `@kyneta/sqlite-store`, `@kyneta/postgres-store`, `@kyneta/prisma-store`. SQL-family stores share pure helpers (`toRow`, `fromRow`, `planAppend`, `planCompact`) via `@kyneta/sql-store-core`. |
 
 ### What the exchange is NOT
 
@@ -140,7 +140,7 @@ SessionInput                                 SyncInput
 ├─ sess/channel-removed                      ├─ sync/doc-suspend / resume
 ├─ sess/message-received (LifecycleMsg)      ├─ sync/peer-available / unavailable / departed
 └─ sess/departure-timer-expired              ├─ sync/message-received (SyncMsg)
-                                             └─ sync/local-doc-change
+                                             └─ sync/doc-advanced
 
 SessionEffect                                SyncEffect
 ├─ send (LifecycleMsg)                       ├─ send-to-peer (SyncMsg)
@@ -468,7 +468,7 @@ The translation is a hash, `peerNumber` from `@kyneta/schema` (53 bits for Yjs, 
 
 Because a CRDT addresses operations by `(peer, counter)` and the counter restarts at zero on a fresh document, a peer that claims its identity before loading its own stored history writes to addresses that history already occupies. The merge deduplicates by address and one of the two operations is silently dropped.
 
-So a **store-backed document claims its substrate identity after hydration, not at construction**. `Runtime.createInterpretDoc` takes `beginHydration` from `@kyneta/schema` when stores are configured and calls the returned `adopt()` once the load resolves — before `registerDoc`, so peers never see the transient identity in an announcement. Without stores there is nothing to import and identity is claimed immediately.
+So a **store-backed document claims its substrate identity after hydration, not at construction**. `Runtime.createInterpretDoc` takes `beginHydration` from `@kyneta/schema` when a store is configured and calls the returned `adopt()` once the load resolves — before `registerDoc`, so peers never see the transient identity in an announcement. Without a store there is nothing to import and identity is claimed immediately.
 
 One consequence worth knowing: a document written to *before* it has hydrated contributes its early operations under a transient identity, which shows up as one extra version-vector entry that never grows. Waiting for the document to settle avoids it, which the readiness layer already asks for on independent grounds. See §"Peer identity and when a substrate may claim it" in `packages/schema/TECHNICAL.md` for the rule and which backends need it.
 
@@ -500,7 +500,7 @@ The `resolveLease` pure core is independently tested. Storage keys (`key`, `key 
 
 ## The local-write path
 
-Source: `src/runtime.ts` → `#wire`, `#markLocalChangeDirty`, `#drainLocalChanges`, `#drainLocal`; `src/exchange.ts` → the `onDocLocalChange` hook.
+Source: `src/runtime.ts` → `#wire`, `#markLocalChangeDirty`, `#drainLocalChanges`, `#drainLocal`; `src/exchange.ts` → the `onDocAdvanced` hook.
 
 A local write is anything this peer authors on a document: `batch(doc, fn)`, a write on a ref, `applyChanges`, and a write made directly on the native document reached through `unwrap`, which is how editor bindings (y-prosemirror, y-codemirror, loro-prosemirror) write. Every one of them leaves the process the same way. The substrate reports it through `subscribeLocalUpdates`, the Runtime marks the document dirty, and one drain per microtask asks for each dirty document to be persisted and pushed. With a store, the push leaves once the store has confirmed the write ([Store-first](#store-first)).
 
@@ -516,8 +516,8 @@ batch(doc, fn)  |  unwrap(doc.title).insert(…)  |  an editor binding's transac
        ├─ commitPending(): a pending native write reports itself now
        ├─ with a store: ownHigh := the replica's version
        ├─ onStateAdvanced(docId) → store program `state-advanced` → persist
-       └─ onDocLocalChange(docId) → synchronizer.notifyLocalChange
-            → sync/local-doc-change → a push to each synced peer, starting
+       └─ onDocAdvanced(docId) → synchronizer.notifyAdvanced
+            → sync/doc-advanced → a push to each synced peer, starting
               from what that peer will hold, owed until reported sent
             → #executeSendOffers: publishable(docId)?
                  yes → export, queue offers, sync/offers-sent
@@ -563,7 +563,7 @@ This closes the third instance of the "one-pass-only drain" structural flaw call
 ### What the local-write path is NOT
 
 - **Not synchronous with send.** `batch(doc, fn)` returns as soon as the substrate's `onFlush` completes. The wire `offer` fires in the next quiescence drain, which may be the same tick or later depending on re-entrant dispatch, and with a store not before the store has confirmed the write.
-- **Not per-mutation.** However many writes, batches and signals a document sees in one microtask, the drain runs once for it: one `sync/local-doc-change` input, and one export per distinct baseline among the synced peers.
+- **Not per-mutation.** However many writes, batches and signals a document sees in one microtask, the drain runs once for it: one `sync/doc-advanced` input, and one export per distinct baseline among the synced peers.
 - **Not guaranteed-delivery.** The payload is queued on the transport; delivery depends on the transport.
 
 ---
@@ -680,7 +680,7 @@ A document can reach a peer four ways, and **all four consult `canShare`**:
 | Path | Handler | Effect |
 |------|---------|--------|
 | Announce | `handlePeerAvailable`, `handleDocEnsure` / `handleDocDefer` → `announceDoc` | `present` |
-| Push | `handleLocalDocChange` → `buildPush` | `send-offers`, one recipient per peer, each from its own baseline |
+| Push | `handleDocAdvanced` → `buildPush` | `send-offers`, one recipient per peer, each from its own baseline |
 | Relay | `handleDocImported` → `buildPush` | `send-offers`, likewise |
 | Answer a request | `handleInterest` → `handleInterestForKnownDoc` | `send-offers` with one recipient |
 
@@ -772,7 +772,7 @@ waiting for:
 | --- | --- | --- |
 | Ref | `doc.field` | — (inherits the document's; see below) |
 | Document | `createDoc(bound)` | — nothing to await |
-| + Runtime | stores configured | the stored data finishing its load |
+| + Runtime | a store configured | the stored data finishing its load |
 | + Exchange | transports configured | the authoritative peer answering |
 
 A ref inherits its document's terms because every per-document registry here
@@ -868,7 +868,7 @@ A reader will ask: what stops a server that has a document on disk, but has not
 opened it, from replying "I do not have this" and inviting the client to seed
 over it? Two independent mechanisms.
 
-First, a document with stores does not enter the sync graph until it has
+First, a document with a store does not enter the sync graph until it has
 hydrated — `#register` runs in `#becomeReady`, after the load completes, so a
 server never announces a half-loaded document. See
 [How a document becomes ready](#how-a-document-becomes-ready).
@@ -922,7 +922,7 @@ a contract.
 
 `persisted(doc)` / `whenPersisted(doc)` is the other direction: whether the
 store has confirmed every write this peer made. `exchange.flush()` waits for
-the stores to settle and then for the transports to drain, so it resolves after
+the store to settle and then for the transports to drain, so it resolves after
 the offers the store's confirmations released have gone out; a store that keeps
 failing holds up neither.
 
@@ -937,13 +937,13 @@ not gate the executor.
 
 Source: `src/store/*.ts`, `src/store/store-program.ts`, `src/exchange.ts` → store-program executor.
 
-A `Store` is a persistence interface this package defines. A `Store` instance must be owned by exactly one `Exchange` for its entire lifetime — exclusive ownership ensures that version tracking, append ordering, and compaction are never corrupted by concurrent access from a second exchange.
+A `Store` is a persistence interface this package defines. A Runtime takes one (`ExchangeParams.store`, `RuntimeParams.store`), and an instance is owned by that Runtime, which calls it sequentially per document. Several instances may open one storage: tabs over one IndexedDB database, processes over one Postgres schema. See [Several instances over one storage](#several-instances-over-one-storage).
 
 ### How a document becomes ready
 
 Source: `src/runtime.ts` → `#hydrate`, `#becomeReady`, `storeInputFor`.
 
-A document's ref is returned at once; loading from the stores runs afterwards. `#hydrate` only gathers: it reads the first store that holds the document and returns a `LoadOutcome` — `stored` with the version the store holds, `empty`, or `none` when nothing was loaded (no stores, a transient document, or a promotion whose replica already loaded). `#becomeReady` is **the one place a document becomes ready**, for every creation path, and runs in a fixed order:
+A document's ref is returned at once; loading from the store runs afterwards. `#hydrate` only gathers: it reads the store and returns a `LoadOutcome` — `stored` with the version the store holds, `empty`, or `none` when nothing was loaded (no store, a transient document, or a promotion whose replica already loaded). `#becomeReady` is **the one place a document becomes ready**, for every creation path, and runs in a fixed order:
 
 1. If the cache no longer holds this entry (destroyed, or destroyed and created again, while it loaded), the latch fails with "destroyed while loading" and nothing else happens. Otherwise the dismissed document would be registered with the Synchronizer again.
 2. The store program learns what the store holds: `storeInputFor(docId, outcome)`, a pure mapping (`stored` → `hydrated`, `empty` → `register`, `none` → nothing).
@@ -953,13 +953,20 @@ A document's ref is returned at once; loading from the stores runs afterwards. `
 
 A failed load only marks the latch `failed`: its state is unknown, so the document is not registered, announced or given a stable identity.
 
-**A store in a format the replica cannot read is a failed read.** `#hydrate` compares the stored meta's `replicaType` with the replica factory's (`replicaTypesCompatible`). An incompatible store is treated like one that threw: it could not answer, and if no store can, the load fails. Reading it anyway would misparse it — the case when plain's payloads gained their log positions and its replica type moved to `["plain", 2, 0]`.
+**A store in a format the replica cannot read is a failed read.** `#hydrate` compares the stored meta's `replicaType` with the replica factory's (`replicaTypesCompatible`) before loading any record. An incompatible store is treated like one that threw: it could not answer, and the load fails. Reading it anyway would misparse it — the case when plain's payloads gained their log positions and its replica type moved to `["plain", 2, 0]`.
 
-**The store's confirmed version is read from the store.** Every stored entry records the version the store reached with it, and `hydrated` carries the last loaded entry's version, even when that entry failed to load, since the store holds it all the same. It used to carry the replica's live version, which already includes anything written while the document loaded; every later `since` write then started past that write, and it was never stored. `hydrated` now owes a `since` write from the stored version: when nothing arrived during loading the executor finds the versions equal and touches no store.
+**The store's confirmed version is read from the store.** Every stored entry records the version the store reached with it, and `hydrated` carries the join of the versions of the entries the replica reaches (`takeStoredEntries`'s `stored`). Not the last entry's: once several instances append to one stream, the last may be another's, concurrent with earlier ones. Not an entry the replica could not take in either: a plain version is one counter, and counting an entry past a gap claims positions the store does not hold, so the next own write there would be confirmed without being stored. It used to carry the replica's live version, which already includes anything written while the document loaded; every later `since` write then started past that write, and it was never stored. `hydrated` now owes a `since` write from the stored version: when nothing arrived during loading the executor finds the versions equal and touches no store.
 
-**A whole-document entry is the state at its version.** `#hydrate` loads a whole-document entry with `resetFromEntirety`, which adopts it whatever came before, and merges deltas. A plain whole-document payload carries the log position it represents, so a reloaded plain document's version equals the store's; Yjs and Loro implement `resetFromEntirety` as a merge. It is not a merge for plain because the entries before it may be from an older lineage: after a lineage reset, the store's next write is the new lineage's whole document, and a merge refuses a payload from a different lineage. Before payloads carried positions, plain counted the entry as one more flush on top of its log, its version ran one ahead of the store's, and with a correct baseline its first write would have stored the last delta a second time: replaying a repeated sequence delete removes a second item. A stored delta must bring the replica to the version it was stored at (`reaches`); one that does not continue the entries loaded before it leaves the replica short, and is a failed read of that entry. A load with nothing new therefore writes nothing on every substrate, including after a compaction (`store-hydration.test.ts`, "a load with nothing new writes nothing").
+**Loading does not depend on record order.** Records of several instances reach a loader in an order no single writer chose, and a compaction appends its whole document after records it did not delete. `takeStoredEntries` (`src/stored-entries.ts`, shared by hydration and compaction) therefore decides per entry, against a lineage to load toward:
 
-**Writing before a document has loaded.** On a concurrent-writer substrate (Yjs, Loro) a write made during loading merges with the loaded history whenever it arrives, and is stored. A serialized-writer (plain) document with stores refuses authored writes until `adopt`: its merge does not commute with a local write, so the loaded state would overwrite the write, and the write would mint a lineage the store does not know. The write throws "still loading"; `await whenHydrated(doc)` first, or seed with `initialize`. After a failed load `adopt` never runs, and writes stay refused.
+- An entry of that lineage, or of genesis, which every lineage continues, is taken in. One the replica already reaches is skipped, so a whole document stored after newer entries never rolls the replica back. A whole document it does not reach is taken with `resetFromEntirety`; a delta with `merge`.
+- A delta that does not continue what is loaded is held, and retried after each entry taken. Whatever is still held at the end is *untaken*, and warned about. CRDTs already hold operations whose dependencies are missing; this gives plain the same order-independence.
+- An entry of a lineage the target supersedes is skipped as dead history, not untaken.
+- An entry of a lineage that supersedes the target is untaken.
+
+Hydration loads toward the latest stored lineage (`latestLineage`): nothing live is there to protect. A plain whole-document payload carries the log position it represents, so a reloaded plain document's version equals the store's; Yjs and Loro implement `resetFromEntirety` as a merge. A load with nothing new therefore writes nothing on every substrate, including after a compaction (`store-hydration.test.ts`, "a load with nothing new writes nothing"). `stored-entries.test.ts` loads the same entries in several orders on every backend.
+
+**Writing before a document has loaded.** On a concurrent-writer substrate (Yjs, Loro) a write made during loading merges with the loaded history whenever it arrives, and is stored. A serialized-writer (plain) document with a store refuses authored writes until `adopt`: its merge does not commute with a local write, so the loaded state would overwrite the write, and the write would mint a lineage the store does not know. The write throws "still loading"; `await whenHydrated(doc)` first, or seed with `initialize`. After a failed load `adopt` never runs, and writes stay refused.
 
 ### `StoreRecord` and `StoreMeta`
 
@@ -970,10 +977,13 @@ type StoreRecord =
   | { readonly kind: "meta"; readonly meta: StoreMeta }
   | { readonly kind: "entry"; readonly payload: SubstratePayload; readonly version: string }
 
+type StoreMark = number
+
 interface Store {
   append(docId: DocId, record: StoreRecord): Promise<void>
   loadAll(docId: DocId): AsyncIterable<StoreRecord>
-  replace(docId: DocId, records: StoreRecord[]): Promise<void>
+  mark(docId: DocId): Promise<StoreMark | null>
+  compact(docId: DocId, records: StoreRecord[], through: StoreMark | null): Promise<void>
   delete(docId: DocId): Promise<void>
   currentMeta(docId: DocId): Promise<StoreMeta | null>
   listDocIds(prefix?: string): AsyncIterable<DocId>
@@ -981,13 +991,23 @@ interface Store {
 }
 ```
 
-The `StoreRecord` tagged union carries either document metadata (`"meta"`) or a substrate payload with its version tag (`"entry"`). Both record kinds flow through the same `append` / `loadAll` / `replace` pipeline, so metadata and state are always co-located and atomically durable.
+The `StoreRecord` tagged union carries either document metadata (`"meta"`) or a substrate payload with its version tag (`"entry"`). Both record kinds flow through the same `append` / `loadAll` / `compact` pipeline, so metadata and state are always co-located and atomically durable.
 
 `StoreMeta` is `Omit<DocMetadata, "supportedHashes">` — the subset of document metadata that the store persists. `supportedHashes` is runtime-derived from the schema binding and never stored.
 
-### Multi-store semantics
+### Several instances over one storage
 
-Applications pass zero or more stores in `ExchangeParams.stores`. Writes fan out to all stores. Reads use first-hit: stores are tried in array order; the first store where `currentMeta(docId)` returns non-null is used for hydration. Five production implementations exist:
+A Runtime takes one store. Several instances may open one storage, and the contract (`src/store/store.ts`) says what that asks:
+
+- **Interleaved appends each succeed.** A record's position comes from the storage, never from a counter one instance keeps: IndexedDB's autoincrement key; SQL's `MAX(seq) + 1`, read inside the write transaction under a per-document lock (a Postgres advisory lock, SQLite's `BEGIN IMMEDIATE`, and for Prisma, which has no portable lock, one retry on a `(docId, seq)` violation). LevelDB keeps an in-memory counter, which is sound because `classic-level` refuses a second open of a directory.
+- **Compaction removes only what its caller has read.** `mark(docId)` is the position of the document's last record; `compact(docId, records, through)` deletes the records at or before `through` and appends `records` after every record that remains, atomically. A compaction takes the mark, reads, takes everything it read into its replica, and deletes through the mark (see [The store-program](#the-store-program)). A record another instance appended after the mark survives; one before it was read and is now held. Two compactions through one mark both append after it, so neither deletes the other's output.
+- **Readers do not depend on record order.** See [How a document becomes ready](#how-a-document-becomes-ready).
+
+The conformance suite's two-instance section (`describeStore`'s `secondInstance`) checks interleaved appends and compactions on every backend that can open a second instance, and that LevelDB refuses one.
+
+**A destroyed docId must not be reused.** `destroy` deletes the stored operations, but peers keep theirs, so a document recreated under the id would restart its clocks at 0 under an identity peers still hold. Nothing enforces this yet: `Line.destroy` followed by a new `Line` to the same seat reuses its document ids, so a tombstone needs a design for that case first.
+
+Five production implementations exist:
 
 - `@kyneta/leveldb-store` — server-side (LevelDB via `classic-level`).
 - `@kyneta/indexeddb-store` — browser-side (IndexedDB).
@@ -995,13 +1015,13 @@ Applications pass zero or more stores in `ExchangeParams.stores`. Writes fan out
 - `@kyneta/postgres-store` — async-native Postgres backend over `pg`.
 - `@kyneta/prisma-store` — backend that takes a caller-supplied `PrismaClient`.
 
-The three SQL-family backends share pure helpers (`toRow`, `fromRow`, `planAppend`, `planReplace`) via `@kyneta/sql-store-core` — preserving round-trip portability of a `StoreRecord` stream across SQL backends. The in-memory store in `src/store/in-memory-store.ts` is used for tests and browser-ephemeral cases.
+The three SQL-family backends share pure helpers (`toRow`, `fromRow`, `planAppend`, `planCompact`) via `@kyneta/sql-store-core` — preserving round-trip portability of a `StoreRecord` stream across SQL backends. The in-memory store in `src/store/in-memory-store.ts` is used for tests and browser-ephemeral cases.
 
 For the conformance suite's fault-injection atomicity property, `@kyneta/exchange/testing` exports `makeArmedFault` — a shared op-weighted, deferred-arm write-fault primitive that a backend's `faultFactory` wraps around its write seam (LevelDB `put`/`batch` weighted by op count; the SQLite adapter's `exec`; a checked-out Postgres client's `query` via `fromClient`). Every store backend consumes it; it replaced the per-backend hand-rolled wrappers and the construction-armed `failOnNthCall`.
 
 ### Async-factory pattern for stores requiring async setup
 
-`Store` instances handed to `Exchange` must be ready by construction — the seven `Store` methods are all that the Exchange knows about; there is no lifecycle hook and no orchestration of readiness. Backends needing async setup (open a connection, validate a schema, probe connectivity) expose **async factory functions** returning `Promise<Store>`. The Exchange takes ready stores; readiness is a per-backend concern, surfacing curated errors at the right altitude.
+`Store` instances handed to `Exchange` must be ready by construction — the eight `Store` methods are all that the Exchange knows about; there is no lifecycle hook and no orchestration of readiness. Backends needing async setup (open a connection, validate a schema, probe connectivity) expose **async factory functions** returning `Promise<Store>`. The Exchange takes ready stores; readiness is a per-backend concern, surfacing curated errors at the right altitude.
 
 Canonical async factories: `createIndexedDBStore` (opens the IDB database), `createPostgresStore` (validates schema via `information_schema.columns`). Sync constructors are kept where they're honest: `SqliteStore` does fast local DDL in its constructor; `PrismaStore` defers to the caller-supplied client. `createSqliteStore` and `createPrismaStore` exist for ergonomic symmetry but do no async work.
 
@@ -1009,9 +1029,7 @@ Earlier planning briefly considered adding a `Store.initialize?(): Promise<void>
 
 ### Shared store utilities
 
-Two patterns common to all store backends are extracted into shared utilities in `src/store/`:
-
-- **`SeqNoTracker`** (`src/store/seq-tracker.ts`) — per-document monotonic sequence number tracker. Maintains an in-memory cache of the last-used seqNo per document; on first access, a caller-supplied `discover` callback resolves the current maximum from the backend (reverse-iterator seek in LevelDB, `SELECT MAX(seq)` in SQLite). Used by `LevelDBStore` and `SqliteStore`.
+A pattern common to all store backends is extracted into a shared utility in `src/store/`:
 
 - **`validateAppend`** (`src/store/store.ts`) — shared meta-first invariant guard. Validates that an `entry` record is not appended before a `meta` record exists, and resolves metadata for `meta` records via `resolveMetaFromBatch`. Used by `InMemoryStore`, `LevelDBStore`, and `SqliteStore`. The IndexedDB store has its own inline variant that calls `tx.abort()` before throwing.
 
@@ -1028,14 +1046,14 @@ Persistence is driven by a pure Mealy machine: `Program<StoreInput, StoreModel, 
 | `state-advanced` | `Runtime.onStateAdvanced` — from the Runtime's local-change drain, or from the Synchronizer after a network import. Carries only the `docId`. |
 | `compact` | `exchange.compact(docId)` called. Carries only the `docId`. |
 | `destroy` | `exchange.destroy(docId)` called |
-| `write-succeeded` | Store `.append()` or `.replace()` resolved successfully |
-| `write-failed` | Store `.append()` or `.replace()` rejected |
+| `write-succeeded` | Store `.append()` or `.compact()` resolved successfully |
+| `write-failed` | Store `.append()` or `.compact()` rejected |
 
 **Effect vocabulary:**
 
 | Effect | Executed by shell |
 |--------|-------------------|
-| `persist` | Cancels the document's retry timer, reads the replica, builds the records for its `write`, and appends or replaces them on each registered store |
+| `persist` | Cancels the document's retry timer, reads the replica, builds the records for its `write`, and writes them to the store (a compaction reads the store first) |
 | `persisted` | The store holds the document at `version`. Opens the publish gate if the version reaches the document's own writes, and clears its recorded error ([Store-first](#store-first)) |
 | `retry` | A write failed and none is owed. Starts a timer for `afterMs` that dispatches `state-advanced` |
 | `persist-delete` | Cancels the retry timer, and calls `store.delete(docId)` on each registered store |
@@ -1080,9 +1098,18 @@ Both settled phases carry `failures`, the count of writes that have failed in a 
 
 | `write` | Records | Store call |
 |---|---|---|
-| `register` | `meta` + the whole document | append |
+| `register` | `meta` + the whole document | `compact` with no mark, which only appends |
 | `since`, with the confirmed `version` | the delta since `version` | append |
-| `compact` | `meta` + the whole document | replace |
+| `compact` | `meta` + the whole document | `compact` through the mark it took |
+
+**A compaction subsumes what it deletes** (`Runtime.#compact`):
+
+1. Read the store's `mark`, then every entry.
+2. Stop if the document is no longer the one held when the read began: nothing is merged into, or pushed from, a document that is gone. The write is reported failed, which the store program ignores for a document it no longer knows.
+3. Take what was read into the live replica (`takeStoredEntries`), toward the replica's own lineage, or toward the latest stored lineage while the replica is still at genesis. Joining a lineage from genesis is not a crossing; moving a live replica to another lineage is, and is the network's to make, with `canReset` and the `lineage-collision` report ([Compaction and lineage boundaries](#compaction-and-lineage-boundaries)). Records other instances appended are now held here. A merge that moved the replica calls `onDocAdvanced`, so the Synchronizer pushes it: an instance that stored its writes and crashed before sending them leaves them reachable only through the store.
+4. Prepare and write the whole document, deleting through the mark.
+
+If the replica could not take everything in (an entry that does not continue, or one of a lineage that supersedes its own), deleting would lose it. The compaction then warns, deletes nothing, and writes what a `since` write would: the delta from the confirmed version, or with none the whole document with its meta. It succeeds and confirms as usual. It is not a failed write: under store-first a failed write sets `persistenceError` and schedules retries, and a stray record would then surface as a storage failure on every compaction while every append succeeds.
 
 A request that arrives during `writing` is recorded as `owed` — `advance` or `compact`, with `compact` absorbing `advance` because a compaction writes everything an advance would. Any number of requests during one write collapse into one owed write, started in the same transition as the `write-succeeded` or `write-failed` that ends the first, so a document with a write owed is never observably settled and `flush()` cannot resolve in between.
 
@@ -1118,7 +1145,7 @@ Every local change and every remote `offer` merge drives the same persistence pa
 1. The Runtime's local-change drain, or the Synchronizer's `#drainStateAdvanced` for a network import, names a `docId` whose state advanced.
 2. `Runtime.onStateAdvanced(docId)` dispatches `{ type: 'state-advanced', docId }` into the store-program.
 3. If no write is in flight, the store-program emits `persist` with a `since` write from the confirmed version; otherwise it records the advance as owed.
-4. The executor reads the replica, computes `exportSince(confirmedVersion)`, and fans out `store.append(docId, record)` to each registered store.
+4. The executor reads the replica, computes `exportSince(confirmedVersion)`, and appends the record to the store.
 5. On success it feeds `write-succeeded` back, which advances the confirmed version and starts any owed write from there.
 
 Because each drain's dirty set coalesces multiple advances per doc, and the store-program collapses requests made during a write, a burst of edits produces at most one write in flight and one owed behind it, however long the burst.
@@ -1128,7 +1155,7 @@ Because each drain's dirty set coalesces multiple advances per doc, and the stor
 - **Not a sync primitive.** Stores do not announce themselves on `present`, receive `offer`, or emit `interest`. They are local to the exchange instance.
 - **Not a cache.** Every record is durable on return.
 - **Not reactive.** No `subscribe`; reactivity lives at the `Ref<S>` / `ReactiveMap` layer.
-- **Not shared across exchanges.** Exclusive ownership is required. If two exchanges share a `Store` instance, version-tracking invariants break and data corruption is possible.
+- **Not shared between Runtimes as an instance.** An instance is owned by one Runtime, which calls it sequentially per document. A *storage* may be shared: open one instance over it per Runtime.
 
 ---
 
@@ -1271,7 +1298,7 @@ For durability guarantees, use the `cohort` predicate to prevent compaction past
 | Type | File | Role |
 |------|------|------|
 | `Exchange` | `src/exchange.ts` | Public façade. Constructor, `get`, `destroy`, `suspend`, `resume`, `addTransport`, `removeTransport`, `peers`, `documents`, `registerReplica`, `registerPolicy`. |
-| `ExchangeParams` | `src/exchange.ts` | Constructor options: `id`, `transports`, `stores`, `governance`, `policies`, `resolve`, `canShare`, `canAccept`, `departureTimeout`, `replicas`. |
+| `ExchangeParams` | `src/exchange.ts` | Constructor options: `id`, `transports`, `store`, `governance`, `policies`, `resolve`, `canShare`, `canAccept`, `departureTimeout`, `replicas`. |
 | `PeerIdentityInput` | `src/exchange.ts` | Input variant of `PeerIdentityDetails` with optional `type`. |
 | `Disposition` | `src/exchange.ts` | `Interpret \| Replicate \| Defer \| Reject`. |
 | `Synchronizer` | `src/synchronizer.ts` | Shell class. Public only for `@kyneta/react`'s internal use; applications never construct one. |
@@ -1287,7 +1314,6 @@ For durability guarantees, use the `cohort` predicate to prevent compaction past
 | `persistentPeerId` / `releasePeerId` / `resolveLease` / `LeaseState` | `src/persistent-peer-id.ts` | Browser-tab peer-ID lease helper + pure core. |
 | `Store` / `StoreRecord` / `StoreMeta` / `DocMetadata` | `src/store/store.ts` | Persistence interface. |
 | `validateAppend` | `src/store/store.ts` | Shared meta-first invariant guard for `append` implementations. |
-| `SeqNoTracker` | `src/store/seq-tracker.ts` | Per-doc monotonic seqNo tracker with lazy backend discovery. |
 | `PeerChange` / `DocChange` / `DocInfo` / `PeerState` / `PeerSyncState` / `PeerDocSyncState` / `Connectivity` | `src/types.ts` | Reactive-collection change types and snapshot shapes. |
 | `sync(doc)` | `src/sync.ts` | Helper: returns `SyncRef` (`peerStates`, `ready`, `readyFor`, `connectivity`, `onPeerSyncChange`). |
 | `AsyncQueue` | `src/async-queue.ts` | Bounded async producer/consumer queue used inside `Line`. |

@@ -593,6 +593,7 @@ export {
 export {
   DEFAULT_LINEAGE,
   decodePlainPayload,
+  latestLineage,
   mintLineage,
   objectToReplaceOps,
   type PlainPayload,

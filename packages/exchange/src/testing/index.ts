@@ -16,4 +16,5 @@ export {
   makeMetaRecord,
   makePlainEntirety,
   plainMeta,
+  type TwoInstances,
 } from "./store-conformance.js"

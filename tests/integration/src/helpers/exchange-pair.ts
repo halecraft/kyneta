@@ -1,7 +1,7 @@
 // exchange-pair — connected server + client Exchange pair over Node ws.
 //
 // Returns two `Exchange`s already bridged via real WebSocket transport
-// (HTTP server + `ws` library). Per-side `stores` and `schemas` are
+// (HTTP server + `ws` library). Per-side `store` and `schemas` are
 // optional, supporting both store-less integration tests and persistence
 // tests.
 
@@ -21,8 +21,8 @@ export interface CreateConnectedPairOptions {
   serverPeerId?: string
   clientPeerId?: string
   fragmentThreshold?: number
-  serverStores?: Store[]
-  clientStores?: Store[]
+  serverStore?: Store
+  clientStore?: Store
   schemas?: BoundSchema[]
 }
 
@@ -53,7 +53,7 @@ export async function createConnectedPair(
   const serverParams: ExchangeParams = {
     id: serverPeerId,
     transports: [serverTransport],
-    ...(opts.serverStores ? { stores: opts.serverStores } : {}),
+    ...(opts.serverStore ? { store: opts.serverStore } : {}),
     ...(opts.schemas ? { schemas: opts.schemas } : {}),
   }
   const serverExchange = lifecycle.registerExchange(new Exchange(serverParams))
@@ -68,7 +68,7 @@ export async function createConnectedPair(
   const clientParams: ExchangeParams = {
     id: clientPeerId,
     transports: [clientTransport],
-    ...(opts.clientStores ? { stores: opts.clientStores } : {}),
+    ...(opts.clientStore ? { store: opts.clientStore } : {}),
     ...(opts.schemas ? { schemas: opts.schemas } : {}),
   }
   const clientExchange = lifecycle.registerExchange(new Exchange(clientParams))

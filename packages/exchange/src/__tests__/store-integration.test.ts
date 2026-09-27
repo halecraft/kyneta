@@ -11,35 +11,39 @@ import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import { loro } from "@kyneta/loro-schema"
 import {
   batch,
+  createDoc,
   ephemeral,
   ephemeralReplicaFactory,
+  exportEntirety,
   Interpret,
   json,
   Replicate,
   Schema,
   SYNC_EPHEMERAL,
+  version,
 } from "@kyneta/schema"
+import { yjs } from "@kyneta/yjs-schema"
 import { decodeImportBlobMeta } from "loro-crdt"
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { docStatus } from "../doc-status.js"
 import {
   Exchange,
   type ExchangeParams,
   type PeerIdentityInput,
 } from "../exchange.js"
+import { persistenceError } from "../persistence.js"
+import { Runtime } from "../runtime.js"
 import { whenHydrated } from "../settle.js"
 import {
   createInMemoryStore,
+  createInMemoryStoreData,
   InMemoryStore,
   type InMemoryStoreData,
+  recordsOf,
 } from "../store/in-memory-store.js"
 import type { Store, StoreRecord } from "../store/store.js"
 import { whenSettled } from "../sync.js"
-import {
-  collectAll,
-  makeMetaRecord,
-  makePlainEntirety,
-} from "../testing/store-conformance.js"
+import { collectAll } from "../testing/store-conformance.js"
 import { wrapStore } from "./wrap-store.js"
 
 // ---------------------------------------------------------------------------
@@ -105,15 +109,12 @@ const PresenceDoc = ephemeral.bind(
 
 describe("Storage persist + hydrate", () => {
   it("authoritative doc: write → shutdown → restart with same storage → hydrate", async () => {
-    const sharedData: InMemoryStoreData = {
-      records: new Map(),
-      metadata: new Map(),
-    }
+    const sharedData: InMemoryStoreData = createInMemoryStoreData()
 
     // Phase 1: create doc, mutate, persist
     const exchange1 = createExchange({
       id: "server",
-      stores: [createInMemoryStore({ sharedData })],
+      store: createInMemoryStore({ sharedData }),
     })
 
     const doc1 = exchange1.get("doc-1", SequentialDoc)
@@ -128,7 +129,7 @@ describe("Storage persist + hydrate", () => {
     // Phase 2: new exchange with same storage → hydrate
     const exchange2 = createExchange({
       id: "server",
-      stores: [createInMemoryStore({ sharedData })],
+      store: createInMemoryStore({ sharedData }),
     })
 
     const doc2 = exchange2.get("doc-1", SequentialDoc)
@@ -139,14 +140,11 @@ describe("Storage persist + hydrate", () => {
   })
 
   it("collaborative doc (Loro): write → shutdown → restart → hydrate", async () => {
-    const sharedData: InMemoryStoreData = {
-      records: new Map(),
-      metadata: new Map(),
-    }
+    const sharedData: InMemoryStoreData = createInMemoryStoreData()
 
     const exchange1 = createExchange({
       id: "server",
-      stores: [createInMemoryStore({ sharedData })],
+      store: createInMemoryStore({ sharedData }),
       schemas: [CausalDoc],
     })
 
@@ -160,7 +158,7 @@ describe("Storage persist + hydrate", () => {
 
     const exchange2 = createExchange({
       id: "server",
-      stores: [createInMemoryStore({ sharedData })],
+      store: createInMemoryStore({ sharedData }),
       schemas: [CausalDoc],
     })
 
@@ -171,14 +169,11 @@ describe("Storage persist + hydrate", () => {
   })
 
   it("ephemeral doc: writes do NOT survive a restart", async () => {
-    const sharedData: InMemoryStoreData = {
-      records: new Map(),
-      metadata: new Map(),
-    }
+    const sharedData: InMemoryStoreData = createInMemoryStoreData()
 
     const exchange1 = createExchange({
       id: "server",
-      stores: [createInMemoryStore({ sharedData })],
+      store: createInMemoryStore({ sharedData }),
     })
 
     const doc1 = exchange1.get("presence-1", PresenceDoc)
@@ -193,7 +188,7 @@ describe("Storage persist + hydrate", () => {
 
     const exchange2 = createExchange({
       id: "server",
-      stores: [createInMemoryStore({ sharedData })],
+      store: createInMemoryStore({ sharedData }),
     })
 
     const doc2 = exchange2.get("presence-1", PresenceDoc)
@@ -270,7 +265,7 @@ function entriesOf(
   sharedData: InMemoryStoreData,
   docId: string,
 ): (StoreRecord & { kind: "entry" })[] {
-  return (sharedData.records.get(docId) ?? []).filter(
+  return recordsOf(sharedData, docId).filter(
     (r): r is StoreRecord & { kind: "entry" } => r.kind === "entry",
   )
 }
@@ -279,12 +274,9 @@ describe("a mutation during an in-flight write", () => {
   it("is persisted, not dropped", async () => {
     // At most one write per document is in flight at a time. A request that
     // arrives meanwhile is owed, and written once the first lands.
-    const sharedData: InMemoryStoreData = {
-      records: new Map(),
-      metadata: new Map(),
-    }
+    const sharedData: InMemoryStoreData = createInMemoryStoreData()
     const gate = gatedAppend(createInMemoryStore({ sharedData }))
-    const exchange1 = createExchange({ id: "server", stores: [gate.store] })
+    const exchange1 = createExchange({ id: "server", store: gate.store })
 
     const doc = exchange1.get("doc-1", SequentialDoc)
     await exchange1.flush()
@@ -303,7 +295,7 @@ describe("a mutation during an in-flight write", () => {
 
     const exchange2 = createExchange({
       id: "server",
-      stores: [createInMemoryStore({ sharedData })],
+      store: createInMemoryStore({ sharedData }),
     })
     const restored = exchange2.get("doc-1", SequentialDoc)
     await exchange2.flush()
@@ -317,12 +309,9 @@ describe("a mutation during an in-flight write", () => {
     // behind it. A mutation landing while it is in flight used to be
     // discarded — there was no base to diff it against yet — and nothing
     // offered it again, so a restart found the document without it.
-    const sharedData: InMemoryStoreData = {
-      records: new Map(),
-      metadata: new Map(),
-    }
+    const sharedData: InMemoryStoreData = createInMemoryStoreData()
     const gate = gatedAppend(createInMemoryStore({ sharedData }))
-    const exchange1 = createExchange({ id: "server", stores: [gate.store] })
+    const exchange1 = createExchange({ id: "server", store: gate.store })
 
     gate.hold()
     const doc = exchange1.get("doc-1", SequentialDoc)
@@ -336,7 +325,7 @@ describe("a mutation during an in-flight write", () => {
 
     const exchange2 = createExchange({
       id: "server",
-      stores: [createInMemoryStore({ sharedData })],
+      store: createInMemoryStore({ sharedData }),
     })
     const restored = exchange2.get("doc-1", SequentialDoc)
     await exchange2.flush()
@@ -350,12 +339,9 @@ describe("a mutation during an in-flight write", () => {
     // write's operations again. With a large in-flight write and a few small
     // edits behind it, every record after the first used to be as large as
     // the first.
-    const sharedData: InMemoryStoreData = {
-      records: new Map(),
-      metadata: new Map(),
-    }
+    const sharedData: InMemoryStoreData = createInMemoryStoreData()
     const gate = gatedAppend(createInMemoryStore({ sharedData }))
-    const exchange1 = createExchange({ id: "server", stores: [gate.store] })
+    const exchange1 = createExchange({ id: "server", store: gate.store })
 
     const doc = exchange1.get("doc-1", CausalDoc)
     await exchange1.flush()
@@ -396,7 +382,7 @@ describe("a mutation during an in-flight write", () => {
     await exchange1.shutdown()
     const exchange2 = createExchange({
       id: "server",
-      stores: [createInMemoryStore({ sharedData })],
+      store: createInMemoryStore({ sharedData }),
     })
     const restored = exchange2.get("doc-1", CausalDoc)
     await exchange2.flush()
@@ -407,15 +393,12 @@ describe("a mutation during an in-flight write", () => {
     // A write owed behind a failed one diffs from where the failed one
     // started, so it carries both — nothing is lost, and nothing is retried
     // in a loop.
-    const sharedData: InMemoryStoreData = {
-      records: new Map(),
-      metadata: new Map(),
-    }
+    const sharedData: InMemoryStoreData = createInMemoryStoreData()
     const gate = gatedAppend(createInMemoryStore({ sharedData }))
     const errors: unknown[] = []
     const exchange1 = createExchange({
       id: "server",
-      stores: [gate.store],
+      store: gate.store,
       onStoreError: (_docId, _op, error) => errors.push(error),
     })
 
@@ -438,7 +421,7 @@ describe("a mutation during an in-flight write", () => {
 
     const exchange2 = createExchange({
       id: "server",
-      stores: [createInMemoryStore({ sharedData })],
+      store: createInMemoryStore({ sharedData }),
     })
     const restored = exchange2.get("doc-1", SequentialDoc)
     await exchange2.flush()
@@ -455,25 +438,20 @@ describe("a failed compaction", () => {
     // answers `null` — "cannot", not "nothing" — and reading it as "nothing"
     // silently wrote no further changes until some later compaction
     // happened to succeed.
-    const sharedData: InMemoryStoreData = {
-      records: new Map(),
-      metadata: new Map(),
-    }
+    const sharedData: InMemoryStoreData = createInMemoryStoreData()
     const gate = gatedAppend(createInMemoryStore({ sharedData }))
-    let failReplace = true
+    let failCompact = true
     const exchange1 = createExchange({
       id: "server",
-      stores: [
-        wrapStore(gate.store, {
-          replace: async (docId, records) => {
-            if (failReplace) {
-              failReplace = false
-              throw new Error("disk full")
-            }
-            return gate.store.replace(docId, records)
-          },
-        }),
-      ],
+      store: wrapStore(gate.store, {
+        compact: async (docId, records, through) => {
+          if (failCompact) {
+            failCompact = false
+            throw new Error("disk full")
+          }
+          return gate.store.compact(docId, records, through)
+        },
+      }),
       onStoreError: () => {}, // expected here; keep it out of the test output
     })
 
@@ -500,7 +478,7 @@ describe("a failed compaction", () => {
 
     const exchange2 = createExchange({
       id: "server",
-      stores: [createInMemoryStore({ sharedData })],
+      store: createInMemoryStore({ sharedData }),
     })
     const restored = exchange2.get("doc-1", SequentialDoc)
     await exchange2.flush()
@@ -514,15 +492,22 @@ describe("a failed compaction", () => {
 // ---------------------------------------------------------------------------
 
 /** Wrap a store so that its first `append` rejects and later ones succeed. */
-function failingFirstAppend(inner: Store): Store {
+/** A store whose first write, an append or a compaction, fails. */
+function failingFirstWrite(inner: Store): Store {
   let failuresLeft = 1
+  const fail = (): boolean => {
+    if (failuresLeft === 0) return false
+    failuresLeft--
+    return true
+  }
   return wrapStore(inner, {
     append: async (docId, record) => {
-      if (failuresLeft > 0) {
-        failuresLeft--
-        throw new Error("disk full")
-      }
+      if (fail()) throw new Error("disk full")
       return inner.append(docId, record)
+    },
+    compact: async (docId, records, through) => {
+      if (fail()) throw new Error("disk full")
+      return inner.compact(docId, records, through)
     },
   })
 }
@@ -537,15 +522,12 @@ describe("a store whose first write fails", () => {
     // from persistence for the rest of the process, recovering only on
     // restart, while `onStoreError` reported the failure but nothing reported
     // the durable consequence.
-    const sharedData: InMemoryStoreData = {
-      records: new Map(),
-      metadata: new Map(),
-    }
-    const flaky = failingFirstAppend(createInMemoryStore({ sharedData }))
+    const sharedData: InMemoryStoreData = createInMemoryStoreData()
+    const flaky = failingFirstWrite(createInMemoryStore({ sharedData }))
 
     const exchange = createExchange({
       id: "server",
-      stores: [flaky],
+      store: flaky,
       onStoreError: () => {}, // expected here; keep it out of the test output
     })
 
@@ -575,13 +557,10 @@ describe("transient documents never reach a store", () => {
   // on disk, was faithfully hydrated on restart, and never updated again.
 
   it("an interpreted transient document leaves no records", async () => {
-    const sharedData: InMemoryStoreData = {
-      records: new Map(),
-      metadata: new Map(),
-    }
+    const sharedData: InMemoryStoreData = createInMemoryStoreData()
     const exchange = createExchange({
       id: "server",
-      stores: [createInMemoryStore({ sharedData })],
+      store: createInMemoryStore({ sharedData }),
     })
 
     const doc = exchange.get("presence-1", PresenceDoc)
@@ -597,13 +576,10 @@ describe("transient documents never reach a store", () => {
     // A relay holds transient documents too, headlessly. This is the only
     // coverage of the replicate creation path — it has no `docStatus` surface,
     // so the store is the one place its behaviour is observable.
-    const sharedData: InMemoryStoreData = {
-      records: new Map(),
-      metadata: new Map(),
-    }
+    const sharedData: InMemoryStoreData = createInMemoryStoreData()
     const exchange = createExchange({
       id: "relay",
-      stores: [createInMemoryStore({ sharedData })],
+      store: createInMemoryStore({ sharedData }),
     })
 
     exchange.replicate(
@@ -621,10 +597,7 @@ describe("transient documents never reach a store", () => {
     // Presence documents churn on every tab open and close, so a delete per
     // teardown for something never written is a steady trickle of pointless
     // store I/O.
-    const sharedData: InMemoryStoreData = {
-      records: new Map(),
-      metadata: new Map(),
-    }
+    const sharedData: InMemoryStoreData = createInMemoryStoreData()
     const store = createInMemoryStore({ sharedData })
     let deletes = 0
     const counting = wrapStore(store, {
@@ -634,7 +607,7 @@ describe("transient documents never reach a store", () => {
       },
     })
 
-    const exchange = createExchange({ id: "server", stores: [counting] })
+    const exchange = createExchange({ id: "server", store: counting })
     exchange.get("presence-1", PresenceDoc)
     await exchange.flush()
 
@@ -650,14 +623,11 @@ describe("transient documents never reach a store", () => {
     // the cache is precisely the case where we know nothing — it may well be
     // sitting on disk from a previous session. `Exchange.destroy` is
     // documented as the single public API for removal, so it has to work here.
-    const sharedData: InMemoryStoreData = {
-      records: new Map(),
-      metadata: new Map(),
-    }
+    const sharedData: InMemoryStoreData = createInMemoryStoreData()
 
     const exchange1 = createExchange({
       id: "server",
-      stores: [createInMemoryStore({ sharedData })],
+      store: createInMemoryStore({ sharedData }),
     })
     const doc = exchange1.get("doc-1", SequentialDoc)
     await exchange1.flush()
@@ -671,7 +641,7 @@ describe("transient documents never reach a store", () => {
     // entry to consult.
     const exchange2 = createExchange({
       id: "server",
-      stores: [createInMemoryStore({ sharedData })],
+      store: createInMemoryStore({ sharedData }),
     })
     exchange2.destroy("doc-1")
     await exchange2.flush()
@@ -691,11 +661,9 @@ describe("transient documents never reach a store", () => {
     // not tracked by the store-program, so both complete while it hangs.
     const exchange = createExchange({
       id: "server",
-      stores: [
-        createInMemoryStore({
-          sharedData: { records: new Map(), metadata: new Map() },
-        }),
-      ],
+      store: createInMemoryStore({
+        sharedData: createInMemoryStoreData(),
+      }),
     })
 
     const doc = exchange.get("presence-1", PresenceDoc)
@@ -711,10 +679,7 @@ describe("transient documents never reach a store", () => {
 
 describe("Storage + network sync", () => {
   it("peer A writes → server persists → peer B connects → gets data", async () => {
-    const sharedData: InMemoryStoreData = {
-      records: new Map(),
-      metadata: new Map(),
-    }
+    const sharedData: InMemoryStoreData = createInMemoryStoreData()
 
     const bridge = new Bridge()
 
@@ -723,7 +688,7 @@ describe("Storage + network sync", () => {
       transports: [
         createBridgeTransport({ transportId: "server-side", bridge }),
       ],
-      stores: [createInMemoryStore({ sharedData })],
+      store: createInMemoryStore({ sharedData }),
       resolve: () => Replicate(),
     })
 
@@ -762,7 +727,7 @@ describe("Storage + network sync", () => {
           bridge: bridge2,
         }),
       ],
-      stores: [createInMemoryStore({ sharedData })],
+      store: createInMemoryStore({ sharedData }),
       resolve: () => Replicate(),
     })
 
@@ -799,7 +764,7 @@ describe("Storage + network sync", () => {
       transports: [
         createBridgeTransport({ transportId: "server-side", bridge }),
       ],
-      stores: [backend],
+      store: backend,
       resolve: () => Replicate(),
     })
 
@@ -834,10 +799,7 @@ describe("Storage + network sync", () => {
 
 describe("Storage + replicated doc", () => {
   it("exchange.replicate() + storage → relay persists and hydrates", async () => {
-    const sharedData: InMemoryStoreData = {
-      records: new Map(),
-      metadata: new Map(),
-    }
+    const sharedData: InMemoryStoreData = createInMemoryStoreData()
 
     const bridge1 = new Bridge()
 
@@ -847,7 +809,7 @@ describe("Storage + replicated doc", () => {
       transports: [
         createBridgeTransport({ transportId: "relay-side", bridge: bridge1 }),
       ],
-      stores: [createInMemoryStore({ sharedData })],
+      store: createInMemoryStore({ sharedData }),
       resolve: () => Replicate(),
     })
 
@@ -889,7 +851,7 @@ describe("Storage + replicated doc", () => {
       transports: [
         createBridgeTransport({ transportId: "relay-side", bridge: bridge2 }),
       ],
-      stores: [createInMemoryStore({ sharedData })],
+      store: createInMemoryStore({ sharedData }),
       resolve: () => Replicate(),
     })
 
@@ -926,7 +888,7 @@ describe("a relay's replica after a lineage reset", () => {
     const relay = createExchange({
       id: { peerId: "relay", type: "service" },
       transports: [createBridgeTransport({ transportId: "relay", bridge })],
-      stores: [createInMemoryStore({ sharedData })],
+      store: createInMemoryStore({ sharedData }),
       resolve: () => Replicate(),
     })
 
@@ -960,10 +922,7 @@ describe("a relay's replica after a lineage reset", () => {
   }
 
   it("persists the rebuilt replica", async () => {
-    const sharedData: InMemoryStoreData = {
-      records: new Map(),
-      metadata: new Map(),
-    }
+    const sharedData: InMemoryStoreData = createInMemoryStoreData()
     const relay = await relayThroughReset(sharedData)
     await relay.shutdown()
 
@@ -971,7 +930,7 @@ describe("a relay's replica after a lineage reset", () => {
     createExchange({
       id: { peerId: "relay", type: "service" },
       transports: [createBridgeTransport({ transportId: "relay", bridge })],
-      stores: [createInMemoryStore({ sharedData })],
+      store: createInMemoryStore({ sharedData }),
       resolve: () => Replicate(),
     })
     const reader = createExchange({
@@ -986,10 +945,7 @@ describe("a relay's replica after a lineage reset", () => {
   })
 
   it("promotes the rebuilt replica", async () => {
-    const relay = await relayThroughReset({
-      records: new Map(),
-      metadata: new Map(),
-    })
+    const relay = await relayThroughReset(createInMemoryStoreData())
 
     const doc = relay.get("doc-1", SequentialDoc)
 
@@ -1008,7 +964,7 @@ describe("Storage + destroy", () => {
 
     const exchange = createExchange({
       id: "server",
-      stores: [backend],
+      store: backend,
     })
 
     const doc = exchange.get("doc-1", SequentialDoc)
@@ -1048,7 +1004,10 @@ describe("onStoreError callback", () => {
       },
       async *loadAll() {},
       async *listDocIds() {},
-      async replace() {
+      async mark() {
+        return null
+      },
+      async compact() {
         throw new Error("disk full")
       },
       async delete() {},
@@ -1057,7 +1016,7 @@ describe("onStoreError callback", () => {
 
     const exchange = createExchange({
       id: "server",
-      stores: [failingStore],
+      store: failingStore,
       onStoreError: (docId, operation, _error) => {
         errors.push({ docId, operation })
       },
@@ -1069,42 +1028,6 @@ describe("onStoreError callback", () => {
     // The store-program should have reported the failure
     expect(errors.length).toBeGreaterThan(0)
     expect(errors[0]?.docId).toBe("doc-1")
-  })
-})
-
-// ===========================================================================
-// Multi-store first-hit reads
-// ===========================================================================
-
-describe("Multi-store first-hit reads", () => {
-  it("hydration uses the first store that has data, not merge-all", async () => {
-    // Store A has doc with value "from-A"
-    const storeA = new InMemoryStore()
-    await storeA.append("doc-1", makeMetaRecord())
-    await storeA.append(
-      "doc-1",
-      makePlainEntirety({ title: "from-A", count: 1 }, "seed-1"),
-    )
-
-    // Store B has doc with DIFFERENT value "from-B"
-    const storeB = new InMemoryStore()
-    await storeB.append("doc-1", makeMetaRecord())
-    await storeB.append(
-      "doc-1",
-      makePlainEntirety({ title: "from-B", count: 2 }, "seed-2"),
-    )
-
-    const exchange = createExchange({
-      id: "server",
-      stores: [storeA, storeB], // A is first
-    })
-
-    const doc = exchange.get("doc-1", SequentialDoc)
-    await exchange.flush()
-
-    // Should use store A (first-hit), not merge from both
-    expect(doc.title()).toBe("from-A")
-    expect(doc.count()).toBe(1)
   })
 })
 
@@ -1140,5 +1063,228 @@ describe("No storage (baseline)", () => {
       expect(docB.title()).toBe("no storage")
       expect(docB.count()).toBe(123)
     }
+  })
+})
+
+// ===========================================================================
+// Several instances over one storage
+// ===========================================================================
+
+describe("several instances over one storage", () => {
+  const LogSchema = Schema.struct({ log: Schema.text() })
+  type LogDoc = {
+    readonly log: { (): string; insert(index: number, text: string): void }
+  }
+  const append = (doc: LogDoc, text: string): void =>
+    doc.log.insert(doc.log().length, text)
+
+  const runtimes: Runtime[] = []
+  afterEach(async () => {
+    vi.useRealTimers()
+    for (const runtime of runtimes) await runtime.shutdown()
+    runtimes.length = 0
+  })
+
+  function open(sharedData: InMemoryStoreData, peerId: string): Runtime {
+    const runtime = new Runtime({
+      peerId,
+      store: createInMemoryStore({ sharedData }),
+      tickInterval: 0,
+    })
+    runtimes.push(runtime)
+    return runtime
+  }
+
+  const yjsLog = yjs.bind(LogSchema)
+  const loroLog = loro.bind(LogSchema)
+  const plainLog = json.bind(LogSchema)
+  const BACKENDS: readonly {
+    readonly name: string
+    readonly get: (runtime: Runtime) => LogDoc
+  }[] = [
+    { name: "yjs", get: r => r.get("doc", yjsLog) },
+    { name: "loro", get: r => r.get("doc", loroLog) },
+    { name: "plain", get: r => r.get("doc", plainLog) },
+  ]
+
+  for (const { name, get } of BACKENDS) {
+    it(`a compaction by one keeps what another wrote (${name})`, async () => {
+      // The reproduction: compaction used to delete every record, including
+      // another instance's it had never read.
+      const sharedData = createInMemoryStoreData()
+      const a = open(sharedData, "a")
+      const docA = get(a)
+      await whenHydrated(docA)
+      append(docA, "a")
+      await a.flush()
+
+      const b = open(sharedData, "b")
+      const docB = get(b)
+      await whenHydrated(docB)
+      append(docB, "b")
+      await b.flush()
+
+      await a.compact("doc")
+
+      const c = open(sharedData, "c")
+      const docC = get(c)
+      await whenHydrated(docC)
+      expect(docC.log()).toBe("ab")
+    })
+  }
+
+  it("a compaction that cannot take everything in appends instead", async () => {
+    const sharedData = createInMemoryStoreData()
+    const a = open(sharedData, "a")
+    const doc = a.get("doc", plainLog) as LogDoc
+    await whenHydrated(doc)
+    append(doc, "a")
+    await a.flush()
+    // A record this replica cannot read.
+    await createInMemoryStore({ sharedData }).append("doc", {
+      kind: "entry",
+      payload: { kind: "since", encoding: "json", data: "{}" },
+      version: "not a version",
+    })
+    const before = recordsOf(sharedData, "doc")
+
+    await a.compact("doc")
+
+    const after = recordsOf(sharedData, "doc")
+    expect(after.slice(0, before.length)).toEqual(before)
+    expect(persistenceError(doc)).toBeUndefined()
+  })
+
+  it("a compaction keeps the live lineage over another instance's later one", async () => {
+    // Another instance crossed first. The crossing is the network's to make,
+    // with its policy and its report, not a compaction's.
+    const sharedData = createInMemoryStoreData()
+    const a = open(sharedData, "a")
+    vi.setSystemTime(1_000)
+    const doc = a.get("doc", plainLog) as LogDoc
+    await whenHydrated(doc)
+    append(doc, "live")
+    await a.flush()
+    const lineage = version(doc).lineage
+
+    vi.setSystemTime(2_000)
+    const later = createDoc(plainLog) as LogDoc
+    append(later, "later")
+    await createInMemoryStore({ sharedData }).append("doc", {
+      kind: "entry",
+      payload: exportEntirety(later),
+      version: version(later).serialize(),
+    })
+    const before = recordsOf(sharedData, "doc")
+
+    await a.compact("doc")
+
+    expect(version(doc).lineage).toBe(lineage)
+    expect(doc.log()).toBe("live")
+    expect(recordsOf(sharedData, "doc").slice(0, before.length)).toEqual(before)
+  })
+
+  it("a compaction from genesis takes in another instance's lineage", async () => {
+    // Joining a lineage from genesis is not a crossing: a fresh replica does
+    // it over the network by an ordinary merge.
+    const sharedData = createInMemoryStoreData()
+    const a = open(sharedData, "a")
+    const idle = a.get("doc", plainLog) as LogDoc
+    await whenHydrated(idle)
+    await a.flush()
+
+    const b = open(sharedData, "b")
+    const writer = b.get("doc", plainLog) as LogDoc
+    await whenHydrated(writer)
+    append(writer, "b")
+    await b.flush()
+    const stored = recordsOf(sharedData, "doc").length
+
+    await a.compact("doc")
+
+    expect(idle.log()).toBe("b")
+    expect(version(idle).lineage).toBe(version(writer).lineage)
+    // Compacted: what it read is gone, and its whole document replaces it.
+    expect(recordsOf(sharedData, "doc").length).toBeLessThan(stored)
+  })
+
+  it("a compaction of a document destroyed while reading merges and pushes nothing", async () => {
+    const sharedData = createInMemoryStoreData()
+    // The store deletes only once the compaction is over, so the compaction
+    // reads what `b` stored even though its document is gone.
+    let releaseDelete = (): void => {}
+    const deleting = new Promise<void>(resolve => {
+      releaseDelete = resolve
+    })
+    const inner = createInMemoryStore({ sharedData })
+    const a = new Runtime({
+      peerId: "a",
+      store: wrapStore(inner, {
+        delete: async docId => {
+          await deleting
+          await inner.delete(docId)
+        },
+      }),
+      tickInterval: 0,
+    })
+    runtimes.push(a)
+    const advanced: string[] = []
+    a.setHooks({ onDocAdvanced: docId => advanced.push(docId) })
+    const idle = a.get("doc", plainLog) as LogDoc
+    await whenHydrated(idle)
+    await a.flush()
+
+    // Stored after `a` loaded, so a compaction by `a` would take it in.
+    const b = open(sharedData, "b")
+    const writer = b.get("doc", plainLog) as LogDoc
+    await whenHydrated(writer)
+    append(writer, "b")
+    await b.flush()
+
+    // The compaction reads the store asynchronously; the document is gone
+    // before it has read anything.
+    // `compact` resolves once the document is no longer written, which a
+    // destroy makes true at once; the read it started finishes later.
+    const compacting = a.compact("doc")
+    a.destroy("doc")
+    await compacting
+    await drain(20)
+    releaseDelete()
+
+    expect(advanced).toEqual([])
+    expect(idle.log()).toBe("")
+  })
+
+  it("a compaction pushes what it took in from another instance to peers", async () => {
+    // An instance that stored its writes and crashed before sending them
+    // leaves them reachable only through the store.
+    const sharedData = createInMemoryStoreData()
+    const bridge = new Bridge()
+    const server = createExchange({
+      id: "server",
+      transports: [createBridgeTransport({ transportId: "server", bridge })],
+      store: createInMemoryStore({ sharedData }),
+    })
+    const peer = createExchange({
+      id: "peer",
+      transports: [createBridgeTransport({ transportId: "peer", bridge })],
+    })
+    const doc = server.get("doc", plainLog) as LogDoc
+    const seen = peer.get("doc", plainLog) as LogDoc
+    await whenHydrated(doc)
+    append(doc, "a")
+    await server.flush()
+    await drain(50)
+    expect(seen.log()).toBe("a")
+
+    const crashed = open(sharedData, "crashed")
+    const writer = crashed.get("doc", plainLog) as LogDoc
+    await whenHydrated(writer)
+    append(writer, "b")
+    await crashed.flush()
+
+    await server.compact("doc")
+    await drain(50)
+    expect(seen.log()).toBe("ab")
   })
 })

@@ -9,9 +9,11 @@
 // Implementations maintain a materialized metadata index so that
 // `currentMeta()` and `listDocIds()` are sublinear lookups.
 //
-// The Exchange guarantees that for any given docId, these methods are
-// called sequentially — never concurrently. Backends may assume
-// single-writer-per-document semantics.
+// An instance is owned by one Runtime, which calls it sequentially per
+// document. Several instances may open one storage (tabs over one IndexedDB
+// database, processes over one Postgres schema): their appends to a document
+// interleave, and each must succeed. See `Store` for what that asks of a
+// backend.
 
 import {
   type DocMetadata,
@@ -88,20 +90,27 @@ export type StoreRecord =
 // ---------------------------------------------------------------------------
 
 /**
+ * An opaque position in one document's record stream. Later records have
+ * greater marks, in every instance over the same storage.
+ */
+export type StoreMark = number
+
+/**
  * The persistence contract for a storage backend.
  *
  * Concrete backends implement these methods. They need no knowledge
  * of the sync protocol, substrates, or schemas — they store and
  * retrieve `StoreRecord` values faithfully.
  *
- * The Exchange guarantees single-writer-per-document semantics.
- *
- * `replace` must be atomic: a concurrent reader must never observe
- * an empty intermediate state — it sees either the pre-replace or
- * post-replace records.
- *
- * A `Store` instance is owned by exactly one `Exchange` for its
- * entire lifetime. Do not share stores across exchanges.
+ * - **An instance is owned by one Runtime**, which calls it sequentially per
+ *   document.
+ * - **Several instances may open one storage.** Their appends to one document
+ *   interleave, and each must succeed: a record's position comes from the
+ *   storage, never from a counter one instance keeps.
+ * - **`compact` removes only what its caller has read**: the records at or
+ *   before a mark the caller took before reading.
+ * - **Readers must not depend on record order across instances.** Records of
+ *   different instances reach a loader in an order no single writer chose.
  */
 export interface Store {
   /**
@@ -126,18 +135,24 @@ export interface Store {
    */
   loadAll(docId: DocId): AsyncIterable<StoreRecord>
 
+  /** The mark of the document's last record, or `null` if it has none. */
+  mark(docId: DocId): Promise<StoreMark | null>
+
   /**
-   * Atomically replace all records for a document with a batch.
-   * Used for compaction (meta + collapsed entirety).
+   * Atomically delete the document's records at or before `through`, and
+   * append `records` after every record that remains. With `through` null,
+   * only append.
    *
-   * The batch must contain at least one `meta` record. Immutable
-   * fields are validated against existing metadata. The materialized
-   * index is updated from the resolved metadata.
-   *
-   * A concurrent reader must never observe an empty intermediate
-   * state — it sees either pre-replace or post-replace records.
+   * The batch must contain at least one `meta` record. Immutable fields are
+   * validated against existing metadata, and the materialized index is
+   * updated from the resolved metadata. A concurrent reader sees either the
+   * records before or after, never a document with neither.
    */
-  replace(docId: DocId, records: StoreRecord[]): Promise<void>
+  compact(
+    docId: DocId,
+    records: StoreRecord[],
+    through: StoreMark | null,
+  ): Promise<void>
 
   /**
    * Delete all records and metadata for a document.

@@ -8,6 +8,7 @@
 import { SYNC_COLLABORATIVE } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import {
+  createInMemoryStoreData,
   InMemoryStore,
   type InMemoryStoreData,
 } from "../store/in-memory-store.js"
@@ -24,7 +25,19 @@ import {
 // Conformance suite — validates the full Store contract
 // ---------------------------------------------------------------------------
 
-describeStore("InMemoryStore", () => new InMemoryStore())
+describeStore("InMemoryStore", () => new InMemoryStore(), {
+  secondInstance: {
+    refused: false,
+    open: async () => {
+      const sharedData = createInMemoryStoreData()
+      return {
+        first: new InMemoryStore(sharedData),
+        openSecond: async () => new InMemoryStore(sharedData),
+        cleanup: async () => {},
+      }
+    },
+  },
+})
 
 // ---------------------------------------------------------------------------
 // InMemory-specific tests — sharedData / getStorage()
@@ -32,10 +45,7 @@ describeStore("InMemoryStore", () => new InMemoryStore())
 
 describe("InMemoryStore — shared state", () => {
   it("shared state via constructor arg is visible across instances", async () => {
-    const sharedData: InMemoryStoreData = {
-      records: new Map(),
-      metadata: new Map(),
-    }
+    const sharedData: InMemoryStoreData = createInMemoryStoreData()
     const backend1 = new InMemoryStore(sharedData)
     const backend2 = new InMemoryStore(sharedData)
 

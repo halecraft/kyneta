@@ -5,7 +5,7 @@
 > **Depends on**: `@prisma/client` (peer), `@kyneta/exchange` (peer), `@kyneta/schema` (peer), `@kyneta/sql-store-core` (peer).
 > **Depended on by**: Applications that have standardized on Prisma and don't want a parallel SQL library.
 > **Canonical symbols**: `PrismaStore`, `createPrismaStore`, `PrismaStoreOptions`.
-> **Key invariant(s)**: All multi-step writes run inside `client.$transaction(...)`. The seq-tracker mutation in `replace` runs lexically after the awaited `$transaction` — a rejection propagates past it. Model accessors are typed `unknown` deliberately; internally cast once to a narrow structural interface.
+> **Key invariant(s)**: All multi-step writes run inside `client.$transaction(...)`, and read the document's meta and `MAX(seq)` inside it. A write that loses a race for a `seq` to another store over the same database is retried once. Model accessors are typed `unknown` deliberately; internally cast once to a narrow structural interface.
 
 ## Architecture
 
@@ -52,9 +52,10 @@ Round-trip portability through `loadAll` works across all of these. Byte-level i
 
 | Method | Prisma calls |
 |--------|--------------|
-| `append` | `aggregate({ _max: { seq: true }})` (cold start only) → `planAppend` → `client.$transaction(async tx => { tx.<meta>.upsert(...) /* if applicable */; tx.<record>.create(...) })`. |
+| `append` | `client.$transaction(async tx => { tx.<meta>.findUnique; tx.<record>.aggregate({ _max: { seq: true }}); planAppend; tx.<meta>.upsert(...) /* if applicable */; tx.<record>.create(...) })`, retried once on `P2002`. |
 | `loadAll` | `<record>.findMany({ where: { docId }, orderBy: { seq: "asc" }})`. |
-| `replace` | `client.$transaction(async tx => { tx.<record>.deleteMany; for each: tx.<record>.create; tx.<meta>.upsert })`. |
+| `mark` | `<record>.aggregate({ where: { docId }, _max: { seq: true }})`. |
+| `compact` | `client.$transaction(async tx => { tx.<meta>.findUnique; tx.<record>.aggregate; planCompact; tx.<record>.deleteMany({ where: { docId, seq: { lte: through }}}); for each: tx.<record>.create; tx.<meta>.upsert })`, retried once on `P2002`. |
 | `delete` | `client.$transaction(async tx => { tx.<record>.deleteMany; tx.<meta>.deleteMany })`. |
 | `currentMeta` | `<meta>.findUnique({ where: { docId }})`. |
 | `listDocIds(prefix)` | Range filter: `<meta>.findMany({ where: { docId: { gte, lt }}, select: { docId: true }})`. |
@@ -77,9 +78,11 @@ Renamed model accessors work via the `metaModel`, `recordModel`, and `storeMetaM
 
 `createPrismaStore` (via `PrismaStore.open`) runs the store-format gate on open. It reads the `format` row from the store-meta model, probes the doc-meta model's `count()`, and via `@kyneta/exchange`'s `decideStoreFormat` either stamps a brand-new store, accepts a compatible major, or throws `StoreFormatVersionError`. The version value comes from `@kyneta/sql-store-core`'s `STORE_FORMAT_VERSION` (shared with sqlite/postgres). It is a compatibility check, **not** a migration. The bare `new PrismaStore({ client })` constructor skips the gate.
 
-## seq-tracker post-commit ordering
+## Sequence numbers come from the table
 
-In `replace`, `this.#seqNos.reset(docId, records.length - 1)` runs **lexically after** the awaited `client.$transaction(...)`. Prisma's `$transaction` callback returning successfully does not guarantee COMMIT succeeded — a failed commit propagates as a rejected promise from `$transaction`. Placing the reset after the await ensures a transaction rejection's throw propagates past the cache mutation, preventing a stale seq cache from corrupting a future append.
+Several stores may open one database. Each write reads the document's `MAX(seq)` inside its interactive transaction and inserts after it. Prisma offers no portable lock to hold between the read and the insert, so two stores can read the same `MAX` and the second insert then violates the `(docId, seq)` key (`P2002`). The whole transaction is retried once, reading afresh. An earlier version cached the next `seq` per document in memory, and two stores then collided on every write after the first.
+
+No conformance run reaches Prisma (it would need `prisma generate` against a schema). Its unit test drives the store through a structural mock, including an injected collision.
 
 ## What this package is NOT
 
@@ -101,7 +104,7 @@ In `replace`, `this.#seqNos.reset(docId, records.length - 1)` runs **lexically a
 |------|------|
 | `src/index.ts` | `PrismaStore` class, `createPrismaStore` factory, internal structural types, `parseMetaData`, `prefixUpperBound`. |
 | `schema.prisma.example` | Canonical model fragment — caller copies into their schema. |
-| `src/__tests__/prisma-store.test.ts` | Structural-mock unit tests covering translation. End-to-end Prisma+SQLite/Postgres tests live in `tests/integration` (when configured). |
+| `src/__tests__/prisma-store.test.ts` | Structural-mock unit tests covering translation and the retry after a lost `seq` race. No end-to-end run reaches Prisma. |
 
 ## Testing
 
@@ -110,7 +113,7 @@ Per-package tests use a structural mock instead of spinning up a real `PrismaCli
 - `PrismaStore` accepts an `unknown`-typed accessor object.
 - Default model names (`kynetaDocMeta`, `kynetaRecord`, `kynetaStoreMeta`); overridable via options.
 - Each `Store` method calls the expected mock methods.
-- Transaction rejection leaves observable state unchanged (the seq-tracker post-commit ordering claim).
+- An append that loses its `seq` to another store retries, reading `MAX(seq)` afresh. The mock rolls back only what the failing transaction wrote, as a database does.
 - Range-scan `listDocIds` matches `%` and `_` literally.
 
-End-to-end coverage against a real Prisma+SQLite/Postgres setup is the responsibility of `tests/integration` (deferred — see Learnings in the project plan).
+No end-to-end run against a real Prisma+SQLite/Postgres setup exists: `tests/integration` lists the package as a dependency but does not exercise it, and the store conformance suite does not reach Prisma.

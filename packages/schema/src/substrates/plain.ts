@@ -99,6 +99,22 @@ export function supersedes(a: string, b: string): boolean {
   return a > b
 }
 
+/**
+ * The lineage a document holding all of `lineages` belongs to: the one that
+ * supersedes the rest. Genesis (`DEFAULT_LINEAGE`) is continued by any real
+ * lineage, so it is the answer only when nothing else is given.
+ */
+export function latestLineage(lineages: Iterable<string>): string {
+  let latest = DEFAULT_LINEAGE
+  for (const lineage of lineages) {
+    if (lineage === DEFAULT_LINEAGE) continue
+    if (latest === DEFAULT_LINEAGE || supersedes(lineage, latest)) {
+      latest = lineage
+    }
+  }
+  return latest
+}
+
 export class PlainVersion implements Version {
   readonly #value: number
   readonly #lineage: string

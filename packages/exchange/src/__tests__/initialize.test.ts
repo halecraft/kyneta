@@ -139,7 +139,7 @@ describe("initialize", () => {
     // naive `if (!populated) seed()` destroyed the stored document.
     const sharedData = await seedStoredDoc({ title: "stored", count: 42 })
     const exchange = createExchange({
-      stores: [createInMemoryStore({ sharedData })],
+      store: createInMemoryStore({ sharedData }),
       authority: "self",
     })
 

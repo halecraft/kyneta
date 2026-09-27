@@ -16,6 +16,7 @@ import { Exchange } from "../exchange.js"
 import { whenHydrated } from "../settle.js"
 import {
   createInMemoryStore,
+  createInMemoryStoreData,
   type InMemoryStoreData,
 } from "../store/in-memory-store.js"
 
@@ -39,7 +40,7 @@ function exchangeOn(
   const exchange = new Exchange({
     id,
     transports: links.map(link => createBridgeTransport(link)),
-    ...(store ? { stores: [createInMemoryStore({ sharedData: store })] } : {}),
+    ...(store ? { store: createInMemoryStore({ sharedData: store }) } : {}),
   })
   exchanges.push(exchange)
   return exchange
@@ -107,7 +108,7 @@ describe("a Yjs delete-only change", () => {
   it("is relayed to a peer beyond the next one, and persisted", async () => {
     const left = new Bridge()
     const right = new Bridge()
-    const store: InMemoryStoreData = { records: new Map(), metadata: new Map() }
+    const store: InMemoryStoreData = createInMemoryStoreData()
     const alice = exchangeOn(
       "alice",
       [{ bridge: left, transportId: "alice" }],

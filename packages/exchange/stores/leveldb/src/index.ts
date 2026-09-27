@@ -19,16 +19,17 @@ import {
   decideStoreFormat,
   parseStoreFormat,
   resolveMetaFromBatch,
-  SeqNoTracker,
   STORE_META_FORMAT_KEY,
   type Store,
   type StoreFormatVersion,
   StoreFormatVersionError,
+  type StoreMark,
   type StoreMeta,
   type StoreRecord,
   validateAppend,
 } from "@kyneta/exchange"
 import { ClassicLevel } from "classic-level"
+import { SeqNoTracker } from "./seq-tracker.js"
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -296,22 +297,7 @@ export class LevelDBStore implements Store {
   async append(docId: DocId, record: StoreRecord): Promise<void> {
     const existingMeta = await this.currentMeta(docId)
 
-    // SeqNoTracker.next advances the in-memory counter before the write lands.
-    // On a caught write failure the counter runs one ahead of disk → a benign
-    // sparse seqNo (records are range-scanned, not indexed contiguously); it
-    // self-heals on reopen via the cold-start seek. Context: jj:pzuytnvo.
-    const seq = await this.#seqNos.next(docId, async () => {
-      const prefix = recordPrefix(docId)
-      for await (const key of this.#db.keys({
-        gte: prefix,
-        lt: `${prefix}\xff`,
-        reverse: true,
-        limit: 1,
-      })) {
-        return parseSeqNoFromRecordKey(key, docId)
-      }
-      return null
-    })
+    const seq = await this.#nextSeq(docId)
 
     // Single atomic batch: an entry append is a one-op batch (record only); a
     // meta append commits the record and the doc-meta index together, so a
@@ -329,37 +315,39 @@ export class LevelDBStore implements Store {
     }
   }
 
-  async replace(docId: DocId, records: StoreRecord[]): Promise<void> {
+  async mark(docId: DocId): Promise<StoreMark | null> {
+    return this.#lastSeq(docId)
+  }
+
+  async compact(
+    docId: DocId,
+    records: StoreRecord[],
+    through: StoreMark | null,
+  ): Promise<void> {
     const existingMeta = await this.currentMeta(docId)
 
     // Resolve validates: at least one meta present, immutable fields match.
     const resolved = resolveMetaFromBatch(records, existingMeta)
 
-    const prefix = recordPrefix(docId)
-
-    // Collect existing record keys to delete
-    const keysToDelete: string[] = []
-    for await (const key of this.#db.keys({
-      gte: prefix,
-      lt: `${prefix}\xff`,
-    })) {
-      keysToDelete.push(key)
+    // Atomic batch: delete the records at or before the mark, write the new
+    // ones after everything that remains, upsert meta.
+    const ops: BatchOp[] = []
+    if (through !== null) {
+      const prefix = recordPrefix(docId)
+      for await (const key of this.#db.keys({
+        gte: prefix,
+        lte: recordKey(docId, through),
+      })) {
+        ops.push({ type: "del", key })
+      }
     }
-
-    // Atomic batch: delete all existing records, write replacements, upsert meta
-    const ops: BatchOp[] = keysToDelete.map(key => ({
-      type: "del" as const,
-      key,
-    }))
-
-    for (const [i, record] of records.entries()) {
+    for (const record of records) {
       ops.push({
         type: "put",
-        key: recordKey(docId, i),
+        key: recordKey(docId, await this.#nextSeq(docId)),
         value: encodeStoreRecord(record),
       })
     }
-
     ops.push({
       type: "put",
       key: docMetaKey(docId),
@@ -367,9 +355,33 @@ export class LevelDBStore implements Store {
     })
 
     await this.#db.batch(ops)
+  }
 
-    // Reset seqNo counter to the last written index
-    this.#seqNos.reset(docId, records.length - 1)
+  /**
+   * The next record's sequence number. Kept in memory, which is sound only
+   * because `classic-level` refuses a second open of a directory, so this
+   * instance is the only writer.
+   *
+   * The counter advances before the write lands. On a caught write failure it
+   * runs ahead of disk, leaving a benign gap (records are range-scanned, not
+   * indexed contiguously) that a reopen does not repeat. Context: jj:pzuytnvo.
+   */
+  #nextSeq(docId: DocId): Promise<number> {
+    return this.#seqNos.next(docId, () => this.#lastSeq(docId))
+  }
+
+  /** The sequence number of the document's last record on disk. */
+  async #lastSeq(docId: DocId): Promise<number | null> {
+    const prefix = recordPrefix(docId)
+    for await (const key of this.#db.keys({
+      gte: prefix,
+      lt: `${prefix}\xff`,
+      reverse: true,
+      limit: 1,
+    })) {
+      return parseSeqNoFromRecordKey(key, docId)
+    }
+    return null
   }
 
   async delete(docId: DocId): Promise<void> {
@@ -494,7 +506,7 @@ export class LevelDBStore implements Store {
  * import { createLevelDBStore } from "@kyneta/leveldb-store"
  *
  * const exchange = new Exchange({
- *   stores: [await createLevelDBStore("./data/exchange-db")],
+ *   store: await createLevelDBStore("./data/exchange-db"),
  * })
  * ```
  */

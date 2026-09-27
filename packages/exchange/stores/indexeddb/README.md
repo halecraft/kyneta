@@ -2,7 +2,7 @@
 
 IndexedDB storage backend for `@kyneta/exchange` — browser-side persistent storage for documents that survive page refreshes, tab crashes, and temporary network loss.
 
-Implements the `Store` interface — pass directly to `Exchange({ stores: [...] })` for automatic document persistence and hydration.
+Implements the `Store` interface — pass directly to `Exchange({ store: ... })` for automatic document persistence and hydration.
 
 ## Install
 
@@ -19,7 +19,7 @@ import { Exchange, persistentPeerId } from "@kyneta/exchange"
 const store = await createIndexedDBStore("my-app-db")
 const exchange = new Exchange({
   id: persistentPeerId("my-peer-id"),
-  stores: [store],
+  store,
   transports: [...],
 })
 

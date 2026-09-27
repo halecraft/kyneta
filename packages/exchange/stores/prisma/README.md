@@ -51,7 +51,7 @@ const prisma = new PrismaClient()
 const store = await createPrismaStore({ client: prisma })
 
 const exchange = new Exchange({
-  stores: [store],
+  store,
   // ...
 })
 

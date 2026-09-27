@@ -5,7 +5,7 @@
 > **Depends on**: `@kyneta/exchange` (peer), `@kyneta/schema` (peer), `@kyneta/sql-store-core` (peer). Optional driver dependency: `better-sqlite3` or `bun:sqlite`.
 > **Depended on by**: Server, Bun, Cloudflare DO, and embedded-database applications.
 > **Canonical symbols**: `SqliteStore`, `createSqliteStore`, `SqliteAdapter`, `SqliteStoreOptions`, `fromBetterSqlite3`, `fromBunSqlite`.
-> **Key invariant(s)**: `append`'s meta-upsert + record-insert run inside a single `transaction(...)` — atomic. The `SqliteAdapter` interface is deliberately synchronous to preserve compatibility with all SQLite-family drivers (better-sqlite3, bun:sqlite, Cloudflare DO).
+> **Key invariant(s)**: `append`'s meta-upsert + record-insert run inside a single `transaction(...)` — atomic — and so does `compact`. Both read the meta and `MAX(seq)` inside that transaction, which takes the write lock when it begins, so several stores over one database file never take the same `seq`. The `SqliteAdapter` interface is deliberately synchronous to preserve compatibility with all SQLite-family drivers (better-sqlite3, bun:sqlite, Cloudflare DO).
 
 ## Architecture
 
@@ -29,9 +29,10 @@ The Cloudflare DO factory does not yet exist — only the design accommodates it
 
 | Method | SQL |
 |--------|-----|
-| `append` | `iterate` (currentMeta) → `iterate` (cold-start `MAX(seq)`) → `transaction(() => { exec (meta upsert if applicable); exec (record insert) })`. |
+| `append` | `transaction(() => { iterate (meta); iterate (MAX(seq)); exec (meta upsert if applicable); exec (record insert at MAX + 1) })`. |
 | `loadAll` | `iterate("SELECT kind, payload, blob FROM records WHERE doc_id = ? ORDER BY seq", docId)`. |
-| `replace` | `transaction(() => { exec DELETE; for each: exec INSERT; exec meta upsert })`. |
+| `mark` | `iterate("SELECT MAX(seq) …")`. |
+| `compact` | `transaction(() => { iterate (meta); iterate (MAX(seq)); exec DELETE seq <= through; for each: exec INSERT from MAX + 1; exec meta upsert })`. |
 | `delete` | `transaction(() => { exec DELETE records; exec DELETE meta })`. |
 | `currentMeta` | `iterate("SELECT data FROM meta WHERE doc_id = ?")` → `JSON.parse`. |
 | `listDocIds(prefix)` | `iterate("SELECT doc_id FROM meta WHERE doc_id LIKE ? ESCAPE '\\'")` with `escapeLike`. |
@@ -84,9 +85,11 @@ The named-table contract makes "prefix" a misframing — there is a fixed set of
 
 Pre-v2.0.0, `append` performed the meta upsert and the record insert as separate `exec` calls. A crash between them left the meta updated with no corresponding record — an atomicity bug. v2.0.0 wraps both writes in `transaction(() => …)`, exploiting the sync-by-default `transaction` method already implemented by both extant adapter factories. The conformance suite's fault-injected atomicity test catches the regression — the seam is `adapter.exec`, and arming "fail on the 2nd exec" forces the record-insert step to throw inside the transaction, which rolls back the meta upsert.
 
-## seq-tracker post-commit ordering
+## Sequence numbers come from the table
 
-In `replace`, `this.#seqNos.reset(docId, records.length - 1)` runs **lexically after** the sync `transaction(() => …)` call. If the transaction throws (rollback), the throw propagates past the `reset`, leaving the cache untouched. Critical: not inside the transaction callback — the cache is in-process state, not part of the database transaction; rollback would leave a stale cache pointing below the actual seq, causing primary-key collisions on subsequent appends.
+Several stores may open one database file: two processes, or two connections in one. Each write reads `MAX(seq)` for the document and inserts after it, inside one transaction. That is sound only if no other writer comes between the read and the insert, so `SqliteAdapter.transaction` must take the write lock when it begins (`BEGIN IMMEDIATE`), not at its first write, as a deferred transaction would. The built-in adapters use `.immediate()`. The store sets `PRAGMA busy_timeout = 5000` on open, so a second writer waits for the lock rather than failing at once, whatever the driver's default.
+
+An earlier version cached the next `seq` per document in memory, seeded once from `MAX(seq)`. Two instances over one table then handed out the same `seq`, and the second insert failed on the primary key.
 
 ## LIKE-pattern hazard handling
 

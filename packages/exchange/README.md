@@ -219,7 +219,7 @@ doc.theme()  // same API, now backed by a CRDT
 const exchange = new Exchange({
   id: "server",
   transports: [serverTransport],
-  stores: [await createLevelDBStore("./data/exchange-db")],  // ← new
+  store: await createLevelDBStore("./data/exchange-db"),  // ← new
 })
 // Durable documents auto-hydrate on restart, auto-persist on mutation.
 // Ephemeral ones deliberately do neither — see Storage, below.
@@ -399,13 +399,13 @@ The two-tiered default (when no `resolve` callback matches): documents whose rep
 
 ### The Exchange
 
-The `Exchange` class is the central orchestrator. It manages document lifecycle, coordinates transports and stores, and runs sync algorithms on behalf of passive substrates.
+The `Exchange` class is the central orchestrator. It manages document lifecycle, coordinates transports and a store, and runs sync algorithms on behalf of passive substrates.
 
 ```ts
 const exchange = new Exchange({
   id: { peerId: "alice", name: "Alice", type: "user" },
   transports: [networkTransport],
-  stores: [createInMemoryStore()],
+  store: createInMemoryStore(),
   canShare: (docId, peer) => {
     if (docId.startsWith("input:")) return peer.peerId === docId.slice(6)
     return undefined
@@ -511,7 +511,7 @@ Use `resolve` to decide **what to do**. Use `onDocCreated` to observe **what hap
 
 ### Storage
 
-Stores are a first-class constructor parameter, separate from transports. Durable documents auto-persist on mutation and auto-hydrate on restart:
+A store is a constructor parameter, separate from transports. Durable documents auto-persist on mutation and auto-hydrate on restart:
 
 <!-- ts-docs-standalone -->
 <!-- Not compiled: assumes a document shape the shared prelude does not declare. -->
@@ -521,7 +521,7 @@ import { createLevelDBStore } from "@kyneta/leveldb-store"
 
 const exchange = new Exchange({
   id: "server",
-  stores: [await createLevelDBStore("./data/exchange-db")],
+  store: await createLevelDBStore("./data/exchange-db"),
   transports: [networkTransport],
 })
 
@@ -533,13 +533,15 @@ const doc = exchange.get("my-doc", TodoDoc)
 
 **A `json` document has one writer.** If two peers author one (or a writer restarts without its store and writes before it has synced), each mints its own lineage. When the lineages meet, every peer converges on the one minted later, the other's writes are gone, and both sides report a `lineage-collision` diagnostic (an error, on the console and the observation bus). That includes a `Line`'s outbox: two Exchanges sharing one peer id, as React StrictMode's double mount can produce, can lose a message in flight. Give every Exchange its own peer id.
 
-**Write to a stored plain document after it has loaded.** A `json.bind` document with stores refuses writes until loading completes, and throws "still loading" if you try: its history is a sequence, and a write made before that history is known would be overwritten by it. `await whenHydrated(doc)` (storage only) or `await whenSettled(doc)` (storage and the authority) first, or seed defaults with `initialize`. Loro and Yjs documents accept writes while loading and merge them.
+**Write to a stored plain document after it has loaded.** A `json.bind` document with a store refuses writes until loading completes, and throws "still loading" if you try: its history is a sequence, and a write made before that history is known would be overwritten by it. `await whenHydrated(doc)` (storage only) or `await whenSettled(doc)` (storage and the authority) first, or seed defaults with `initialize`. Loro and Yjs documents accept writes while loading and merge them.
 
-**Ephemeral documents are never stored.** Anything bound through `ephemeral` declares `durability: "transient"`, and the exchange keeps it out of stores in both directions — no hydrate on open, no write on mutation, no delete on destroy. That is the point of the tier: presence, cursors and live input describe who is here *now*, and a restarted server resurrecting yesterday's cursor positions would be worse than having none. Configuring stores does not change this, and there is no way to opt a transient document into persistence — use a durable binding target instead.
+**Ephemeral documents are never stored.** Anything bound through `ephemeral` declares `durability: "transient"`, and the exchange keeps it out of the store in both directions — no hydrate on open, no write on mutation, no delete on destroy. That is the point of the tier: presence, cursors and live input describe who is here *now*, and a restarted server resurrecting yesterday's cursor positions would be worse than having none. Configuring a store does not change this, and there is no way to opt a transient document into persistence — use a durable binding target instead.
+
+**Several instances may open one storage** — tabs over one IndexedDB database, processes over one Postgres schema. Their writes interleave safely, and a compaction by one never deletes what another wrote without having read it.
 
 **Store format gate.** On open, every persistent backend stamps a `{ major, minor }` on-disk format version into a dedicated store-metadata namespace (a `kyneta_store_meta` table, an IndexedDB `store_meta` object store, or a `store-meta\x00` key prefix — separate from the per-document `doc_meta` namespace). On a later open it refuses — throwing `StoreFormatVersionError` — a store whose stamped major is incompatible with the running build, or an unversioned store that already holds documents. The gate is a compatibility check only; it performs no automatic migration. Separately, a document whose stored records were written in a replica format the running build cannot read (a different `replicaType` major) fails to load: `whenHydrated` rejects rather than presenting an empty document.
 
-For testing, use `createInMemoryStore()` with shared state to simulate persist → restart → hydrate flows:
+For testing, use `createInMemoryStore()` with shared state to simulate persist → restart → hydrate flows. `createInMemoryStoreData()` builds the shared storage, and `recordsOf(sharedData, docId)` reads what it holds:
 
 <!-- ts-docs-setup
 declare const TodoDoc: typeof MyDoc
@@ -551,11 +553,11 @@ declare const exchange: Exchange
 <!-- Not compiled: assumes a document shape the shared prelude does not declare. -->
 <!-- ts-docs-verifier:ignore -->
 ```ts
-const sharedData: InMemoryStoreData = { records: new Map(), metadata: new Map() }
+const sharedData = createInMemoryStoreData()
 
 const exchange1 = new Exchange({
   id: "server",
-  stores: [createInMemoryStore({ sharedData })],
+  store: createInMemoryStore({ sharedData }),
 })
 const doc = exchange1.get("my-doc", TodoDoc)
 await whenHydrated(doc) // a stored plain document refuses writes until it has loaded
@@ -564,7 +566,7 @@ await exchange1.shutdown()
 
 const exchange2 = new Exchange({
   id: "server",
-  stores: [createInMemoryStore({ sharedData })],
+  store: createInMemoryStore({ sharedData }),
   resolve: () => Interpret(TodoDoc),
 })
 // "my-doc" is restored from storage automatically
@@ -688,7 +690,7 @@ const doc = createDoc(BlogSchema)
 await initialize(doc, seedDefaults)
 
 // Local-only, with storage — waits for the load, never for a network
-const exchange = new Exchange({ id: "app", stores: [store] })
+const exchange = new Exchange({ id: "app", store })
 await initialize(exchange.get("blog", BlogDoc), seedDefaults)
 
 // Server — authoritative. Declared once, at construction. It has a transport
@@ -697,7 +699,7 @@ await initialize(exchange.get("blog", BlogDoc), seedDefaults)
 // for a client that has nothing to tell it.
 const server = new Exchange({
   id: "server",
-  stores: [store],
+  store,
   transports: [wsServer],
   authority: "self",
 })
@@ -806,7 +808,7 @@ lose the race at runtime, it throws with the fix in the message.
 | Level | What you write | What you get |
 |-------|----------------|--------------|
 | **Trivial** | `exchange.get("doc", MyDoc)` | Typed, syncable, observable document |
-| **Standard** | Add `transports`, `stores` | Network sync + persistence |
+| **Standard** | Add `transports`, `store` | Network sync + persistence |
 | **Intermediate** | Add `canShare`, `canAccept`, `resolve` | Information flow control, dynamic doc creation |
 | **Advanced** | `register()` scopes, `Line`, custom transports | Composable rules, reliable messaging, custom protocols |
 | **Expert** | Custom `Substrate<V>` implementation | New CRDT runtimes, new state models |
@@ -826,10 +828,10 @@ You only engage the next level when you need it. Each level is additive — it d
 | `replicate(docId, replicaFactory, syncMode, schemaHash)` | Register a document for headless replication with explicit arguments. |
 | `has(docId)` | Check if a document exists (interpret or replicate mode). |
 | `deferred` | `ReadonlySet<DocId>` — deferred document IDs. Participate in routing but have no local representation. |
-| `dismiss(docId)` | Leave the sync graph — removes locally, broadcasts `dismiss`, deletes from stores. |
+| `dismiss(docId)` | Leave the sync graph — removes locally, broadcasts `dismiss`, deletes from the store. |
 | `peers` | `CallableChangefeed<ReadonlyMap<PeerId, PeerIdentityDetails>, PeerChange>` — reactive peer connection lifecycle (established / disconnected / reconnected / departed). |
 | `flush()` | Await all pending storage operations. |
-| `shutdown()` | Flush stores, disconnect transports, close handles. The recommended graceful teardown. |
+| `shutdown()` | Flush the store, disconnect transports, close handles. The recommended graceful teardown. |
 | `reset()` | Disconnect transports and clear state (synchronous). Does NOT flush pending storage. |
 | `addTransport(transport)` | Add a transport at runtime. |
 | `removeTransport(transportId)` | Remove a transport at runtime. |
@@ -844,7 +846,7 @@ You only engage the next level when you need it. Each level is additive — it d
 |--------|-------------|
 | `id` | `string \| { peerId, name?, type? }` — peer identity. A plain string is shorthand for `{ peerId: string }`. Required for `get()`. |
 | `transports` | `TransportFactory[]` — network connectivity. |
-| `stores` | `Store[]` — persistent storage backends. |
+| `store` | `Store` — the persistent storage backend. |
 | `schemas` | `BoundSchema[]` — upfront schema registration for auto-resolution. |
 | `replicas` | `BoundReplica[]` — replication modes for headless participation. E.g. `[loro.replica()]`. |
 | `canShare` | `(docId, peer) → boolean \| undefined` — outbound flow control. Default: allow. |
@@ -931,9 +933,11 @@ Each binding target is a fixed `(substrate, sync-mode, supported-laws)` bundle. 
 
 | Export | Description |
 |--------|-------------|
-| `Store` | Interface for persistent storage backends. |
-| `StoreEntry` | `{ payload: SubstratePayload, version: string }` |
-| `createInMemoryStore(opts?)` | Map-backed store for testing. Pass `{ sharedData }` for cross-instance persistence. |
+| `Store` | Interface for persistent storage backends: append, load, and compaction by mark (`StoreMark`). Several instances may open one storage. |
+| `StoreRecord` | A stored record: `{ kind: "meta", meta }` or `{ kind: "entry", payload, version }`. |
+| `createInMemoryStore(opts?)` | Map-backed store for testing. Pass `{ sharedData }` to open the same storage from several instances. |
+| `createInMemoryStoreData()` | An empty storage to share between in-memory stores. |
+| `recordsOf(sharedData, docId)` | The records an in-memory storage holds for a document, in stream order. |
 
 ### Utility
 

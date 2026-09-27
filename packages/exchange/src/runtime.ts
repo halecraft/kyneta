@@ -43,8 +43,8 @@ import type {
 import {
   beginHydration,
   createRef,
+  DEFAULT_LINEAGE,
   metadataOf,
-  reaches,
   replicaTypesCompatible,
   subscribe,
 } from "@kyneta/schema"
@@ -65,6 +65,11 @@ import {
   storeProgram,
   type Write,
 } from "./store/store-program.js"
+import {
+  latestStoredLineage,
+  type StoredEntry,
+  takeStoredEntries,
+} from "./stored-entries.js"
 
 /**
  * Let a Node.js timer run without keeping the process alive. Browser timers
@@ -81,6 +86,24 @@ function unrefTimer(timer: unknown): void {
   }
 }
 
+/**
+ * Store the records of a `register` or `since` write: a document the store
+ * has never acknowledged is written by `compact` with no mark, which only
+ * appends; a delta is appended.
+ */
+async function writeRecords(
+  store: Store,
+  docId: DocId,
+  write: Exclude<Write, { kind: "compact" }>,
+  records: StoreRecord[],
+): Promise<void> {
+  if (write.kind === "register") {
+    await store.compact(docId, records, null)
+    return
+  }
+  for (const record of records) await store.append(docId, record)
+}
+
 /** The obligation a no-store document has: none. */
 const NO_ADOPT = (): void => {}
 
@@ -89,11 +112,14 @@ const NOTHING_WIRED = (): void => {}
 
 /** What loading found. `#hydrate` gathers it; `#becomeReady` acts on it. */
 export type LoadOutcome =
-  /** The store holds the document at `version`, the last loaded entry's. */
+  /**
+   * The store holds the document at `version`: the join of the stored
+   * entries the replica reaches.
+   */
   | { readonly kind: "stored"; readonly version: string }
-  /** No store holds the document. */
+  /** The store holds nothing of the document the replica could take in. */
   | { readonly kind: "empty" }
-  /** Nothing was loaded: no stores, a transient document, or a promotion
+  /** Nothing was loaded: no store, a transient document, or a promotion
    *  whose replica already loaded. */
   | { readonly kind: "none" }
 
@@ -287,7 +313,7 @@ export type DocCacheEntry =
 export type RuntimeHooks = {
   /**
    * Called when a document has been fully hydrated from storage (or
-   * immediately if no stores are configured) and is ready to participate
+   * immediately if no store is configured) and is ready to participate
    * in the sync graph.
    *
    * The Exchange implements this to call `synchronizer.registerDoc(...)`.
@@ -299,20 +325,22 @@ export type RuntimeHooks = {
    *
    * For observation only: the Exchange forwards it to the Synchronizer's
    * observation bus. Nothing leaves the process from here; see
-   * {@link RuntimeHooks.onDocLocalChange}.
+   * {@link RuntimeHooks.onDocAdvanced}.
    */
   onDocChangeset?: (docId: DocId, changeset: Changeset<Op>) => void
 
   /**
-   * Called when an interpreted document gained local operations, however
-   * they were written, from the Runtime's drain and after persistence was
-   * requested for them.
+   * Called when a document's replica advanced by a route other than the
+   * network: an interpreted document's local operations, however they were
+   * written (from the drain, after persistence was requested for them), or
+   * records a compaction took in from the store.
    *
-   * The Exchange implements this to call `synchronizer.notifyLocalChange`,
+   * The Exchange implements this to call `synchronizer.notifyAdvanced`,
    * which asks for a push to peers. With a store, the push is held until the
-   * store confirms the operations (see {@link Runtime.publishable}).
+   * store confirms the document's own operations (see
+   * {@link Runtime.publishable}).
    */
-  onDocLocalChange?: (docId: DocId) => void
+  onDocAdvanced?: (docId: DocId) => void
 
   /**
    * Called when the store confirms a document's own writes, so the document
@@ -326,7 +354,7 @@ export type RuntimeHooks = {
 
   /**
    * Called when a document is destroyed locally — remove from sync graph
-   * AND delete from stores. The Exchange implements this to broadcast
+   * AND delete from the store. The Exchange implements this to broadcast
    * `dismiss` to peers via the Synchronizer.
    */
   onDocDestroyed?: (docId: DocId) => void
@@ -358,8 +386,8 @@ export type RuntimeParams = {
   /** The local peer ID — used for substrate factory construction. */
   peerId: string
 
-  /** Persistent storage backends (first-hit semantics). */
-  stores?: Store[]
+  /** The store documents persist to and load from. */
+  store?: Store
 
   /**
    * Called when a store operation fails. Default: `console.warn`.
@@ -397,7 +425,7 @@ export type RuntimeParams = {
  * directly:
  *
  * ```typescript
- * const runtime = new Runtime({ peerId: "alice", stores: [createInMemoryStore()] })
+ * const runtime = new Runtime({ peerId: "alice", store: createInMemoryStore() })
  * const doc = runtime.get("my-doc", TodoDoc)
  * await runtime.flush() // persist
  * await runtime.shutdown()
@@ -410,7 +438,7 @@ export class Runtime {
   readonly peerId: string
   readonly lease: Lease
 
-  readonly #stores: Store[]
+  readonly #store: Store | undefined
   /** Store-program handle — pure Mealy machine for store coordination. */
   readonly #storeHandle: ObservableHandle<StoreInput, StoreModel> | null
 
@@ -444,18 +472,18 @@ export class Runtime {
 
   constructor({
     peerId,
-    stores = [],
+    store,
     onStoreError,
     lease,
     tickInterval = 1000,
   }: RuntimeParams) {
     this.peerId = peerId
     this.lease = lease ?? createLease()
-    this.#stores = stores
+    this.#store = store
     this.#tickIntervalMs = tickInterval
 
     // ── Store-program — pure machine for store coordination ──
-    if (stores.length > 0) {
+    if (store) {
       const errorHandler =
         onStoreError ??
         ((docId: DocId, operation: string, error: unknown) => {
@@ -472,7 +500,7 @@ export class Runtime {
             case "persist": {
               // Any write that starts replaces a scheduled retry.
               this.#cancelRetry(effect.docId)
-              this.#persist(effect.docId, effect.write, dispatch)
+              this.#persist(store, effect.docId, effect.write, dispatch)
               break
             }
             case "persisted": {
@@ -486,7 +514,7 @@ export class Runtime {
             case "persist-delete": {
               const { docId } = effect
               this.#cancelRetry(docId)
-              Promise.all(stores.map(store => store.delete(docId))).then(
+              store.delete(docId).then(
                 () => {}, // No write-succeeded for destroy
                 error => errorHandler(docId, "delete", error),
               )
@@ -545,8 +573,8 @@ export class Runtime {
    * Gets (or creates) an interpreted document.
    *
    * Creates the substrate + ref, caches the entry, and begins hydration
-   * (if stores are configured). Returns the ref synchronously. If stores
-   * are configured, hydration completes asynchronously — the ref starts
+   * (if a store is configured). Returns the ref synchronously. If a store
+   * is configured, hydration completes asynchronously — the ref starts
    * empty and the changefeed fires when stored data is merged.
    *
    * Multiple calls with the same `docId` return the same instance. Calling
@@ -713,7 +741,7 @@ export class Runtime {
   // =========================================================================
 
   /**
-   * Destroy a document — remove it from the cache and delete from stores.
+   * Destroy a document — remove it from the cache and delete from the store.
    *
    * Fires {@link RuntimeHooks.onDocDestroyed} so the Exchange can broadcast
    * `dismiss` to peers and remove the doc from the sync graph.
@@ -738,7 +766,7 @@ export class Runtime {
     const touchesStore =
       entry === undefined ||
       entry.mode === "deferred" ||
-      this.#usesStores(entry.readyInfo.syncMode)
+      this.#usesStore(entry.readyInfo.syncMode)
 
     this.#evict(docId)
     if (touchesStore) this.#storeHandle?.dispatch({ type: "destroy", docId })
@@ -853,13 +881,15 @@ export class Runtime {
   /**
    * Will this document's state ever reach a store, in either direction?
    */
-  #usesStores(syncMode: SyncMode): boolean {
-    return this.#stores.length > 0 && syncMode.durability === "persistent"
+  #usesStore(syncMode: SyncMode): boolean {
+    return this.#store !== undefined && syncMode.durability === "persistent"
   }
 
   /**
-   * Compact a document: replace what the stores hold with the document as it
-   * stands when the write starts. Resolves once no write is in flight for it.
+   * Compact a document: take in what the store holds of it, then replace
+   * what was read with the whole document ({@link Runtime.#compact}).
+   * Resolves once no write is in flight for it, which a `destroy` makes true
+   * at once.
    */
   async compact(docId: DocId): Promise<void> {
     if (!this.#storeHandle) return
@@ -875,13 +905,23 @@ export class Runtime {
    *
    * The replica is read here, when the write starts, not when it was
    * requested. A write owed behind another therefore diffs from the version
-   * that one confirmed, so no record repeats another's operations.
+   * that one confirmed, so no record repeats another's operations. A
+   * compaction reads the store first ({@link Runtime.#compact}).
    */
   #persist(
+    store: Store,
     docId: DocId,
     write: Write,
     dispatch: (msg: StoreInput) => void,
   ): void {
+    if (write.kind === "compact") {
+      this.#compact(store, docId).then(
+        version => dispatch({ type: "write-succeeded", docId, version }),
+        error => dispatch({ type: "write-failed", docId, error }),
+      )
+      return
+    }
+
     let prepared: { records: StoreRecord[]; version: string }
     try {
       prepared = this.#prepareWrite(docId, write)
@@ -897,18 +937,82 @@ export class Runtime {
       return
     }
 
-    Promise.all(
-      this.#stores.map(async store => {
-        if (write.kind === "compact") {
-          await store.replace(docId, records)
-          return
-        }
-        for (const record of records) await store.append(docId, record)
-      }),
-    ).then(
+    writeRecords(store, docId, write, records).then(
       () => dispatch({ type: "write-succeeded", docId, version }),
       error => dispatch({ type: "write-failed", docId, error }),
     )
+  }
+
+  /**
+   * Compact a document, and resolve with the version the store then holds.
+   *
+   * 1. Read the store's mark, then every entry.
+   * 2. Stop if the document is no longer the one held when the read began:
+   *    nothing is merged into, or pushed from, a document that is gone.
+   * 3. Take what was read into the live replica, toward its own lineage, or
+   *    toward the latest stored one while it is still at genesis, since
+   *    joining a lineage from genesis is not a crossing. Records other
+   *    instances appended are then held here. A merge that moved the replica
+   *    is an advance the Synchronizer must hear of, or the writes of an
+   *    instance that stored them and crashed before sending would never
+   *    leave.
+   * 4. Write the whole document, deleting the records at or before the mark.
+   *    Everything deleted was read and is now held; anything appended after
+   *    the read is after the mark and survives.
+   *
+   * If the replica could not take everything in, deleting would lose it. The
+   * compaction then appends what a `since` write would, and deletes nothing:
+   * compaction only saves space, and a stray record must not surface as a
+   * failed write on every compaction while every append succeeds.
+   */
+  async #compact(store: Store, docId: DocId): Promise<string> {
+    const held = this.#docCache.get(docId)
+    const mark = await store.mark(docId)
+    const entries: StoredEntry[] = []
+    for await (const record of store.loadAll(docId)) {
+      if (record.kind === "entry") entries.push(record)
+    }
+
+    const entry = this.#docCache.get(docId)
+    if (entry === undefined || entry !== held || entry.mode === "deferred") {
+      throw new Error(`[runtime] cannot compact '${docId}': document not held`)
+    }
+    const { replica, replicaFactory } = entry.readyInfo
+    const before = replica.version()
+    const toward =
+      before.lineage === DEFAULT_LINEAGE
+        ? latestStoredLineage(replicaFactory, entries)
+        : before.lineage
+    const { untaken } = takeStoredEntries(
+      replica,
+      replicaFactory,
+      entries,
+      toward,
+    )
+    if (replica.version().serialize() !== before.serialize()) {
+      this.#hooks.onDocAdvanced?.(docId)
+    }
+
+    if (untaken.length > 0) {
+      console.warn(
+        `[runtime] compaction of '${docId}' could not take in the stored ` +
+          `entries at ${untaken.join(", ")}; appending instead`,
+      )
+      const phase = this.#storeHandle?.getState().docs.get(docId)
+      const confirmed =
+        phase === undefined ? undefined : confirmedVersion(phase)
+      const write: Write =
+        confirmed === undefined
+          ? { kind: "register" }
+          : { kind: "since", version: confirmed }
+      const { records, version } = this.#prepareWrite(docId, write)
+      if (records.length > 0) await writeRecords(store, docId, write, records)
+      return version
+    }
+
+    const { records, version } = this.#prepareWrite(docId, { kind: "compact" })
+    await store.compact(docId, records, mark)
+    return version
   }
 
   /**
@@ -985,7 +1089,7 @@ export class Runtime {
   }
 
   /**
-   * Gracefully shut down: flush all pending operations, close stores,
+   * Gracefully shut down: flush all pending operations, close the store,
    * stop the tick clock.
    */
   async shutdown(): Promise<void> {
@@ -997,9 +1101,7 @@ export class Runtime {
     this.#stopTick()
     this.#cancelAllRetries()
     for (const docId of [...this.#docCache.keys()]) this.#evict(docId)
-    for (const backend of this.#stores) {
-      await backend.close()
-    }
+    await this.#store?.close()
   }
 
   /**
@@ -1065,7 +1167,7 @@ export class Runtime {
     // `#usesStores` for why they have to agree. A promotion never hydrates:
     // the replica it upgrades has already loaded, which is the precondition
     // the caller had to satisfy to get here.
-    const willHydrate = !promoting && this.#usesStores(bound.syncMode)
+    const willHydrate = !promoting && this.#usesStore(bound.syncMode)
 
     // All three arms end with this peer's identity claimed; they differ in
     // *when*, and each is right for what it can guarantee. `beginHydration`
@@ -1186,7 +1288,7 @@ export class Runtime {
     }
 
     // Same rule as the interpret path — a relay holds transient documents too.
-    const willHydrate = this.#usesStores(syncMode)
+    const willHydrate = this.#usesStore(syncMode)
 
     // A replicate document has no ref, so no settle term can be keyed to it
     // and it has no `docStatus` surface. The latch is still tracked so the
@@ -1210,7 +1312,7 @@ export class Runtime {
   }
 
   /**
-   * Load the document from the stores, then make it ready. A failed load
+   * Load the document from the store, then make it ready. A failed load
    * marks the latch `failed` and nothing else: its state is unknown, so the
    * document is neither registered, announced, nor given a stable identity.
    */
@@ -1355,12 +1457,12 @@ export class Runtime {
     const { replica, syncMode } = entry.readyInfo
     replica.commitPending()
     if (!this.#dirtyLocalChanges.delete(docId)) return
-    if (this.#usesStores(syncMode)) {
+    if (this.#usesStore(syncMode)) {
       entry.publication.ownHigh = replica.version()
       this.#reportPersistence(entry)
     }
     this.onStateAdvanced(docId)
-    this.#hooks.onDocLocalChange?.(docId)
+    this.#hooks.onDocAdvanced?.(docId)
   }
 
   /**
@@ -1425,97 +1527,44 @@ export class Runtime {
    */
   async #hydrate(readyInfo: DocReadyInfo): Promise<LoadOutcome> {
     const { docId, replica, replicaFactory } = readyInfo
-    // First-hit semantics: use the first store that has data. `storedVersion`
-    // is the version of the last entry loaded: what the store holds.
-    let storedVersion: string | undefined
-    // A store that throws has told us nothing — not "the document is empty",
-    // merely "I could not answer". Track those separately from stores that
-    // answered (with data or with a definitive null), because the difference
-    // decides whether an empty replica means "nothing stored" or "we failed to
-    // look". Reporting the second as the first is how defaults get written
-    // over data that exists on disk.
-    const readFailures: unknown[] = []
-    let anyStoreAnswered = false
-    for (const backend of this.#stores) {
-      try {
-        const existing = await backend.currentMeta(docId)
-        if (
-          existing &&
-          !replicaTypesCompatible(
-            existing.replicaType,
-            replicaFactory.replicaType,
-          )
-        ) {
-          // Records in a format this replica cannot read are not an empty
-          // document: reading them anyway would misparse them. The store
-          // could not answer, the same as a store that threw.
-          throw new Error(
-            `stored replica type [${existing.replicaType}] cannot be read by [${replicaFactory.replicaType}]`,
-          )
-        }
-        anyStoreAnswered = true
-        if (existing) {
-          for await (const record of backend.loadAll(docId)) {
-            if (record.kind === "entry") {
-              // The store holds this entry whether or not it loads here, so
-              // it counts toward the store's version either way.
-              storedVersion = record.version
-              try {
-                // A whole-document entry is the state at its version, whatever
-                // came before it: after a lineage reset, the store's next
-                // write is the new lineage's whole document, which a merge
-                // would refuse as not continuing the old one. A delta must
-                // bring the replica to the version it was stored at; one that
-                // does not continue what loaded before it leaves the replica
-                // short, and is a failed read of that entry.
-                if (record.payload.kind === "entirety") {
-                  replica.resetFromEntirety(record.payload, { origin: "sync" })
-                } else {
-                  replica.merge(record.payload, { origin: "sync" })
-                  // A history-free version is a private counter, compared
-                  // with nothing but its own replica.
-                  if (
-                    !replicaFactory.historyFree &&
-                    !reaches(
-                      replica.version(),
-                      replicaFactory.parseVersion(record.version),
-                    )
-                  ) {
-                    throw new Error(
-                      `stored entry at ${record.version} does not continue the entries loaded before it`,
-                    )
-                  }
-                }
-              } catch (err) {
-                console.warn(
-                  `[runtime] failed to merge stored entry for doc '${docId}':`,
-                  err,
-                )
-              }
-            }
-          }
-          break // First-hit: use first store that has the doc
-        }
-      } catch (error) {
-        readFailures.push(error)
-        console.warn(
-          `[runtime] store hydration failed for doc '${docId}':`,
-          error,
-        )
-      }
+    const store = this.#store
+    if (!store) return NOTHING_LOADED
+    const nothingStored: LoadOutcome = { kind: "empty" }
+
+    // A read that throws is a failed load, not an empty document: reporting
+    // it as empty is how defaults get written over data that exists.
+    const existing = await store.currentMeta(docId)
+    if (!existing) return nothingStored
+    if (
+      !replicaTypesCompatible(existing.replicaType, replicaFactory.replicaType)
+    ) {
+      // Records in a format this replica cannot read are not an empty
+      // document either: reading them would misparse them.
+      throw new Error(
+        `stored replica type [${existing.replicaType}] cannot be read by [${replicaFactory.replicaType}]`,
+      )
     }
 
-    // Only a *total* read failure is fatal. With several stores configured, one
-    // failing and another answering is a legitimate fallback — that is what
-    // first-hit ordering is for. But if nothing could be read at all, the
-    // caller must not be handed a document that merely looks empty.
-    if (!anyStoreAnswered && readFailures.length > 0) {
-      throw readFailures[0]
+    const entries: StoredEntry[] = []
+    for await (const record of store.loadAll(docId)) {
+      if (record.kind === "entry") entries.push(record)
     }
-
-    return storedVersion === undefined
-      ? { kind: "empty" }
-      : { kind: "stored", version: storedVersion }
+    // Nothing live is loaded into, so the latest stored lineage is the
+    // document's.
+    const { stored, untaken } = takeStoredEntries(
+      replica,
+      replicaFactory,
+      entries,
+      latestStoredLineage(replicaFactory, entries),
+    )
+    for (const version of untaken) {
+      console.warn(
+        `[runtime] stored entry at ${version} for doc '${docId}' could not be loaded`,
+      )
+    }
+    return stored === undefined
+      ? nothingStored
+      : { kind: "stored", version: stored }
   }
 
   // =========================================================================
@@ -1586,7 +1635,7 @@ export class Runtime {
    */
   #gateOpen(entry: InterpretEntry): boolean {
     const { replica, replicaFactory, syncMode, docId } = entry.readyInfo
-    if (!this.#usesStores(syncMode)) return true
+    if (!this.#usesStore(syncMode)) return true
     const phase = this.#storeHandle?.getState().docs.get(docId)
     const confirmed = phase === undefined ? undefined : confirmedVersion(phase)
     return gateOpen({
@@ -1632,7 +1681,7 @@ export class Runtime {
    * heard of it: the gate is only asked after a drain.
    */
   #persisted(entry: InterpretEntry): boolean {
-    if (!this.#usesStores(entry.readyInfo.syncMode)) return true
+    if (!this.#usesStore(entry.readyInfo.syncMode)) return true
     if (this.#dirtyLocalChanges.has(entry.readyInfo.docId)) return false
     return this.#gateOpen(entry)
   }

@@ -179,7 +179,7 @@ export const STORE_FORMAT_VERSION: StoreFormatVersion = { major: 1, minor: 0 }
 //
 // Why these exist: validation, serialization, and seq math are identical
 // across every SQL backend. Factoring them into pure helpers keeps each
-// backend's append/replace down to "gather state, plan, execute under
+// backend's append/compact down to "gather state, plan, execute under
 // transaction" — no duplicated invariant logic that can drift between
 // backends.
 
@@ -188,7 +188,7 @@ export interface AppendPlan {
   readonly insertRecord: { readonly seq: number; readonly row: RowShape }
 }
 
-export interface ReplacePlan {
+export interface CompactPlan {
   readonly records: ReadonlyArray<{
     readonly seq: number
     readonly row: RowShape
@@ -211,21 +211,22 @@ export function planAppend(
   }
 }
 
-export function planReplace(
+/**
+ * The rows a compaction writes, numbered from `nextSeq`: after every record
+ * that remains, which the caller read from the table inside the write
+ * transaction.
+ */
+export function planCompact(
   records: ReadonlyArray<StoreRecord>,
   existingMeta: StoreMeta | null,
-): ReplacePlan {
+  nextSeq: number,
+): CompactPlan {
   const resolved = resolveMetaFromBatch([...records], existingMeta)
-
-  const rows: Array<{ readonly seq: number; readonly row: RowShape }> = []
-  for (let i = 0; i < records.length; i++) {
-    const record = records[i]
-    if (record === undefined) continue
-    rows.push({ seq: i, row: toRow(record) })
-  }
-
   return {
-    records: rows,
+    records: records.map((record, i) => ({
+      seq: nextSeq + i,
+      row: toRow(record),
+    })),
     upsertMeta: { data: JSON.stringify(resolved) },
   }
 }

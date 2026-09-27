@@ -2,6 +2,7 @@
 // load one.
 
 import {
+  createInMemoryStoreData,
   InMemoryStore,
   type InMemoryStoreData,
 } from "../store/in-memory-store.js"
@@ -14,10 +15,7 @@ import {
 export async function seedStoredDoc(
   state: Record<string, unknown>,
 ): Promise<InMemoryStoreData> {
-  const sharedData: InMemoryStoreData = {
-    records: new Map(),
-    metadata: new Map(),
-  }
+  const sharedData: InMemoryStoreData = createInMemoryStoreData()
   const backend = new InMemoryStore(sharedData)
   await backend.append("doc-1", makeMetaRecord())
   await backend.append("doc-1", makePlainEntirety(state))

@@ -2,15 +2,17 @@
 //
 // These tests exercise the PrismaStore's translation of Store calls
 // into Prisma model-accessor calls without depending on @prisma/client
-// at runtime (which would force a real schema generation step). The
-// full conformance suite runs against Prisma+SQLite as part of the
-// integration tests in tests/integration. Here we only verify:
+// at runtime (which would force a real schema generation step). No
+// conformance run reaches Prisma: these tests are its coverage. They
+// verify:
 //
 // 1. PrismaStore accepts a structurally-typed accessor object.
 // 2. The model names default to `kynetaDocMeta` / `kynetaRecord` /
 //    `kynetaStoreMeta`, overridable via options.
-// 3. Append, currentMeta, loadAll, listDocIds, delete, replace each
-//    call the expected mock methods with the expected args.
+// 3. Append, currentMeta, loadAll, listDocIds, delete, mark and compact
+//    each call the expected mock methods with the expected args.
+// 4. An append that loses a race for a sequence number to another
+//    instance retries, reading the last sequence number afresh.
 //
 // The structural-typing test is the load-bearing claim of the
 // `unknown`-with-internal-cast approach: any caller-supplied
@@ -38,6 +40,13 @@ interface MockState {
     blob: Uint8Array | null
   }>
   txCalls: number
+  /**
+   * Run once before the next `create`: another instance inserting between
+   * this transaction's read of the last sequence number and its insert.
+   */
+  beforeCreate?: () => void
+  /** Records created by the transaction in progress, undone if it fails. */
+  createdInTx?: MockState["records"]
 }
 
 function makeMockClient(state: MockState): unknown {
@@ -119,11 +128,29 @@ function makeMockClient(state: MockState): unknown {
         blob: Uint8Array | null
       }
     }) {
+      const interleave = state.beforeCreate
+      state.beforeCreate = undefined
+      interleave?.()
+      if (
+        state.records.some(
+          r => r.docId === args.data.docId && r.seq === args.data.seq,
+        )
+      ) {
+        throw Object.assign(new Error("Unique constraint failed"), {
+          code: "P2002",
+        })
+      }
       state.records.push(args.data)
+      state.createdInTx?.push(args.data)
       return null
     },
-    async deleteMany(args: { where: { docId: string } }) {
-      state.records = state.records.filter(r => r.docId !== args.where.docId)
+    async deleteMany(args: {
+      where: { docId: string; seq?: { lte: number } }
+    }) {
+      const { docId, seq } = args.where
+      state.records = state.records.filter(
+        r => r.docId !== docId || (seq !== undefined && r.seq > seq.lte),
+      )
       return null
     },
     async aggregate(args: { where: { docId: string }; _max: { seq: true } }) {
@@ -148,17 +175,19 @@ function makeMockClient(state: MockState): unknown {
     fn: (tx: unknown) => Promise<R>,
   ): Promise<R> => {
     state.txCalls += 1
-    // Snapshot for rollback.
-    const snapshot = {
-      metas: new Map(state.metas),
-      records: state.records.slice(),
-    }
+    // Roll back only what this transaction did: another instance's writes
+    // made meanwhile stand.
+    const metas = new Map(state.metas)
+    const created: MockState["records"] = []
+    state.createdInTx = created
     try {
       return await fn(client)
     } catch (e) {
-      state.metas = snapshot.metas
-      state.records = snapshot.records
+      state.metas = metas
+      state.records = state.records.filter(r => !created.includes(r))
       throw e
+    } finally {
+      state.createdInTx = undefined
     }
   }
   return client
@@ -219,7 +248,7 @@ describe("PrismaStore — structural mock", () => {
     expect(state.records).toHaveLength(0)
   })
 
-  it("replace swaps the record stream and updates meta", async () => {
+  it("compact swaps what is at or before the mark, after what remains", async () => {
     const state = freshState()
     const store = new PrismaStore({ client: makeMockClient(state) })
     await store.append("doc-1", { kind: "meta", meta: baseMeta })
@@ -234,19 +263,54 @@ describe("PrismaStore — structural mock", () => {
       version: "v2",
     })
 
-    await store.replace("doc-1", [
-      { kind: "meta", meta: baseMeta },
-      {
-        kind: "entry",
-        payload: { kind: "entirety", encoding: "json", data: "{}" },
-        version: "v3",
-      },
-    ])
+    const through = await store.mark("doc-1")
+    expect(through).toBe(2)
+
+    await store.compact(
+      "doc-1",
+      [
+        { kind: "meta", meta: baseMeta },
+        {
+          kind: "entry",
+          payload: { kind: "entirety", encoding: "json", data: "{}" },
+          version: "v3",
+        },
+      ],
+      through,
+    )
 
     const records = state.records
       .filter(r => r.docId === "doc-1")
       .sort((a, b) => a.seq - b.seq)
-    expect(records).toHaveLength(2)
+    expect(records.map(r => r.seq)).toEqual([3, 4])
+  })
+
+  it("an append that loses its sequence number to another instance retries", async () => {
+    const state = freshState()
+    const store = new PrismaStore({ client: makeMockClient(state) })
+    await store.append("doc-1", { kind: "meta", meta: baseMeta })
+
+    // Another instance takes seq 1 after this append read the last seq (0).
+    state.beforeCreate = () => {
+      state.records.push({
+        docId: "doc-1",
+        seq: 1,
+        kind: "entry",
+        payload: "{}",
+        blob: null,
+      })
+    }
+    await store.append("doc-1", {
+      kind: "entry",
+      payload: { kind: "since", encoding: "json", data: "{}" },
+      version: "v1",
+    })
+
+    const seqs = state.records
+      .filter(r => r.docId === "doc-1")
+      .map(r => r.seq)
+      .sort((a, b) => a - b)
+    expect(seqs).toEqual([0, 1, 2])
   })
 
   it("listDocIds(prefix) range-scans, no LIKE-pattern surface", async () => {

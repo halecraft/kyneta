@@ -4,7 +4,7 @@
 // thing worth waiting for:
 //
 //   createDoc(bound)                — nothing to wait for
-//   + Runtime with stores           — the saved data has to finish loading
+//   + Runtime with a store          — the saved data has to finish loading
 //   + Exchange with transports      — the authoritative peer has to answer
 //
 // Each layer registers one **settle term**: a boolean that starts `false` and

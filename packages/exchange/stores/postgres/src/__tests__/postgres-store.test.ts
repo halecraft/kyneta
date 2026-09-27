@@ -108,6 +108,25 @@ describeIfEnabled("PostgresStore", () => {
           },
         }
       },
+      // Two stores over one schema, as two processes have. Each transaction
+      // checks out its own connection from the pool.
+      secondInstance: {
+        refused: false,
+        open: async () => {
+          await pool.query(
+            `TRUNCATE ${SCHEMA_TABLES.records}, ${SCHEMA_TABLES.docMeta}`,
+          )
+          return {
+            first: new PostgresStore(fromPool(pool)),
+            openSecond: async () => new PostgresStore(fromPool(pool)),
+            cleanup: async () => {
+              await pool.query(
+                `TRUNCATE ${SCHEMA_TABLES.records}, ${SCHEMA_TABLES.docMeta}`,
+              )
+            },
+          }
+        },
+      },
       isolationFactory: async () => {
         // Two distinct table-name sets sharing the same Pool. These use the
         // bare `PostgresStore` constructor (no store-format gate), so the

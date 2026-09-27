@@ -1,11 +1,12 @@
 // store-conformance — reusable contract test suite for Store.
 //
 // Any conforming Store implementation must pass these tests.
-// The suite covers: currentMeta, append, loadAll, replace, delete,
+// The suite covers: currentMeta, append, loadAll, mark, compact, delete,
 // listDocIds, and both JSON and binary payload round-trips. Backends
-// that opt in via `faultFactory` and `isolationFactory` get additional
-// property-level tests (atomicity under fault injection; storage-domain
-// isolation across two stores sharing one physical resource).
+// that opt in via `faultFactory`, `isolationFactory` and `secondInstance`
+// get additional property-level tests (atomicity under fault injection;
+// storage-domain isolation across two stores sharing one physical resource;
+// two instances opening one storage).
 //
 // Usage:
 //   import { describeStore, makeArmedFault } from "@kyneta/exchange/testing"
@@ -112,6 +113,16 @@ export interface FaultInjection {
   readonly cleanup: () => Promise<void>
 }
 
+/**
+ * A first instance over a storage, and a way to open a second over the same
+ * one, as a second tab or process would.
+ */
+export interface TwoInstances {
+  readonly first: Store
+  readonly openSecond: () => Promise<Store>
+  readonly cleanup: () => Promise<void>
+}
+
 /** Two stores sharing a physical resource via distinct namespacing. */
 export interface IsolationPair {
   readonly storeA: Store
@@ -130,6 +141,15 @@ export interface DescribeStoreOptions {
   cleanup?: (backend: Store) => Promise<void>
   faultFactory?: () => Promise<FaultInjection>
   isolationFactory?: () => Promise<IsolationPair>
+  /**
+   * Two instances over one storage. With `refused`, the backend refuses the
+   * second (LevelDB), and the suite asserts that its open fails instead of
+   * running the multi-instance section.
+   */
+  secondInstance?: {
+    readonly open: () => Promise<TwoInstances>
+    readonly refused: boolean
+  }
 }
 
 /**
@@ -144,7 +164,7 @@ export function describeStore(
   factory: () => Store | Promise<Store>,
   options: DescribeStoreOptions = {},
 ): void {
-  const { cleanup, faultFactory, isolationFactory } = options
+  const { cleanup, faultFactory, isolationFactory, secondInstance } = options
   describe(name, () => {
     let backend: Store
 
@@ -263,55 +283,74 @@ export function describeStore(
     })
 
     // =======================================================================
-    // 7. replace atomically swaps stream; loadAll yields exactly the
-    //    replacement records
+    // 7. mark and compact
     // =======================================================================
 
-    it("replace atomically swaps stream", async () => {
+    it("mark is null for a document with no records, and grows with appends", async () => {
+      expect(await backend.mark("doc-1")).toBeNull()
+      await backend.append("doc-1", makeMetaRecord())
+      const first = await backend.mark("doc-1")
+      await backend.append("doc-1", makeEntryRecord("since", "1"))
+      const second = await backend.mark("doc-1")
+      expect(first).not.toBeNull()
+      expect(second).not.toBeNull()
+      if (first === null || second === null) return
+      expect(second).toBeGreaterThan(first)
+    })
+
+    it("compact swaps only what is at or before the mark", async () => {
       await backend.append("doc-1", makeMetaRecord())
       await backend.append("doc-1", makeEntryRecord("since", "1"))
       await backend.append("doc-1", makeEntryRecord("since", "2"))
-      await backend.append("doc-1", makeEntryRecord("since", "3"))
+      const through = await backend.mark("doc-1")
+      // Appended after the mark: another writer's, which the compaction never
+      // read.
+      const later = makeEntryRecord("since", "3")
+      await backend.append("doc-1", later)
 
-      // Before replace: 4 records (1 meta + 3 entries)
-      let records = await collectAll(backend.loadAll("doc-1"))
-      expect(records).toHaveLength(4)
+      const meta = makeMetaRecord()
+      const collapsed = makeEntryRecord("entirety", "2")
+      await backend.compact("doc-1", [meta, collapsed], through)
 
-      // After replace: exactly 2 records (1 meta + 1 entry)
-      const replacementMeta = makeMetaRecord()
-      const replacementEntry = makeEntryRecord("entirety", "4")
-      await backend.replace("doc-1", [replacementMeta, replacementEntry])
-
-      records = await collectAll(backend.loadAll("doc-1"))
-      expect(records).toHaveLength(2)
-      expect(records[0]).toEqual(replacementMeta)
-      expect(records[1]).toEqual(replacementEntry)
+      const records = await collectAll(backend.loadAll("doc-1"))
+      expect(records).toEqual([later, meta, collapsed])
     })
 
-    // =======================================================================
-    // 8. replace without a meta record in the batch → throws
-    // =======================================================================
+    it("compact with no mark only appends", async () => {
+      const first = makeMetaRecord()
+      await backend.compact("doc-1", [first], null)
+      const meta = makeMetaRecord()
+      const entry = makeEntryRecord("entirety", "1")
+      await backend.compact("doc-1", [meta, entry], null)
 
-    it("replace without a meta record in the batch throws", async () => {
+      const records = await collectAll(backend.loadAll("doc-1"))
+      expect(records).toEqual([first, meta, entry])
+      expect(await backend.currentMeta("doc-1")).toEqual(plainMeta)
+    })
+
+    it("compact without a meta record in the batch throws", async () => {
       await backend.append("doc-1", makeMetaRecord())
-
       await expect(
-        backend.replace("doc-1", [makeEntryRecord("entirety", "1")]),
+        backend.compact(
+          "doc-1",
+          [makeEntryRecord("entirety", "1")],
+          await backend.mark("doc-1"),
+        ),
       ).rejects.toThrow()
     })
 
-    // =======================================================================
-    // 9. replace updates materialized index from last meta in batch
-    // =======================================================================
-
-    it("replace updates materialized index from last meta in batch", async () => {
+    it("compact updates materialized index from last meta in batch", async () => {
       await backend.append("doc-1", makeMetaRecord())
 
       const metaA = makeMetaRecord({ schemaHash: "hash-a" })
       const metaB = makeMetaRecord({ schemaHash: "hash-b" })
       const entry = makeEntryRecord("entirety", "1")
 
-      await backend.replace("doc-1", [metaA, entry, metaB])
+      await backend.compact(
+        "doc-1",
+        [metaA, entry, metaB],
+        await backend.mark("doc-1"),
+      )
 
       const meta = await backend.currentMeta("doc-1")
       expect(meta).not.toBeNull()
@@ -362,34 +401,32 @@ export function describeStore(
     })
 
     // =======================================================================
-    // 12. append after replace produces correct ordering (no seqNo collision)
+    // 12. append after compact produces correct ordering
     // =======================================================================
 
-    it("append after replace produces correct ordering", async () => {
+    it("append after compact produces correct ordering", async () => {
       await backend.append("doc-1", makeMetaRecord())
       await backend.append("doc-1", makeEntryRecord("since", "1"))
       await backend.append("doc-1", makeEntryRecord("since", "2"))
 
-      // Replace collapses to meta + one entry
+      // Compaction collapses to meta + one entry
       const snapshot = makeMetaRecord()
       const collapsed = makeEntryRecord("entirety", "3")
-      await backend.replace("doc-1", [snapshot, collapsed])
+      await backend.compact(
+        "doc-1",
+        [snapshot, collapsed, makeEntryRecord("since", "3a")],
+        await backend.mark("doc-1"),
+      )
 
-      // Append after replace must not overwrite the replacement
+      // An append after the compaction must not overwrite what it wrote, even
+      // when it wrote more records than it deleted.
       const delta = makeEntryRecord("since", "4")
       await backend.append("doc-1", delta)
 
       const records = await collectAll(backend.loadAll("doc-1"))
-      expect(records).toHaveLength(3)
-      expect(records[0]).toEqual(snapshot)
-      expect(records[1]?.kind).toBe("entry")
-      if (records[1]?.kind === "entry") {
-        expect(records[1].version).toBe("3")
-      }
-      expect(records[2]?.kind).toBe("entry")
-      if (records[2]?.kind === "entry") {
-        expect(records[2].version).toBe("4")
-      }
+      expect(
+        records.map(r => (r.kind === "entry" ? r.version : "meta")),
+      ).toEqual(["meta", "3", "3a", "4"])
     })
 
     // =======================================================================
@@ -547,6 +584,142 @@ export function describeStore(
           }
         } finally {
           await fault.cleanup()
+        }
+      })
+
+      it("a mid-compaction failure leaves the records as they were", async () => {
+        const fault = await faultFactory()
+        try {
+          const meta = makeMetaRecord({ schemaHash: "primer" })
+          const entry = makeEntryRecord("since", "1")
+          await fault.store.append("doc-1", meta)
+          await fault.store.append("doc-1", entry)
+          const through = await fault.store.mark("doc-1")
+
+          // The 2nd write of the compaction: after it has started deleting or
+          // writing, before it has finished.
+          fault.injectFault(2)
+          await expect(
+            fault.store.compact(
+              "doc-1",
+              [
+                makeMetaRecord({ schemaHash: "injected" }),
+                makeEntryRecord("entirety", "2"),
+              ],
+              through,
+            ),
+          ).rejects.toThrow()
+
+          const fresh = await fault.freshStore()
+          try {
+            expect((await fresh.currentMeta("doc-1"))?.schemaHash).toBe(
+              "primer",
+            )
+            expect(await collectAll(fresh.loadAll("doc-1"))).toEqual([
+              meta,
+              entry,
+            ])
+          } finally {
+            await fresh.close()
+          }
+        } finally {
+          await fault.cleanup()
+        }
+      })
+    })
+  }
+
+  // Several instances may open one storage: two tabs over one IndexedDB
+  // database, several processes over one Postgres schema. Each must append
+  // safely, and a compaction by one must not lose what another wrote.
+
+  if (secondInstance?.refused) {
+    describe(`${name} — a second instance`, () => {
+      it("is refused", async () => {
+        const pair = await secondInstance.open()
+        try {
+          await expect(pair.openSecond()).rejects.toThrow()
+        } finally {
+          await pair.cleanup()
+        }
+      })
+    })
+  } else if (secondInstance !== undefined) {
+    const twoInstances = secondInstance.open
+    describe(`${name} — two instances over one storage`, () => {
+      const versions = (records: StoreRecord[]): string[] =>
+        records.flatMap(r => (r.kind === "entry" ? [r.version] : []))
+
+      it("appends from both, interleaved, all load", async () => {
+        const pair = await twoInstances()
+        try {
+          const second = await pair.openSecond()
+          await pair.first.append("doc-1", makeMetaRecord())
+          await Promise.all(
+            Array.from({ length: 10 }, (_, i) => [
+              pair.first.append("doc-1", makeEntryRecord("since", `a${i}`)),
+              second.append("doc-1", makeEntryRecord("since", `b${i}`)),
+            ]).flat(),
+          )
+          for (const store of [pair.first, second]) {
+            const loaded = versions(await collectAll(store.loadAll("doc-1")))
+            expect(loaded.sort()).toEqual(
+              [
+                ...Array.from({ length: 10 }, (_, i) => `a${i}`),
+                ...Array.from({ length: 10 }, (_, i) => `b${i}`),
+              ].sort(),
+            )
+          }
+        } finally {
+          await pair.cleanup()
+        }
+      })
+
+      it("a compaction by one keeps what the other appended after its mark", async () => {
+        const pair = await twoInstances()
+        try {
+          const second = await pair.openSecond()
+          await pair.first.append("doc-1", makeMetaRecord())
+          await pair.first.append("doc-1", makeEntryRecord("since", "1"))
+          const through = await pair.first.mark("doc-1")
+          await second.append("doc-1", makeEntryRecord("since", "theirs"))
+
+          await pair.first.compact(
+            "doc-1",
+            [makeMetaRecord(), makeEntryRecord("entirety", "whole")],
+            through,
+          )
+
+          const loaded = versions(await collectAll(second.loadAll("doc-1")))
+          expect(loaded.sort()).toEqual(["theirs", "whole"])
+        } finally {
+          await pair.cleanup()
+        }
+      })
+
+      it("two compactions through one mark lose nothing either wrote", async () => {
+        const pair = await twoInstances()
+        try {
+          const second = await pair.openSecond()
+          await pair.first.append("doc-1", makeMetaRecord())
+          await pair.first.append("doc-1", makeEntryRecord("since", "1"))
+          const through = await pair.first.mark("doc-1")
+
+          await pair.first.compact(
+            "doc-1",
+            [makeMetaRecord(), makeEntryRecord("entirety", "first")],
+            through,
+          )
+          await second.compact(
+            "doc-1",
+            [makeMetaRecord(), makeEntryRecord("entirety", "second")],
+            through,
+          )
+
+          const loaded = versions(await collectAll(pair.first.loadAll("doc-1")))
+          expect(loaded.sort()).toEqual(["first", "second"])
+        } finally {
+          await pair.cleanup()
         }
       })
     })

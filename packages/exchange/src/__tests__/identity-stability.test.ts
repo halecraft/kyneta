@@ -38,7 +38,7 @@ async function session<T>(
   bound: BoundSchema<typeof ListSchema, never>,
   use: (doc: any, runtime: Runtime) => Promise<T> | T,
 ): Promise<T> {
-  const runtime = new Runtime({ peerId: "alice", stores: [store] })
+  const runtime = new Runtime({ peerId: "alice", store })
   const doc = runtime.get("doc-1", bound)
   const result = await use(doc, runtime)
   await runtime.flush()

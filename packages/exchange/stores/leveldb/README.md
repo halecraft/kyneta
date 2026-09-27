@@ -2,7 +2,7 @@
 
 Server-side persistent storage for `@kyneta/exchange`, backed by [LevelDB](https://github.com/google/leveldb) via [`classic-level`](https://github.com/Level/classic-level).
 
-Implements the `Store` interface — pass directly to `Exchange({ stores: [...] })` for automatic document persistence and hydration.
+Implements the `Store` interface — pass directly to `Exchange({ store: ... })` for automatic document persistence and hydration.
 
 ## Install
 
@@ -18,7 +18,7 @@ import { createLevelDBStore } from "@kyneta/leveldb-store"
 
 const exchange = new Exchange({
   identity: { peerId: "my-server", name: "server" },
-  stores: [await createLevelDBStore("./data/exchange-db")],
+  store: await createLevelDBStore("./data/exchange-db"),
   transports: [networkTransport],
 })
 
@@ -103,7 +103,7 @@ Flags byte layout:
 
 ### Atomicity
 
-Every write commits through a single LevelDB `batch`. `append()` of a metadata record commits the materialized index update and the record together, so a crash can never leave the `doc-meta` index advanced past its backing record (an entry-record append is a single record write). `replace()` atomically deletes all existing entries and writes the replacements. A concurrent reader never observes a partial intermediate state.
+Every write commits through a single LevelDB `batch`. `append()` of a metadata record commits the materialized index update and the record together, so a crash can never leave the `doc-meta` index advanced past its backing record (an entry-record append is a single record write). `compact()` atomically deletes the entries at or before a mark and writes the new ones after the rest. A concurrent reader never observes a partial intermediate state.
 
 ## Testing
 

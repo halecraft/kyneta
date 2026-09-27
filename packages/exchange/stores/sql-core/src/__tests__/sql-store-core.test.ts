@@ -8,7 +8,7 @@ import {
   fromRow,
   normalizeBlob,
   planAppend,
-  planReplace,
+  planCompact,
   resolveTables,
   toRow,
 } from "../index.js"
@@ -236,22 +236,19 @@ describe("planAppend", () => {
 })
 
 // ---------------------------------------------------------------------------
-// planReplace
+// planCompact
 // ---------------------------------------------------------------------------
 
-describe("planReplace", () => {
-  it("returns a plan with rows at array-index seqs", () => {
+describe("planCompact", () => {
+  it("numbers the rows from nextSeq, after every record that remains", () => {
     const records: StoreRecord[] = [
       metaRecord(),
       jsonEntry("v1"),
       jsonEntry("v2"),
     ]
-    const plan = planReplace(records, null)
+    const plan = planCompact(records, null, 7)
 
-    expect(plan.records).toHaveLength(3)
-    expect(plan.records[0]?.seq).toBe(0)
-    expect(plan.records[1]?.seq).toBe(1)
-    expect(plan.records[2]?.seq).toBe(2)
+    expect(plan.records.map(r => r.seq)).toEqual([7, 8, 9])
 
     const parsed = JSON.parse(plan.upsertMeta.data) as StoreMeta
     expect(parsed).toEqual(baseMeta)
@@ -263,13 +260,13 @@ describe("planReplace", () => {
       jsonEntry("v1"),
       metaRecord({ schemaHash: "last" }),
     ]
-    const plan = planReplace(records, null)
+    const plan = planCompact(records, null, 0)
     const parsed = JSON.parse(plan.upsertMeta.data) as StoreMeta
     expect(parsed.schemaHash).toBe("last")
   })
 
   it("throws when batch has no meta record", () => {
-    expect(() => planReplace([jsonEntry("v1")], null)).toThrow(
+    expect(() => planCompact([jsonEntry("v1")], null, 0)).toThrow(
       /at least one meta/,
     )
   })
@@ -279,7 +276,9 @@ describe("planReplace", () => {
       ...baseMeta,
       replicaType: ["loro", 1, 0] as const,
     }
-    expect(() => planReplace([metaRecord()], existing)).toThrow(/replicaType/)
+    expect(() => planCompact([metaRecord()], existing, 0)).toThrow(
+      /replicaType/,
+    )
   })
 
   it("throws when batch contains conflicting meta records", () => {
@@ -287,7 +286,7 @@ describe("planReplace", () => {
       metaRecord(),
       { kind: "meta", meta: { ...baseMeta, syncMode: SYNC_COLLABORATIVE } },
     ]
-    expect(() => planReplace(records, null)).toThrow(/syncMode/)
+    expect(() => planCompact(records, null, 0)).toThrow(/syncMode/)
   })
 })
 

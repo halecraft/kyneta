@@ -11,17 +11,17 @@ import {
   type DocId,
   decideStoreFormat,
   parseStoreFormat,
-  SeqNoTracker,
   STORE_META_FORMAT_KEY,
   type Store,
   StoreFormatVersionError,
+  type StoreMark,
   type StoreMeta,
   type StoreRecord,
 } from "@kyneta/exchange"
 import {
   fromRow,
   planAppend,
-  planReplace,
+  planCompact,
   type RowShape,
   STORE_FORMAT_VERSION,
 } from "@kyneta/sql-store-core"
@@ -81,7 +81,9 @@ interface RecordModel {
     orderBy: { seq: "asc" }
   }): Promise<RecordRow[]>
   create(args: { data: RecordRow }): Promise<unknown>
-  deleteMany(args: { where: { docId: string } }): Promise<unknown>
+  deleteMany(args: {
+    where: { docId: string; seq?: { lte: number } }
+  }): Promise<unknown>
   aggregate(args: {
     where: { docId: string }
     _max: { seq: true }
@@ -125,7 +127,6 @@ export interface PrismaStoreOptions {
 
 export class PrismaStore implements Store {
   readonly #client: PrismaClientLike
-  readonly #seqNos = new SeqNoTracker()
   readonly #metaModelName: string
   readonly #recordModelName: string
   readonly #storeMetaModelName: string
@@ -170,19 +171,9 @@ export class PrismaStore implements Store {
   // -------------------------------------------------------------------------
 
   async append(docId: DocId, record: StoreRecord): Promise<void> {
-    const existingMeta = await this.currentMeta(docId)
-    const seq = await this.#seqNos.next(docId, async () => {
-      const result = await this.#records.aggregate({
-        where: { docId },
-        _max: { seq: true },
-      })
-      return result._max.seq ?? null
-    })
-
-    const plan = planAppend(docId, record, existingMeta, seq)
-
-    await this.#client.$transaction(async tx => {
+    await this.#writeAfterLast(docId, async (tx, existingMeta, nextSeq) => {
       const { meta, records } = this.#txModels(tx)
+      const plan = planAppend(docId, record, existingMeta, nextSeq)
 
       if (plan.upsertMeta !== null) {
         const dataValue = JSON.parse(plan.upsertMeta.data) as unknown
@@ -221,14 +212,28 @@ export class PrismaStore implements Store {
     }
   }
 
-  async replace(docId: DocId, records: StoreRecord[]): Promise<void> {
-    const existingMeta = await this.currentMeta(docId)
-    const plan = planReplace(records, existingMeta)
+  async mark(docId: DocId): Promise<StoreMark | null> {
+    const result = await this.#records.aggregate({
+      where: { docId },
+      _max: { seq: true },
+    })
+    return result._max.seq ?? null
+  }
 
-    await this.#client.$transaction(async tx => {
+  async compact(
+    docId: DocId,
+    records: StoreRecord[],
+    through: StoreMark | null,
+  ): Promise<void> {
+    await this.#writeAfterLast(docId, async (tx, existingMeta, nextSeq) => {
       const { meta, records: recordsModel } = this.#txModels(tx)
+      const plan = planCompact(records, existingMeta, nextSeq)
 
-      await recordsModel.deleteMany({ where: { docId } })
+      if (through !== null) {
+        await recordsModel.deleteMany({
+          where: { docId, seq: { lte: through } },
+        })
+      }
 
       for (const { seq, row } of plan.records) {
         await recordsModel.create({
@@ -249,11 +254,43 @@ export class PrismaStore implements Store {
         update: { data: dataValue },
       })
     })
+  }
 
-    // Must run after commit. A `$transaction` rejection (failed COMMIT
-    // or callback throw) propagates past this line; cache stays
-    // unmutated. Inside the callback would corrupt it on rollback.
-    this.#seqNos.reset(docId, records.length - 1)
+  /**
+   * Run `write` in a transaction, given the document's meta and next
+   * sequence number as read inside it.
+   *
+   * Several stores may open one database, and Prisma offers no portable
+   * lock, so two may read the same last sequence number and both insert
+   * after it. The second insert then violates the `(docId, seq)` key, and
+   * the whole transaction is retried once, reading afresh.
+   */
+  async #writeAfterLast(
+    docId: DocId,
+    write: (
+      tx: PrismaTransactionLike,
+      existingMeta: StoreMeta | null,
+      nextSeq: number,
+    ) => Promise<void>,
+  ): Promise<void> {
+    const attempt = () =>
+      this.#client.$transaction(async tx => {
+        const { meta, records } = this.#txModels(tx)
+        const row = await meta.findUnique({ where: { docId } })
+        const existingMeta =
+          row === null ? null : (parseMetaData(row.data) as StoreMeta)
+        const last = await records.aggregate({
+          where: { docId },
+          _max: { seq: true },
+        })
+        await write(tx, existingMeta, (last._max.seq ?? -1) + 1)
+      })
+    try {
+      await attempt()
+    } catch (error) {
+      if (!isUniqueViolation(error)) throw error
+      await attempt()
+    }
   }
 
   async delete(docId: DocId): Promise<void> {
@@ -262,7 +299,6 @@ export class PrismaStore implements Store {
       await records.deleteMany({ where: { docId } })
       await meta.deleteMany({ where: { docId } })
     })
-    this.#seqNos.remove(docId)
   }
 
   async currentMeta(docId: DocId): Promise<StoreMeta | null> {
@@ -351,6 +387,16 @@ export class PrismaStore implements Store {
  * string on SQLite — the only place where the underlying database
  * type leaks through Prisma's abstraction.
  */
+/** Prisma's unique-constraint violation (`P2002`). */
+function isUniqueViolation(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "P2002"
+  )
+}
+
 function parseMetaData(value: unknown): unknown {
   if (typeof value === "string") return JSON.parse(value)
   return value

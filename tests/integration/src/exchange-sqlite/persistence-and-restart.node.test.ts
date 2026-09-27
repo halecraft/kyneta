@@ -140,8 +140,8 @@ describe("SQLite-backed exchanges: persistence + restart over WebSocket", () => 
     const { serverExchange, clientExchange } = await createConnectedPair(
       lifecycle,
       {
-        serverStores: [serverStore],
-        clientStores: [clientStore],
+        serverStore: serverStore,
+        clientStore: clientStore,
         schemas: [YjsDoc],
       },
     )
@@ -204,8 +204,8 @@ describe("SQLite-backed exchanges: persistence + restart over WebSocket", () => 
       const { serverExchange, clientExchange } = await createConnectedPair(
         lifecycle,
         {
-          serverStores: [serverStore],
-          clientStores: [clientStore],
+          serverStore: serverStore,
+          clientStore: clientStore,
           schemas: [YjsDoc],
         },
       )
@@ -237,14 +237,14 @@ describe("SQLite-backed exchanges: persistence + restart over WebSocket", () => 
       const serverExchange = lifecycle.registerExchange(
         new Exchange({
           id: "server",
-          stores: [serverStore],
+          store: serverStore,
           schemas: [YjsDoc],
         }),
       )
       const clientExchange = lifecycle.registerExchange(
         new Exchange({
           id: "client",
-          stores: [clientStore],
+          store: clientStore,
           schemas: [YjsDoc],
         }),
       )
@@ -274,8 +274,8 @@ describe("SQLite-backed exchanges: persistence + restart over WebSocket", () => 
       const { serverExchange, clientExchange } = await createConnectedPair(
         lifecycle,
         {
-          serverStores: [serverStore],
-          clientStores: [clientStore],
+          serverStore: serverStore,
+          clientStore: clientStore,
           schemas: [YjsDoc],
         },
       )

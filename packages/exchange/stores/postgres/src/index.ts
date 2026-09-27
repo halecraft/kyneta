@@ -13,17 +13,17 @@ import {
   type DocId,
   decideStoreFormat,
   parseStoreFormat,
-  SeqNoTracker,
   STORE_META_FORMAT_KEY,
   type Store,
   StoreFormatVersionError,
+  type StoreMark,
   type StoreMeta,
   type StoreRecord,
 } from "@kyneta/exchange"
 import {
   fromRow,
   planAppend,
-  planReplace,
+  planCompact,
   type RowShape,
   resolveTables,
   STORE_FORMAT_VERSION,
@@ -145,7 +145,6 @@ export function fromClient(client: Client | PoolClient): PgAdapter {
  */
 export class PostgresStore implements Store {
   readonly #adapter: PgAdapter
-  readonly #seqNos = new SeqNoTracker()
   readonly #tables: TableNames
 
   constructor(adapter: PgAdapter, options: PostgresStoreOptions = {}) {
@@ -158,18 +157,14 @@ export class PostgresStore implements Store {
   // -------------------------------------------------------------------------
 
   async append(docId: DocId, record: StoreRecord): Promise<void> {
-    const existingMeta = await this.currentMeta(docId)
-    const seq = await this.#seqNos.next(docId, async () => {
-      const result = await this.#adapter.query<{ max_seq: number | null }>(
-        `SELECT MAX(seq)::int AS max_seq FROM ${this.#tables.records} WHERE doc_id = $1`,
-        [docId],
-      )
-      return result.rows[0]?.max_seq ?? null
-    })
-
-    const plan = planAppend(docId, record, existingMeta, seq)
-
     await this.#adapter.transaction(async q => {
+      await this.#lockDoc(q, docId)
+      const plan = planAppend(
+        docId,
+        record,
+        await this.#readMeta(q, docId),
+        await this.#nextSeq(q, docId),
+      )
       if (plan.upsertMeta !== null) {
         await q.query(
           `INSERT INTO ${this.#tables.docMeta} (doc_id, data)
@@ -199,14 +194,28 @@ export class PostgresStore implements Store {
     }
   }
 
-  async replace(docId: DocId, records: StoreRecord[]): Promise<void> {
-    const existingMeta = await this.currentMeta(docId)
-    const plan = planReplace(records, existingMeta)
+  async mark(docId: DocId): Promise<StoreMark | null> {
+    return this.#lastSeq(this.#adapter, docId)
+  }
 
+  async compact(
+    docId: DocId,
+    records: StoreRecord[],
+    through: StoreMark | null,
+  ): Promise<void> {
     await this.#adapter.transaction(async q => {
-      await q.query(`DELETE FROM ${this.#tables.records} WHERE doc_id = $1`, [
-        docId,
-      ])
+      await this.#lockDoc(q, docId)
+      const plan = planCompact(
+        records,
+        await this.#readMeta(q, docId),
+        await this.#nextSeq(q, docId),
+      )
+      if (through !== null) {
+        await q.query(
+          `DELETE FROM ${this.#tables.records} WHERE doc_id = $1 AND seq <= $2`,
+          [docId, through],
+        )
+      }
 
       for (const { seq, row } of plan.records) {
         await q.query(
@@ -224,12 +233,40 @@ export class PostgresStore implements Store {
         [docId, plan.upsertMeta.data],
       )
     })
+  }
 
-    // Must run after commit. If `#withTransaction` rejects, the throw
-    // propagates past this line; the cache stays unmutated. Inside the
-    // callback would corrupt it on rollback — the next append would
-    // collide with restored rows on (doc_id, seq).
-    this.#seqNos.reset(docId, records.length - 1)
+  /**
+   * Hold the document's write lock until the transaction ends. Several
+   * stores may open one schema: each reads the document's last sequence
+   * number and writes after it, so two writers of one document take turns.
+   * Released at commit or rollback. `hashtext` collisions only make two
+   * documents take turns too.
+   */
+  async #lockDoc(q: PgQuerier, docId: DocId): Promise<void> {
+    await q.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [
+      `${this.#tables.records}:${docId}`,
+    ])
+  }
+
+  async #lastSeq(q: PgQuerier, docId: DocId): Promise<number | null> {
+    const result = await q.query<{ max_seq: number | null }>(
+      `SELECT MAX(seq)::int AS max_seq FROM ${this.#tables.records} WHERE doc_id = $1`,
+      [docId],
+    )
+    return result.rows[0]?.max_seq ?? null
+  }
+
+  /** The next sequence number. Read inside the write transaction. */
+  async #nextSeq(q: PgQuerier, docId: DocId): Promise<number> {
+    return ((await this.#lastSeq(q, docId)) ?? -1) + 1
+  }
+
+  async #readMeta(q: PgQuerier, docId: DocId): Promise<StoreMeta | null> {
+    const result = await q.query<{ data: StoreMeta }>(
+      `SELECT data FROM ${this.#tables.docMeta} WHERE doc_id = $1`,
+      [docId],
+    )
+    return result.rows[0]?.data ?? null
   }
 
   async delete(docId: DocId): Promise<void> {
@@ -241,15 +278,10 @@ export class PostgresStore implements Store {
         docId,
       ])
     })
-    this.#seqNos.remove(docId)
   }
 
   async currentMeta(docId: DocId): Promise<StoreMeta | null> {
-    const result = await this.#adapter.query<{ data: StoreMeta }>(
-      `SELECT data FROM ${this.#tables.docMeta} WHERE doc_id = $1`,
-      [docId],
-    )
-    return result.rows[0]?.data ?? null
+    return this.#readMeta(this.#adapter, docId)
   }
 
   async *listDocIds(prefix?: string): AsyncIterable<DocId> {
