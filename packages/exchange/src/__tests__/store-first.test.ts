@@ -16,7 +16,7 @@ import { PROTOCOL_VERSION } from "@kyneta/transport"
 import { yjs } from "@kyneta/yjs-schema"
 import { LoroText } from "loro-crdt"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { Exchange, type ExchangeParams } from "../exchange.js"
+import type { Exchange, ExchangeParams } from "../exchange.js"
 import {
   persisted,
   persistedFeed,
@@ -31,6 +31,7 @@ import {
   type InMemoryStoreData,
 } from "../store/in-memory-store.js"
 import type { Store } from "../store/store.js"
+import { exchangesPerTest, sleep } from "./exchanges.js"
 import { ScriptedPeer } from "./scripted-peer.js"
 import { wrapStore } from "./wrap-store.js"
 
@@ -65,12 +66,9 @@ function append(doc: LogDoc, text: string): void {
   doc.log.insert(doc.log().length, text)
 }
 
-const exchanges: Exchange[] = []
-
-afterEach(async () => {
+const createExchange = exchangesPerTest()
+afterEach(() => {
   vi.useRealTimers()
-  for (const exchange of exchanges) await exchange.shutdown()
-  exchanges.length = 0
 })
 
 function freshData(): InMemoryStoreData {
@@ -82,7 +80,7 @@ function open(
   bridges: Bridge[],
   params: Partial<ExchangeParams> = {},
 ): Exchange {
-  const exchange = new Exchange({
+  const exchange = createExchange({
     principal: id,
     transports: bridges.map((bridge, i) =>
       createBridgeTransport({ bridge, transportId: `${id}-${i}` }),
@@ -90,18 +88,13 @@ function open(
     onStoreError: () => {},
     ...params,
   })
-  exchanges.push(exchange)
   return exchange
 }
 
 /** Stop `exchange` without flushing anything, as a crash would. */
 function crash(exchange: Exchange): void {
-  exchanges.splice(exchanges.indexOf(exchange), 1)
+  createExchange.forget(exchange)
   exchange.reset()
-}
-
-async function drain(ms = 30): Promise<void> {
-  await new Promise(resolve => setTimeout(resolve, ms))
 }
 
 /** A store whose appends can be held back until released. */
@@ -171,20 +164,20 @@ for (const { name, get } of BACKENDS) {
       const held = new HeldStore()
       const writer = get(open("writer", [bridge], { store: held.store }))
       const reader = get(open("reader", [bridge]))
-      await drain()
+      await sleep(30)
 
       append(writer, "A")
-      await drain()
+      await sleep(30)
       expect(reader.log()).toBe("A")
 
       held.hold()
       append(writer, "B")
-      await drain()
+      await sleep(30)
       expect(reader.log()).toBe("A")
       expect(persisted(writer)).toBe(false)
 
       held.release()
-      await drain()
+      await sleep(30)
       expect(reader.log()).toBe("AB")
       expect(persisted(writer)).toBe(true)
     })
@@ -198,29 +191,28 @@ for (const { name, get } of BACKENDS) {
       const host = get(open("host", [bridge]))
       const before = open("browser", [bridge], { store: held.store })
       const browser = get(before)
-      await drain()
+      await sleep(30)
 
       append(browser, "A")
-      await drain()
+      await sleep(30)
       expect(host.log()).toBe("A")
 
       held.hold()
       append(browser, "B")
-      await drain()
+      await sleep(30)
       crash(before)
 
-      const after = new Exchange({
+      const after = createExchange({
         principal: "browser",
         transports: [
           createBridgeTransport({ bridge, transportId: "browser-reloaded" }),
         ],
         store: createInMemoryStore({ sharedData: data }),
       })
-      exchanges.push(after)
       const reloaded = get(after)
       await whenHydrated(reloaded)
       append(reloaded, "C")
-      await drain(60)
+      await sleep(60)
 
       expect(host.log()).toBe("AC")
       expect(reloaded.log()).toBe("AC")
@@ -230,19 +222,19 @@ for (const { name, get } of BACKENDS) {
       const bridge = new Bridge()
       const held = new HeldStore()
       const writer = get(open("writer", [bridge], { store: held.store }))
-      await drain()
+      await sleep(30)
       append(writer, "x")
-      await drain()
+      await sleep(30)
 
       held.hold()
       append(writer, "y")
-      await drain()
+      await sleep(30)
       const late = get(open("late", [bridge]))
-      await drain()
+      await sleep(30)
       expect(late.log()).toBe("")
 
       held.release()
-      await drain()
+      await sleep(30)
       expect(late.log()).toBe("xy")
     })
 
@@ -250,11 +242,11 @@ for (const { name, get } of BACKENDS) {
       const bridge = new Bridge()
       const writer = get(open("writer", [bridge]))
       const reader = get(open("reader", [bridge]))
-      await drain()
+      await sleep(30)
 
       append(writer, "A")
       expect(persisted(writer)).toBe(true)
-      await drain(0)
+      await sleep(0)
       expect(reader.log()).toBe("A")
     })
 
@@ -270,7 +262,7 @@ for (const { name, get } of BACKENDS) {
       const writerExchange = open("writer", [bridge], { store: slow })
       const writer = get(writerExchange)
       const reader = get(open("reader", [bridge]))
-      await drain(60)
+      await sleep(60)
 
       append(writer, "A")
       await writerExchange.flush()
@@ -295,18 +287,18 @@ for (const { name, get } of BACKENDS.filter(b => b.concurrent)) {
       const a = get(open("a", [ab]))
       const b = get(open("b", [ab, bc], { store: held.store }))
       const c = get(open("c", [bc]))
-      await drain()
+      await sleep(30)
 
       held.hold()
       append(b, "b")
-      await drain()
+      await sleep(30)
       append(a, "a")
-      await drain()
+      await sleep(30)
       expect(b.log()).toHaveLength(2)
       expect(c.log()).toBe("")
 
       held.release()
-      await drain()
+      await sleep(30)
       expect(c.log()).toBe(b.log())
     })
   })
@@ -319,9 +311,9 @@ describe("store-first (loro): a pending native write", () => {
     const held = new HeldStore()
     const writerExchange = open("writer", [bridge], { store: held.store })
     const writer = writerExchange.get("doc", bound)
-    await drain()
+    await sleep(30)
     append(writer, "x")
-    await drain()
+    await sleep(30)
 
     // Left uncommitted, the write fires no signal. The export of the
     // interest's answer would commit it and send it; the gate commits it
@@ -332,11 +324,11 @@ describe("store-first (loro): a pending native write", () => {
     text.insert(1, "p")
 
     const late = open("late", [bridge]).get("doc", bound)
-    await drain()
+    await sleep(30)
     expect(late.log()).toBe("")
 
     held.release()
-    await drain()
+    await sleep(30)
     expect(late.log()).toBe("xp")
   })
 })
@@ -384,19 +376,19 @@ describe("store-first (yjs): a delete-only write", () => {
       bound,
     )
     const reader = open("reader", [bridge]).get("doc", bound)
-    await drain()
+    await sleep(30)
     append(writer, "abc")
-    await drain()
+    await sleep(30)
     expect(reader.log()).toBe("abc")
 
     held.hold()
     batch(writer, d => d.log.delete(2, 1))
-    await drain()
+    await sleep(30)
     expect(reader.log()).toBe("abc")
     expect(persisted(writer)).toBe(false)
 
     held.release()
-    await drain()
+    await sleep(30)
     expect(reader.log()).toBe("ab")
   })
 })
@@ -547,16 +539,16 @@ describe("persistedFeed", () => {
       tickInterval: 0,
     })
     const doc = runtime.get("doc", json.bind(LogSchema))
-    await drain()
+    await sleep(30)
     const seen: boolean[] = []
     const feed = persistedFeed(doc)
     feed[CHANGEFEED].subscribe(() => seen.push(feed()))
 
     held.hold()
     append(doc, "A")
-    await drain()
+    await sleep(30)
     held.release()
-    await drain()
+    await sleep(30)
 
     expect(seen).toEqual([false, true])
     await runtime.shutdown()
@@ -570,8 +562,7 @@ describe("persistedFeed", () => {
 describe("an interest whose version does not parse", () => {
   it("is answered with the whole document, and the peer is then pushed to", async () => {
     const peer = new ScriptedPeer()
-    const exchange = new Exchange({ principal: "us", transports: [peer] })
-    exchanges.push(exchange)
+    const exchange = createExchange({ principal: "us", transports: [peer] })
     const doc = exchange.get("d", json.bind(LogSchema))
     append(doc, "A")
     await Promise.resolve()
@@ -589,7 +580,7 @@ describe("an interest whose version does not parse", () => {
     // Reported sent, so the next push goes out from where the answer left
     // the peer.
     append(doc, "B")
-    await drain(0)
+    await sleep(0)
     expect(peer.sentOf("offer")).toHaveLength(2)
   })
 })

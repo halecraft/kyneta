@@ -26,7 +26,6 @@ import { yjs } from "@kyneta/yjs-schema"
 import { decodeImportBlobMeta } from "loro-crdt"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { docStatus } from "../doc-status.js"
-import { Exchange, type ExchangeParams } from "../exchange.js"
 import { persistenceError } from "../persistence.js"
 import { Runtime } from "../runtime.js"
 import { whenHydrated } from "../settle.js"
@@ -40,6 +39,7 @@ import {
 import type { Store, StoreRecord } from "../store/store.js"
 import { whenSettled } from "../sync.js"
 import { collectAll } from "../testing/store-conformance.js"
+import { exchangesPerTest, sleep } from "./exchanges.js"
 import { wrapStore } from "./wrap-store.js"
 
 // ---------------------------------------------------------------------------
@@ -50,29 +50,8 @@ import { wrapStore } from "./wrap-store.js"
  * Drain microtask queue — necessary for BridgeTransport async delivery
  * and storage hydration async operations.
  */
-async function drain(ms = 100): Promise<void> {
-  await new Promise(resolve => setTimeout(resolve, ms))
-}
 
-/** Active exchanges that need cleanup */
-const activeExchanges: Exchange[] = []
-
-function createExchange(params: Partial<ExchangeParams> = {}): Exchange {
-  const ex = new Exchange({ principal: "test", ...params })
-  activeExchanges.push(ex)
-  return ex
-}
-
-afterEach(async () => {
-  for (const ex of activeExchanges) {
-    try {
-      await ex.shutdown()
-    } catch {
-      // ignore
-    }
-  }
-  activeExchanges.length = 0
-})
+const createExchange = exchangesPerTest()
 
 // ---------------------------------------------------------------------------
 // Bound schemas
@@ -702,7 +681,7 @@ describe("Storage + network sync", () => {
     })
 
     // Wait for sync and persistence
-    await drain(200)
+    await sleep(200)
     await server.flush()
 
     // Verify server persisted — use currentMeta instead of lookup
@@ -740,7 +719,7 @@ describe("Storage + network sync", () => {
     })
 
     // Wait for server hydration + peer B sync
-    await drain(300)
+    await sleep(300)
     await server2.flush()
     await peerB.flush()
 
@@ -779,7 +758,7 @@ describe("Storage + network sync", () => {
       d.count.set(99)
     })
 
-    await drain(200)
+    await sleep(200)
     await server.flush()
 
     // Storage on server should have records — filter for entry records
@@ -828,7 +807,7 @@ describe("Storage + replicated doc", () => {
       d.count.set(55)
     })
 
-    await drain(200)
+    await sleep(200)
     await relay1.flush()
 
     // Verify storage has data — use currentMeta and filter for entry records
@@ -866,7 +845,7 @@ describe("Storage + replicated doc", () => {
       resolve: () => Interpret(SequentialDoc),
     })
 
-    await drain(300)
+    await sleep(300)
     await relay2.flush()
     await peerB.flush()
 
@@ -901,7 +880,7 @@ describe("a relay's replica after a lineage reset", () => {
       d.title.set("before")
       d.count.set(1)
     })
-    await drain(200)
+    await sleep(200)
     await first.shutdown()
     const before = relay.synchronizer.getDoc("doc-1")?.replica
 
@@ -913,7 +892,7 @@ describe("a relay's replica after a lineage reset", () => {
     await second.addTransport(
       createBridgeTransport({ transportId: "second", bridge }),
     )
-    await drain(300)
+    await sleep(300)
     await relay.flush()
 
     // The rebuild ran. Without this, the assertions below could pass on a
@@ -940,7 +919,7 @@ describe("a relay's replica after a lineage reset", () => {
       transports: [createBridgeTransport({ transportId: "reader", bridge })],
     })
     const doc = reader.get("doc-1", SequentialDoc)
-    await drain(300)
+    await sleep(300)
 
     expect(doc.title()).toBe("after")
     expect(doc.count()).toBe(2)
@@ -1058,7 +1037,7 @@ describe("No storage (baseline)", () => {
       d.count.set(123)
     })
 
-    await drain(200)
+    await sleep(200)
 
     if (exchangeB.has("doc-1")) {
       const docB = exchangeB.get("doc-1", SequentialDoc)
@@ -1087,7 +1066,7 @@ describe("several instances over one storage", () => {
     runtimes.length = 0
   })
 
-  function open(sharedData: InMemoryStoreData, peerId: string): Runtime {
+  function open(sharedData: InMemoryStoreData): Runtime {
     const runtime = new Runtime({
       store: createInMemoryStore({ sharedData }),
       tickInterval: 0,
@@ -1113,13 +1092,13 @@ describe("several instances over one storage", () => {
       // The reproduction: compaction used to delete every record, including
       // another instance's it had never read.
       const sharedData = createInMemoryStoreData()
-      const a = open(sharedData, "a")
+      const a = open(sharedData)
       const docA = get(a)
       await whenHydrated(docA)
       append(docA, "a")
       await a.flush()
 
-      const b = open(sharedData, "b")
+      const b = open(sharedData)
       const docB = get(b)
       await whenHydrated(docB)
       append(docB, "b")
@@ -1127,7 +1106,7 @@ describe("several instances over one storage", () => {
 
       await a.compact("doc")
 
-      const c = open(sharedData, "c")
+      const c = open(sharedData)
       const docC = get(c)
       await whenHydrated(docC)
       expect(docC.log()).toBe("ab")
@@ -1136,7 +1115,7 @@ describe("several instances over one storage", () => {
 
   it("a compaction that cannot take everything in appends instead", async () => {
     const sharedData = createInMemoryStoreData()
-    const a = open(sharedData, "a")
+    const a = open(sharedData)
     const doc = a.get("doc", plainLog) as LogDoc
     await whenHydrated(doc)
     append(doc, "a")
@@ -1160,7 +1139,7 @@ describe("several instances over one storage", () => {
     // Another instance crossed first. The crossing is the network's to make,
     // with its policy and its report, not a compaction's.
     const sharedData = createInMemoryStoreData()
-    const a = open(sharedData, "a")
+    const a = open(sharedData)
     vi.setSystemTime(1_000)
     const doc = a.get("doc", plainLog) as LogDoc
     await whenHydrated(doc)
@@ -1189,12 +1168,12 @@ describe("several instances over one storage", () => {
     // Joining a lineage from genesis is not a crossing: a fresh replica does
     // it over the network by an ordinary merge.
     const sharedData = createInMemoryStoreData()
-    const a = open(sharedData, "a")
+    const a = open(sharedData)
     const idle = a.get("doc", plainLog) as LogDoc
     await whenHydrated(idle)
     await a.flush()
 
-    const b = open(sharedData, "b")
+    const b = open(sharedData)
     const writer = b.get("doc", plainLog) as LogDoc
     await whenHydrated(writer)
     append(writer, "b")
@@ -1235,7 +1214,7 @@ describe("several instances over one storage", () => {
     await a.flush()
 
     // Stored after `a` loaded, so a compaction by `a` would take it in.
-    const b = open(sharedData, "b")
+    const b = open(sharedData)
     const writer = b.get("doc", plainLog) as LogDoc
     await whenHydrated(writer)
     append(writer, "b")
@@ -1248,7 +1227,7 @@ describe("several instances over one storage", () => {
     const compacting = a.compact("doc")
     a.destroy("doc")
     await compacting
-    await drain(20)
+    await sleep(20)
     releaseDelete()
 
     expect(advanced).toEqual([])
@@ -1274,17 +1253,17 @@ describe("several instances over one storage", () => {
     await whenHydrated(doc)
     append(doc, "a")
     await server.flush()
-    await drain(50)
+    await sleep(50)
     expect(seen.log()).toBe("a")
 
-    const crashed = open(sharedData, "crashed")
+    const crashed = open(sharedData)
     const writer = crashed.get("doc", plainLog) as LogDoc
     await whenHydrated(writer)
     append(writer, "b")
     await crashed.flush()
 
     await server.compact("doc")
-    await drain(50)
+    await sleep(50)
     expect(seen.log()).toBe("ab")
   })
 })

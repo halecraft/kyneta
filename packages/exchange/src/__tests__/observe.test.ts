@@ -9,8 +9,7 @@ import { loro } from "@kyneta/loro-schema"
 import { batch, json, Schema, unwrap } from "@kyneta/schema"
 import { defined } from "@kyneta/schema/testing"
 import { yjs } from "@kyneta/yjs-schema"
-import { afterEach, describe, expect, it } from "vitest"
-import { Exchange, type ExchangeParams } from "../exchange.js"
+import { describe, expect, it } from "vitest"
 import {
   createObservationBus,
   frameTraceToBody,
@@ -22,6 +21,7 @@ import {
 } from "../observe.js"
 import type { SessionEffect, SessionInput } from "../session-program.js"
 import type { SyncEffect, SyncInput } from "../sync-program.js"
+import { drain, exchangesPerTest } from "./exchanges.js"
 
 // ---------------------------------------------------------------------------
 // Pure mappers — the functional core
@@ -380,32 +380,7 @@ const TodoDoc = loro.bind(
   }),
 )
 
-async function drain(rounds = 30): Promise<void> {
-  for (let i = 0; i < rounds; i++) {
-    await new Promise<void>(r => queueMicrotask(r))
-    await new Promise<void>(r => setTimeout(r, 0))
-  }
-}
-
-const active: Exchange[] = []
-function createExchange(params: Partial<ExchangeParams> = {}): Exchange {
-  const ex = new Exchange({
-    principal: "test",
-    ...params,
-  })
-  active.push(ex)
-  return ex
-}
-afterEach(async () => {
-  for (const ex of active) {
-    try {
-      await ex.shutdown()
-    } catch {
-      /* ignore */
-    }
-  }
-  active.length = 0
-})
+const createExchange = exchangesPerTest()
 
 describe("observe — integration (two peers, one bridge)", () => {
   it("threads a local batch end-to-end across all Phase-1 layers", async () => {

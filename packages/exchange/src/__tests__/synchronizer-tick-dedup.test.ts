@@ -11,27 +11,10 @@
 // single-doc subscriber path.
 
 import { batch, json, Schema, subscribe } from "@kyneta/schema"
-import { afterEach, describe, expect, it } from "vitest"
-import { Exchange, type ExchangeParams } from "../exchange.js"
+import { describe, expect, it } from "vitest"
+import { exchangesPerTest } from "./exchanges.js"
 
-const activeExchanges: Exchange[] = []
-
-function createExchange(params: Partial<ExchangeParams> = {}): Exchange {
-  const ex = new Exchange({ principal: "test", ...params })
-  activeExchanges.push(ex)
-  return ex
-}
-
-afterEach(async () => {
-  for (const ex of activeExchanges) {
-    try {
-      await ex.shutdown()
-    } catch {
-      // ignore
-    }
-  }
-  activeExchanges.length = 0
-})
+const createExchange = exchangesPerTest()
 
 const DocSchema = Schema.struct({ n: Schema.number() })
 const Doc = json.bind(DocSchema)

@@ -10,39 +10,31 @@ import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import { loro } from "@kyneta/loro-schema"
 import { batch, Schema, unwrap } from "@kyneta/schema"
 import { yjs } from "@kyneta/yjs-schema"
-import { afterEach, describe, expect, it } from "vitest"
+import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
-import { Exchange } from "../exchange.js"
+import type { Exchange } from "../exchange.js"
 import { whenHydrated } from "../settle.js"
 import {
   createInMemoryStore,
   createInMemoryStoreData,
   type InMemoryStoreData,
 } from "../store/in-memory-store.js"
+import { exchangesPerTest, sleep } from "./exchanges.js"
 
 const TextDoc = Schema.struct({ title: Schema.text() })
 
-const exchanges: Exchange[] = []
-afterEach(async () => {
-  for (const exchange of exchanges) await exchange.shutdown()
-  exchanges.length = 0
-})
-
-async function drain(ms = 50): Promise<void> {
-  await new Promise(resolve => setTimeout(resolve, ms))
-}
+const createExchange = exchangesPerTest()
 
 function exchangeOn(
   id: string,
   links: ReadonlyArray<{ bridge: Bridge; transportId: string }>,
   store?: InMemoryStoreData,
 ): Exchange {
-  const exchange = new Exchange({
+  const exchange = createExchange({
     principal: id,
     transports: links.map(link => createBridgeTransport(link)),
     ...(store ? { store: createInMemoryStore({ sharedData: store }) } : {}),
   })
-  exchanges.push(exchange)
   return exchange
 }
 
@@ -67,14 +59,14 @@ function concurrentDeleteAndInsert<D extends object>(
     const bob = exchangeOn("bob", [{ bridge, transportId: "bob" }])
     const a = backend.open(alice)
     const b = backend.open(bob)
-    await drain()
+    await sleep(50)
     backend.insert(a, 0, "abc")
-    await drain()
+    await sleep(50)
     expect(backend.title(b)).toBe("abc")
 
     backend.remove(b, 1, 1)
     backend.insert(a, 3, "X")
-    await drain(150)
+    await sleep(150)
 
     expect(backend.title(a)).toBe("acX")
     expect(backend.title(b)).toBe("acX")
@@ -122,13 +114,13 @@ describe("a Yjs delete-only change", () => {
     const a = alice.get("doc", bound)
     bob.get("doc", bound)
     const c = carol.get("doc", bound)
-    await drain()
+    await sleep(50)
     batch(a, d => d.title.insert(0, "abc"))
-    await drain(100)
+    await sleep(100)
     expect(c.title()).toBe("abc")
 
     batch(a, d => d.title.delete(1, 1))
-    await drain(100)
+    await sleep(100)
     await alice.flush()
 
     expect(c.title()).toBe("ac")
@@ -145,19 +137,19 @@ describe("a Yjs delete-only change", () => {
     const bob = exchangeOn("bob", [{ bridge, transportId: "bob" }])
     const a = alice.get("doc", bound)
     const b = bob.get("doc", bound)
-    await drain()
+    await sleep(50)
     batch(a, d => d.title.insert(0, "abc"))
-    await drain()
+    await sleep(50)
 
     await alice.removeTransport("alice")
     batch(a, d => d.title.delete(1, 1))
-    await drain(10)
+    await sleep(10)
     expect(b.title()).toBe("abc")
 
     await alice.addTransport(
       createBridgeTransport({ bridge, transportId: "alice" }),
     )
-    await drain(150)
+    await sleep(150)
     expect(b.title()).toBe("ac")
   })
 
@@ -170,9 +162,9 @@ describe("a Yjs delete-only change", () => {
     const bob = exchangeOn("bob", [{ bridge, transportId: "bob" }])
     const a = alice.get("doc", bound)
     const b = bob.get("doc", bound)
-    await drain()
+    await sleep(50)
     batch(a, d => d.title.insert(0, "abc"))
-    await drain()
+    await sleep(50)
 
     const aliceDoc = unwrap(a)
     const plain = new Y.Doc()
@@ -197,7 +189,7 @@ describe("a Yjs delete-only change", () => {
     await bob.addTransport(
       createBridgeTransport({ bridge, transportId: "bob" }),
     )
-    await drain(150)
+    await sleep(150)
     expect(b.title()).toBe("ac")
   })
 })

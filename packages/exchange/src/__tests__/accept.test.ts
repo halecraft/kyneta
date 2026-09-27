@@ -21,25 +21,21 @@ import {
 } from "@kyneta/schema"
 import { type ChannelMsg, PROTOCOL_VERSION } from "@kyneta/transport"
 import { YjsVersion, yjs } from "@kyneta/yjs-schema"
-import { afterEach, describe, expect, it } from "vitest"
-import { Exchange } from "../exchange.js"
+import { describe, expect, it } from "vitest"
+import type { Exchange } from "../exchange.js"
+import { exchangesPerTest } from "./exchanges.js"
 import { ScriptedPeer } from "./scripted-peer.js"
 
-const Doc = json.bind(Schema.struct({ n: Schema.number() }))
+const createExchange = exchangesPerTest()
 
-const exchanges: Exchange[] = []
-afterEach(async () => {
-  for (const exchange of exchanges) await exchange.shutdown()
-  exchanges.length = 0
-})
+const Doc = json.bind(Schema.struct({ n: Schema.number() }))
 
 /** An exchange holding document `d`, connected to a scripted peer. */
 async function connected<D>(
   open: (exchange: Exchange) => D,
 ): Promise<{ peer: ScriptedPeer; version: string; doc: D }> {
   const peer = new ScriptedPeer()
-  const exchange = new Exchange({ principal: "us", transports: [peer] })
-  exchanges.push(exchange)
+  const exchange = createExchange({ principal: "us", transports: [peer] })
   const doc = open(exchange)
   await Promise.resolve()
   peer.receive({

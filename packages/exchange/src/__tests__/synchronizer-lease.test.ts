@@ -5,27 +5,10 @@
 
 import { createLease } from "@kyneta/machine"
 import { batch, json, Schema } from "@kyneta/schema"
-import { afterEach, describe, expect, it } from "vitest"
-import { Exchange, type ExchangeParams } from "../exchange.js"
+import { describe, expect, it } from "vitest"
+import { exchangesPerTest } from "./exchanges.js"
 
-const activeExchanges: Exchange[] = []
-
-function createExchange(params: Partial<ExchangeParams> = {}): Exchange {
-  const ex = new Exchange({ principal: "test", ...params })
-  activeExchanges.push(ex)
-  return ex
-}
-
-afterEach(async () => {
-  for (const ex of activeExchanges) {
-    try {
-      await ex.shutdown()
-    } catch {
-      // ignore
-    }
-  }
-  activeExchanges.length = 0
-})
+const createExchange = exchangesPerTest()
 
 const CounterSchema = Schema.struct({ n: Schema.number() })
 const CounterDoc = json.bind(CounterSchema)

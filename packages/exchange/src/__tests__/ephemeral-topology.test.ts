@@ -12,14 +12,11 @@ import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import { batch, ephemeral, Schema } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import { Exchange } from "../exchange.js"
+import { drain } from "./exchanges.js"
 
 const Roster = ephemeral.bind(
   Schema.struct({ peers: Schema.record(Schema.string()) }),
 )
-
-async function drain(rounds = 60): Promise<void> {
-  for (let i = 0; i < rounds; i++) await new Promise(r => setTimeout(r, 0))
-}
 
 /** A peer reachable only over the bridges it is given. */
 function peerOn(id: string, bridges: readonly Bridge[]) {
@@ -52,10 +49,10 @@ describe("a chain: A — B — C, with no link between A and C", () => {
     const a = peerOn("alice", [ab])
     const b = peerOn("bob", [ab, bc])
     const c = peerOn("carol", [bc])
-    await drain()
+    await drain(60)
 
     batch(a.doc, d => d.peers.set("alice", "online"))
-    await drain()
+    await drain(60)
 
     // Carol shares no channel with Alice. The only way this arrives is Bob
     // passing on what he imported.
@@ -69,11 +66,11 @@ describe("a chain: A — B — C, with no link between A and C", () => {
     const a = peerOn("alice", [ab])
     const b = peerOn("bob", [ab, bc])
     const c = peerOn("carol", [bc])
-    await drain()
+    await drain(60)
 
     batch(a.doc, d => d.peers.set("alice", "online"))
     batch(c.doc, d => d.peers.set("carol", "online"))
-    await drain()
+    await drain(60)
 
     for (const { doc } of [a, b, c]) {
       expect(doc.peers()).toEqual({ alice: "online", carol: "online" })
@@ -88,14 +85,14 @@ describe("a chain: A — B — C, with no link between A and C", () => {
     const a = peerOn("alice", [ab])
     const b = peerOn("bob", [ab, bc])
     const c = peerOn("carol", [bc])
-    await drain()
+    await drain(60)
 
     batch(a.doc, d => d.peers.set("alice", "online"))
-    await drain()
+    await drain(60)
     expect(c.doc.peers()?.alice).toBe("online")
 
     batch(a.doc, d => d.peers.set("alice", "away"))
-    await drain()
+    await drain(60)
     expect(c.doc.peers()?.alice).toBe("away")
     void b
   }, 30_000)
@@ -113,10 +110,10 @@ describe("hub and spoke: every spoke reaches only the hub", () => {
 
   it("propagates one spoke's write to every other spoke", async () => {
     const { hub, spokes } = build()
-    await drain()
+    await drain(60)
 
     batch(spokes[0].doc, d => d.peers.set("spoke-0", "online"))
-    await drain()
+    await drain(60)
 
     expect(hub.doc.peers()?.["spoke-0"]).toBe("online")
     for (const spoke of spokes.slice(1)) {
@@ -126,7 +123,7 @@ describe("hub and spoke: every spoke reaches only the hub", () => {
 
   it("converges when every spoke writes its own key", async () => {
     const { hub, spokes } = build()
-    await drain()
+    await drain(60)
 
     for (let i = 0; i < SPOKES; i++) {
       batch(spokes[i].doc, d => d.peers.set(`spoke-${i}`, "online"))
@@ -142,7 +139,7 @@ describe("hub and spoke: every spoke reaches only the hub", () => {
 
   it("costs a frame count linear in the spokes, since nothing is redundant", async () => {
     const { bridges, hub, spokes } = build()
-    await drain()
+    await drain(60)
     for (let i = 0; i < SPOKES; i++) {
       batch(spokes[i].doc, d => d.peers.set(`spoke-${i}`, "online"))
     }
@@ -150,7 +147,7 @@ describe("hub and spoke: every spoke reaches only the hub", () => {
 
     const counter = meterFrames(bridges)
     batch(spokes[0].doc, d => d.peers.set("spoke-0", "away"))
-    await drain()
+    await drain(60)
 
     for (const spoke of spokes.slice(1)) {
       expect(spoke.doc.peers()?.["spoke-0"]).toBe("away")

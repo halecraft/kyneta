@@ -20,11 +20,11 @@ import {
   Schema,
 } from "@kyneta/schema"
 import { yjs } from "@kyneta/yjs-schema"
-import { afterEach, describe, expect, it } from "vitest"
+import { describe, expect, it } from "vitest"
 import { docStatus } from "../doc-status.js"
-import { Exchange, type ExchangeParams } from "../exchange.js"
 import { Line } from "../line.js"
 import { sync, whenSettled } from "../sync.js"
+import { drain, exchangesPerTest } from "./exchanges.js"
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -35,13 +35,6 @@ import { sync, whenSettled } from "../sync.js"
  * We do multiple rounds because messages trigger responses which trigger
  * more async deliveries.
  */
-async function drain(rounds = 20): Promise<void> {
-  for (let i = 0; i < rounds; i++) {
-    await new Promise<void>(r => queueMicrotask(r))
-    // Also yield to promise queue
-    await new Promise<void>(r => setTimeout(r, 0))
-  }
-}
 
 /**
  * Resolves `"pending"` if `p` has not settled within `ms`.
@@ -56,25 +49,7 @@ async function within<T>(p: Promise<T>, ms = 100): Promise<T | "pending"> {
   ])
 }
 
-/** Active exchanges that need cleanup */
-const activeExchanges: Exchange[] = []
-
-function createExchange(params: Partial<ExchangeParams> = {}): Exchange {
-  const ex = new Exchange({ principal: "test", ...params })
-  activeExchanges.push(ex)
-  return ex
-}
-
-afterEach(async () => {
-  for (const ex of activeExchanges) {
-    try {
-      await ex.shutdown()
-    } catch {
-      // ignore
-    }
-  }
-  activeExchanges.length = 0
-})
+const createExchange = exchangesPerTest()
 
 // ---------------------------------------------------------------------------
 // Bound schemas (module scope)
@@ -1804,9 +1779,6 @@ describe("capability gate", () => {
 
     expect(exchangeB.has("loro-doc")).toBe(false)
     expect(exchangeB.deferred.has("loro-doc")).toBe(false)
-
-    await exchangeA.shutdown()
-    await exchangeB.shutdown()
   })
 
   it("callback provided, unsupported type → callback fires", async () => {
@@ -1842,9 +1814,6 @@ describe("capability gate", () => {
 
     // Doc should now be interpreted
     expect(exchangeB.has("loro-doc")).toBe(true)
-
-    await exchangeA.shutdown()
-    await exchangeB.shutdown()
   })
 })
 
@@ -1894,9 +1863,6 @@ describe("two-tiered default", () => {
     expect(exchangeB.deferred.has("seq-doc")).toBe(false)
     expect(exchangeB.has("seq-doc")).toBe(true)
     expect(seqB.title()).toBe("hello")
-
-    await exchangeA.shutdown()
-    await exchangeB.shutdown()
   })
 })
 
@@ -1927,9 +1893,6 @@ describe("auto-interpretation from schema registry", () => {
     expect(exchangeB.has("auto-doc")).toBe(true)
     const docB = exchangeB.get("auto-doc", SequentialDoc)
     expect(docB.title()).toBe("hello")
-
-    await exchangeA.shutdown()
-    await exchangeB.shutdown()
   })
 })
 
@@ -1967,9 +1930,6 @@ describe("deferred document lifecycle", () => {
     expect(exchangeB.has("deferred-doc")).toBe(true)
     expect(exchangeB.deferred.has("deferred-doc")).toBe(false)
     expect(docB.title()).toBe("deferred-value")
-
-    await exchangeA.shutdown()
-    await exchangeB.shutdown()
   })
 
   it("registerSchema() auto-promotes matching deferred docs", async () => {
@@ -2002,9 +1962,6 @@ describe("deferred document lifecycle", () => {
     expect(exchangeB.has("auto-promote-doc")).toBe(true)
     const docB = exchangeB.get("auto-promote-doc", SequentialDoc)
     expect(docB.title()).toBe("auto-promoted")
-
-    await exchangeA.shutdown()
-    await exchangeB.shutdown()
   })
 
   it("exchange.deferred accessor tracks deferred state", async () => {
@@ -2040,9 +1997,6 @@ describe("deferred document lifecycle", () => {
     expect(exchangeB.deferred.size).toBe(0)
     expect(exchangeB.deferred.has("d1")).toBe(false)
     expect(exchangeB.deferred.has("d2")).toBe(false)
-
-    await exchangeA.shutdown()
-    await exchangeB.shutdown()
   })
 })
 
@@ -2214,7 +2168,7 @@ describe("whenSettled semantics", () => {
 
 describe("ensure-doc idempotency", () => {
   it("exchange.get() is idempotent — second call returns same ref", () => {
-    const exchange = new Exchange({ principal: "test" })
+    const exchange = createExchange({ principal: "test" })
     const ref1 = exchange.get("doc-1", SequentialDoc)
     const ref2 = exchange.get("doc-1", SequentialDoc)
     expect(ref1).toBe(ref2)
@@ -2240,9 +2194,6 @@ describe("ensure-doc idempotency", () => {
     await drain(40)
 
     expect(exchangeB.has("doc-1")).toBe(true)
-
-    await exchangeA.shutdown()
-    await exchangeB.shutdown()
   })
 })
 

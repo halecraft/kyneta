@@ -9,18 +9,16 @@
 import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import { json, Schema } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
-import { Exchange, type ExchangeParams } from "../exchange.js"
 import type { Authority } from "../governance.js"
 import { Governance } from "../governance.js"
 import { settled } from "../settle.js"
 import { whenSettled } from "../sync.js"
 import { derivePeerSettled } from "../synchronizer.js"
+import { exchangesPerTest } from "./exchanges.js"
 
 const TestDoc = json.bind(Schema.struct({ title: Schema.string() }))
 
-function createExchange(options: Partial<ExchangeParams> = {}): Exchange {
-  return new Exchange({ principal: "test", ...options })
-}
+const createExchange = exchangesPerTest()
 
 const isServer = (p: { principal: string }) => p.principal === "server"
 

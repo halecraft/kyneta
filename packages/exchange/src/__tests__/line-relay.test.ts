@@ -3,43 +3,19 @@
 
 import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import { Replicate, Schema } from "@kyneta/schema"
-import { afterEach, describe, expect, it } from "vitest"
-import { Exchange, type ExchangeParams } from "../exchange.js"
+import { describe, expect, it } from "vitest"
 import { Line, type LineSender } from "../line.js"
+import { drain, exchangesPerTest } from "./exchanges.js"
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-async function drain(rounds = 30): Promise<void> {
-  for (let i = 0; i < rounds; i++) {
-    await new Promise<void>(r => queueMicrotask(r))
-    await new Promise<void>(r => setTimeout(r, 0))
-  }
-}
-
-const activeExchanges: Exchange[] = []
-
-function createExchange(params: Partial<ExchangeParams> = {}): Exchange {
-  const ex = new Exchange({ principal: "test", ...params })
-  activeExchanges.push(ex)
-  return ex
-}
+const createExchange = exchangesPerTest()
 
 function collect<T>(recv: AsyncIterable<T>, into: T[]): void {
   ;(async () => {
     for await (const msg of recv) into.push(msg)
   })()
 }
-
-afterEach(async () => {
-  for (const ex of activeExchanges) {
-    try {
-      await ex.shutdown()
-    } catch {
-      /* ignore */
-    }
-  }
-  activeExchanges.length = 0
-})
 
 const RequestSchema = Schema.struct({
   method: Schema.string(),

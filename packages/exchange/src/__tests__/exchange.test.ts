@@ -28,12 +28,12 @@ import type {
   LoroDoc as LoroDocNative,
   LoroMap as LoroMapNative,
 } from "loro-crdt"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { docStatus } from "../doc-status.js"
-import { Exchange, type ExchangeParams } from "../exchange.js"
 import { sync, whenSettled } from "../sync.js"
 import type { DocChange, PeerChange } from "../types.js"
 import { whenPeer } from "../when-peer.js"
+import { drain, exchangesPerTest } from "./exchanges.js"
 
 // ---------------------------------------------------------------------------
 // Test schemas (bound at module scope)
@@ -57,39 +57,15 @@ const OtherDoc = json.bind(otherSchema)
 // Helpers for multi-peer tests
 // ---------------------------------------------------------------------------
 
-async function drain(rounds = 20): Promise<void> {
-  for (let i = 0; i < rounds; i++) {
-    await new Promise<void>(r => queueMicrotask(r))
-    await new Promise<void>(r => setTimeout(r, 0))
-  }
-}
-
-const activeExchanges: Exchange[] = []
-
-function createExchange(params: Partial<ExchangeParams> = {}): Exchange {
-  const ex = new Exchange({ principal: "test", ...params })
-  activeExchanges.push(ex)
-  return ex
-}
-
-afterEach(async () => {
-  for (const ex of activeExchanges) {
-    try {
-      await ex.shutdown()
-    } catch {
-      /* ignore */
-    }
-  }
-  activeExchanges.length = 0
-})
+const createExchange = exchangesPerTest()
 
 // ---------------------------------------------------------------------------
 
 describe("Exchange", () => {
   describe("constructor", () => {
     it("takes a principal and issues its own seat", () => {
-      const exchange = new Exchange({ principal: "my-peer" })
-      const other = new Exchange({ principal: "my-peer" })
+      const exchange = createExchange({ principal: "my-peer" })
+      const other = createExchange({ principal: "my-peer" })
 
       expect(exchange.principal).toBe("my-peer")
       expect(exchange.peerId).toMatch(/^[0-9a-f]{32}$/)
@@ -97,13 +73,13 @@ describe("Exchange", () => {
     })
 
     it("refuses an empty principal", () => {
-      expect(() => new Exchange({ principal: "" })).toThrow(/principal/)
+      expect(() => createExchange({ principal: "" })).toThrow(/principal/)
     })
   })
 
   describe("get()", () => {
     it("returns a Ref<S> that can be read", () => {
-      const exchange = new Exchange({ principal: "test" })
+      const exchange = createExchange({ principal: "test" })
       const doc = exchange.get("doc-1", TestDoc)
 
       // The ref should be callable (returns plain value)
@@ -112,7 +88,7 @@ describe("Exchange", () => {
     })
 
     it("returns a Ref<S> with navigation and batch()-applied values", () => {
-      const exchange = new Exchange({ principal: "test" })
+      const exchange = createExchange({ principal: "test" })
       const doc = exchange.get("doc-1", TestDoc)
       batch(doc, (d: any) => {
         d.title.set("Hello")
@@ -124,7 +100,7 @@ describe("Exchange", () => {
     })
 
     it("same docId returns same instance", () => {
-      const exchange = new Exchange({ principal: "test" })
+      const exchange = createExchange({ principal: "test" })
 
       const doc1 = exchange.get("doc-1", TestDoc)
       const doc2 = exchange.get("doc-1", TestDoc)
@@ -133,7 +109,7 @@ describe("Exchange", () => {
     })
 
     it("a schema that cannot read the open document throws, naming the axis", () => {
-      const exchange = new Exchange({ principal: "test" })
+      const exchange = createExchange({ principal: "test" })
 
       exchange.get("doc-1", TestDoc)
       expect(() => exchange.get("doc-1", OtherDoc)).toThrow(
@@ -146,14 +122,14 @@ describe("Exchange", () => {
       // same substrate family, same sync mode. A caller that builds its
       // BoundSchema inside a component, or a library that binds each
       // direction of a protocol separately, must not be punished for it.
-      const exchange = new Exchange({ principal: "test" })
+      const exchange = createExchange({ principal: "test" })
 
       const first = exchange.get("doc-1", TestDoc)
       expect(exchange.get("doc-1", json.bind(testSchema))).toBe(first)
     })
 
     it("batch() values are applied", () => {
-      const exchange = new Exchange({ principal: "test" })
+      const exchange = createExchange({ principal: "test" })
       const doc = exchange.get("doc-1", TestDoc)
       batch(doc, (d: any) => {
         d.title.set("Changed")
@@ -175,7 +151,7 @@ describe("Exchange", () => {
         syncMode: SYNC_AUTHORITATIVE,
       })
 
-      const exchange = new Exchange({ principal: "alice-123" })
+      const exchange = createExchange({ principal: "alice-123" })
       exchange.get("doc-1", Doc)
 
       expect(builder).toHaveBeenCalledWith(
@@ -192,7 +168,7 @@ describe("Exchange", () => {
         syncMode: SYNC_AUTHORITATIVE,
       })
 
-      const exchange = new Exchange({ principal: "test" })
+      const exchange = createExchange({ principal: "test" })
       exchange.get("doc-1", DocA)
 
       // Builder is invoked at each use site: registerSchema (capabilities +
@@ -219,8 +195,8 @@ describe("Exchange", () => {
         syncMode: SYNC_AUTHORITATIVE,
       })
 
-      const exchangeA = new Exchange({ principal: "alice" })
-      const exchangeB = new Exchange({ principal: "bob" })
+      const exchangeA = createExchange({ principal: "alice" })
+      const exchangeB = createExchange({ principal: "bob" })
 
       exchangeA.get("doc-1", Doc)
       exchangeB.get("doc-1", Doc)
@@ -239,12 +215,12 @@ describe("Exchange", () => {
 
   describe("has()", () => {
     it("returns false for unknown doc", () => {
-      const exchange = new Exchange({ principal: "test" })
+      const exchange = createExchange({ principal: "test" })
       expect(exchange.has("nonexistent")).toBe(false)
     })
 
     it("returns true after get()", () => {
-      const exchange = new Exchange({ principal: "test" })
+      const exchange = createExchange({ principal: "test" })
       exchange.get("doc-1", TestDoc)
       expect(exchange.has("doc-1")).toBe(true)
     })
@@ -252,7 +228,7 @@ describe("Exchange", () => {
 
   describe("destroy()", () => {
     it("removes a document", () => {
-      const exchange = new Exchange({ principal: "test" })
+      const exchange = createExchange({ principal: "test" })
 
       exchange.get("doc-1", TestDoc)
       expect(exchange.has("doc-1")).toBe(true)
@@ -264,7 +240,7 @@ describe("Exchange", () => {
 
   describe("sync()", () => {
     it("returns a SyncRef with peerId and docId", () => {
-      const exchange = new Exchange({ principal: "alice" })
+      const exchange = createExchange({ principal: "alice" })
       const doc = exchange.get("doc-1", TestDoc)
       const s = sync(doc)
 
@@ -288,7 +264,7 @@ describe("Exchange", () => {
     })
 
     it("peerStates is initially empty", () => {
-      const exchange = new Exchange({ principal: "test" })
+      const exchange = createExchange({ principal: "test" })
       const doc = exchange.get("doc-1", TestDoc)
       expect(sync(doc).peerStates).toEqual([])
     })
@@ -296,7 +272,7 @@ describe("Exchange", () => {
 
   describe("lifecycle", () => {
     it("reset() clears doc cache", () => {
-      const exchange = new Exchange({ principal: "test" })
+      const exchange = createExchange({ principal: "test" })
 
       exchange.get("doc-1", TestDoc)
       expect(exchange.has("doc-1")).toBe(true)
@@ -306,7 +282,7 @@ describe("Exchange", () => {
     })
 
     it("shutdown() clears doc cache", async () => {
-      const exchange = new Exchange({ principal: "test" })
+      const exchange = createExchange({ principal: "test" })
 
       exchange.get("doc-1", TestDoc)
       await exchange.shutdown()
@@ -315,7 +291,7 @@ describe("Exchange", () => {
 
     describe("escape hatches", () => {
       it("ref[SUBSTRATE] returns the substrate for an exchange-created doc", () => {
-        const exchange = new Exchange({ principal: "test" })
+        const exchange = createExchange({ principal: "test" })
         const doc = exchange.get("doc-1", TestDoc)
         batch(doc, (d: any) => {
           d.title.set("Hi")
@@ -341,7 +317,7 @@ describe("Exchange", () => {
             meta: Schema.struct({ author: Schema.string() }),
           }),
         )
-        const exchange = new Exchange({
+        const exchange = createExchange({
           principal: "test",
           schemas: [LoroBound],
         })
@@ -360,7 +336,7 @@ describe("Exchange", () => {
       })
 
       it("unwrap(ref) returns the PlainState for a plain-backed exchange doc", () => {
-        const exchange = new Exchange({ principal: "test" })
+        const exchange = createExchange({ principal: "test" })
         const doc = exchange.get("doc-1", TestDoc)
 
         // Precise root native: PlainState (the backing JS object), threaded
@@ -375,11 +351,11 @@ describe("Exchange", () => {
       it("a batch reaches the peer with no call to notify the synchronizer", async () => {
         const bridge = new Bridge()
 
-        const exchangeA = new Exchange({
+        const exchangeA = createExchange({
           principal: "alice",
           transports: [createBridgeTransport({ transportId: "alice", bridge })],
         })
-        const exchangeB = new Exchange({
+        const exchangeB = createExchange({
           principal: "bob",
           transports: [createBridgeTransport({ transportId: "bob", bridge })],
         })
@@ -1217,15 +1193,14 @@ describe("Exchange", () => {
     it("returns the peer's advertised features after handshake", async () => {
       const bridge = new Bridge()
 
-      const alice = new Exchange({
+      const alice = createExchange({
         principal: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
-      const bob = new Exchange({
+      const bob = createExchange({
         principal: "bob",
         transports: [createBridgeTransport({ transportId: "bob", bridge })],
       })
-      activeExchanges.push(alice, bob)
 
       await drain()
 
@@ -1236,11 +1211,10 @@ describe("Exchange", () => {
 
     it("returns undefined for a peer that has not established yet", () => {
       const bridge = new Bridge()
-      const alice = new Exchange({
+      const alice = createExchange({
         principal: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
-      activeExchanges.push(alice)
       expect(alice.getPeerFeatures("bob")).toBeUndefined()
     })
   })
@@ -1651,9 +1625,6 @@ describe("get() on a deferred document checks all three axes", () => {
     expect(() => bob.get("doc-1", json.bind(S))).toThrow(
       /replicaType disagrees/,
     )
-
-    await alice.shutdown()
-    await bob.shutdown()
   })
 
   it("promotes and warns when only the schema hash disagrees", async () => {
@@ -1683,7 +1654,5 @@ describe("get() on a deferred document checks all three axes", () => {
     )
 
     warnSpy.mockRestore()
-    await alice.shutdown()
-    await bob.shutdown()
   })
 })

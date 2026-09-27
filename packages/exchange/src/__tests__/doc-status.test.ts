@@ -10,8 +10,8 @@ import { json, Schema } from "@kyneta/schema"
 import { batch, createDoc } from "@kyneta/schema/basic"
 import { describe, expect, it } from "vitest"
 import { deriveDocStatus, docStatus, docStatusFeed } from "../doc-status.js"
-import { Exchange, type ExchangeParams } from "../exchange.js"
 import { createInMemoryStore } from "../store/in-memory-store.js"
+import { exchangesPerTest } from "./exchanges.js"
 import { seedStoredDoc } from "./stored-doc.js"
 
 const TestSchema = Schema.struct({
@@ -20,9 +20,7 @@ const TestSchema = Schema.struct({
 })
 const TestDoc = json.bind(TestSchema)
 
-function createExchange(options: Partial<ExchangeParams> = {}): Exchange {
-  return new Exchange({ principal: "test", ...options })
-}
+const createExchange = exchangesPerTest()
 
 // ===========================================================================
 // Pure — the whole rule as a truth table

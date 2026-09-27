@@ -1,29 +1,16 @@
 import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import type { PeerIdentityDetails } from "@kyneta/transport"
-import { afterEach, describe, expect, it } from "vitest"
-import { Exchange } from "../exchange.js"
+import { describe, expect, it } from "vitest"
 import { whenPeer } from "../when-peer.js"
+import { drain, exchangesPerTest } from "./exchanges.js"
 
-async function drain(rounds = 30): Promise<void> {
-  for (let i = 0; i < rounds; i++) {
-    await new Promise<void>(r => queueMicrotask(r))
-    await new Promise<void>(r => setTimeout(r, 0))
-  }
-}
-
-const active: Exchange[] = []
-afterEach(async () => {
-  for (const ex of active) await ex.shutdown()
-  active.length = 0
-})
+const createExchange = exchangesPerTest()
 
 function open(principal: string, bridge: Bridge, transportId = principal) {
-  const ex = new Exchange({
+  return createExchange({
     principal,
     transports: [createBridgeTransport({ transportId, bridge })],
   })
-  active.push(ex)
-  return ex
 }
 
 const named =

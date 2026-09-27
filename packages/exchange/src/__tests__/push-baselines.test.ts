@@ -16,27 +16,19 @@ import {
   type Substrate,
   type Version,
 } from "@kyneta/schema"
-import { afterEach, describe, expect, it, vi } from "vitest"
-import { Exchange } from "../exchange.js"
+import { describe, expect, it, vi } from "vitest"
+import type { Exchange } from "../exchange.js"
+import { exchangesPerTest, sleep } from "./exchanges.js"
 
 const TestDoc = json.bind(Schema.struct({ title: Schema.string() }))
 
-const exchanges: Exchange[] = []
-afterEach(async () => {
-  for (const exchange of exchanges) await exchange.shutdown()
-  exchanges.length = 0
-})
-
-async function drain(ms = 50): Promise<void> {
-  await new Promise(resolve => setTimeout(resolve, ms))
-}
+const createExchange = exchangesPerTest()
 
 function exchangeOn(bridge: Bridge, id: string): Exchange {
-  const exchange = new Exchange({
+  const exchange = createExchange({
     principal: id,
     transports: [createBridgeTransport({ bridge, transportId: id })],
   })
-  exchanges.push(exchange)
   return exchange
 }
 
@@ -53,12 +45,12 @@ describe("push baselines", () => {
     const doc = writer.get("doc-1", TestDoc)
     const read = readers.map(reader => reader.get("doc-1", TestDoc))
     batch(doc, d => d.title.set("V1"))
-    await drain()
+    await sleep(50)
     expect(read.map(r => r.title())).toEqual(["V1", "V1", "V1"])
 
     const exports = vi.spyOn(substrateOf(doc), "exportSince")
     batch(doc, d => d.title.set("V2"))
-    await drain()
+    await sleep(50)
 
     expect(exports).toHaveBeenCalledTimes(1)
     expect(read.map(r => r.title())).toEqual(["V2", "V2", "V2"])
@@ -71,9 +63,9 @@ describe("push baselines", () => {
     const doc = writer.get("doc-1", TestDoc)
     const read = reader.get("doc-1", TestDoc)
     batch(doc, d => d.title.set("V1"))
-    await drain()
+    await sleep(50)
     batch(doc, d => d.title.set("V2"))
-    await drain()
+    await sleep(50)
     const acknowledged = substrateOf(doc).version()
 
     // V3 is sent but not yet acknowledged when the writer compacts to what
@@ -83,7 +75,7 @@ describe("push baselines", () => {
     expect(substrateOf(doc).baseVersion().compare(acknowledged)).toBe("equal")
     const wholes = vi.spyOn(substrateOf(doc), "exportEntirety")
     batch(doc, d => d.title.set("V4"))
-    await drain()
+    await sleep(50)
 
     expect(wholes).not.toHaveBeenCalled()
     expect(read.title()).toBe("V4")

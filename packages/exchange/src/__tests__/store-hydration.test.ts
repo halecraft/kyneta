@@ -20,7 +20,6 @@ import {
 } from "@kyneta/schema"
 import { yjs } from "@kyneta/yjs-schema"
 import { describe, expect, it } from "vitest"
-import { Exchange, type ExchangeParams } from "../exchange.js"
 import { Runtime } from "../runtime.js"
 import { whenHydrated } from "../settle.js"
 import {
@@ -35,6 +34,7 @@ import {
   makeMetaRecord,
   makePlainEntirety,
 } from "../testing/store-conformance.js"
+import { exchangesPerTest, sleep } from "./exchanges.js"
 import { seedStoredDoc } from "./stored-doc.js"
 
 // ---------------------------------------------------------------------------
@@ -59,13 +59,8 @@ const TestDoc = json.bind(
  * Drain microtask queue — necessary for BridgeTransport async delivery
  * and storage hydration async operations.
  */
-async function drain(ms = 50): Promise<void> {
-  await new Promise(resolve => setTimeout(resolve, ms))
-}
 
-function createExchange(options: Partial<ExchangeParams> = {}): Exchange {
-  return new Exchange({ principal: "test", ...options })
-}
+const createExchange = exchangesPerTest()
 
 // ===========================================================================
 // Exchange-level storage hydration
@@ -258,7 +253,7 @@ describe("Exchange storage persistence", () => {
     })
 
     // Wait for sync
-    await drain(200)
+    await sleep(200)
     await exchangeB.flush()
 
     // B hydrated empty, so its first write is the empty document, and the

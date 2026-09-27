@@ -20,7 +20,9 @@ import {
 } from "@kyneta/schema"
 import { defined } from "@kyneta/schema/testing"
 import { describe, expect, it } from "vitest"
-import { Exchange } from "../exchange.js"
+import { drain, exchangesPerTest } from "./exchanges.js"
+
+const createExchange = exchangesPerTest()
 
 const StateSchema = Schema.struct({
   alice: Schema.string().nullable(),
@@ -29,24 +31,17 @@ const StateSchema = Schema.struct({
 
 const StateDoc = ephemeral.bind(StateSchema)
 
-async function drain(rounds = 20): Promise<void> {
-  for (let i = 0; i < rounds; i++) {
-    await new Promise<void>(r => queueMicrotask(r))
-    await new Promise<void>(r => setTimeout(r, 0))
-  }
-}
-
 describe("ephemeral substrate — field-level LWW through a live Exchange", () => {
   it("merges concurrently at the field level without clobbering", async () => {
     const bridge = new Bridge()
 
-    const exchangeA = new Exchange({
+    const exchangeA = createExchange({
       principal: "alice",
       transports: [createBridgeTransport({ transportId: "alice", bridge })],
       schemas: [StateDoc],
     })
 
-    const exchangeB = new Exchange({
+    const exchangeB = createExchange({
       principal: "bob",
       transports: [createBridgeTransport({ transportId: "bob", bridge })],
       schemas: [StateDoc],
@@ -93,9 +88,6 @@ describe("ephemeral substrate — field-level LWW through a live Exchange", () =
     const tB = lastUpdated(docB.bob)
     expect(tA).toBeGreaterThan(0)
     expect(tB).toBeGreaterThan(0)
-
-    await exchangeA.shutdown()
-    await exchangeB.shutdown()
   })
 
   it("tells local subscribers when a peer's state arrives", async () => {
@@ -104,12 +96,12 @@ describe("ephemeral substrate — field-level LWW through a live Exchange", () =
     // correct and every view stale — which for a presence roster means it
     // simply never updates.
     const bridge = new Bridge()
-    const exchangeA = new Exchange({
+    const exchangeA = createExchange({
       principal: "alice",
       transports: [createBridgeTransport({ transportId: "alice", bridge })],
       schemas: [StateDoc],
     })
-    const exchangeB = new Exchange({
+    const exchangeB = createExchange({
       principal: "bob",
       transports: [createBridgeTransport({ transportId: "bob", bridge })],
       schemas: [StateDoc],
@@ -139,8 +131,6 @@ describe("ephemeral substrate — field-level LWW through a live Exchange", () =
 
     unsubDoc()
     unsubField()
-    await exchangeA.shutdown()
-    await exchangeB.shutdown()
   })
 })
 
@@ -161,13 +151,12 @@ describe("a three-peer mesh settles", () => {
 
   const mesh = (ids: readonly string[]) => {
     const bridge = new Bridge()
-    const exchanges = ids.map(
-      id =>
-        new Exchange({
-          principal: id,
-          transports: [createBridgeTransport({ transportId: id, bridge })],
-          schemas: [MeshDoc],
-        }),
+    const exchanges = ids.map(id =>
+      createExchange({
+        principal: id,
+        transports: [createBridgeTransport({ transportId: id, bridge })],
+        schemas: [MeshDoc],
+      }),
     )
     return exchanges.map(e => e.get("presence", MeshDoc))
   }
@@ -215,12 +204,12 @@ describe("a change ships itself, not the document", () => {
   it("is flat in roster size", async () => {
     const quietBytes = async (rosterSize: number): Promise<number> => {
       const bridge = new Bridge()
-      const alice = new Exchange({
+      const alice = createExchange({
         principal: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
         schemas: [Roster],
       })
-      const bob = new Exchange({
+      const bob = createExchange({
         principal: "bob",
         transports: [createBridgeTransport({ transportId: "bob", bridge })],
         schemas: [Roster],
@@ -266,12 +255,12 @@ describe("a peer that misses an update is repaired precisely", () => {
 
   it("sends the missing leaves, not the whole roster", async () => {
     const bridge = new Bridge()
-    const alice = new Exchange({
+    const alice = createExchange({
       principal: "alice",
       transports: [createBridgeTransport({ transportId: "alice", bridge })],
       schemas: [Roster],
     })
-    const bob = new Exchange({
+    const bob = createExchange({
       principal: "bob",
       transports: [createBridgeTransport({ transportId: "bob", bridge })],
       schemas: [Roster],
@@ -319,12 +308,12 @@ describe("a peer that misses an update is repaired precisely", () => {
     // far ahead of hers; if bob recorded his own version as his cursor for
     // alice, she could not read it and would resend the whole document.
     const bridge = new Bridge()
-    const alice = new Exchange({
+    const alice = createExchange({
       principal: "alice",
       transports: [createBridgeTransport({ transportId: "alice", bridge })],
       schemas: [Roster],
     })
-    const bob = new Exchange({
+    const bob = createExchange({
       principal: "bob",
       transports: [createBridgeTransport({ transportId: "bob-1", bridge })],
       schemas: [Roster],
@@ -398,13 +387,12 @@ describe("a roster of peers all writing their own key", () => {
     const bridge = new Bridge()
     const ids = Array.from({ length: size }, (_, i) => `peer-${i}`)
     const docs = ids
-      .map(
-        id =>
-          new Exchange({
-            principal: id,
-            transports: [createBridgeTransport({ transportId: id, bridge })],
-            schemas: [Roster],
-          }),
+      .map(id =>
+        createExchange({
+          principal: id,
+          transports: [createBridgeTransport({ transportId: id, bridge })],
+          schemas: [Roster],
+        }),
       )
       .map(e => e.get("presence", Roster))
     return { bridge, ids, docs }
@@ -477,12 +465,12 @@ describe("a delete survives promotion", () => {
 
   it("a relayed document opened later keeps its deletes", async () => {
     const bridge = new Bridge()
-    const alice = new Exchange({
+    const alice = createExchange({
       principal: "alice",
       transports: [createBridgeTransport({ transportId: "alice", bridge })],
       schemas: [Roster],
     })
-    const bob = new Exchange({
+    const bob = createExchange({
       principal: "bob",
       transports: [createBridgeTransport({ transportId: "bob", bridge })],
       resolve: () => Replicate(),

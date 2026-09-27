@@ -13,34 +13,10 @@ import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import type { Lease } from "@kyneta/machine"
 import { createLease } from "@kyneta/machine"
 import { batch, json, Schema, subscribe } from "@kyneta/schema"
-import { afterEach, describe, expect, it } from "vitest"
-import { Exchange, type ExchangeParams } from "../exchange.js"
+import { describe, expect, it } from "vitest"
+import { drain, exchangesPerTest } from "./exchanges.js"
 
-async function drain(rounds = 20): Promise<void> {
-  for (let i = 0; i < rounds; i++) {
-    await new Promise<void>(r => queueMicrotask(r))
-    await new Promise<void>(r => setTimeout(r, 0))
-  }
-}
-
-const activeExchanges: Exchange[] = []
-
-function createExchange(params: Partial<ExchangeParams> = {}): Exchange {
-  const ex = new Exchange({ principal: "test", ...params })
-  activeExchanges.push(ex)
-  return ex
-}
-
-afterEach(async () => {
-  for (const ex of activeExchanges) {
-    try {
-      await ex.shutdown()
-    } catch {
-      // ignore
-    }
-  }
-  activeExchanges.length = 0
-})
+const createExchange = exchangesPerTest()
 
 const PresenceSchema = Schema.struct({
   version: Schema.number(),
@@ -111,8 +87,6 @@ describe("doc-layer re-entry: same-doc inside a peer-event subscriber", () => {
 
     await exchangeA.shutdown()
     await drain()
-    const idx = activeExchanges.indexOf(exchangeA)
-    if (idx >= 0) activeExchanges.splice(idx, 1)
 
     expect(docB.version()).toBe(99)
     expect(docB.scratch()).toBe(42)

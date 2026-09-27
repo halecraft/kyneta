@@ -11,34 +11,10 @@
 
 import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import { batch, json, Schema } from "@kyneta/schema"
-import { afterEach, describe, expect, it } from "vitest"
-import { Exchange, type ExchangeParams } from "../exchange.js"
+import { describe, expect, it } from "vitest"
+import { drain, exchangesPerTest } from "./exchanges.js"
 
-async function drain(rounds = 20): Promise<void> {
-  for (let i = 0; i < rounds; i++) {
-    await new Promise<void>(r => queueMicrotask(r))
-    await new Promise<void>(r => setTimeout(r, 0))
-  }
-}
-
-const activeExchanges: Exchange[] = []
-
-function createExchange(params: Partial<ExchangeParams> = {}): Exchange {
-  const ex = new Exchange({ principal: "test", ...params })
-  activeExchanges.push(ex)
-  return ex
-}
-
-afterEach(async () => {
-  for (const ex of activeExchanges) {
-    try {
-      await ex.shutdown()
-    } catch {
-      // ignore
-    }
-  }
-  activeExchanges.length = 0
-})
+const createExchange = exchangesPerTest()
 
 // A "presence" doc whose `version` field is bumped to signal an update.
 const PresenceSchema = Schema.struct({
@@ -134,8 +110,6 @@ describe("peer-event reentry", () => {
     // makes the departure immediate via the depart message handshake).
     await exchangeA.shutdown()
     await drain()
-    const idx = activeExchanges.indexOf(exchangeA)
-    if (idx >= 0) activeExchanges.splice(idx, 1)
 
     // B saw the departure and bumped version to 99. The change must have
     // propagated to C.
@@ -181,8 +155,6 @@ describe("peer-event reentry", () => {
 
     await exchangeA.shutdown()
     await drain()
-    const idx = activeExchanges.indexOf(exchangeA)
-    if (idx >= 0) activeExchanges.splice(idx, 1)
 
     expect(destroyCalledFromInsideEmit).toBe(true)
     const removed = docEvents.filter(
@@ -222,8 +194,6 @@ describe("peer-event reentry", () => {
 
     await exchangeA.shutdown()
     await drain()
-    const idx = activeExchanges.indexOf(exchangeA)
-    if (idx >= 0) activeExchanges.splice(idx, 1)
 
     expect(docB.version()).toBe(99)
     expect(docC.version()).toBe(99)

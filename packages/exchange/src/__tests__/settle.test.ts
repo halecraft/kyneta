@@ -10,7 +10,6 @@ import { json, Schema } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import { writerModelOf } from "../doc-meta.js"
 import { docStatus } from "../doc-status.js"
-import { Exchange, type ExchangeParams } from "../exchange.js"
 import {
   hydrated,
   hydratedFeed,
@@ -22,15 +21,14 @@ import {
 import { createInMemoryStore } from "../store/in-memory-store.js"
 import type { Store } from "../store/store.js"
 import { sync, whenSettled } from "../sync.js"
+import { exchangesPerTest } from "./exchanges.js"
 import { seedStoredDoc } from "./stored-doc.js"
 
 const TestDoc = json.bind(
   Schema.struct({ title: Schema.string(), count: Schema.number() }),
 )
 
-function createExchange(options: Partial<ExchangeParams> = {}): Exchange {
-  return new Exchange({ principal: "test", ...options })
-}
+const createExchange = exchangesPerTest()
 
 /** A term whose value the test drives by hand. */
 function controllableTerm() {
@@ -314,6 +312,8 @@ describe("whenSettled", () => {
       async close() {},
     }
     const exchange = createExchange({ store: stuck })
+    // Shutdown waits for the load, which never settles.
+    createExchange.forget(exchange)
     const doc = exchange.get("doc-1", TestDoc)
 
     const raced = await Promise.race([

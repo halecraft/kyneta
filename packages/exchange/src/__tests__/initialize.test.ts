@@ -10,10 +10,10 @@ import { loro } from "@kyneta/loro-schema"
 import { json, Schema } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import { docStatus } from "../doc-status.js"
-import { Exchange, type ExchangeParams } from "../exchange.js"
 import type { Authority } from "../governance.js"
 import { initialize, planInitialization } from "../initialize.js"
 import { createInMemoryStore } from "../store/in-memory-store.js"
+import { exchangesPerTest } from "./exchanges.js"
 import { seedStoredDoc } from "./stored-doc.js"
 
 const TestSchema = Schema.struct({
@@ -27,9 +27,7 @@ const TestDoc = json.bind(TestSchema)
 // non-authority seed outright and the wait never comes into it.
 const MergeableDoc = loro.bind(Schema.struct({ title: Schema.text() }))
 
-function createExchange(options: Partial<ExchangeParams> = {}): Exchange {
-  return new Exchange({ principal: "test", ...options })
-}
+const createExchange = exchangesPerTest()
 
 // ===========================================================================
 // Pure — every guard, no Exchange

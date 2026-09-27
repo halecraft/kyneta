@@ -10,8 +10,8 @@ import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import { loro } from "@kyneta/loro-schema"
 import { batch, json, Schema, subscribe, unwrap } from "@kyneta/schema"
 import { yjs } from "@kyneta/yjs-schema"
-import { afterEach, describe, expect, it, vi } from "vitest"
-import { Exchange } from "../exchange.js"
+import { describe, expect, it, vi } from "vitest"
+import type { Exchange } from "../exchange.js"
 import { Runtime } from "../runtime.js"
 import { whenHydrated } from "../settle.js"
 import {
@@ -19,21 +19,14 @@ import {
   createInMemoryStoreData,
   type InMemoryStoreData,
 } from "../store/in-memory-store.js"
+import { exchangesPerTest, sleep } from "./exchanges.js"
 
 const DocSchema = Schema.struct({
   title: Schema.text(),
   count: Schema.number(),
 })
 
-const exchanges: Exchange[] = []
-afterEach(async () => {
-  for (const exchange of exchanges) await exchange.shutdown()
-  exchanges.length = 0
-})
-
-async function drain(ms = 50): Promise<void> {
-  await new Promise(resolve => setTimeout(resolve, ms))
-}
+const createExchange = exchangesPerTest()
 
 function freshStore(): InMemoryStoreData {
   return createInMemoryStoreData()
@@ -60,29 +53,27 @@ function localWrites<D extends object>(backend: Backend<D>): void {
     /** Alice, who keeps a store, connected to Bob. */
     async function pair(store: InMemoryStoreData) {
       const bridge = new Bridge()
-      const alice = new Exchange({
+      const alice = createExchange({
         principal: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
         store: createInMemoryStore({ sharedData: store }),
       })
-      const bob = new Exchange({
+      const bob = createExchange({
         principal: "bob",
         transports: [createBridgeTransport({ transportId: "bob", bridge })],
       })
-      exchanges.push(alice, bob)
       const aliceDoc = backend.open(alice)
       const bobDoc = backend.open(bob)
-      await drain()
+      await sleep(50)
       return { alice, aliceDoc, bobDoc }
     }
 
     /** Alice's document, as a restarted Alice loads it from her store. */
     async function reload(store: InMemoryStoreData): Promise<D> {
-      const restarted = new Exchange({
+      const restarted = createExchange({
         principal: "alice",
         store: createInMemoryStore({ sharedData: store }),
       })
-      exchanges.push(restarted)
       const doc = backend.open(restarted)
       await whenHydrated(doc)
       return doc
@@ -95,7 +86,7 @@ function localWrites<D extends object>(backend: Backend<D>): void {
       const { alice, aliceDoc, bobDoc } = await pair(store)
 
       backend.writeTitle(aliceDoc, "native")
-      await drain()
+      await sleep(50)
       await alice.flush()
 
       expect(backend.title(bobDoc)).toBe("native")
@@ -110,7 +101,7 @@ function localWrites<D extends object>(backend: Backend<D>): void {
       const { alice, aliceDoc, bobDoc } = await pair(store)
 
       backend.writeSide(aliceDoc)
-      await drain()
+      await sleep(50)
       await alice.flush()
 
       expect(backend.readSide(bobDoc)).toEqual(backend.readSide(aliceDoc))
@@ -206,18 +197,17 @@ const BODY = 4000
 function writtenDuringMerge<D extends object>(c: DuringMerge<D>): void {
   it(`${c.name}: reaches the peer, which is not sent its own write back`, async () => {
     const bridge = new Bridge()
-    const alice = new Exchange({
+    const alice = createExchange({
       principal: "alice",
       transports: [createBridgeTransport({ transportId: "alice", bridge })],
     })
-    const bob = new Exchange({
+    const bob = createExchange({
       principal: "bob",
       transports: [createBridgeTransport({ transportId: "bob", bridge })],
     })
-    exchanges.push(alice, bob)
     const aliceDoc = c.open(alice)
     const bobDoc = c.open(bob)
-    await drain()
+    await sleep(50)
     c.arrange(aliceDoc)
 
     let toBob = 0
@@ -227,7 +217,7 @@ function writtenDuringMerge<D extends object>(c: DuringMerge<D>): void {
       route(from, to, bytes)
     }
     c.writeBody(bobDoc, noise(BODY))
-    await drain()
+    await sleep(50)
 
     expect(c.holdsReply(bobDoc)).toBe(true)
     // Alice's reply and her acknowledgement, not the body Bob just sent her.

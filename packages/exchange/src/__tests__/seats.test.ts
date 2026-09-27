@@ -16,8 +16,9 @@ import {
 import { loro } from "@kyneta/loro-schema"
 import { type BoundSchema, batch, Schema } from "@kyneta/schema"
 import { yjs } from "@kyneta/yjs-schema"
-import { afterEach, describe, expect, it } from "vitest"
-import { Exchange } from "../exchange.js"
+import { describe, expect, it } from "vitest"
+import type { Exchange } from "../exchange.js"
+import { drain, exchangesPerTest } from "./exchanges.js"
 
 const TextSchema = Schema.struct({ text: Schema.text() })
 
@@ -28,18 +29,7 @@ const backends: ReadonlyArray<readonly [string, Bound]> = [
   ["loro", loro.bind(TextSchema)],
 ]
 
-async function drain(rounds = 30): Promise<void> {
-  for (let i = 0; i < rounds; i++) {
-    await new Promise<void>(r => queueMicrotask(r))
-    await new Promise<void>(r => setTimeout(r, 0))
-  }
-}
-
-const active: Exchange[] = []
-afterEach(async () => {
-  for (const ex of active) await ex.shutdown()
-  active.length = 0
-})
+const createExchange = exchangesPerTest()
 
 /** An Exchange for `principal`, connected to `bridge` as `transportId` unless
  *  `offline`. */
@@ -49,12 +39,10 @@ function open(
   transportId: string,
   offline = false,
 ): Exchange {
-  const ex = new Exchange({
+  return createExchange({
     principal,
     transports: offline ? [] : [createBridgeTransport({ transportId, bridge })],
   })
-  active.push(ex)
-  return ex
 }
 
 function textOf(ex: Exchange, bound: Bound): string {

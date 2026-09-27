@@ -12,9 +12,10 @@
 import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import { json, Schema } from "@kyneta/schema"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { Exchange, type ExchangeParams } from "../exchange.js"
+import type { ExchangeParams } from "../exchange.js"
 import { persisted } from "../persistence.js"
 import { createInMemoryStore } from "../store/in-memory-store.js"
+import { exchangesPerTest, sleep } from "./exchanges.js"
 import { wrapStore } from "./wrap-store.js"
 
 const Doc = json.bind(Schema.struct({ title: Schema.string() }))
@@ -22,12 +23,9 @@ const Doc = json.bind(Schema.struct({ title: Schema.string() }))
 const EARLY = Date.UTC(2026, 0, 1)
 const LATE = Date.UTC(2026, 0, 2)
 
-const exchanges: Exchange[] = []
-
-afterEach(async () => {
+const createExchange = exchangesPerTest()
+afterEach(() => {
   vi.useRealTimers()
-  for (const exchange of exchanges) await exchange.shutdown()
-  exchanges.length = 0
 })
 
 /** An exchange on `bridges`, recording the lineage collisions it reports. */
@@ -36,14 +34,13 @@ function open(
   bridges: Bridge[],
   params: Partial<ExchangeParams> = {},
 ) {
-  const exchange = new Exchange({
+  const exchange = createExchange({
     principal: id,
     transports: bridges.map((bridge, i) =>
       createBridgeTransport({ bridge, transportId: `${id}-${i}` }),
     ),
     ...params,
   })
-  exchanges.push(exchange)
   const collisions: string[] = []
   exchange.observe(o => {
     if (o.kind === "diagnostic" && o.code === "lineage-collision") {
@@ -63,10 +60,6 @@ function writeAt(
   doc.title.set(title)
 }
 
-async function drain(ms = 40): Promise<void> {
-  await new Promise(resolve => setTimeout(resolve, ms))
-}
-
 // The diagnostic is an error, and the shell logs it; these cases cause it on
 // purpose.
 function quietErrors(): void {
@@ -80,9 +73,9 @@ describe("two lineages of a plain document", () => {
     const server = open("server", [bridge])
     const first = open("writer", [bridge])
     writeAt(EARLY, first.doc, "old")
-    await drain()
+    await sleep(40)
     expect(server.doc.title()).toBe("old")
-    exchanges.splice(exchanges.indexOf(first.exchange), 1)
+    createExchange.forget(first.exchange)
     first.exchange.reset()
 
     // No store: the new session writes before it has heard anything.
@@ -92,7 +85,7 @@ describe("two lineages of a plain document", () => {
       ],
     })
     writeAt(LATE, second.doc, "new")
-    await drain()
+    await sleep(40)
 
     expect(server.doc.title()).toBe("new")
     expect(second.doc.title()).toBe("new")
@@ -104,11 +97,11 @@ describe("two lineages of a plain document", () => {
     const bridge = new Bridge()
     const a = open("a", [bridge])
     const b = open("b", [bridge])
-    await drain()
+    await sleep(40)
 
     writeAt(EARLY, a.doc, "a")
     writeAt(LATE, b.doc, "b")
-    await drain()
+    await sleep(40)
 
     expect(a.doc.title()).toBe("b")
     expect(b.doc.title()).toBe("b")
@@ -127,7 +120,7 @@ describe("two lineages of a plain document", () => {
 
     writeAt(EARLY, a.doc, "a")
     writeAt(LATE, b.doc, "b")
-    await drain(80)
+    await sleep(80)
 
     expect([a, s1, s2, b].map(p => p.doc.title())).toEqual(["b", "b", "b", "b"])
   })
@@ -138,11 +131,11 @@ describe("two lineages of a plain document", () => {
     const keeper = open("keeper", [bridge])
     keeper.exchange.register({ canReset: () => false })
     const other = open("other", [bridge])
-    await drain()
+    await sleep(40)
 
     writeAt(EARLY, keeper.doc, "kept")
     writeAt(LATE, other.doc, "later")
-    await drain()
+    await sleep(40)
 
     expect(keeper.doc.title()).toBe("kept")
     expect(keeper.collisions.length).toBeGreaterThan(0)
@@ -165,21 +158,21 @@ describe("two lineages of a plain document", () => {
     const bridge = new Bridge()
     const loser = open("loser", [bridge], { store: held })
     const winner = open("winner", [bridge])
-    await drain()
+    await sleep(40)
 
     writeAt(EARLY, loser.doc, "lost")
     writeAt(LATE, winner.doc, "won")
-    await drain()
+    await sleep(40)
     expect(loser.doc.title()).toBe("won")
 
     const released = waiting ?? []
     waiting = undefined
     for (const resolve of released) resolve()
-    await drain()
+    await sleep(40)
     expect(persisted(loser.doc)).toBe(true)
 
     loser.doc.title.set("after")
-    await drain()
+    await sleep(40)
     expect(winner.doc.title()).toBe("after")
   })
 })

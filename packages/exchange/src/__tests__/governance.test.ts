@@ -12,8 +12,10 @@ import {
 } from "@kyneta/schema"
 import type { PeerIdentityDetails } from "@kyneta/transport"
 import { describe, expect, it, vi } from "vitest"
-import { Exchange } from "../exchange.js"
 import { composeGate, Governance } from "../governance.js"
+import { exchangesPerTest } from "./exchanges.js"
+
+const createExchange = exchangesPerTest()
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -446,7 +448,7 @@ describe("Governance", () => {
 
 describe("rethrowErrors (via Exchange shutdown/reset)", () => {
   it("shutdown rethrows a single dispose error after completing cleanup", async () => {
-    const exchange = new Exchange({ principal: "test" })
+    const exchange = createExchange({ principal: "test" })
     const error = new Error("dispose-fail")
     exchange.register({
       dispose: () => {
@@ -457,7 +459,7 @@ describe("rethrowErrors (via Exchange shutdown/reset)", () => {
   })
 
   it("shutdown wraps multiple dispose errors in AggregateError", async () => {
-    const exchange = new Exchange({ principal: "test" })
+    const exchange = createExchange({ principal: "test" })
     exchange.register({
       dispose: () => {
         throw new Error("a")
@@ -472,7 +474,7 @@ describe("rethrowErrors (via Exchange shutdown/reset)", () => {
   })
 
   it("reset rethrows a single dispose error after completing cleanup", () => {
-    const exchange = new Exchange({ principal: "test" })
+    const exchange = createExchange({ principal: "test" })
     const error = new Error("dispose-fail")
     exchange.register({
       dispose: () => {
@@ -483,7 +485,7 @@ describe("rethrowErrors (via Exchange shutdown/reset)", () => {
   })
 
   it("shutdown completes all cleanup steps even when dispose throws", async () => {
-    const exchange = new Exchange({ principal: "test" })
+    const exchange = createExchange({ principal: "test" })
     exchange.register({
       dispose: () => {
         throw new Error("boom")

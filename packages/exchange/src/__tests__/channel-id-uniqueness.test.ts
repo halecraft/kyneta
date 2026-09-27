@@ -19,27 +19,22 @@
 import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import { json, Schema } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
-import { Exchange } from "../exchange.js"
+import { drain, exchangesPerTest } from "./exchanges.js"
+
+const createExchange = exchangesPerTest()
 
 const Doc = json.bind(Schema.struct({ v: Schema.number() }))
-
-async function drain(rounds = 30): Promise<void> {
-  for (let i = 0; i < rounds; i++) {
-    await new Promise<void>(r => queueMicrotask(r))
-    await new Promise<void>(r => setTimeout(r, 0))
-  }
-}
 
 describe("multi-transport peer discovery", () => {
   it("three-peer mesh A ↔ B ↔ C: every peer discovers its neighbors", async () => {
     const bAB = new Bridge()
     const bBC = new Bridge()
-    const A = new Exchange({
+    const A = createExchange({
       principal: "alice",
       transports: [createBridgeTransport({ transportId: "a", bridge: bAB })],
       schemas: [Doc],
     })
-    const B = new Exchange({
+    const B = createExchange({
       principal: "bob",
       transports: [
         createBridgeTransport({ transportId: "b-ab", bridge: bAB }),
@@ -47,7 +42,7 @@ describe("multi-transport peer discovery", () => {
       ],
       schemas: [Doc],
     })
-    const C = new Exchange({
+    const C = createExchange({
       principal: "carol",
       transports: [createBridgeTransport({ transportId: "c", bridge: bBC })],
       schemas: [Doc],
@@ -58,9 +53,5 @@ describe("multi-transport peer discovery", () => {
     expect([...A.peers().keys()]).toEqual([B.peerId])
     expect([...B.peers().keys()].sort()).toEqual([A.peerId, C.peerId].sort())
     expect([...C.peers().keys()]).toEqual([B.peerId])
-
-    await A.shutdown()
-    await B.shutdown()
-    await C.shutdown()
   })
 })
