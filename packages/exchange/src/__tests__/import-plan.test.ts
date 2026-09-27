@@ -12,6 +12,7 @@ import {
 } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import {
+  crossingOf,
   type ImportFacts,
   planImport,
   reportImport,
@@ -81,6 +82,23 @@ describe("planImport", () => {
     ).toBe("ask-whole")
   })
 
+  it("outranks a superseded lineage, whatever the policy and payload", () => {
+    // Nothing of ours is discarded, so `canReset` has nothing to veto.
+    for (const resetPermitted of [true, false]) {
+      for (const payloadKind of ["since", "entirety"] as const) {
+        expect(
+          planImport(
+            facts({
+              resetTrigger: "stale-lineage",
+              resetPermitted,
+              payloadKind,
+            }),
+          ),
+        ).toBe("outrank")
+      }
+    }
+  })
+
   it("resets from a permitted whole document, for either trigger", () => {
     for (const resetTrigger of ["lineage", "compaction"] as const) {
       expect(
@@ -100,7 +118,7 @@ describe("reportImport", () => {
   const at = (n: number) => new PlainVersion(n, "L")
   const genesis = new PlainVersion(0, DEFAULT_LINEAGE)
   const report = (
-    plan: "ask-whole" | "reset" | "merge",
+    plan: "refused" | "outrank" | "ask-whole" | "reset" | "merge",
     prior: PlainVersion,
     after: PlainVersion,
     offered: PlainVersion,
@@ -136,11 +154,13 @@ describe("reportImport", () => {
     })
   })
 
-  it("asking for the whole document changed nothing and holds nothing", () => {
-    expect(report("ask-whole", at(2), at(2), at(3))).toEqual({
-      changed: false,
-      held: false,
-    })
+  it("asking, refusing and outranking change nothing and hold nothing", () => {
+    for (const plan of ["ask-whole", "refused", "outrank"] as const) {
+      expect(report(plan, at(2), at(2), at(3))).toEqual({
+        changed: false,
+        held: false,
+      })
+    }
   })
 
   it("a history-free merge that moved nothing is not a change, though its counter compares concurrent with itself", () => {
@@ -166,5 +186,28 @@ describe("reportImport", () => {
       changed: false,
       held: true,
     })
+  })
+})
+
+describe("crossingOf", () => {
+  it("names our response to every lineage crossing", () => {
+    expect(crossingOf("lineage", "reset", "a", "b")).toEqual({
+      local: "a",
+      remote: "b",
+      response: "adopted",
+    })
+    expect(crossingOf("lineage", "ask-whole", "a", "b")?.response).toBe(
+      "asking",
+    )
+    expect(crossingOf("lineage", "refused", "a", "b")?.response).toBe("refused")
+    expect(crossingOf("stale-lineage", "outrank", "b", "a")?.response).toBe(
+      "outranking",
+    )
+  })
+
+  it("is nothing without a lineage trigger", () => {
+    expect(crossingOf("compaction", "reset", "a", "a")).toBeUndefined()
+    expect(crossingOf("compaction", "refused", "a", "a")).toBeUndefined()
+    expect(crossingOf("none", "merge", "a", "a")).toBeUndefined()
   })
 })

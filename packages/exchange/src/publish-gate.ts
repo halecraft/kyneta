@@ -10,16 +10,22 @@ import { reaches, type Version } from "@kyneta/schema"
 /**
  * May this document's live state leave the process?
  *
- * Open when no own write is held, or when the store has confirmed a version
- * that reaches the last one the drain found own writes in.
+ * Open when no own write is held, when the store has confirmed a version that
+ * reaches the last one the drain found own writes in, or when the replica
+ * itself no longer reaches it. A replica's version only grows, except when a
+ * reset replaces its state: then the own writes are gone, nothing of them is
+ * left to confirm, and their lineage is never written under again.
  */
 export function gateOpen(input: {
   /** The replica's version when the drain last found own writes; undefined when none is held. */
   readonly ownHigh: Version | undefined
   /** The version the store last confirmed; undefined when it has confirmed none. */
   readonly confirmed: Version | undefined
+  /** The replica's version now. */
+  readonly current: Version
 }): boolean {
-  const { ownHigh, confirmed } = input
+  const { ownHigh, confirmed, current } = input
   if (ownHigh === undefined) return true
+  if (!reaches(current, ownHigh)) return true
   return confirmed !== undefined && reaches(confirmed, ownHigh)
 }

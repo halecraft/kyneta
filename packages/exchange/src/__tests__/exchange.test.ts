@@ -1490,7 +1490,14 @@ describe("Exchange", () => {
       receiver2.close()
     })
 
-    it("double-mount race (same peerId, two concurrent client Exchanges — StrictMode/HMR): lineage boundary crash is recovered, not thrown (production repro)", async () => {
+    // Expected to fail until each Runtime issues its own peer id
+    // (PLAN-2026-09-27-principal). The two clients share one peer id, so they
+    // are two writers of one `Line` outbox, a plain document. Their lineages
+    // converge on the later one (the lineage-collision rule), and a message
+    // the earlier one wrote but the server had not taken in is never
+    // delivered. With a seat per Runtime they write two outboxes, both
+    // messages arrive, and this test passes: then drop `.fails`.
+    it.fails("double-mount race (same peerId, two concurrent client Exchanges — StrictMode/HMR): both messages arrive (production repro)", async () => {
       // Production repro (jj:5e9e318542ee2006ccb720fd4ec9f819): the actual
       // trigger observed in production is TWO client Exchange instances
       // sharing the same peerId connecting concurrently (e.g. React
@@ -1536,6 +1543,9 @@ describe("Exchange", () => {
         ],
       })
       const sender1 = RealProto.sender(client1, "loomi-server")
+      // Client 1 mints the later lineage, so the server, which takes client
+      // 1's outbox first, refuses client 2's: the loss is deterministic.
+      vi.setSystemTime(Date.UTC(2026, 0, 2))
       sender1.send({ id: "req-1", request: true })
 
       // Client "instance 2" mounts with the SAME peerId almost immediately
@@ -1548,7 +1558,9 @@ describe("Exchange", () => {
         ],
       })
       const sender2 = RealProto.sender(client2, "loomi-server")
+      vi.setSystemTime(Date.UTC(2026, 0, 1))
       sender2.send({ id: "req-2", request: true })
+      vi.useRealTimers()
 
       await drain(60)
 

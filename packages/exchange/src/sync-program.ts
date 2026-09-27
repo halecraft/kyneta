@@ -210,6 +210,8 @@ export type SyncInput =
        * not join across replicas.
        */
       senderWillHold?: string
+      /** The offer met a lineage other than ours, and what we did about it. */
+      crossing?: LineageCrossing
     }
   | {
       type: "sync/peer-synced"
@@ -234,6 +236,21 @@ export type SyncInput =
   | { type: "sync/tick-quiescent" }
   | { type: "sync/synthetic-doc-removed-all"; docIds: readonly DocId[] }
 
+/**
+ * An offer whose lineage differs from ours, both real, and our response:
+ *
+ * - `adopted`: its lineage supersedes ours, and we reset to its entirety;
+ * - `asking`: its lineage supersedes ours, but it sent a delta, which no reset
+ *   can take, so we ask for its whole document;
+ * - `outranking`: ours supersedes its lineage, so it must reset to ours;
+ * - `refused`: its lineage supersedes ours, and `canReset` vetoed the reset.
+ */
+export type LineageCrossing = {
+  readonly local: string
+  readonly remote: string
+  readonly response: "adopted" | "asking" | "outranking" | "refused"
+}
+
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 // EFFECTS (what needs to happen in the world)
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -250,6 +267,7 @@ type SyncDiagnostic = Extract<
       | "replica-type-mismatch"
       | "schema-hash-mismatch"
       | "sync-mode-mismatch"
+      | "lineage-collision"
   }
 >
 
@@ -267,6 +285,41 @@ const MISMATCH_CODE = {
   schemaHash: "schema-hash-mismatch",
   syncMode: "sync-mode-mismatch",
 } as const satisfies Record<MetadataAxis, SyncDiagnostic["code"]>
+
+/** What each response to a lineage crossing means, for the diagnostic. */
+const CROSSING_OUTCOME: Record<LineageCrossing["response"], string> = {
+  adopted: "adopting the remote lineage, which supersedes ours",
+  asking:
+    "asking for the remote lineage's whole document, which supersedes ours",
+  outranking: "sending ours, which supersedes the remote lineage",
+  refused: "keeping ours: canReset refused the remote lineage",
+}
+
+/**
+ * A plain document has one writer, so two lineages meeting means a writer
+ * restarted without its history, or two writers authored the document. The
+ * replicas converge on the later lineage, and the writes of the other are
+ * gone, so it is reported as an error.
+ */
+function lineageCollision(
+  docId: DocId,
+  peer: PeerId,
+  crossing: LineageCrossing,
+): SyncEffect {
+  return {
+    type: "diagnostic",
+    code: "lineage-collision",
+    severity: "error",
+    peer,
+    docId,
+    local: crossing.local,
+    remote: crossing.remote,
+    message:
+      `[exchange] lineage collision for doc '${docId}': ` +
+      `local '${crossing.local}' vs remote '${crossing.remote}' — ` +
+      CROSSING_OUTCOME[crossing.response],
+  }
+}
 
 /** The human-readable half of a mismatch diagnostic. */
 function describeMismatch(docId: DocId, m: MetadataMismatch): string {
@@ -1284,6 +1337,38 @@ function handleDocImported(
     ? buildPush(msg.docId, bumped, canShare, msg.fromPeerId)
     : [bumped]
 
+  const crossing = msg.crossing
+  const collision =
+    crossing === undefined
+      ? []
+      : [lineageCollision(msg.docId, msg.fromPeerId, crossing)]
+
+  // Refused: we keep ours and ask for nothing, since the answer would be the
+  // same lineage, refused again.
+  if (crossing?.response === "refused") return [relayed, ...relay, ...collision]
+
+  // Outranking: the sender holds a lineage ours supersedes, so none of our
+  // versions. It is owed our whole document, and has nothing we lack.
+  if (crossing?.response === "outranking") {
+    const owed = setPeerDocState(relayed, msg.fromPeerId, msg.docId, {
+      status: "synced",
+      ourVersionTheyWillHold: undefined,
+      offerOwed: { since: undefined },
+    })
+    const peer = owed.peers.get(msg.fromPeerId)
+    const send: SyncEffect[] =
+      peer && canShare(msg.docId, peer.identity)
+        ? [
+            {
+              type: "send-offers",
+              docId: msg.docId,
+              to: [{ peerId: msg.fromPeerId }],
+            },
+          ]
+        : []
+    return [owed, ...relay, ...collision, ...send]
+  }
+
   // The sender told us its version, which it holds: its baseline joins it.
   const willHold =
     msg.senderWillHold === undefined
@@ -1300,19 +1385,31 @@ function handleDocImported(
         ...willHold,
       }),
       ...relay,
+      ...collision,
     ]
   }
 
   // Not held: we still lack something the sender holds. Ask it for the rest,
   // quoting our version and the cursor of theirs we do hold; its answer is the
   // catch-up.
+  //
+  // Asking across a lineage quotes no cursor. Any cursor of theirs we hold is
+  // from before the crossing, and a genesis one, the usual after an empty
+  // first sync, is served with a delta from the start of their log, which we
+  // cannot take either: we would ask again forever. With no cursor the
+  // interest states only our version, of another lineage, which they cannot
+  // serve, so they answer with their whole document.
   const pending = setPeerDocState(relayed, msg.fromPeerId, msg.docId, {
     status: "pending",
     ...willHold,
+    ...(crossing?.response === "asking"
+      ? { theirVersionWeHold: undefined }
+      : {}),
   })
   return [
     pending,
     ...relay,
+    ...collision,
     interestTo(pending, msg.fromPeerId, msg.docId, bumpedEntry, false),
   ]
 }

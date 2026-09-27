@@ -593,12 +593,14 @@ export {
 export {
   DEFAULT_LINEAGE,
   decodePlainPayload,
+  mintLineage,
   objectToReplaceOps,
   type PlainPayload,
   PlainVersion,
   plainContext,
   plainReplicaFactory,
   plainSubstrateFactory,
+  supersedes,
 } from "./substrates/plain.js"
 // Sync — generic sync functions for any substrate (via ref[SUBSTRATE])
 export {

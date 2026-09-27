@@ -139,7 +139,8 @@ export interface TransitionBody {
 
 /**
  * layer "diagnostic" — a silent-failure signal: schema-hash / replica-type /
- * sync-mode mismatch, protocol skew/mismatch, self-connection, duplicate-peer.
+ * sync-mode mismatch, lineage collision, protocol skew/mismatch,
+ * self-connection, duplicate-peer.
  * Aliased to the producer-side `Diagnostic` discriminated union (`src/types.ts`,
  * jj:nztkqwpm) — keyed on `code`, no optionals; each variant carries exactly its
  * fields (`peer`, and per-variant `local`/`remote` + `docId`). Aliasing (not

@@ -2543,6 +2543,16 @@ describe("sync-program", () => {
       })
       drive({ type: "sync/local-doc-change", docId: VETOED_DOC, version: "v4" })
       drive({ type: "sync/doc-publishable", docId: VETOED_DOC })
+      drive({
+        type: "sync/doc-imported",
+        docId: VETOED_DOC,
+        version: "v5",
+        offered: "c1",
+        fromPeerId: "carol",
+        changed: false,
+        held: false,
+        crossing: { local: "ours", remote: "c", response: "outranking" },
+      })
 
       /** Does this effect mention the vetoed doc, however it carries ids? */
       const namesVetoedDoc = (effect: SyncEffect): boolean => {
@@ -2824,5 +2834,112 @@ describe("vacant + reconciliation latch", () => {
       )
       expect(hasReconciled(deleted, "doc-1")).toBe(false)
     })
+  })
+})
+
+describe("sync/doc-imported across a lineage", () => {
+  /** Alice holds doc-1; bob has asked for it, and the answer went out. */
+  function answered(update = makeUpdate()) {
+    let model = initSync(alice)
+    ;[model] = addPeer(update, model, "bob", bob)
+    ;[model] = ensureDoc(update, model, "doc-1")
+    ;[model] = receiveMessage(update, model, "bob", {
+      type: "interest",
+      docId: "doc-1",
+      version: "kyneta.genesis:0",
+    })
+    ;[model] = reportSent(update, model, "doc-1", "v1", "bob")
+    // A version check found bob at genesis: that is our cursor of his.
+    ;[model] = applyUpdate(
+      update,
+      {
+        type: "sync/peer-synced",
+        docId: "doc-1",
+        peerId: "bob",
+        version: "kyneta.genesis:0",
+      },
+      model,
+    )
+    return { update, model }
+  }
+
+  const imported = (
+    response: "adopted" | "asking" | "outranking" | "refused",
+    over: { held?: boolean; changed?: boolean } = {},
+  ) => ({
+    type: "sync/doc-imported" as const,
+    docId: "doc-1",
+    version: "ours:1",
+    offered: "theirs:1",
+    fromPeerId: "bob",
+    changed: over.changed ?? false,
+    held: over.held ?? false,
+    crossing: { local: "ours", remote: "theirs", response },
+  })
+
+  const state = (model: SyncModel) =>
+    model.peers.get("bob")?.docSyncStates.get("doc-1")
+
+  it("reports every crossing as a lineage collision", () => {
+    for (const [response, over] of [
+      ["adopted", { held: true, changed: true }],
+      ["asking", {}],
+      ["outranking", {}],
+      ["refused", {}],
+    ] as const) {
+      const { update, model } = answered()
+      const [, effects] = applyUpdate(update, imported(response, over), model)
+      expect(effectsOfType(effects, "diagnostic")).toEqual([
+        expect.objectContaining({
+          code: "lineage-collision",
+          severity: "error",
+          peer: "bob",
+          docId: "doc-1",
+          local: "ours",
+          remote: "theirs",
+        }),
+      ])
+    }
+  })
+
+  it("asking quotes no cursor, so the answer is the sender's whole document", () => {
+    const { update, model } = answered()
+    expect(state(model)?.theirVersionWeHold).toBe("kyneta.genesis:0")
+
+    const [after, effects] = applyUpdate(update, imported("asking"), model)
+    expect(state(after)?.theirVersionWeHold).toBeUndefined()
+    const [interest] = effectsOfType(effects, "send-to-peer")
+    expect(interest?.message).toEqual(
+      expect.objectContaining({ type: "interest", docId: "doc-1" }),
+    )
+    const message = interest?.message
+    expect(message?.type === "interest" ? message.since : "absent").toBe(
+      undefined,
+    )
+  })
+
+  it("outranking owes and sends the sender our whole document", () => {
+    const { update, model } = answered()
+    const [after, effects] = applyUpdate(update, imported("outranking"), model)
+    expect(effectsOfType(effects, "send-offers")).toEqual([
+      { type: "send-offers", docId: "doc-1", to: [{ peerId: "bob" }] },
+    ])
+    expect(state(after)?.offerOwed).toEqual({})
+    expect(state(after)?.ourVersionTheyWillHold).toBeUndefined()
+  })
+
+  it("outranking sends nothing to a peer no longer shared with", () => {
+    const { model } = answered()
+    const vetoBob = makeUpdate({
+      canShare: (_docId, peer) => peer.peerId !== "bob",
+    })
+    const [, effects] = applyUpdate(vetoBob, imported("outranking"), model)
+    expect(effectsOfType(effects, "send-offers")).toEqual([])
+  })
+
+  it("refused asks for nothing: the answer would be refused again", () => {
+    const { update, model } = answered()
+    const [, effects] = applyUpdate(update, imported("refused"), model)
+    expect(effects.map(e => e.type)).toEqual(["diagnostic"])
   })
 })

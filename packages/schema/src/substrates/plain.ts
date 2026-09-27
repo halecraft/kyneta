@@ -73,6 +73,32 @@ import { createLocalUpdateSignal } from "./local-update-signal.js"
 // fresh Loro doc's empty version vector — see jj:kxswmuzx.
 export const DEFAULT_LINEAGE = "kyneta.genesis"
 
+/** Base-36 digits of the mint time: enough for any millisecond before 5000 AD. */
+const MINT_TIME_DIGITS = 9
+
+/**
+ * A new lineage, minted at `now` (milliseconds): the mint time as fixed-width
+ * base 36, then random hex. String order is mint order, and the random part
+ * breaks a tie within one millisecond, so two lineages always compare one
+ * way (see {@link supersedes}).
+ */
+export function mintLineage(now: number): string {
+  return `${Math.floor(now).toString(36).padStart(MINT_TIME_DIGITS, "0")}${randomHex(8)}`
+}
+
+/**
+ * Does real lineage `a` supersede real lineage `b`: was it minted later?
+ *
+ * A plain document has one writer, so two real lineages meeting means a writer
+ * restarted without its history, or two writers authored the document. Either
+ * way every peer must settle on the same one, and the later is the one a
+ * restarted writer minted. The order is by wall clock, so a writer whose clock
+ * is behind the lineage it replaces loses to it.
+ */
+export function supersedes(a: string, b: string): boolean {
+  return a > b
+}
+
 export class PlainVersion implements Version {
   readonly #value: number
   readonly #lineage: string
@@ -335,7 +361,9 @@ export function createPlainSubstrate(
       // batches reach here: a merge appends to the log directly, so taking
       // in a peer's ops never claims an identity. Minting before the append
       // makes the new version carry the new lineage.
-      if (clock.lineage() === DEFAULT_LINEAGE) clock.adopt(randomHex(8))
+      if (clock.lineage() === DEFAULT_LINEAGE) {
+        clock.adopt(mintLineage(Date.now()))
+      }
       core.append(pendingOps.splice(0))
       localUpdates.notify()
     },
@@ -840,8 +868,9 @@ function decodeEntirety(payload: SubstratePayload, label: string): Adoption {
  * - A whole document ahead of `position` is adopted. At or behind it, we
  *   already hold everything it says.
  * - A payload from a different REAL lineage continues nothing we hold. The
- *   Synchronizer crosses a lineage boundary with `resetFromEntirety` before a
- *   merge would see it, so here it is a gap.
+ *   Synchronizer crosses a lineage boundary with `resetFromEntirety`, toward
+ *   the lineage that supersedes the other, before a merge would see it, so
+ *   here it is a gap.
  *
  * A replica at genesis holds nothing, so any lineage continues it.
  */

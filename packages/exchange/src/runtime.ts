@@ -1585,7 +1585,7 @@ export class Runtime {
    * document without a store.
    */
   #gateOpen(entry: InterpretEntry): boolean {
-    const { replicaFactory, syncMode, docId } = entry.readyInfo
+    const { replica, replicaFactory, syncMode, docId } = entry.readyInfo
     if (!this.#usesStores(syncMode)) return true
     const phase = this.#storeHandle?.getState().docs.get(docId)
     const confirmed = phase === undefined ? undefined : confirmedVersion(phase)
@@ -1595,6 +1595,7 @@ export class Runtime {
         confirmed === undefined
           ? undefined
           : replicaFactory.parseVersion(confirmed),
+      current: replica.version(),
     })
   }
 

@@ -69,6 +69,7 @@ export type DiagnosticCode =
   | "replica-type-mismatch"
   | "schema-hash-mismatch"
   | "sync-mode-mismatch"
+  | "lineage-collision"
 
 interface DiagnosticCore {
   readonly severity: "error" | "warning"
@@ -105,6 +106,7 @@ export type Diagnostic =
           | "replica-type-mismatch"
           | "schema-hash-mismatch"
           | "sync-mode-mismatch"
+          | "lineage-collision"
         readonly docId: DocId
       })
 

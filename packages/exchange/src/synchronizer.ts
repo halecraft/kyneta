@@ -41,6 +41,7 @@ import {
   DEVTOOLS_HISTORY,
   hasDevtoolsHistory,
   reaches,
+  supersedes,
 } from "@kyneta/schema"
 import type {
   AddressedEnvelope,
@@ -83,6 +84,7 @@ import {
   type DocEntry,
   hasReconciled,
   initSync,
+  type LineageCrossing,
   reconciledMatching,
   type SyncEffect,
   type SyncInput,
@@ -282,16 +284,21 @@ export function transitionForPeerVersion(
  * identity.
  *
  * - `"lineage"` — an *identity* discontinuity. The sender is authoring a
- *   different lineage than we are (see {@link Version.lineage}), typically a
- *   serialized writer that restarted with no persisted store and minted a
- *   fresh one. Its history is not a continuation of ours.
+ *   different lineage than we are (see {@link Version.lineage}), and its
+ *   lineage supersedes ours (`supersedes`: it was minted later), typically by
+ *   a serialized writer that restarted with no persisted store. Its history
+ *   is not a continuation of ours.
+ * - `"stale-lineage"` — the same discontinuity the other way: ours supersedes
+ *   the sender's. Nothing is reset here; the sender must reset to ours.
+ *   Deciding by one order on every peer is what makes two lineages converge
+ *   rather than swap.
  * - `"compaction"` — a *history* gap within the same lineage. The sender
  *   trimmed history past our version, so its `exportSince()` could not compute
  *   a delta and fell back to a whole-state image. Identity is unchanged; only
  *   the connecting history is missing.
  * - `"none"` — an ordinary offer. Merge it.
  */
-export type ResetTrigger = "none" | "lineage" | "compaction"
+export type ResetTrigger = "none" | "lineage" | "stale-lineage" | "compaction"
 
 /**
  * Classify an inbound offer into a {@link ResetTrigger}. Pure, so that every
@@ -301,7 +308,9 @@ export type ResetTrigger = "none" | "lineage" | "compaction"
  * excluded because it is the ordinary lazy-mint / first-sync value, which
  * `merge()` already handles — a mismatch against it means nothing. Only
  * `PlainVersion` ever mints a real one, so in practice this fires for `json`
- * documents alone.
+ * documents alone. `supersedes` picks the direction: `"lineage"` when the
+ * sender's was minted later, `"stale-lineage"` when ours was, so the two
+ * peers of a crossing never both reset.
  *
  * **Compaction** requires a whole-state image from a peer already marked
  * synced; a first entirety is just initial sync. It is the only signal
@@ -329,7 +338,9 @@ export function classifyResetTrigger(
 ): ResetTrigger {
   const lineagesComparable =
     remoteLineage !== DEFAULT_LINEAGE && localLineage !== DEFAULT_LINEAGE
-  if (lineagesComparable && remoteLineage !== localLineage) return "lineage"
+  if (lineagesComparable && remoteLineage !== localLineage) {
+    return supersedes(remoteLineage, localLineage) ? "lineage" : "stale-lineage"
+  }
 
   if (isEntirety && senderAlreadySynced && !historyFree) {
     return "compaction"
@@ -359,6 +370,8 @@ export type ImportFacts = {
  * - `unreadable`: its version does not parse. Nothing, and no `accept`.
  * - `already-held`: we hold its version. `accept` if owed.
  * - `refused`: a reset the policy vetoed. Keep local state.
+ * - `outrank`: the sender's lineage is superseded by ours. Take nothing, and
+ *   owe the sender our whole document, to which it will reset.
  * - `ask-whole`: a delta across a lineage boundary, which no reset can
  *   take. Report it not held, which asks the sender for its whole document.
  * - `reset`: take the sender's whole document in place of ours. A headless
@@ -370,6 +383,7 @@ export type ImportPlan =
   | "unreadable"
   | "already-held"
   | "refused"
+  | "outrank"
   | "ask-whole"
   | "reset"
   | "merge"
@@ -385,6 +399,8 @@ export function planImport(facts: ImportFacts): ImportPlan {
       break
   }
   if (facts.resetTrigger === "none") return "merge"
+  // Nothing of ours is discarded, so the reset policy is not asked.
+  if (facts.resetTrigger === "stale-lineage") return "outrank"
   if (!facts.resetPermitted) return "refused"
   // `resetFromEntirety`/`fromEntirety` take only a self-sufficient state
   // image. The lineage trigger fires regardless of payload shape, so a delta
@@ -394,8 +410,34 @@ export function planImport(facts: ImportFacts): ImportPlan {
 }
 
 /**
- * What taking an offer in did, from the versions around it.
+ * The lineage boundary an offer crossed, and our response, or `undefined` if
+ * it crossed none. Every peer that meets two lineages reports it.
+ */
+export function crossingOf(
+  trigger: ResetTrigger,
+  plan: ImportPlan,
+  local: string,
+  remote: string,
+): LineageCrossing | undefined {
+  if (trigger !== "lineage" && trigger !== "stale-lineage") return undefined
+  const response = CROSSING_RESPONSE[plan]
+  return response === undefined ? undefined : { local, remote, response }
+}
+
+/** What each plan that follows a lineage trigger does about the crossing. */
+const CROSSING_RESPONSE: Partial<
+  Record<ImportPlan, LineageCrossing["response"]>
+> = {
+  reset: "adopted",
+  "ask-whole": "asking",
+  outrank: "outranking",
+  refused: "refused",
+}
+
+/**
+ * What an offer did, from the versions around it.
  *
+ * `refused`, `outrank` and `ask-whole` take nothing in: unchanged, not held.
  * `changed`: a reset replaced the state; a merge moved it iff our version's
  * serialization changed. That is not a lattice comparison: a history-free
  * version (an install counter) compares `"concurrent"` even with itself, and
@@ -405,13 +447,16 @@ export function planImport(facts: ImportFacts): ImportPlan {
  * not compare across replicas and its merge is a join that waits on nothing.
  */
 export function reportImport(r: {
-  readonly plan: "ask-whole" | "reset" | "merge"
+  readonly plan: "refused" | "outrank" | "ask-whole" | "reset" | "merge"
   readonly prior: Version
   readonly after: Version
   readonly offered: Version
   readonly historyFree: boolean
 }): { readonly changed: boolean; readonly held: boolean } {
-  if (r.plan === "ask-whole") return { changed: false, held: false }
+  // These take nothing in.
+  if (r.plan === "refused" || r.plan === "outrank" || r.plan === "ask-whole") {
+    return { changed: false, held: false }
+  }
   const changed =
     r.plan === "reset" || r.after.serialize() !== r.prior.serialize()
   const held = r.historyFree || reaches(r.after, r.offered)
@@ -1690,10 +1735,6 @@ export class Synchronizer {
 
     switch (plan) {
       case "unreadable":
-      case "refused":
-        // A refused reset keeps local state: the document diverges from the
-        // compacted peers until governance reconciles or a new entirety is
-        // accepted.
         return
       case "already-held":
         this.#acceptIfOwed(effect)
@@ -1702,14 +1743,18 @@ export class Synchronizer {
     // Every remaining plan follows a gap, which carries the parsed version.
     if (gap.kind !== "gap") return
 
-    if (plan === "ask-whole") {
-      console.warn(
-        `[exchange] lineage boundary detected for doc '${effect.docId}' ` +
-          `with a non-entirety payload — re-requesting the sender's full state.`,
-      )
-    }
+    // A refused compaction reset stays silent: the document diverges from the
+    // compacted peers until governance reconciles. Reported not held, it
+    // would draw an interest whose answer is the same image, refused again.
+    if (plan === "refused" && resetTrigger === "compaction") return
 
     const prior = doc.replica.version()
+    const crossing = crossingOf(
+      resetTrigger,
+      plan,
+      prior.lineage,
+      gap.parsed.lineage,
+    )
     try {
       switch (plan) {
         case "reset":
@@ -1741,6 +1786,9 @@ export class Synchronizer {
           doc.replica.merge(effect.payload, { origin: "sync" })
           break
         case "ask-whole":
+        case "refused":
+        case "outrank":
+          // These take nothing in; the report says what follows.
           break
       }
     } catch (err) {
@@ -1766,6 +1814,7 @@ export class Synchronizer {
         historyFree: doc.replicaFactory.historyFree,
       }),
       this.#senderWillHold(doc, effect, gap.parsed, plan),
+      crossing,
     )
   }
 
@@ -1797,14 +1846,16 @@ export class Synchronizer {
   }
 
   /**
-   * The one exit of a taken offer: `accept` it if it is held and an accept is
-   * owed, then tell the program what taking it in did.
+   * The one exit of every offer that showed a gap, except a refused
+   * compaction: `accept` it if it is held and an accept is owed, then tell
+   * the program what the offer did, including any lineage it crossed.
    */
   #took(
     effect: ImportDocData,
     version: string,
     report: { readonly changed: boolean; readonly held: boolean },
     senderWillHold: string | undefined,
+    crossing: LineageCrossing | undefined,
   ): void {
     if (report.held) this.#acceptIfOwed(effect)
     this.#dispatchSync({
@@ -1816,6 +1867,7 @@ export class Synchronizer {
       changed: report.changed,
       held: report.held,
       ...(senderWillHold === undefined ? {} : { senderWillHold }),
+      ...(crossing === undefined ? {} : { crossing }),
     })
   }
 

@@ -15,7 +15,7 @@
 //      what makes it safe for the reset path to rebuild the replica rather
 //      than merge into it — see the replicate arm of `#executeImportDocData`.
 
-import { DEFAULT_LINEAGE } from "@kyneta/schema"
+import { DEFAULT_LINEAGE, mintLineage } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import { classifyResetTrigger } from "../synchronizer.js"
 
@@ -60,6 +60,16 @@ describe("classifyResetTrigger — lineage", () => {
     // -discontinuity case requires — a writer that restarted with no store
     // must be detected even when its next offer happens to be a delta.
     expect(classify("inc-a", "inc-b")).toBe("lineage")
+  })
+
+  it("crosses toward the lineage minted later, on both peers", () => {
+    // One order on every peer: the peer holding the earlier lineage resets,
+    // the one holding the later is stale-lineage and resets nothing. Both
+    // resetting is what swapped two replicas.
+    const early = mintLineage(Date.UTC(2020, 0, 1))
+    const late = mintLineage(Date.UTC(2026, 0, 1))
+    expect(classify(early, late)).toBe("lineage")
+    expect(classify(late, early)).toBe("stale-lineage")
   })
 
   it("is none when local is DEFAULT_LINEAGE (normal lazy-mint/first-sync path)", () => {
