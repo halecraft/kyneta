@@ -132,12 +132,21 @@ export type PeerDocSyncState = {
    */
   readonly ourVersionTheyHold?: string
   /**
-   * The version of ours this peer will hold once every offer we have sent it
-   * arrives, joined with what its own offers said it holds. Each push to it
-   * starts here. Optimistic, unlike `ourVersionTheyHold`: it moves when we
-   * send, not when the peer acknowledges, and so never falls behind it.
+   * The version of ours this peer will hold once every offer reported sent to
+   * it arrives, joined with what its own offers said it holds. Each push to it
+   * starts here. Optimistic, unlike `ourVersionTheyHold`: it moves when the
+   * send is reported, not when the peer acknowledges, and so never falls
+   * behind it. An interest clears it until the answer is reported sent, so no
+   * push reaches the peer from a version it may not hold.
    */
   readonly ourVersionTheyWillHold?: string
+  /**
+   * An offer of this document was emitted to this peer and not yet reported
+   * sent. `since` is where it starts: the version it exports from, or
+   * undefined for the whole document. Kept so an offer withheld at the export
+   * can be sent as it was once the document may leave.
+   */
+  readonly offerOwed?: { readonly since?: string }
   /**
    * The latest of this peer's versions we hold: the version of the last offer
    * of its we held, or the version it stated when we already held it. Quoted

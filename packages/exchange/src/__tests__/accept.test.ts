@@ -19,57 +19,11 @@ import {
   type SubstratePayload,
   type Version,
 } from "@kyneta/schema"
-import {
-  type ChannelMsg,
-  type ConnectedChannel,
-  type GeneratedChannel,
-  PROTOCOL_VERSION,
-  Transport,
-} from "@kyneta/transport"
+import { type ChannelMsg, PROTOCOL_VERSION } from "@kyneta/transport"
 import { YjsVersion, yjs } from "@kyneta/yjs-schema"
 import { afterEach, describe, expect, it } from "vitest"
 import { Exchange } from "../exchange.js"
-
-/** A peer whose every message is written by the test. */
-class ScriptedPeer extends Transport<void> {
-  readonly sent: ChannelMsg[] = []
-  #channel: ConnectedChannel | undefined
-
-  constructor() {
-    super({ transportType: "scripted", transportId: "scripted" })
-  }
-
-  protected generate(): GeneratedChannel {
-    return {
-      transportType: this.transportType,
-      send: msg => {
-        this.sent.push(msg)
-      },
-      stop: () => {},
-    }
-  }
-
-  async onStart(): Promise<void> {
-    const channel = this.addChannel(undefined)
-    this.#channel = channel
-    this.establishChannel(channel.channelId)
-  }
-
-  async onStop(): Promise<void> {}
-
-  receive(msg: ChannelMsg): void {
-    if (!this.#channel) throw new Error("the scripted peer has not started")
-    this.#channel.onReceive(msg)
-  }
-
-  sentOf<T extends ChannelMsg["type"]>(
-    type: T,
-  ): Extract<ChannelMsg, { type: T }>[] {
-    return this.sent.filter(
-      (m): m is Extract<ChannelMsg, { type: T }> => m.type === type,
-    )
-  }
-}
+import { ScriptedPeer } from "./scripted-peer.js"
 
 const Doc = json.bind(Schema.struct({ n: Schema.number() }))
 

@@ -22,6 +22,7 @@ Imported by applications to construct the top-level sync graph; by `@kyneta/reac
 
 - What is the difference between session and sync, and why are they split? → [Two programs, one shell](#two-programs-one-shell)
 - How does a local mutation become a wire `offer`? → [The local-write path](#the-local-write-path)
+- Why does a local write reach peers only once it is stored? → [Store-first](#store-first)
 - What does `exchange.get(docId, bound)` actually do? → [`exchange.get` — phase in, action out](#exchangeget--phase-in-action-out)
 - What does the `resolve` callback decide? → [Document classification on `present`](#document-classification-on-present)
 - How do departure and reconnection interact? → [Departure, grace, reconnection](#departure-grace-reconnection)
@@ -208,23 +209,26 @@ The eight are defined once in `@kyneta/transport`; the wire encoding is defined 
 
 ### What each side knows about the other
 
-Source: `src/types.ts` → `PeerDocSyncState`, `src/sync-program.ts` → `setPeerDocState`, `handleAccept`, `handleDocImported`, `buildPush`, `src/synchronizer.ts` → `#acceptIfOwed`, `#senderWillHold`, `leastCommonVersion`.
+Source: `src/types.ts` → `PeerDocSyncState`, `src/sync-program.ts` → `setPeerDocState`, `handleAccept`, `handleDocImported`, `buildPush`, `handleOffersSent`, `src/synchronizer.ts` → `#acceptIfOwed`, `#senderWillHold`, `leastCommonVersion`.
 
-Per peer and document the sync model keeps a `status` and three versions:
+Per peer and document the sync model keeps a `status`, three versions, and `offerOwed`, an offer emitted to the peer and not yet reported sent:
 
-| Event | `status` | `ourVersionTheyHold` | `ourVersionTheyWillHold` | `theirVersionWeHold` |
-|---|---|---|---|---|
-| interest received, and answered | `pending` | := its `since ?? version` | := our version | kept |
-| `accept` received | kept | := its `version` | kept | kept |
-| offer held | `synced` | kept | := joined with the offer's `version` | := the offer's `version` |
-| offer not held | `pending` | kept | := joined with the offer's `version` | kept |
-| a push sent to it | kept | kept | := our new version | kept |
-| version check finds no gap | `synced` | kept | kept | := the peer's stated version |
-| peer's channel returns | kept | cleared | cleared | kept |
+| Event | `status` | `ourVersionTheyHold` | `ourVersionTheyWillHold` | `theirVersionWeHold` | `offerOwed` |
+|---|---|---|---|---|---|
+| interest received | `pending` | := its `since ?? version` | cleared | kept | := from its `since ?? version` |
+| `accept` received | kept | := its `version` | kept | kept | kept |
+| offer held | `synced` | kept | := joined with the offer's `version` | := the offer's `version` | kept |
+| offer not held | `pending` | kept | := joined with the offer's `version` | kept | kept |
+| a push emitted to it | kept | kept | kept | kept | := from its baseline, unless already owed |
+| an offer reported sent | kept | kept | := the version the offer carried | kept | cleared |
+| version check finds no gap | `synced` | kept | kept | := the peer's stated version | kept |
+| peer's channel returns | kept | cleared | cleared | kept | cleared |
 
 - **`theirVersionWeHold` is quoted back as an interest's `since`.** It is always a version the peer minted, which matters where versions are private: the ephemeral substrate's is an install counter, and a reconnecting peer that quoted its own counter used to be answered with the whole document.
 - **`ourVersionTheyHold` is what compaction trims to.** Nothing else tells an offer's sender which of its versions a receiver holds, because a peer that only reads never offers anything back; before `accept`, the record of such a peer stayed at its handshake and `compact` trimmed nothing. An interest's `since` names one of our versions, so it wins over the peer's own `version`.
-- **`ourVersionTheyWillHold` is where each push to the peer starts.** It is optimistic: it moves when we send, not when the peer acknowledges, so it never lags an offer in flight (an earlier per-peer baseline that waited for acknowledgement resent every one) and never falls behind `ourVersionTheyHold`, which is why compaction never trims past a push baseline. When a peer offers us its version, it holds that version, so its baseline joins it (`#senderWillHold`, computed by the shell from the value the `import-doc-data` effect carries): a push after an import sends its sender only what it lacks, never its own import back. After a reset the baseline is the offered version alone; a history-free document's versions do not join across replicas, so an import leaves it unchanged. A peer whose baseline is unknown, one that has just come back, is not pushed to; the answer to its interest catches it up.
+- **`ourVersionTheyWillHold` is where each push to the peer starts.** It is optimistic: it moves when the shell reports the offer sent (`sync/offers-sent`), not when the peer acknowledges, so it never lags an offer in flight (an earlier per-peer baseline that waited for acknowledgement resent every one) and never falls behind `ourVersionTheyHold`, which is why compaction never trims past a push baseline. It does not move when the push is emitted, because the shell may withhold the offer at the export (see [Store-first](#store-first)); a baseline moved at emission would claim the peer holds what it was never sent, and every later push to it would start past what it holds.
+- **`offerOwed` is an offer the shell has not reported sent**, with `since`, where it starts. A push records it only if none is owed, since within a connection a baseline only grows and the earliest starting point covers every later one. When a withheld document may leave again, `sync/doc-publishable` re-emits each owed offer from its `since`. Any offer reported sent clears it: every offer exports our live state from a version the peer holds, so it carries whatever an earlier owed one would have.
+- **An interest clears the baseline** until its answer is reported sent, so no push reaches the peer from a version it may not hold; the answer exports our live state, which carries anything a push would. The interest's own version is where the answer starts, not the baseline: a history-free peer's version is its private counter, not one of ours, and a baseline set to it would make every push a whole document. When a peer offers us its version, it holds that version, so its baseline joins it (`#senderWillHold`, computed by the shell from the value the `import-doc-data` effect carries): a push after an import sends its sender only what it lacks, never its own import back. After a reset the baseline is the offered version alone; a history-free document's versions do not join across replicas, so an import leaves it unchanged. A peer whose baseline is unknown, one that has just come back or whose interest has not been answered, is not pushed to; the answer to its interest catches it up.
 - **A reconnecting peer's holding is forgotten**, because it may have restarted without its state. Its interest restates it.
 - **`leastCommonVersion` counts every peer we push to** (`pending` or `synced`) whose holding is known, filtered by `cohort`. Leaving out a `pending` peer could trim past what it holds.
 
@@ -232,7 +236,7 @@ Per peer and document the sync model keeps a `status` and three versions:
 
 **An offer is held when our version reaches it.** After taking an offer in, the shell asks `reaches(ours, offered)` and reports `held` on `sync/doc-imported`. An offer can leave us short: a plain delta that does not continue our log applies nothing; a CRDT holds back ops whose dependencies are missing; and a Yjs delta merges cleanly while its sender held a third peer's op we lack. An offer not held is not accepted, its sender stays `pending`, and the program sends it an interest quoting our version and `theirVersionWeHold`; its answer is the catch-up. The lineage-reset branch reports a delta that crosses a lineage boundary the same way, which asks for the sender's whole document. A history-free document's offer is held once merged, since its versions do not compare across replicas.
 
-**Taking in an offer is a plan and an executor.** `#executeImportDocData` gathers the facts — the version comparison (`#classifyPeer`), the reset trigger (`classifyResetTrigger`), and, for a reset, the `canReset` policy — and `planImport` (pure) names one action: `unreadable`, `already-held`, `refused`, `ask-whole`, `rebuild`, `reset` or `merge`. The executor performs it, and `reportImport` (pure) derives `changed` and `held` from the versions around it. `#took` is the one exit: it sends the owed `accept` only when held, then dispatches `sync/doc-imported`. `import-plan.test.ts` tables both decisions.
+**Taking in an offer is a plan and an executor.** `#executeImportDocData` gathers the facts — the version comparison (`#classifyPeer`), the reset trigger (`classifyResetTrigger`), and, for a reset, the `canReset` policy — and `planImport` (pure) names one action: `unreadable`, `already-held`, `refused`, `ask-whole`, `reset` or `merge`. The executor performs it, and `reportImport` (pure) derives `changed` and `held` from the versions around it. `#took` is the one exit: it sends the owed `accept` only when held, then dispatches `sync/doc-imported`. `import-plan.test.ts` tables both decisions.
 
 ### Establish-time protocol-version compatibility
 
@@ -494,9 +498,9 @@ The `resolveLease` pure core is independently tested. Storage keys (`key`, `key 
 
 ## The local-write path
 
-Source: `src/runtime.ts` → `#wire`, `#markLocalChangeDirty`, `#drainLocalChanges`; `src/exchange.ts` → the `onDocLocalChange` hook.
+Source: `src/runtime.ts` → `#wire`, `#markLocalChangeDirty`, `#drainLocalChanges`, `#drainLocal`; `src/exchange.ts` → the `onDocLocalChange` hook.
 
-A local write is anything this peer authors on a document: `batch(doc, fn)`, a write on a ref, `applyChanges`, and a write made directly on the native document reached through `unwrap`, which is how editor bindings (y-prosemirror, y-codemirror, loro-prosemirror) write. Every one of them leaves the process the same way. The substrate reports it through `subscribeLocalUpdates`, the Runtime marks the document dirty, and one drain per microtask persists and then pushes each dirty document.
+A local write is anything this peer authors on a document: `batch(doc, fn)`, a write on a ref, `applyChanges`, and a write made directly on the native document reached through `unwrap`, which is how editor bindings (y-prosemirror, y-codemirror, loro-prosemirror) write. Every one of them leaves the process the same way. The substrate reports it through `subscribeLocalUpdates`, the Runtime marks the document dirty, and one drain per microtask asks for each dirty document to be persisted and pushed. With a store, the push leaves once the store has confirmed the write ([Store-first](#store-first)).
 
 ```
 batch(doc, fn)  |  unwrap(doc.title).insert(…)  |  an editor binding's transaction
@@ -506,11 +510,16 @@ batch(doc, fn)  |  unwrap(doc.title).insert(…)  |  an editor binding's transac
   │
   ├─ #markLocalChangeDirty(docId): add to the dirty set, schedule one microtask
   │
-  └─ #drainLocalChanges, once per microtask, for each dirty document:
+  └─ #drainLocalChanges, once per microtask, #drainLocal for each dirty document:
+       ├─ commitPending(): a pending native write reports itself now
+       ├─ with a store: ownHigh := the replica's version
        ├─ onStateAdvanced(docId) → store program `state-advanced` → persist
        └─ onDocLocalChange(docId) → synchronizer.notifyLocalChange
             → sync/local-doc-change → a push to each synced peer, starting
-              from what that peer will hold → offers at quiescence
+              from what that peer will hold, owed until reported sent
+            → #executeSendOffers: publishable(docId)?
+                 yes → export, queue offers, sync/offers-sent
+                 no  → nothing leaves; the store's confirmation re-sends
 ```
 
 **Why not changesets.** The path used to hang off the changefeed: each changeset with `replay: false` was pushed and persisted. A changeset is the schema's account of a write, and not every local write has one:
@@ -523,7 +532,7 @@ The local-update signal is the CRDT's own account, so it sees all three. Changes
 
 **Why one deferred drain.** The signal fires synchronously, sometimes inside a native commit or a merge, and sometimes several times for one batch. The drain keeps the store program and the Synchronizer out of those callbacks, and turns any number of signals, batches and documents in one tick into one persist and one push per document. It is also the one place the order of persist and push is decided. Re-entrancy is not a reason: the Synchronizer's dispatcher already queues re-entrant input.
 
-**Persist, then push.** The drain requests persistence before the push. Neither waits for the other to complete: persistence is asynchronous, and the push leaves at the Synchronizer's next quiescence.
+**Persist, then push.** The drain requests persistence before the push. Without a store the push leaves at the Synchronizer's next quiescence. With one it is held at the export until the store confirms the write, and sent when it does; see [Store-first](#store-first).
 
 ### Echo prevention
 
@@ -551,9 +560,54 @@ This closes the third instance of the "one-pass-only drain" structural flaw call
 
 ### What the local-write path is NOT
 
-- **Not synchronous with send.** `batch(doc, fn)` returns as soon as the substrate's `onFlush` completes. The wire `offer` fires in the next quiescence drain, which may be the same tick or later depending on re-entrant dispatch.
+- **Not synchronous with send.** `batch(doc, fn)` returns as soon as the substrate's `onFlush` completes. The wire `offer` fires in the next quiescence drain, which may be the same tick or later depending on re-entrant dispatch, and with a store not before the store has confirmed the write.
 - **Not per-mutation.** However many writes, batches and signals a document sees in one microtask, the drain runs once for it: one `sync/local-doc-change` input, and one export per distinct baseline among the synced peers.
 - **Not guaranteed-delivery.** The payload is queued on the transport; delivery depends on the transport.
+
+---
+
+## Store-first
+
+Source: `src/runtime.ts` → `publishable`, `#drainLocal`, `#gateOpen`, `#confirmed`; `src/publish-gate.ts` → `gateOpen`; `src/synchronizer.ts` → `#executeSendOffers`; `src/sync-program.ts` → `handleOffersSent`, `handleDocPublishable`; `src/persistence.ts`.
+
+> With a store, an own operation leaves the process only after the store has confirmed it.
+
+**Why.** Yjs and Loro address an operation by `(peer, counter)`, and plain by `(lineage, n)`, and a counter means something only relative to the history a replica has loaded. A replica may issue operations under an identity only if its state holds every operation ever issued under it. A store-backed document claims its identity after hydration, which assumes the store holds everything the identity issued. Before store-first it need not have: the drain asked for the store write and the push together, the push left at the next quiescence, and the store write completed later. A crash in between left operations only the network had. The next session hydrated without them, wrote at the addresses they occupy, and the peers holding the old ones deduplicated the new ones away. The divergence was permanent and silent on every backend. With store-first, "hydrated" implies "the clock is known", and the `createForHydration`/`adopt` path is sound as it stands.
+
+**The gate.** The Runtime keeps, per interpreted document:
+
+- `ownHigh`: the replica's version when the drain last found own writes, with a store;
+- the store's confirmed version, read from the store program's model (`confirmedVersion`: `idle`'s version, or a write in flight's `revertTo`).
+
+The document may leave the process when `ownHigh` is unset, or the confirmed version `reaches` it (`gateOpen`). `reaches` is the generic test of holding a version, so the gate needs no backend-specific notion of an own component. Plain and Loro versions advance on every own operation; a Yjs version advances on a delete only through the delete clock, which is what makes a delete-only write one the store must confirm.
+
+**Checked at the export.** `#executeSendOffers` asks `runtime.publishable(docId)` immediately before exporting. `publishable` first runs `#drainLocal`: it commits whatever the native document holds uncommitted (`Substrate.commitPending`), and drains the document if that, or anything earlier, left it dirty. Then it evaluates the gate. The drain, the check and the export are consecutive synchronous calls, so nothing can write between them. A gate decided anywhere earlier is bypassed two ways:
+
+- a Loro native write left uncommitted fires no signal until something commits it, and an `export` does, so the write would be sent by the export that should have been refused;
+- the sync dispatcher is first in, first out, so an `interest` queued earlier can be answered after a merge whose subscriber wrote, before any message saying the gate had closed.
+
+**The whole document is held back.** Yjs cannot export an upper-bounded range, so there is no way to send everything except the unconfirmed operations. Filtering own structs out of an update is unsound: the delete set can reference own items that were never stored, and after a crash those ids are reissued, so a peer holding the pending delete would apply it to the new item. So while a document has unconfirmed own operations, no message carrying its content leaves: not a push, not a relay of another peer's operations, not an answer to an interest.
+
+**Owed, then reported.** The sync program emits `send-offers` as before, but records `offerOwed` instead of moving the recipient's baseline ([What each side knows about the other](#what-each-side-knows-about-the-other)). The executor either sends and reports each recipient it queued with `sync/offers-sent`, carrying the version the offer carried, or sends nothing. When the store confirms, the store program's `persisted` effect runs `#confirmed`, which clears `ownHigh` once the confirmed version reaches it and calls `onDocPublishable`: the gate was shut exactly while `ownHigh` was set, so clearing it is the opening. The Exchange forwards it as `sync/doc-publishable`, which re-emits every owed offer from its `since`.
+
+**The opening is an effect.** `write-succeeded` emits `persisted` before the `persist` of any write owed behind it, so the gate opens against the version just confirmed. An effect runs after the model updates, however dispatches nest, so the executor always reads the current phase; a check placed after a `dispatch` call would depend on whether that dispatch was nested. It also keeps every gate transition in the store program's effects.
+
+**Two kinds of document need no gate.**
+
+- Writes made before `adopt()`. A stored CRDT document writes under a throwaway id until hydration claims the real one, and nothing else will ever write under it. These writes happen before `#becomeReady` wires the local-update signal, so the gate never sees them.
+- Replicate-mode documents make no operations of their own; `publishable` answers `true` for them, as for any document without a store.
+
+**Announcements need not lag.** `interest` and `present` carry `DocEntry.version`, which includes unconfirmed own operations. A peer's own operations held back, announced, then dropped by a crash, and a new session writing something else under the same identity: Yjs, Loro and plain all converge. No peer ever held the dropped operations, so a version that claimed them misled no peer about what to send.
+
+**Persistence is observable.** `persisted(doc)`, `persistedFeed(doc)`, `whenPersisted(doc)` and `persistenceError(doc)` (`src/persistence.ts`) answer whether every own write is confirmed, and why not. A document with a write the drain has not reached yet is not persisted either. `persistenceError` covers every store write, including one that stores only imported operations, so it can be set while `persisted` is true. `whenPersisted` checks in `whenHydrated`'s order: resolve if persisted, reject if an error is recorded, otherwise wait. It is not a settle term: `settled` asks whether every source has reported, and a write waiting on the store is not a source.
+
+**Costs.**
+
+- **Latency:** own operations reach peers one store write later.
+- **Liveness:** writes arriving faster than the store confirms them hold content back until they pause. The store program collapses writes requested during a write into one owed write, so any pause longer than one store write opens the gate.
+- **Relays:** a document holding its own unconfirmed write relays nothing until the next opening.
+- **A failed store write** keeps the gate shut until a write succeeds. The store program retries with a capped backoff (250 ms, doubling to 30 s), and `persistenceError` reports the failure meanwhile.
+- **Duplicate payloads:** between emission and the report, a second push to the same peer can resend bytes; merges are idempotent.
 
 ---
 
@@ -629,6 +683,8 @@ A document can reach a peer four ways, and **all four consult `canShare`**:
 | Answer a request | `handleInterest` → `handleInterestForKnownDoc` | `send-offers` with one recipient |
 
 The first three filter recipients through `filterPeersByShare`. The fourth is a single-peer check inside `handleInterest`.
+
+The last three carry content, and all three become one `send-offers` effect. Its executor asks the Runtime's publish gate immediately before exporting, so with a store none of them sends while the document has own writes the store has not confirmed; see [Store-first](#store-first). The re-send when the gate opens, `sync/doc-publishable`, filters its recipients through `canShare` too.
 
 **The fourth shipped ungated through 3.0.0.** `canShare` therefore decided only whether a peer was *told about* a document, not whether it could *have* one: any peer that knew or guessed a document id could pull its full state by calling `get(docId, schema)`, which sends `interest` to everyone. The leak was the initial state rather than a live subscription — subsequent pushes were filtered by `buildPush` — which is part of why it went unnoticed. `handlePresent`'s known-document branch was ungated for the same reason and is now checked too; without it, a denied peer's own `present` would still draw an `interest` naming our version.
 
@@ -862,6 +918,12 @@ drains pending *writes* and only happens to await hydration as an
 implementation detail — using it as a load gate tests a coincidence rather than
 a contract.
 
+`persisted(doc)` / `whenPersisted(doc)` is the other direction: whether the
+store has confirmed every write this peer made. `exchange.flush()` waits for
+the stores to settle and then for the transports to drain, so it resolves after
+the offers the store's confirmations released have gone out; a store that keeps
+failing holds up neither.
+
 The per-document latch is a different mechanism from the `Store.initialize?()`
 lifecycle hook rejected in "Async-factory pattern" below. That hook was about
 store *construction*; this is about one document's load completing, and it does
@@ -971,9 +1033,13 @@ Persistence is driven by a pure Mealy machine: `Program<StoreInput, StoreModel, 
 
 | Effect | Executed by shell |
 |--------|-------------------|
-| `persist` | Reads the replica, builds the records for its `write`, and appends or replaces them on each registered store |
-| `persist-delete` | Calls `store.delete(docId)` on each registered store |
-| `store-error` | Calls the `onStoreError` callback |
+| `persist` | Cancels the document's retry timer, reads the replica, builds the records for its `write`, and appends or replaces them on each registered store |
+| `persisted` | The store holds the document at `version`. Opens the publish gate if the version reaches the document's own writes, and clears its recorded error ([Store-first](#store-first)) |
+| `retry` | A write failed and none is owed. Starts a timer for `afterMs` that dispatches `state-advanced` |
+| `persist-delete` | Cancels the retry timer, and calls `store.delete(docId)` on each registered store |
+| `store-error` | Records a failed write's error for the document, and calls the `onStoreError` callback |
+
+**Confirmation and retry are effects.** They run after the model updates, however the dispatch that caused them was nested, so the executor always reads the phase the transition produced. A `write-succeeded` dispatched from inside the store executor, as when a write finds nothing new, is queued behind the current dispatch, and a check placed straight after the call would read the phase before it.
 
 **Composition with the Exchange.** Each cause of a write reaches the store program by one path. A local change comes from the Runtime's own drain (see [The local-write path](#the-local-write-path)), which calls `onStateAdvanced` directly. A network import comes through the Synchronizer: the Exchange constructor registers a listener via `synchronizer.onStateAdvanced(cb)`, which does *not* fire inline with the merge — it fires at quiescence, after the Synchronizer's `#drainStateAdvanced` method processes the dirty set. The full dispatch chain for an import:
 
@@ -1000,6 +1066,8 @@ Two asymmetries in the same area, both deliberate:
 |-------|-------|
 | `unwritten` | The store has never acknowledged anything for this document. Reached when its first write failed. |
 | `idle` | A version is confirmed, and named. Ready for the next write. |
+
+Both settled phases carry `failures`, the count of writes that have failed in a row, which sets the next retry's delay; a success clears it.
 | `writing` | I/O in flight, with a `revertTo` and at most one write `owed` after it. |
 
 `unwritten` and `idle` are the two *settled* phases — nothing in flight — and `writing` carries one of them as `revertTo`: where to fall back if this write fails. Storing the fallback rather than deriving it is what keeps `writing` a single phase. The alternative, a separate status for "writing with nothing behind it", would fall silently out of every `status === "writing"` check, including the one that acknowledges a *successful* write — leaving the document mid-write forever and hanging every `flush()`.
@@ -1022,7 +1090,7 @@ An `advance` on an `unwritten` document is a `register` — the whole document a
 
 **`null` from `exportSince` means "cannot serve"**, not "nothing". It happens when `since` is behind the replica's trimmed base: after a compaction trims history and then fails to write, the document falls back to a confirmed version the replica can no longer diff from. A current cursor gets an empty delta. So a `since` write first compares versions — equal means nothing to write, and the executor reports success at `version` without touching a store — and otherwise appends the delta, or the whole document when the delta cannot be computed.
 
-**Self-healing version tracking.** The store-program's confirmed version only advances on `write-succeeded`. A failed write falls back to whatever the phase it started from was — carried on the `writing` phase as `revertTo`, decided when the write began by the code that knew which case it was in. Temporary store failures (disk full, `QuotaExceededError` on IndexedDB, a network blip on a remote store) therefore recover on the next write, without data loss.
+**Self-healing version tracking.** The store-program's confirmed version only advances on `write-succeeded`. A failed write falls back to whatever the phase it started from was — carried on the `writing` phase as `revertTo`, decided when the write began by the code that knew which case it was in. Temporary store failures (disk full, `QuotaExceededError` on IndexedDB, a network blip on a remote store) therefore recover on the next write, without data loss, and the program asks for that write itself.
 
 *Temporary* here means the failure, not the document. `durability: "transient"` is an unrelated property described above — a transient document never reaches a store at all, so none of this applies to it.
 
@@ -1035,11 +1103,11 @@ Recovery takes one of two shapes, and which one depends on whether anything was 
 
 The second exists because a delta is defined relative to a version the store acknowledged, and a first write has none. Without the distinction there is nothing to recompute from, and the document would stay unpersisted until the process restarted — which is what `version: ""` used to cause, by making "no confirmed version" indistinguishable from "a confirmed version" at the type level.
 
-A failed write is retried only when something asks for a write: the write already owed, if there is one, or the next mutation. The program never re-emits its own failed effect. That keeps it bounded — one attempt per request against a persistently failing store, rather than a loop. Applications that want a different policy have `onStoreError`.
+A failed write is retried. If a write is owed it starts at once and is the retry; otherwise the program emits `retry` with `retryDelay(failures)`: 250 ms, doubling with each failure in a row, up to 30 s. The Runtime keeps one timer per document, which dispatches `state-advanced` when it fires, and any write that starts cancels it. Under store-first a failed write stops the document syncing as well as persisting, so a retry that waited for the next mutation would leave an idle user's last write stranded on this peer. The bound is the backoff: one attempt per 30 s against a persistently failing store. A failed compaction is retried as an ordinary write (`state-advanced`), not as a compaction; compaction only saves space, so nothing is lost. A document waiting to retry is settled, so `flush()` and `shutdown()` do not wait on a failing store. Applications that want to act on failures have `onStoreError` and `persistenceError`.
 
 ### `onStoreError` callback
 
-`ExchangeParams.onStoreError` is an optional callback invoked for any store operation failure. Signature: `(docId: DocId, operation: string, error: unknown) => void`. Default: `console.warn`. This allows applications to surface persistence failures to monitoring, retry infrastructure, or user-facing error states without coupling the store-program to any particular error-handling strategy.
+`ExchangeParams.onStoreError` is an optional callback invoked for any store operation failure. Signature: `(docId: DocId, operation: string, error: unknown) => void`. Default: `console.warn`. This allows applications to surface persistence failures to monitoring or user-facing error states; the store program retries failed writes itself. `persistenceError(doc)` reports the same failures per document.
 
 ### Unified persistence via `state-advanced`
 

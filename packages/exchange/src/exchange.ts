@@ -437,6 +437,7 @@ export class Exchange {
       canReset: this.#governance.canReset.bind(this.#governance),
       rebuildReplica: (docId, payload) =>
         this.#runtime.rebuildReplica(docId, payload),
+      publishable: docId => this.#runtime.publishable(docId),
       departureTimeout,
       lease: this.#runtime.lease,
 
@@ -557,6 +558,9 @@ export class Exchange {
       },
       onDocLocalChange: docId => {
         this.#synchronizer.notifyLocalChange(docId)
+      },
+      onDocPublishable: docId => {
+        this.#synchronizer.notifyPublishable(docId)
       },
       onDocDestroyed: docId => {
         this.#synchronizer.dismissDocument(docId)
@@ -1208,6 +1212,13 @@ export class Exchange {
    *
    * Use this when you want to ensure all data has been persisted but
    * plan to continue using the Exchange afterwards.
+   *
+   * The order matters. With a store, an offer is withheld until the store
+   * confirms the document's own writes, and the confirmation queues the
+   * withheld offers synchronously, before `runtime.flush()` resolves. Draining
+   * the transports after it is what sends them. A store that keeps failing
+   * does not hold `runtime.flush()` up, so offers still waiting on it are not
+   * sent.
    */
   async flush(): Promise<void> {
     await this.#runtime.flush()

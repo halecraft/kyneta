@@ -358,6 +358,8 @@ The persistent `doc.subscribe()` callback is the enforcement mechanism for the k
 
 A write to a root container the schema does not declare raises no changeset, since the schema has no place for it. It is still pushed and persisted, through `subscribeLocalUpdates`.
 
+A raw write nobody commits stays pending, and fires nothing until something commits it: an `export` or an `import` does so implicitly. `substrate.commitPending()` commits it on demand, when `getPendingTxnLength() > 0`; the commit is a native local commit like any other, so the handler below announces it and `subscribeLocalUpdates` fires. `@kyneta/exchange` calls it before every export, to peers and to a store, so a pending write is held back until the store has confirmed it rather than sent by the export that commits it.
+
 The handler:
 
 1. If `batch.by === "local"` and matches an entry in `ourCommits` (via `delete`-as-predicate) → skip (we already notified during `prepare`).

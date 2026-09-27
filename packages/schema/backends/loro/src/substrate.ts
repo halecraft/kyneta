@@ -474,6 +474,13 @@ export function createLoroSubstrate(
       return doc.subscribeLocalUpdates(() => listener())
     },
 
+    commitPending(): void {
+      // A native commit like any other: the event bridge announces it and
+      // `subscribeLocalUpdates` fires. Inside an open `batch()` body it is the
+      // same implicit commit an `export` there would make.
+      if (doc.getPendingTxnLength() > 0) doc.commit()
+    },
+
     context(): WritableContext {
       if (!cachedCtx) {
         cachedCtx = buildWritableContext(substrate, {

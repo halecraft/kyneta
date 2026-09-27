@@ -226,6 +226,12 @@ export {
 } from "./doc-status.js"
 export type { InitAction } from "./initialize.js"
 export { initialize, planInitialization } from "./initialize.js"
+export {
+  persisted,
+  persistedFeed,
+  persistenceError,
+  whenPersisted,
+} from "./persistence.js"
 export type { SettleTerm } from "./settle.js"
 export {
   hydrated,

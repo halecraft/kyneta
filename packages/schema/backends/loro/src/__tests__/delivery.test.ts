@@ -67,6 +67,13 @@ function createLoroEnv(): DeliveryTestEnv {
       )
       batch(other, fn)
     },
+    pendingNativeWrite() {
+      // A container outside the schema: the write is a local operation all
+      // the same, and nothing commits it.
+      const native = unwrap(doc)
+      if (!(native instanceof LoroDoc)) throw new Error("expected a LoroDoc")
+      native.getText("pending").insert(0, "x")
+    },
   }
 }
 

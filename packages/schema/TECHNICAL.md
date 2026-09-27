@@ -310,6 +310,7 @@ interface SubstratePrepare {
 interface Substrate<V> extends Replica<V>, SubstratePrepare {
   context(): WritableContext
   subscribeLocalUpdates(listener: () => void): () => void
+  commitPending(): void
   tick?(now: number): void
 }
 ```
@@ -337,6 +338,7 @@ A `Substrate` adds interpretation:
 - `prepare` / `afterBatch` / `runBatch` → the mutation primitives the `WritableContext` is built over. They see only local writes and their compensations.
 - `context()` → the `WritableContext` the interpreter stack closes over.
 - `subscribeLocalUpdates(listener)` → the local-update signal, below.
+- `commitPending()` → commit any local operations the native document holds uncommitted, so the signal reports them now.
 - `tick(now)` → optional heartbeat for time-based projections (ephemeral decay).
 
 ### The local-update signal
@@ -355,6 +357,8 @@ It is how `@kyneta/exchange` decides what leaves the process. A changeset cannot
 Plain and ephemeral have only Kyneta writers, so they share `createLocalUpdateSignal` (`src/substrates/local-update-signal.ts`) and differ only in how they know a batch wrote.
 
 The signal fires synchronously, possibly several times for one batch (a Yjs tick taken in by a merge can fire it twice), and possibly from inside another call on the substrate: a merge, an export, a native commit. A listener records and defers; it must not write.
+
+**A pending native write reports itself late.** A write on a Loro document that nobody commits fires nothing until something does, and an `export` or an `import` does, so the signal can arrive from inside the export that sends the write. `commitPending()` commits it first, when `getPendingTxnLength() > 0`, and does nothing otherwise. Yjs commits every transaction as it ends, and plain and ephemeral have only Kyneta writers, which commit at the end of a batch, so for them it does nothing. `@kyneta/exchange` calls it before every export, to peers and to a store, so it hears of every own write before the write can leave (§"Store-first" in its TECHNICAL.md). `deliveryConformance` checks that after it, an export reports no local update; an environment with a `pendingNativeWrite` driver checks a pending write is reported by it.
 
 ### The `SubstratePrepare` pipeline
 

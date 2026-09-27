@@ -156,6 +156,13 @@ export type SynchronizerParams = {
    * replacing; the Synchronizer holds the same record and sees it.
    */
   rebuildReplica: (docId: DocId, payload: SubstratePayload) => void
+  /**
+   * May this document's live state leave the process now? Asked immediately
+   * before every export to a peer. The Runtime answers `false` while the
+   * store has not confirmed the document's own writes, and reports the
+   * opening through `notifyPublishable`.
+   */
+  publishable: (docId: DocId) => boolean
   onEnsureDoc?: DocCreationCallback
   onEnsureDocDismissed?: DocDismissedCallback
   departureTimeout?: number
@@ -542,6 +549,7 @@ export class Synchronizer {
 
   readonly #canReset: LineageBoundaryPredicate
   readonly #rebuildReplica: SynchronizerParams["rebuildReplica"]
+  readonly #publishable: SynchronizerParams["publishable"]
   readonly #canConnect?: (peer: PeerIdentityDetails) => boolean
   readonly #canShare: (docId: DocId, peer: PeerIdentityDetails) => boolean
   readonly #canAccept: (docId: DocId, peer: PeerIdentityDetails) => boolean
@@ -606,6 +614,7 @@ export class Synchronizer {
     canConnect,
     canReset,
     rebuildReplica,
+    publishable,
     onEnsureDoc,
     onEnsureDocDismissed,
     departureTimeout,
@@ -620,6 +629,7 @@ export class Synchronizer {
     this.#selfFeatures = selfFeatures
     this.#canReset = canReset
     this.#rebuildReplica = rebuildReplica
+    this.#publishable = publishable
     this.#canConnect = canConnect
     this.#canShare = canShare
     this.#canAccept = canAccept
@@ -885,10 +895,11 @@ export class Synchronizer {
   }
 
   /**
-   * Push a document's local changes to peers. The Exchange calls this from
-   * the Runtime's `onDocLocalChange` hook, which fires for every local
-   * write, including writes made directly on the native document, so no
-   * application code needs to call it.
+   * Ask for a document's local changes to be pushed to peers. The push is
+   * sent when the document may leave the process (`publishable`), and owed
+   * until then. The Exchange calls this from the Runtime's `onDocLocalChange`
+   * hook, which fires for every local write, including writes made directly
+   * on the native document, so no application code needs to call it.
    */
   notifyLocalChange(docId: DocId): void {
     const doc = this.#docs.get(docId)
@@ -899,6 +910,15 @@ export class Synchronizer {
       docId,
       version: doc.replica.version().serialize(),
     })
+  }
+
+  /**
+   * A document may leave the process again: send the offers withheld while
+   * it could not. The Exchange calls this from the Runtime's
+   * `onDocPublishable` hook.
+   */
+  notifyPublishable(docId: DocId): void {
+    this.#dispatchSync({ type: "sync/doc-publishable", docId })
   }
 
   getDoc(docId: DocId): RegisteredDoc | undefined {
@@ -1457,30 +1477,51 @@ export class Synchronizer {
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
   /**
-   * Send each recipient an offer from its own baseline, exporting once per
-   * distinct baseline. Baselines differ only between an import and the next
-   * push, so a fan-out usually costs one export however many peers it reaches.
+   * Send each recipient an offer from its own baseline, if the document may
+   * leave the process, and report what was sent.
+   *
+   * - `publishable` is asked first, immediately before the export, and
+   *   nothing can write between the two. Refused, nothing is sent and every
+   *   recipient stays owed; the Runtime reports the opening later.
+   * - One export per distinct baseline. Baselines differ only between an
+   *   import and the next push, so a fan-out usually costs one export however
+   *   many peers it reaches.
+   * - `sync/offers-sent` names each recipient whose offer was queued, with
+   *   the version the offer carried, which is where its baseline moves. A
+   *   peer without a channel is not named, and stays owed.
    */
   #executeSendOffers(
     effect: Extract<SyncEffect, { type: "send-offers" }>,
   ): void {
+    const { docId } = effect
+    if (!this.#publishable(docId)) return
     const payloads = new Map<string | undefined, SubstratePayload | null>()
+    const sent: { peerId: PeerId; version: string }[] = []
     for (const { peerId, sinceVersion } of effect.to) {
       let payload = payloads.get(sinceVersion)
       if (payload === undefined) {
-        payload = this.#buildOffer(effect.docId, sinceVersion)
+        payload = this.#buildOffer(docId, sinceVersion)
         payloads.set(sinceVersion, payload)
       }
-      if (payload !== null) this.#sendOfferToPeer(peerId, effect.docId, payload)
+      if (payload === null) continue
+      const version = this.#sendOfferToPeer(peerId, docId, payload)
+      if (version !== undefined) sent.push({ peerId, version })
+    }
+    if (sent.length > 0) {
+      this.#dispatchSync({ type: "sync/offers-sent", docId, sent })
     }
   }
 
   /**
    * The payload that brings a peer at `sinceVersion` to our version: the
    * delta from it, or the whole document when we cannot serve it (history
-   * trimmed past it, an incarnation not ours) or no baseline is given. `null`
-   * when there is nothing to send: the document is gone, or the baseline does
-   * not parse.
+   * trimmed past it, an incarnation not ours, a version that does not parse)
+   * or no baseline is given. `null` only when the document is gone.
+   *
+   * A version that does not parse is answered with the whole document rather
+   * than nothing. It can come from a peer's interest, and a peer left with
+   * no answer would stay owed one, and be skipped by every push, until it
+   * reconnected.
    */
   #buildOffer(docId: DocId, sinceVersion?: string): SubstratePayload | null {
     const doc = this.#docs.get(docId)
@@ -1496,32 +1537,42 @@ export class Synchronizer {
     try {
       since = doc.replicaFactory.parseVersion(sinceVersion)
     } catch (error) {
-      console.warn(`[exchange] version parse failed for doc '${docId}':`, error)
-      return null
+      console.warn(
+        `[exchange] version parse failed for doc '${docId}', sending the whole document:`,
+        error,
+      )
+      return doc.replica.exportEntirety()
     }
     return doc.replica.exportSince(since) ?? doc.replica.exportEntirety()
   }
 
+  /**
+   * Queue an offer to every channel of `peerId`. Returns the version the
+   * offer carries, or `undefined` when nothing was queued: the peer has no
+   * channel, or the document is gone.
+   */
   #sendOfferToPeer(
     peerId: PeerId,
     docId: DocId,
     payload: SubstratePayload,
-  ): void {
+  ): string | undefined {
     const peer = this.#sessionHandle.getState().peers.get(peerId)
-    if (!peer || peer.channels.size === 0) return
+    if (!peer || peer.channels.size === 0) return undefined
 
     const doc = this.#docs.get(docId)
-    if (!doc) return
+    if (!doc) return undefined
 
+    const version = doc.replica.version().serialize()
     this.#outboundQueue.push({
       toChannelIds: Array.from(peer.channels),
       message: this.#withDigest({
         type: "offer",
         docId,
         payload,
-        version: doc.replica.version().serialize(),
+        version,
       }),
     })
+    return version
   }
 
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=

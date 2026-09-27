@@ -23,7 +23,8 @@
 //   Metadata      origin/replay/aborted/source identical across one flush
 //   Conservation  what the root sees equals the union of what everyone sees
 //   Signal        the substrate reports a local update iff the ops were
-//                 written here, and then they are not a replay
+//                 written here, and then they are not a replay; after
+//                 `commitPending`, an export reports none
 //
 // A substrate opts in by supplying a factory that returns two wired peers. See
 // `positionConformance` in this directory for the same pattern applied to the
@@ -99,6 +100,14 @@ export interface DeliveryTestEnv {
    * driver when this is present.
    */
   nativeWrite?(fn: (draft: DeliveryDoc) => void): void
+
+  /**
+   * Write on `doc`'s native document and leave the write uncommitted, so no
+   * local-update signal has fired for it yet. Only for a native document that
+   * can hold a write pending (Loro); the suite adds the pending-write
+   * invariants when this is present.
+   */
+  pendingNativeWrite?(): void
 }
 
 /** What a second peer's write offers `doc`. */
@@ -515,6 +524,48 @@ export function deliveryConformance(
       ).toThrow("abort")
 
       expect(localUpdates()).toBeGreaterThan(0)
+    })
+
+    it("signal: after commitPending, an export reports no local update", () => {
+      const env = factory()
+      batch(env.doc, d => d.top.set(1))
+      env.pendingNativeWrite?.()
+      const substrate = substrateOf(env.doc)
+      substrate.commitPending()
+      const localUpdates = countLocalUpdates(env.doc)
+
+      // The Runtime commits before every export so it hears of each own write
+      // before the write can leave. A signal fired from inside the export
+      // would arrive after the write had gone.
+      substrate.exportEntirety()
+
+      expect(localUpdates()).toBe(0)
+    })
+
+    if (factory().pendingNativeWrite !== undefined) {
+      it("signal: commitPending reports a pending native write, and the export then does not", () => {
+        const env = factory()
+        const localUpdates = countLocalUpdates(env.doc)
+        env.pendingNativeWrite?.()
+        expect(localUpdates()).toBe(0)
+
+        substrateOf(env.doc).commitPending()
+        expect(localUpdates()).toBeGreaterThan(0)
+
+        const before = localUpdates()
+        substrateOf(env.doc).exportEntirety()
+        expect(localUpdates()).toBe(before)
+      })
+    }
+
+    it("signal: commitPending with nothing pending reports nothing", () => {
+      const env = factory()
+      batch(env.doc, d => d.top.set(1))
+      const localUpdates = countLocalUpdates(env.doc)
+
+      substrateOf(env.doc).commitPending()
+
+      expect(localUpdates()).toBe(0)
     })
   })
 }

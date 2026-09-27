@@ -51,10 +51,13 @@ import {
 import type { DocId } from "@kyneta/transport"
 import { registerDocSyncMode } from "./doc-meta.js"
 import { planInterpretation } from "./interpret.js"
+import { registerPersistenceTerm } from "./persistence.js"
+import { gateOpen } from "./publish-gate.js"
 import { makeSettleTerm, registerHydrationTerm } from "./settle.js"
 import type { Store, StoreRecord } from "./store/store.js"
 import {
   allDocsSettled,
+  confirmedVersion,
   isSettled,
   type StoreEffect,
   type StoreInput,
@@ -62,6 +65,21 @@ import {
   storeProgram,
   type Write,
 } from "./store/store-program.js"
+
+/**
+ * Let a Node.js timer run without keeping the process alive. Browser timers
+ * are numbers and have no `unref`.
+ */
+function unrefTimer(timer: unknown): void {
+  if (
+    typeof timer === "object" &&
+    timer !== null &&
+    "unref" in timer &&
+    typeof timer.unref === "function"
+  ) {
+    timer.unref()
+  }
+}
 
 /** The obligation a no-store document has: none. */
 const NO_ADOPT = (): void => {}
@@ -102,6 +120,8 @@ export function storeInputFor(
 
 /** A cache entry that can become ready: anything but a deferred one. */
 type ReadyEntry = Extract<DocCacheEntry, { mode: "interpret" | "replicate" }>
+
+type InterpretEntry = Extract<DocCacheEntry, { mode: "interpret" }>
 
 // ---------------------------------------------------------------------------
 // RuntimeGet — the call signature for Runtime.get (mirrors Exchange's Get type)
@@ -197,6 +217,33 @@ export function createHydrationLatch(): HydrationLatch {
 }
 
 /**
+ * Where an interpreted document's own writes stand against its store. See
+ * §"Store-first" in TECHNICAL.md.
+ */
+export type Publication = {
+  /**
+   * The replica's version when the drain last found own writes, until the
+   * store confirms a version that reaches it. `undefined` when every own write
+   * is confirmed, and always for a document without a store.
+   */
+  ownHigh: Version | undefined
+  /** The error of the latest failed store write, until a write succeeds. */
+  error: unknown
+  /** What the persistence term last reported, so it reports changes only. */
+  reported: { readonly persisted: boolean; readonly error: unknown }
+  readonly listeners: Set<() => void>
+}
+
+function createPublication(): Publication {
+  return {
+    ownHigh: undefined,
+    error: undefined,
+    reported: { persisted: true, error: undefined },
+    listeners: new Set(),
+  }
+}
+
+/**
  * `readyInfo` + `announced` let {@link Runtime.setHooks} safely backfill
  * `onDocReady` for documents that already existed before hooks were
  * attached (e.g. a standalone `Runtime` later wrapped in an `Exchange`).
@@ -206,7 +253,8 @@ export function createHydrationLatch(): HydrationLatch {
  * `setHooks` calls never double-announce. Context: jj:mrlnmlus.
  *
  * `hydration` is the storage half of the document's readiness — see
- * {@link HydrationLatch} and `settle.ts`.
+ * {@link HydrationLatch} and `settle.ts`. `publication` is where its own
+ * writes stand against the store — see {@link Publication}.
  */
 export type DocCacheEntry =
   | {
@@ -217,6 +265,7 @@ export type DocCacheEntry =
       announced: boolean
       suspended?: boolean
       hydration: HydrationLatch
+      publication: Publication
       /** Undoes what `#becomeReady` wired; a no-op until then. */
       unwire: () => void
     }
@@ -260,9 +309,20 @@ export type RuntimeHooks = {
    * requested for them.
    *
    * The Exchange implements this to call `synchronizer.notifyLocalChange`,
-   * which pushes the document to peers.
+   * which asks for a push to peers. With a store, the push is held until the
+   * store confirms the operations (see {@link Runtime.publishable}).
    */
   onDocLocalChange?: (docId: DocId) => void
+
+  /**
+   * Called when the store confirms a document's own writes, so the document
+   * may leave the process again. An export can only have been refused before
+   * this.
+   *
+   * The Exchange implements this to call `synchronizer.notifyPublishable`,
+   * which sends the offers that were withheld.
+   */
+  onDocPublishable?: (docId: DocId) => void
 
   /**
    * Called when a document is destroyed locally — remove from sync graph
@@ -361,15 +421,19 @@ export class Runtime {
   readonly #pendingWork = new Set<Promise<void>>()
 
   /**
-   * Documents whose substrate reported local operations that have not yet
-   * been persisted and pushed. Drained once per microtask by
+   * Documents whose substrate reported local operations that the drain has
+   * not reached. Drained once per microtask by
    * {@link Runtime.#drainLocalChanges}, so several signals, batches and
    * documents in one tick cost one persist and one push per document, the
    * same dirty-set-drained-later pattern the Synchronizer uses for its own
-   * notifications. Context: jj:mrlnmlus.
+   * notifications, and drained for one document on demand by
+   * {@link Runtime.publishable}. Context: jj:mrlnmlus.
    */
   readonly #dirtyLocalChanges = new Set<DocId>()
   #localChangeDrain: Promise<void> | null = null
+
+  /** One timer per document whose failed write waits to be retried. */
+  readonly #retryTimers = new Map<DocId, ReturnType<typeof setTimeout>>()
 
   /** Network hooks — set by Exchange. Undefined for standalone use. */
   #hooks: RuntimeHooks = {}
@@ -406,11 +470,22 @@ export class Runtime {
         (effect: StoreEffect, dispatch: (msg: StoreInput) => void) => {
           switch (effect.type) {
             case "persist": {
+              // Any write that starts replaces a scheduled retry.
+              this.#cancelRetry(effect.docId)
               this.#persist(effect.docId, effect.write, dispatch)
+              break
+            }
+            case "persisted": {
+              this.#confirmed(effect.docId)
+              break
+            }
+            case "retry": {
+              this.#scheduleRetry(effect.docId, effect.afterMs)
               break
             }
             case "persist-delete": {
               const { docId } = effect
+              this.#cancelRetry(docId)
               Promise.all(stores.map(store => store.delete(docId))).then(
                 () => {}, // No write-succeeded for destroy
                 error => errorHandler(docId, "delete", error),
@@ -418,6 +493,9 @@ export class Runtime {
               break
             }
             case "store-error": {
+              if (effect.operation === "write") {
+                this.#writeFailed(effect.docId, effect.error)
+              }
               errorHandler(effect.docId, effect.operation, effect.error)
               break
             }
@@ -836,6 +914,8 @@ export class Runtime {
   /**
    * The records a write consists of, and the version they bring the store to.
    *
+   * Reads the replica now, when the write starts.
+   *
    * Throws if the document is not held here. The store program only writes
    * documents this Runtime registered, and `destroy` removes both together,
    * so that is a broken invariant; it is reported as a failed write rather
@@ -849,6 +929,10 @@ export class Runtime {
     if (!entry || entry.mode === "deferred") {
       throw new Error(`[runtime] cannot write '${docId}': document not held`)
     }
+    // Commit, read the version, export: otherwise the export commits a
+    // pending native write here, its signal fires from inside this executor,
+    // and the drain asks for one more write that finds nothing new.
+    if (entry.mode === "interpret") entry.readyInfo.replica.commitPending()
     const { replica, replicaFactory, syncMode, schemaHash } = entry.readyInfo
     const current = replica.version()
     const version = current.serialize()
@@ -911,6 +995,7 @@ export class Runtime {
       this.#storeHandle.dispose()
     }
     this.#stopTick()
+    this.#cancelAllRetries()
     for (const docId of [...this.#docCache.keys()]) this.#evict(docId)
     for (const backend of this.#stores) {
       await backend.close()
@@ -923,6 +1008,7 @@ export class Runtime {
    */
   reset(): void {
     this.#stopTick()
+    this.#cancelAllRetries()
     this.#storeHandle?.dispose()
     for (const docId of [...this.#docCache.keys()]) this.#evict(docId)
   }
@@ -1012,14 +1098,16 @@ export class Runtime {
     }
 
     const hydration = createHydrationLatch()
+    const publication = createPublication()
 
-    const entry: DocCacheEntry = {
+    const entry: InterpretEntry = {
       mode: "interpret",
       ref,
       bound,
       readyInfo,
       announced: false,
       hydration,
+      publication,
       unwire: NOTHING_WIRED,
       // Suspension survives promotion. The two say different things: which
       // tier holds the document, versus whether it is in the sync graph.
@@ -1051,6 +1139,17 @@ export class Runtime {
         },
       ),
       () => (hydration.state === "failed" ? hydration.error : undefined),
+    )
+    registerPersistenceTerm(
+      ref,
+      makeSettleTerm(
+        () => this.#persisted(entry),
+        onChange => {
+          publication.listeners.add(onChange)
+          return () => publication.listeners.delete(onChange)
+        },
+      ),
+      () => publication.error,
     )
 
     if (willHydrate) {
@@ -1175,10 +1274,7 @@ export class Runtime {
    * while the document loaded is owed to the store by `hydrated`, and
    * `#register` has just published the live version to peers.
    */
-  #wire(
-    docId: DocId,
-    entry: Extract<DocCacheEntry, { mode: "interpret" }>,
-  ): () => void {
+  #wire(docId: DocId, entry: InterpretEntry): () => void {
     const stopLocalUpdates = entry.readyInfo.replica.subscribeLocalUpdates(() =>
       this.#markLocalChangeDirty(docId),
     )
@@ -1214,6 +1310,8 @@ export class Runtime {
    */
   #markLocalChangeDirty(docId: DocId): void {
     this.#dirtyLocalChanges.add(docId)
+    const entry = this.#docCache.get(docId)
+    if (entry?.mode === "interpret") this.#reportPersistence(entry)
     if (this.#localChangeDrain) return // Already scheduled this tick.
     this.#localChangeDrain = Promise.resolve().then(() => {
       this.#localChangeDrain = null
@@ -1223,23 +1321,46 @@ export class Runtime {
   }
 
   /**
-   * Persist, then push, each dirty document once.
+   * Drain each dirty document once.
    *
-   * The set is snapshotted and cleared first, so a local write made during
-   * the drain schedules a fresh one rather than being lost. A document
-   * evicted since it was marked is skipped.
-   *
-   * Persistence is requested before the push. Both leave from here, so this
-   * is the one place their order is decided.
+   * The set is snapshotted first, so a local write made during the drain
+   * schedules a fresh one rather than being lost.
    */
   #drainLocalChanges(): void {
-    const docIds = [...this.#dirtyLocalChanges]
-    this.#dirtyLocalChanges.clear()
-    for (const docId of docIds) {
-      if (this.#docCache.get(docId)?.mode !== "interpret") continue
-      this.onStateAdvanced(docId)
-      this.#hooks.onDocLocalChange?.(docId)
+    for (const docId of [...this.#dirtyLocalChanges]) this.#drainLocal(docId)
+  }
+
+  /**
+   * Bring one document's own writes into view, and if it has any, request
+   * persistence and a push.
+   *
+   * First commits whatever the native document holds uncommitted, whose
+   * signal marks the document dirty. Then, if it is dirty:
+   * - records `ownHigh`, the version the store must confirm before the
+   *   document may leave the process again (with a store);
+   * - requests persistence;
+   * - asks for a push, which {@link Runtime.publishable} holds until the store
+   *   has confirmed.
+   *
+   * Runs from the microtask drain for every dirty document, and on demand
+   * from `publishable`, which is why it is per document. A document evicted
+   * since it was marked is dropped.
+   */
+  #drainLocal(docId: DocId): void {
+    const entry = this.#docCache.get(docId)
+    if (entry?.mode !== "interpret") {
+      this.#dirtyLocalChanges.delete(docId)
+      return
     }
+    const { replica, syncMode } = entry.readyInfo
+    replica.commitPending()
+    if (!this.#dirtyLocalChanges.delete(docId)) return
+    if (this.#usesStores(syncMode)) {
+      entry.publication.ownHigh = replica.version()
+      this.#reportPersistence(entry)
+    }
+    this.onStateAdvanced(docId)
+    this.#hooks.onDocLocalChange?.(docId)
   }
 
   /**
@@ -1422,10 +1543,7 @@ export class Runtime {
       }
     }, this.#tickIntervalMs)
     // Don't keep the Node.js process alive just for the tick.
-    // In browsers, `unref` doesn't exist — guard with a runtime check.
-    if (typeof (this.#tickTimer as any).unref === "function") {
-      ;(this.#tickTimer as any).unref()
-    }
+    unrefTimer(this.#tickTimer)
   }
 
   #stopTick(): void {
@@ -1433,5 +1551,126 @@ export class Runtime {
       clearInterval(this.#tickTimer)
       this.#tickTimer = null
     }
+  }
+
+  // =========================================================================
+  // INTERNAL — Store-first: the publish gate
+  // =========================================================================
+
+  /**
+   * May this document's live state leave the process now?
+   *
+   * The Synchronizer asks immediately before it exports the document. Asking
+   * first brings every own write into view: a pending native write is
+   * committed and drained here, so the answer covers it. Draining, checking
+   * and exporting are consecutive synchronous calls, so nothing can write
+   * between the answer and the export.
+   *
+   * After a refusal, {@link RuntimeHooks.onDocPublishable} fires once the
+   * store confirms what the export was waiting for.
+   *
+   * @internal The Exchange wires it into the Synchronizer.
+   */
+  publishable(docId: DocId): boolean {
+    const entry = this.#docCache.get(docId)
+    // Replicate documents make no operations of their own, and a deferred
+    // one holds nothing to export.
+    if (entry?.mode !== "interpret") return true
+    this.#drainLocal(docId)
+    return this.#gateOpen(entry)
+  }
+
+  /**
+   * Has the store confirmed every own write of this document? Always, for a
+   * document without a store.
+   */
+  #gateOpen(entry: InterpretEntry): boolean {
+    const { replicaFactory, syncMode, docId } = entry.readyInfo
+    if (!this.#usesStores(syncMode)) return true
+    const phase = this.#storeHandle?.getState().docs.get(docId)
+    const confirmed = phase === undefined ? undefined : confirmedVersion(phase)
+    return gateOpen({
+      ownHigh: entry.publication.ownHigh,
+      confirmed:
+        confirmed === undefined
+          ? undefined
+          : replicaFactory.parseVersion(confirmed),
+    })
+  }
+
+  /**
+   * The store confirmed a write of `docId`. Called from the `persisted`
+   * effect, which runs with the store model already updated.
+   */
+  #confirmed(docId: DocId): void {
+    const entry = this.#docCache.get(docId)
+    if (entry?.mode !== "interpret") return
+    const publication = entry.publication
+    publication.error = undefined
+    // The gate was shut exactly while `ownHigh` was set, so clearing it is
+    // the opening. Nothing may have been refused meanwhile; the offers owed
+    // are then none, and the signal sends nothing.
+    if (publication.ownHigh !== undefined && this.#gateOpen(entry)) {
+      publication.ownHigh = undefined
+      this.#hooks.onDocPublishable?.(docId)
+    }
+    this.#reportPersistence(entry)
+  }
+
+  /** A store write of `docId` failed. Only a confirmation opens the gate. */
+  #writeFailed(docId: DocId, error: unknown): void {
+    const entry = this.#docCache.get(docId)
+    if (entry?.mode !== "interpret") return
+    entry.publication.error = error
+    this.#reportPersistence(entry)
+  }
+
+  /**
+   * What the persistence term reports: every own write confirmed. A write
+   * the drain has not reached yet is unconfirmed too, though the gate has not
+   * heard of it: the gate is only asked after a drain.
+   */
+  #persisted(entry: InterpretEntry): boolean {
+    if (!this.#usesStores(entry.readyInfo.syncMode)) return true
+    if (this.#dirtyLocalChanges.has(entry.readyInfo.docId)) return false
+    return this.#gateOpen(entry)
+  }
+
+  /** Tell the persistence term's subscribers, if what it reports moved. */
+  #reportPersistence(entry: InterpretEntry): void {
+    const publication = entry.publication
+    const now = {
+      persisted: this.#persisted(entry),
+      error: publication.error,
+    }
+    const before = publication.reported
+    if (before.persisted === now.persisted && before.error === now.error) {
+      return
+    }
+    publication.reported = now
+    for (const listener of [...publication.listeners]) listener()
+  }
+
+  #scheduleRetry(docId: DocId, afterMs: number): void {
+    this.#cancelRetry(docId)
+    const timer = setTimeout(() => {
+      this.#retryTimers.delete(docId)
+      this.onStateAdvanced(docId)
+    }, afterMs)
+    // A retry alone does not keep a Node.js process alive.
+    unrefTimer(timer)
+    this.#retryTimers.set(docId, timer)
+  }
+
+  #cancelRetry(docId: DocId): void {
+    const timer = this.#retryTimers.get(docId)
+    if (timer === undefined) return
+    clearTimeout(timer)
+    this.#retryTimers.delete(docId)
+  }
+
+  #cancelAllRetries(): void {
+    for (const timer of this.#retryTimers.values()) clearTimeout(timer)
+    this.#retryTimers.clear()
   }
 }

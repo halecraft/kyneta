@@ -8,7 +8,10 @@ import type { DocId } from "@kyneta/transport"
 import { describe, expect, it } from "vitest"
 import {
   allDocsSettled,
+  confirmedVersion,
   type DocPhase,
+  MAX_RETRY_MS,
+  retryDelay,
   type StoreEffect,
   type StoreInput,
   type StoreModel,
@@ -47,6 +50,14 @@ function getPhase(model: StoreModel, docId: DocId): DocPhase {
 
 function persist(write: Write, docId: DocId = "doc-1"): StoreEffect {
   return { type: "persist", docId, write }
+}
+
+function persisted(version: string): StoreEffect {
+  return { type: "persisted", docId: "doc-1", version }
+}
+
+function retry(afterMs: number): StoreEffect {
+  return { type: "retry", docId: "doc-1", afterMs }
 }
 
 const init = storeProgram.init[0]
@@ -175,7 +186,7 @@ describe("storeProgram", () => {
   it("write-succeeded with nothing owed — idle at the written version", () => {
     const [model, ...effects] = step(writingFromV1(), succeeded("v2"))
     expect(getPhase(model, "doc-1")).toEqual({ status: "idle", version: "v2" })
-    expect(effects).toEqual([])
+    expect(effects).toEqual([persisted("v2")])
   })
 
   it("write-succeeded with an advance owed — the next write diffs from the version just confirmed", () => {
@@ -187,7 +198,11 @@ describe("storeProgram", () => {
       status: "writing",
       revertTo: { status: "idle", version: "v2" },
     })
-    expect(effects).toEqual([persist({ kind: "since", version: "v2" })])
+    // Confirmed first, so the executor acts on it before the next write starts.
+    expect(effects).toEqual([
+      persisted("v2"),
+      persist({ kind: "since", version: "v2" }),
+    ])
   })
 
   it("write-succeeded with a compact owed — compacts", () => {
@@ -196,7 +211,7 @@ describe("storeProgram", () => {
       status: "writing",
       revertTo: { status: "idle", version: "v2" },
     })
-    expect(effects).toEqual([persist({ kind: "compact" })])
+    expect(effects).toEqual([persisted("v2"), persist({ kind: "compact" })])
   })
 
   it("an owed write starts in the same transition — never observably settled", () => {
@@ -208,12 +223,17 @@ describe("storeProgram", () => {
     expect(allDocsSettled(model)).toBe(false)
   })
 
-  it("write-failed with nothing owed — falls back, reports, does not retry", () => {
+  it("write-failed with nothing owed — falls back, reports, and asks for a retry", () => {
     const error = new Error("disk full")
     const [model, ...effects] = step(writingFromV1(), failed(error))
-    expect(getPhase(model, "doc-1")).toEqual({ status: "idle", version: "v1" })
+    expect(getPhase(model, "doc-1")).toEqual({
+      status: "idle",
+      version: "v1",
+      failures: 1,
+    })
     expect(effects).toEqual([
       { type: "store-error", docId: "doc-1", operation: "write", error },
+      retry(retryDelay(1)),
     ])
   })
 
@@ -222,8 +242,9 @@ describe("storeProgram", () => {
     const [model, ...effects] = run(writingFromV1(), advanced, failed(error))
     expect(getPhase(model, "doc-1")).toEqual({
       status: "writing",
-      revertTo: { status: "idle", version: "v1" },
+      revertTo: { status: "idle", version: "v1", failures: 1 },
     })
+    // The owed write is the retry, so no `retry` is asked for.
     expect(effects).toEqual([
       { type: "store-error", docId: "doc-1", operation: "write", error },
       persist({ kind: "since", version: "v1" }),
@@ -260,24 +281,28 @@ describe("storeProgram", () => {
 
   it("register → write-failed — falls back to unwritten, reports the error", () => {
     const [model, ...effects] = step(registered(), failed())
-    expect(getPhase(model, "doc-1")).toEqual({ status: "unwritten" })
-    expect(effects.map(e => e.type)).toEqual(["store-error"])
+    expect(getPhase(model, "doc-1")).toEqual({
+      status: "unwritten",
+      failures: 1,
+    })
+    expect(effects.map(e => e.type)).toEqual(["store-error", "retry"])
   })
 
   it("register → write-succeeded — idle at the confirmed version", () => {
     const [model, ...effects] = step(registered(), succeeded("v1"))
     expect(getPhase(model, "doc-1")).toEqual({ status: "idle", version: "v1" })
-    expect(effects).toEqual([])
+    expect(effects).toEqual([persisted("v1")])
   })
 
   it("unwritten → state-advanced — retries the whole document", () => {
     // A delta needs a confirmed base and there is none, so an advance on an
     // unwritten document is a whole write. This is how a failed first write
-    // recovers: from the next mutation, once per mutation.
+    // recovers, whether the advance comes from the retry timer or from the
+    // next mutation.
     const [model, ...effects] = step(unwritten(), advanced)
     expect(getPhase(model, "doc-1")).toEqual({
       status: "writing",
-      revertTo: { status: "unwritten" },
+      revertTo: { status: "unwritten", failures: 1 },
     })
     expect(effects).toEqual([persist({ kind: "register" })])
 
@@ -301,7 +326,74 @@ describe("storeProgram", () => {
 
   it("an advance owed behind a successful first write — diffs from it", () => {
     const [, ...effects] = run(registered(), advanced, succeeded("v1"))
-    expect(effects).toEqual([persist({ kind: "since", version: "v1" })])
+    expect(effects).toEqual([
+      persisted("v1"),
+      persist({ kind: "since", version: "v1" }),
+    ])
+  })
+
+  // -----------------------------------------------------------------------
+  // Confirmation and retry
+  // -----------------------------------------------------------------------
+
+  it("a write that found nothing new is still reported persisted", () => {
+    // The executor reports success at the confirmed version without touching
+    // a store. The confirmation is what opens the gate, so it must not
+    // depend on there having been something to write.
+    const [, ...effects] = run(init, hydrated("v1"), succeeded("v1"))
+    expect(effects).toEqual([persisted("v1")])
+  })
+
+  it("each failure in a row doubles the retry delay", () => {
+    let model = writingFromV1()
+    const delays: number[] = []
+    for (let i = 0; i < 4; i++) {
+      const [next, ...effects] = step(model, failed())
+      for (const effect of effects) {
+        if (effect.type === "retry") delays.push(effect.afterMs)
+      }
+      // The retry timer's `state-advanced` starts the next attempt.
+      model = step(next, advanced)[0]
+    }
+    expect(delays).toEqual([250, 500, 1000, 2000])
+  })
+
+  it("a success clears the failure count", () => {
+    const [failing] = run(writingFromV1(), failed(), advanced, failed())
+    expect(getPhase(failing, "doc-1")).toMatchObject({ failures: 2 })
+
+    const [recovered] = run(failing, advanced, succeeded("v2"))
+    expect(getPhase(recovered, "doc-1")).toEqual({
+      status: "idle",
+      version: "v2",
+    })
+
+    // The next failure starts the backoff over.
+    const [, ...effects] = run(recovered, advanced, failed())
+    expect(effects).toContainEqual(retry(250))
+  })
+
+  it("a document waiting to retry is settled", () => {
+    // `flush()` and `shutdown()` wait for `allDocsSettled`; they must not wait
+    // on a store that keeps failing.
+    const [model] = step(writingFromV1(), failed())
+    expect(allDocsSettled(model)).toBe(true)
+  })
+
+  it("retryDelay doubles from 250 ms and stops at MAX_RETRY_MS", () => {
+    expect([1, 2, 3, 4].map(retryDelay)).toEqual([250, 500, 1000, 2000])
+    expect(retryDelay(8)).toBe(MAX_RETRY_MS)
+    expect(retryDelay(50)).toBe(MAX_RETRY_MS)
+  })
+
+  it("confirmedVersion — what the store holds, including during a write", () => {
+    expect(confirmedVersion({ status: "unwritten" })).toBeUndefined()
+    expect(confirmedVersion({ status: "idle", version: "v1" })).toBe("v1")
+    expect(getPhase(writingFromV1(), "doc-1").status).toBe("writing")
+    expect(confirmedVersion(getPhase(writingFromV1(), "doc-1"))).toBe("v1")
+    expect(
+      confirmedVersion(getPhase(step(init, register)[0], "doc-1")),
+    ).toBeUndefined()
   })
 
   // -----------------------------------------------------------------------
@@ -396,7 +488,8 @@ describe("storeProgram", () => {
         confirmed = write.to
         apply(succeeded(String(write.to)))
       }
-      // A failure with nothing owed leaves its changes for the next mutation.
+      // A failure with nothing owed asks for a retry, which the executor
+      // dispatches as a `state-advanced`.
       if (confirmed !== current) {
         apply(advanced)
         const write = inFlight as { from: number; to: number } | null

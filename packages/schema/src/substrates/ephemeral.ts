@@ -522,6 +522,9 @@ export function createStateSubstrate(
 
     subscribeLocalUpdates: localUpdates.subscribe,
 
+    // Only Kyneta writes here, and a batch commits when it ends.
+    commitPending(): void {},
+
     writable(): PositionCapable {
       return {
         createPosition(_index: number, _side: Side): PlainPosition {

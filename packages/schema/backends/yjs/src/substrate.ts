@@ -380,6 +380,9 @@ export function createYjsSubstrate(
       return () => doc.off("update", onUpdate)
     },
 
+    // Every Yjs transaction commits when it ends, so nothing is ever pending.
+    commitPending(): void {},
+
     context(): WritableContext {
       if (!cachedCtx) {
         cachedCtx = buildWritableContext(substrate, {

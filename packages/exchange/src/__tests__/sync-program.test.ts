@@ -129,6 +129,28 @@ function receiveMessage(
   )
 }
 
+/**
+ * Report offers of `docId` sent, as the shell does after it queues them:
+ * each peer's offer carried our `version`.
+ */
+function reportSent(
+  update: SyncUpdate,
+  model: SyncModel,
+  docId: string,
+  version: string,
+  ...peerIds: string[]
+): [SyncModel, SyncEffect[]] {
+  return applyUpdate(
+    update,
+    {
+      type: "sync/offers-sent",
+      docId,
+      sent: peerIds.map(peerId => ({ peerId, version })),
+    },
+    model,
+  )
+}
+
 /** Find effects of a given type from a flat list. */
 function effectsOfType<T extends SyncEffect["type"]>(
   effects: SyncEffect[],
@@ -1125,7 +1147,13 @@ describe("sync-program", () => {
         `${peer}'s state for doc-1`,
       ).ourVersionTheyWillHold
 
-    /** Alice holds doc-1 at v1; bob and carol have each sent an interest. */
+    const owed = (model: SyncModel, peer: string) =>
+      model.peers.get(peer)?.docSyncStates.get("doc-1")?.offerOwed
+
+    /**
+     * Alice holds doc-1 at v1; bob and carol have each sent an interest, and
+     * the shell has reported both answers sent.
+     */
     function bothInterested() {
       const update = makeUpdate()
       let model = initSync(alice)
@@ -1142,16 +1170,187 @@ describe("sync-program", () => {
         docId: "doc-1",
         version: "c0",
       })
+      ;[model] = reportSent(update, model, "doc-1", "v1", "bob", "carol")
       return { update, model }
     }
 
-    it("an interest, answered, brings the peer to our version", () => {
+    it("an interest owes the peer an answer from what it holds, and clears its baseline", () => {
+      const update = makeUpdate()
+      let model = initSync(alice)
+      ;[model] = addPeer(update, model, "bob", bob)
+      ;[model] = ensureDoc(update, model, "doc-1")
+      ;[model] = receiveMessage(update, model, "bob", {
+        type: "interest",
+        docId: "doc-1",
+        version: "b0",
+      })
+      ;[model] = reportSent(update, model, "doc-1", "v1", "bob")
+      expect(willHold(model, "bob")).toBe("v1")
+
+      // A second interest restates what bob holds: the answer is owed from
+      // there, and no push reaches bob until it is reported sent.
+      ;[model] = receiveMessage(update, model, "bob", {
+        type: "interest",
+        docId: "doc-1",
+        version: "b1",
+        since: "v0",
+      })
+      expect(owed(model, "bob")).toEqual({ since: "v0" })
+      expect(willHold(model, "bob")).toBeUndefined()
+
+      const [, effects] = applyUpdate(
+        update,
+        { type: "sync/local-doc-change", docId: "doc-1", version: "v2" },
+        model,
+      )
+      expect(effectsOfType(effects, "send-offers")).toEqual([])
+    })
+
+    it("an answer reported sent brings the peer to the version it carried", () => {
       const { model } = bothInterested()
       expect(willHold(model, "bob")).toBe("v1")
       expect(willHold(model, "carol")).toBe("v1")
+      expect(owed(model, "bob")).toBeUndefined()
+      expect(owed(model, "carol")).toBeUndefined()
     })
 
-    it("a local change pushes each peer from its own baseline, and moves every baseline", () => {
+    it("a push owes each peer an offer from its baseline, and leaves the baselines alone", () => {
+      const { update, model: before } = bothInterested()
+      const [pushed, effects] = applyUpdate(
+        update,
+        { type: "sync/local-doc-change", docId: "doc-1", version: "v2" },
+        before,
+      )
+      expect(effectsOfType(effects, "send-offers")).toEqual([
+        {
+          type: "send-offers",
+          docId: "doc-1",
+          to: [
+            { peerId: "bob", sinceVersion: "v1" },
+            { peerId: "carol", sinceVersion: "v1" },
+          ],
+        },
+      ])
+      expect(willHold(pushed, "bob")).toBe("v1")
+      expect(owed(pushed, "bob")).toEqual({ since: "v1" })
+
+      // A second push before the report keeps the earlier starting point,
+      // which covers it.
+      const [again] = applyUpdate(
+        update,
+        { type: "sync/local-doc-change", docId: "doc-1", version: "v3" },
+        pushed,
+      )
+      expect(owed(again, "bob")).toEqual({ since: "v1" })
+
+      const [reported] = reportSent(update, again, "doc-1", "v3", "bob")
+      expect(willHold(reported, "bob")).toBe("v3")
+      expect(owed(reported, "bob")).toBeUndefined()
+      expect(owed(reported, "carol")).toEqual({ since: "v1" })
+    })
+
+    it("doc-publishable resends to owed peers only, each from where its offer starts", () => {
+      const { update, model: before } = bothInterested()
+      let model = before
+      ;[model] = applyUpdate(
+        update,
+        { type: "sync/local-doc-change", docId: "doc-1", version: "v2" },
+        model,
+      )
+      // Carol's push went out; bob's was withheld.
+      ;[model] = reportSent(update, model, "doc-1", "v2", "carol")
+
+      const [after, effects] = applyUpdate(
+        update,
+        { type: "sync/doc-publishable", docId: "doc-1" },
+        model,
+      )
+      expect(effectsOfType(effects, "send-offers")).toEqual([
+        {
+          type: "send-offers",
+          docId: "doc-1",
+          to: [{ peerId: "bob", sinceVersion: "v1" }],
+        },
+      ])
+      // The record stays until the report.
+      expect(owed(after, "bob")).toEqual({ since: "v1" })
+    })
+
+    it("doc-publishable resends an owed answer to an interest from what the peer holds", () => {
+      const update = makeUpdate()
+      let model = initSync(alice)
+      ;[model] = addPeer(update, model, "bob", bob)
+      ;[model] = ensureDoc(update, model, "doc-1")
+      ;[model] = receiveMessage(update, model, "bob", {
+        type: "interest",
+        docId: "doc-1",
+      })
+
+      const [, effects] = applyUpdate(
+        update,
+        { type: "sync/doc-publishable", docId: "doc-1" },
+        model,
+      )
+      expect(effectsOfType(effects, "send-offers")).toEqual([
+        { type: "send-offers", docId: "doc-1", to: [{ peerId: "bob" }] },
+      ])
+    })
+
+    it("doc-publishable does not resend to a peer no longer shared with", () => {
+      // The offer was owed while bob could see the document; the policy
+      // changed before the store confirmed.
+      const { update, model: before } = bothInterested()
+      const [pushed] = applyUpdate(
+        update,
+        { type: "sync/local-doc-change", docId: "doc-1", version: "v2" },
+        before,
+      )
+      const vetoBob = makeUpdate({
+        canShare: (_docId, peer) => peer.peerId !== "bob",
+      })
+      const [, effects] = applyUpdate(
+        vetoBob,
+        { type: "sync/doc-publishable", docId: "doc-1" },
+        pushed,
+      )
+      expect(effectsOfType(effects, "send-offers")).toEqual([
+        {
+          type: "send-offers",
+          docId: "doc-1",
+          to: [{ peerId: "carol", sinceVersion: "v1" }],
+        },
+      ])
+    })
+
+    it("doc-publishable with nobody owed sends nothing", () => {
+      const { update, model } = bothInterested()
+      const [, effects] = applyUpdate(
+        update,
+        { type: "sync/doc-publishable", docId: "doc-1" },
+        model,
+      )
+      expect(effects).toEqual([])
+    })
+
+    it("a returning peer's owed offer is forgotten with its baselines", () => {
+      const { update, model: before } = bothInterested()
+      const [pushed] = applyUpdate(
+        update,
+        { type: "sync/local-doc-change", docId: "doc-1", version: "v2" },
+        before,
+      )
+      expect(owed(pushed, "bob")).toEqual({ since: "v1" })
+
+      const [returned] = applyUpdate(
+        update,
+        { type: "sync/peer-available", peerId: "bob", identity: bob },
+        pushed,
+      )
+      expect(owed(returned, "bob")).toBeUndefined()
+      expect(willHold(returned, "bob")).toBeUndefined()
+    })
+
+    it("a local change pushes each peer from its own baseline", () => {
       const { update, model: before } = bothInterested()
       const [imported] = applyUpdate(
         update,
@@ -1168,12 +1367,15 @@ describe("sync-program", () => {
         before,
       )
       expect(willHold(imported, "bob")).toBe("v1+b1")
-      expect(willHold(imported, "carol")).toBe("v2")
+      // The relay to carol moves her baseline once it is reported sent.
+      expect(willHold(imported, "carol")).toBe("v1")
+      const [relayed] = reportSent(update, imported, "doc-1", "v2", "carol")
+      expect(willHold(relayed, "carol")).toBe("v2")
 
       const [model, effects] = applyUpdate(
         update,
         { type: "sync/local-doc-change", docId: "doc-1", version: "v3" },
-        imported,
+        relayed,
       )
       expect(effectsOfType(effects, "send-offers")).toEqual([
         {
@@ -1185,8 +1387,16 @@ describe("sync-program", () => {
           ],
         },
       ])
-      expect(willHold(model, "bob")).toBe("v3")
-      expect(willHold(model, "carol")).toBe("v3")
+      const [reported] = reportSent(
+        update,
+        model,
+        "doc-1",
+        "v3",
+        "bob",
+        "carol",
+      )
+      expect(willHold(reported, "bob")).toBe("v3")
+      expect(willHold(reported, "carol")).toBe("v3")
     })
 
     it("an import relays to the other peers from theirs, not to its sender", () => {
@@ -1583,6 +1793,8 @@ describe("sync-program", () => {
           'defined(model.peers.get("bob")).docSyncStates.get("doc-1")',
         ).status,
       ).toBe("pending")
+      // The answer went out, and bob is still pending.
+      ;[model] = reportSent(update, model, "doc-1", "v1", "bob")
 
       const [, effects] = applyUpdate(
         update,
@@ -1944,6 +2156,9 @@ describe("sync-program", () => {
         type: "interest",
         docId: "doc-1",
       })
+      // An ephemeral answer has no gate, so it is reported sent at once, at
+      // our version. That, not bob's private counter, is his baseline.
+      ;[model] = reportSent(update, model, "doc-1", "v1", "bob")
 
       const [, effects] = applyUpdate(
         update,
@@ -2321,6 +2536,13 @@ describe("sync-program", () => {
         from: "carol",
         message: { type: "interest", docId: VETOED_DOC, version: "v0" },
       })
+      drive({
+        type: "sync/offers-sent",
+        docId: VETOED_DOC,
+        sent: [{ peerId: "bob", version: "v3" }],
+      })
+      drive({ type: "sync/local-doc-change", docId: VETOED_DOC, version: "v4" })
+      drive({ type: "sync/doc-publishable", docId: VETOED_DOC })
 
       /** Does this effect mention the vetoed doc, however it carries ids? */
       const namesVetoedDoc = (effect: SyncEffect): boolean => {
@@ -2336,10 +2558,13 @@ describe("sync-program", () => {
         )
       }
 
+      // `send-offers` names each recipient as `{ peerId, sinceVersion }`.
       const recipients = (effect: SyncEffect): string[] => {
         const to = (effect as any).to
         if (to === undefined) return []
-        return Array.isArray(to) ? to : [to]
+        return (Array.isArray(to) ? to : [to]).map((r: any) =>
+          typeof r === "string" ? r : r.peerId,
+        )
       }
 
       let carolSawSomething = false

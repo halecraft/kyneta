@@ -743,9 +743,20 @@ export interface Substrate<V extends Version = Version>
    * inside another call on this substrate (a merge, an export, a native
    * commit). A listener records and defers; it must not write.
    *
+   * A native Loro write left uncommitted fires nothing until something
+   * commits it, and an export does. Call {@link Substrate.commitPending}
+   * before exporting to hear about it first.
+   *
    * @returns The unsubscribe.
    */
   subscribeLocalUpdates(listener: () => void): () => void
+
+  /**
+   * Commit any local operations the native document is holding uncommitted,
+   * so `subscribeLocalUpdates` reports them now rather than from inside the
+   * next export or merge. Does nothing when nothing is pending.
+   */
+  commitPending(): void
 
   /**
    * Heartbeat for time-based projections (ephemeral decay): re-project σ at

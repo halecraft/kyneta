@@ -342,6 +342,9 @@ export function createPlainSubstrate(
 
     subscribeLocalUpdates: localUpdates.subscribe,
 
+    // Only Kyneta writes here, and a batch commits when it ends.
+    commitPending(): void {},
+
     context(): WritableContext {
       if (!cachedCtx) {
         let nextTreeNodeCounter = 1

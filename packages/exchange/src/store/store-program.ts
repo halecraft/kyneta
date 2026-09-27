@@ -6,6 +6,10 @@
 // store has confirmed by then — including everything the previous write
 // carried.
 //
+// It also reports what the store confirmed (`persisted`) and when a failed
+// write should be tried again (`retry`), as effects, so the executor acts on
+// them with the model already updated.
+//
 // Every transition is pure: new Map for each model, no mutation.
 
 import type { DocId } from "@kyneta/transport"
@@ -32,10 +36,14 @@ type Program<Msg, Model, Fx> = {
  * `unwritten` means the store has never acknowledged anything for this
  * document, so there is no version to compute a delta against; `idle` means
  * it has, and names the version.
+ *
+ * `failures` counts the writes that have failed in a row since the last one
+ * that succeeded, and sets the delay before the next retry. Absent when the
+ * last write succeeded.
  */
 export type SettledPhase =
-  | { status: "unwritten" }
-  | { status: "idle"; version: string }
+  | { status: "unwritten"; failures?: number }
+  | { status: "idle"; version: string; failures?: number }
 
 /**
  * A write requested while another is in flight.
@@ -105,6 +113,10 @@ export type Write =
 
 export type StoreEffect =
   | { type: "persist"; docId: DocId; write: Write }
+  /** The store now holds the document at `version`. */
+  | { type: "persisted"; docId: DocId; version: string }
+  /** A write failed and none is owed: ask for one again after `afterMs`. */
+  | { type: "retry"; docId: DocId; afterMs: number }
   | { type: "persist-delete"; docId: DocId }
   | {
       type: "store-error"
@@ -239,13 +251,20 @@ export const storeProgram: Program<StoreInput, StoreModel, StoreEffect> = {
       }
 
       case "write-succeeded": {
+        // `persisted` comes before the owed write's `persist`, so the
+        // executor acts on this confirmation before the next write starts.
         const existing = model.docs.get(msg.docId)
         if (!existing || existing.status !== "writing") return [model]
+        const confirmed: StoreEffect = {
+          type: "persisted",
+          docId: msg.docId,
+          version: msg.version,
+        }
         const [phase, ...effects] = settle(msg.docId, existing, {
           status: "idle",
           version: msg.version,
         })
-        return [withDoc(model, msg.docId, phase), ...effects]
+        return [withDoc(model, msg.docId, phase), confirmed, ...effects]
       }
 
       case "write-failed": {
@@ -254,9 +273,10 @@ export const storeProgram: Program<StoreInput, StoreModel, StoreEffect> = {
         // failed write's changes; for one without, the next write is whole
         // again.
         //
-        // A failed write with nothing owed is not retried. The next request
-        // retries it, which bounds a persistently failing store to one
-        // attempt per mutation rather than a loop.
+        // An owed write, if there is one, starts now and is the retry.
+        // Otherwise `retry` asks for one after a delay that doubles with each
+        // failure in a row, up to `MAX_RETRY_MS`, which bounds a persistently
+        // failing store to one attempt per `MAX_RETRY_MS` rather than a loop.
         const existing = model.docs.get(msg.docId)
         if (!existing || existing.status !== "writing") return [model]
         const errorEffect: StoreEffect = {
@@ -265,11 +285,19 @@ export const storeProgram: Program<StoreInput, StoreModel, StoreEffect> = {
           operation: "write",
           error: msg.error,
         }
-        const [phase, ...effects] = settle(
-          msg.docId,
-          existing,
-          existing.revertTo,
-        )
+        const fallback: SettledPhase = {
+          ...existing.revertTo,
+          failures: (existing.revertTo.failures ?? 0) + 1,
+        }
+        const [phase, ...effects] = settle(msg.docId, existing, fallback)
+        if (effects.length === 0) {
+          const retry: StoreEffect = {
+            type: "retry",
+            docId: msg.docId,
+            afterMs: retryDelay(fallback.failures ?? 1),
+          }
+          return [withDoc(model, msg.docId, phase), errorEffect, retry]
+        }
         return [withDoc(model, msg.docId, phase), errorEffect, ...effects]
       }
     }
@@ -279,6 +307,29 @@ export const storeProgram: Program<StoreInput, StoreModel, StoreEffect> = {
 // ---------------------------------------------------------------------------
 // Query helpers
 // ---------------------------------------------------------------------------
+
+/** First retry delay, in milliseconds. */
+export const FIRST_RETRY_MS = 250
+/** Longest retry delay, in milliseconds. */
+export const MAX_RETRY_MS = 30_000
+
+/**
+ * How long to wait before retrying after `failures` writes have failed in a
+ * row: `FIRST_RETRY_MS`, doubling, up to `MAX_RETRY_MS`.
+ */
+export function retryDelay(failures: number): number {
+  return Math.min(FIRST_RETRY_MS * 2 ** (failures - 1), MAX_RETRY_MS)
+}
+
+/**
+ * The version the store holds the document at: the version of the last write
+ * it confirmed, which a write in flight falls back to. `undefined` when it
+ * has confirmed none.
+ */
+export function confirmedVersion(phase: DocPhase): string | undefined {
+  const settled = phase.status === "writing" ? phase.revertTo : phase
+  return settled.status === "idle" ? settled.version : undefined
+}
 
 /** No write in flight for this document, and none owed. */
 export function isSettled(phase: DocPhase): phase is SettledPhase {

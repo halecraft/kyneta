@@ -529,6 +529,8 @@ const doc = exchange.get("my-doc", TodoDoc)
 // Mutations are automatically persisted. On restart, documents hydrate from storage.
 ```
 
+**With a store, a local write reaches peers once it is stored.** The exchange holds a document's offers back while the store has not confirmed its own writes, so a crash can never leave peers holding writes this peer's next session does not know it made. That costs one store write of latency. `persisted(doc)` and `await whenPersisted(doc)` tell you when a document's writes are confirmed, and `persistenceError(doc)` why not. A failed store write is retried on its own, 250 ms after the failure and doubling to 30 s. Without a store, writes are sent at once.
+
 **Write to a stored plain document after it has loaded.** A `json.bind` document with stores refuses writes until loading completes, and throws "still loading" if you try: its history is a sequence, and a write made before that history is known would be overwritten by it. `await whenHydrated(doc)` (storage only) or `await whenSettled(doc)` (storage and the authority) first, or seed defaults with `initialize`. Loro and Yjs documents accept writes while loading and merge them.
 
 **Ephemeral documents are never stored.** Anything bound through `ephemeral` declares `durability: "transient"`, and the exchange keeps it out of stores in both directions — no hydrate on open, no write on mutation, no delete on destroy. That is the point of the tier: presence, cursors and live input describe who is here *now*, and a restarted server resurrecting yesterday's cursor positions would be worse than having none. Configuring stores does not change this, and there is no way to opt a transient document into persistence — use a durable binding target instead.
@@ -864,7 +866,7 @@ You only engage the next level when you need it. Each level is additive — it d
 
 ### Readiness
 
-Standalone functions, not members of `sync(doc)`. They divide by two questions: *has everything reported?* (`settled`, `whenSettled`) and *what does the document hold?* (`docStatus`).
+Standalone functions, not members of `sync(doc)`. They divide by three questions: *has everything reported?* (`settled`, `whenSettled`), *what does the document hold?* (`docStatus`), and *has the store confirmed this peer's writes?* (`persisted`).
 
 | Function | Description |
 |----------|-------------|
@@ -875,6 +877,10 @@ Standalone functions, not members of `sync(doc)`. They divide by two questions: 
 | `settled(doc)` | `boolean` — has every truth source reported? The synchronous form of `whenSettled`; **not** a promise. |
 | `settledFeed(doc)` | Observable form of `settled`. A callable, so never put it in an `if`. |
 | `hydrated(doc)` / `whenHydrated(doc)` | The storage half alone: has this document's stored data finished loading? `whenHydrated` rejects if the load failed. This — not `flush()` — is the storage gate. |
+| `persisted(doc)` | `boolean` — has the store confirmed every write this peer made to the document? `true` without a store. Until it is, the exchange sends peers nothing of the document. |
+| `persistedFeed(doc)` | Observable form of `persisted`. A callable, so never put it in an `if`. |
+| `whenPersisted(doc)` | Resolve once `persisted`. Rejects at once if a store write failed and none has succeeded since, and rejects if one fails while waiting. Writes are retried on their own, so a caller can check `persistenceError` and wait again. |
+| `persistenceError(doc)` | The error of the latest failed store write, cleared by the next write that succeeds. Covers every store write, including one that stores only operations imported from peers, so it can be set while `persisted` is true. |
 
 `whenSettled` and `docStatus` resolve the authority the same way, so they cannot disagree: call-site `opts.authority` → the Exchange's `Policy.authority` → `"any"`.
 
