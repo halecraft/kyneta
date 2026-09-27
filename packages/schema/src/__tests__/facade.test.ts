@@ -795,12 +795,11 @@ describe("change: changefeed integration", () => {
 // Re-entrancy: subscriber-triggered mutations during notification
 // ===========================================================================
 //
-// Post-1.6.0: subscriber callbacks may mutate freely. The per-context
-// dispatcher enqueues re-entrant `accumulate` Msgs back into its own
-// pending queue and drains them in fresh sub-ticks of the same outer
-// dispatch call. Substrate writes inside `batch()` remain synchronous
-// — subsequent reads see the new state. These tests verify the new
-// drain-to-quiescence semantics.
+// Subscriber callbacks may mutate freely. A write from inside a
+// subscriber is its own batch: its substrate writes are synchronous, so
+// subsequent reads see the new state, and its changeset queues on the
+// context's delivery dispatcher behind the one being delivered. These
+// tests verify the drain-to-quiescence semantics.
 
 describe("re-entrancy: mutation during notification drains to quiescence", () => {
   it("auto-commit inside subscriber lands and fires the corresponding subscriber", () => {
@@ -811,8 +810,7 @@ describe("re-entrancy: mutation during notification drains to quiescence", () =>
       fontSizeFired++
     })
     getChangefeed(doc.settings.darkMode).subscribe(() => {
-      // Re-entrant auto-commit: dispatched into the per-context dispatcher
-      // and drained in a fresh sub-tick.
+      // Re-entrant auto-commit: its changeset queues behind this one.
       doc.settings.fontSize.set(24)
     })
 

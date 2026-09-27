@@ -82,7 +82,7 @@ export interface DeliveryTestEnv {
    * Write on a second peer and merge the result into `doc`.
    *
    * This is the whole reason the factory takes two peers. A merge is
-   * announced with `announce(ctx, ops, origin)` — a different
+   * announced with `ctx.announce(ops, origin)` — a different
    * entry point from a local `batch()`, and the one that carries the largest
    * payloads in practice.
    */

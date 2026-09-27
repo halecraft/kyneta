@@ -463,9 +463,9 @@ The `resolveLease` pure core is independently tested. Storage keys (`key`, `key 
 
 ## The local-write path
 
-Source: `src/synchronizer.ts` → `#wireLocalChanges`, `src/exchange.ts` → changefeed subscription.
+Source: `src/runtime.ts` → `#wireDocSubscription`, `src/exchange.ts` → the `onDocChangeset` hook.
 
-Every local mutation — `batch(doc, fn)`, direct writes on a ref, `applyChanges` — flows through the substrate's changefeed. The Synchronizer subscribes once per `DocRuntime` and filters by the structural `replay` flag:
+Every local mutation — `batch(doc, fn)`, direct writes on a ref, `applyChanges` — flows through the substrate's changefeed. The Runtime subscribes once per interpreted document (`#wireDocSubscription`) and hands each changeset to the Exchange's `onDocChangeset` hook, which filters by the structural `replay` flag before calling `synchronizer.notifyLocalChange`. The same subscription marks the document dirty for persistence when `replay` is false.
 
 Since `@kyneta/schema` 4.0 that subscription receives **one changeset per transaction**, not one per changed path, and the same holds for an announced merge — an incoming `offer` touching fifty paths now arrives as one changeset rather than fifty. Two mechanisms in `Runtime` were built when it was one per path, and both are retained: `#dirtyLocalChanges` still coalesces several *batches* and several *documents* within one microtask, and the store-program collapses any requests landing during a write into the one write owed after it. What changed is which of them carries the common case, not whether either is needed.
 
@@ -473,11 +473,12 @@ Since `@kyneta/schema` 4.0 that subscription receives **one changeset per transa
 batch(doc, d => d.title.insert(0, "hi"))
   │
   ├─ substrate.prepare → applyChangeToYjs / applyDiff / etc.
-  │  flush → changefeed emits Changeset with origin: undefined, replay: false
+  │  afterBatch, seal, native commit (Loro doc.commit / Yjs transaction closes)
+  │  deliver → changefeed emits Changeset with origin: undefined, replay: false
   │
-  ├─ Synchronizer's subscriber checks replay:
+  ├─ onDocChangeset checks replay:
   │    if (changeset.replay) return   // echo from remote import; skip
-  │    else dispatch sync/local-doc-change
+  │    else notifyLocalChange → dispatch sync/local-doc-change
   │
   ├─ sync program update:
   │    emits send-to-peers { docId, payload: exportSince(peerVersion), version }
@@ -491,7 +492,7 @@ batch(doc, d => d.title.insert(0, "hi"))
 
 ### Echo prevention
 
-Remote `offer` messages go through `substrate.merge(payload, { origin: "sync" })`. The substrate takes the ops in, brings its shadow up to date, and announces them through `announce(ctx, ops, "sync")`, so every `Changeset` emitted during that merge carries `replay: true`. The Synchronizer's subscriber checks `changeset.replay` and **skips** `notifyLocalChange(docId)`. Without this skip, every incoming `offer` would re-emit a local `offer` back to all peers — an infinite feedback loop.
+Remote `offer` messages go through `substrate.merge(payload, { origin: "sync" })`. The substrate takes the ops in, brings its shadow up to date, and announces them through `ctx.announce(ops, "sync")`, so every `Changeset` emitted during that merge carries `replay: true`. `onDocChangeset` checks `changeset.replay` and **skips** `notifyLocalChange(docId)`. Without this skip, every incoming `offer` would re-emit a local `offer` back to all peers — an infinite feedback loop.
 
 Pre-1.6.x the filter checked `changeset.origin === "sync"` — fragile because `origin` is a free-vocabulary app label, so a `batch(doc, fn, { origin: "sync" })` happened to be suppressed (wrong), and a `doc.import(payload, "from-some-other-pubsub")` would echo back to peers (also wrong). `replay` is derived from the batch's `ingress` — apps cannot construct it, the schema layer never reads `origin`'s value, and the discrimination is correct regardless of what labels apps use. Context: jj:qpultxsw.
 

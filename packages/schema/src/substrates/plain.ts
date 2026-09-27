@@ -22,7 +22,7 @@ import type { Op } from "../changefeed.js"
 import { deepClonePlain } from "../clone.js"
 import type { Path } from "../interpret.js"
 import type { WritableContext } from "../interpreters/writable.js"
-import { announce, buildWritableContext } from "../interpreters/writable.js"
+import { buildWritableContext } from "../interpreters/writable.js"
 import { invert } from "../inverse.js"
 import { RawPath } from "../path.js"
 import {
@@ -326,7 +326,7 @@ export function createPlainSubstrate(
       for (const batch of batches) {
         applyOps(doc, batch)
         core.append(batch)
-        announce(substrate.context(), batch, options?.origin)
+        substrate.context().announce(batch, options?.origin)
       }
     },
 
@@ -349,7 +349,7 @@ export function createPlainSubstrate(
       // Adopt the remote's flush count, so the version does not inflate
       // across lineages.
       core.resetLog(asPlainVersion(remoteVersion).value)
-      if (ops.length > 0) announce(substrate.context(), ops, options?.origin)
+      substrate.context().announce(ops, options?.origin)
     },
   }
 

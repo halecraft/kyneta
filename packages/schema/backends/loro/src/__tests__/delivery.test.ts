@@ -4,7 +4,7 @@
 // through it, so this is not re-testing schema's logic. What it pins is that
 // Loro's event bridge feeds that engine the same way the plain substrate does
 // — in particular for an incoming merge, which is announced through
-// announce(ctx, ops, origin) with an op list that
+// ctx.announce(ops, origin) with an op list that
 // expandMapOpsToLeaves may have spread across many paths.
 
 import { batch, createRef } from "@kyneta/schema"

@@ -16,7 +16,8 @@
 // hooks ctx.prepare to invalidate caches at the target path before store
 // mutation. Mutation methods simply construct the change and dispatch.
 
-import type { Lease } from "@kyneta/machine"
+import type { DispatcherHandle, Lease } from "@kyneta/machine"
+import { createDispatcher } from "@kyneta/machine"
 
 import type { Op } from "../changefeed.js"
 import type {
@@ -158,164 +159,119 @@ export function hasRemove(value: unknown): value is HasRemove {
 }
 
 // ---------------------------------------------------------------------------
-// FORWARD_OPS_* — runWriter / execWriter for the change-Writer monad
-// ---------------------------------------------------------------------------
-
-/**
- * Snapshot the current writer-log marker. `batch(doc, fn)` calls this
- * before running `fn` to capture a starting position; `FORWARD_OPS_SINCE`
- * with the same marker returns the forward ops added during `fn`.
- *
- * Conceptually `runWriter` for the change-Writer monad: every authored
- * `prepare` appends one op to the writer log that `buildWritableContext`
- * keeps; the marker is the log length at a moment in time.
- */
-export const FORWARD_OPS_MARKER: unique symbol = Symbol.for(
-  "kyneta:forward-ops-marker",
-)
-
-/**
- * Slice the writer log from `marker` to the current length: the authored
- * ops since then. Compensations are never logged.
- *
- * Conceptually `execWriter` (the value side; the result side is `void`
- * for `prepare`). See `FORWARD_OPS_MARKER`.
- */
-export const FORWARD_OPS_SINCE: unique symbol = Symbol.for(
-  "kyneta:forward-ops-since",
-)
-
-// ---------------------------------------------------------------------------
 // WritableContext — shared state flowing through the tree
 // ---------------------------------------------------------------------------
 
+/** A finished batch: its options and every op it prepared, in order. */
+export interface SealedBatch {
+  readonly options: BatchOptions
+  readonly ops: readonly Op[]
+}
+
 /**
  * The context shared across the entire interpreted tree. Extends
- * `RefContext` with three substrate primitives plus the depth-aware
- * `dispatch` combinator.
+ * `RefContext` with the write primitives.
  *
- * **The bracket primitive and its three handlers.** `runBatch` is one
- * bracket with three effect handlers (see the plan's "Algebraic framing"
- * subsection — substrate, changefeed-flush, inverse-stack). Inside the
- * bracket, `prepare` is the single effect; the handlers react to it,
- * all keyed off a single depth counter. There are no concentric brackets
- * — there's one, observed three ways.
- *
- * **Three primitives:**
- *
- * - `prepare` — take one op into the batch. For an authored op the
- *   substrate advances σ and λ and records the inverse; a compensation
- *   records nothing; an announced op never reaches the substrate. Layers
- *   like `withCaching` and `withChangefeed` wrap it from the top to
- *   invalidate caches and accumulate notifications.
- * - `flush` — deliver accumulated notifications as a single Changeset
- *   per subscriber. Called exactly once per outermost `runBatch` release
- *   (success path: clean flush; catch path: flush with `aborted: true`).
- *   Announcements call `flush` directly without entering `runBatch`.
- * - `runBatch` — open a frame; run `work`; on success pop and flush at
- *   depth-0; on throw replay this frame's inverses LIFO, pop, flush
- *   with `aborted: true` at depth-0, rethrow. Inner frames push/pop
- *   without invoking the substrate bracket or flushing — the depth-0
- *   transition is the single delivery point per outermost block.
+ * **The batch lifecycle.** Every op belongs to a batch: an authored block
+ * opened by `runBatch`, or an announcement. The context captures each
+ * batch's ops in its own trace, seals the batch when it ends, and delivers
+ * sealed batches in seal order. An authored block is sealed inside the
+ * substrate's native bracket and delivered after the native commit, so a
+ * batch sealed while a native commit is open waits for it.
  *
  * **The `dispatch` combinator.** Helper methods (`scalar.set`,
  * `sequence.push`, etc.) call `ctx.dispatch(path, change)` rather than
  * `ctx.prepare` directly. `dispatch` is depth-aware:
  *
- * - Outside any frame (`frameStarts.length === 0`): opens an implicit
- *   single-op `runBatch` (auto-commit) — subscribers see a degenerate
- *   Changeset of one change.
+ * - Outside any frame: opens an implicit single-op `runBatch`
+ *   (auto-commit) — subscribers see a degenerate Changeset of one change.
  * - Inside a frame: forwards to `prepare`. The outer frame owns the
- *   flush boundary, so helpers in a `batch()` block collapse into one
- *   Changeset.
- *
- * The "where am I" information comes from the catamorphism's `path`
- * parameter, not from the context. The context doesn't need to be
- * re-derived at each level — it's the same object throughout.
+ *   seal, so helpers in a `batch()` block collapse into one Changeset.
  */
 export interface WritableContext extends RefContext {
-  /** Take one op into the batch; `options.ingress` says how it arrived.
-   *  Mutable — caching and changefeed layers wrap this at interpretation
-   *  time. */
+  /** Take one op into the batch being captured; `options.ingress` says how
+   *  it arrived. Throws outside `runBatch` or `announce`. Mutable — caching,
+   *  addressing and changefeed layers wrap it at interpretation time. */
   prepare: (path: Path, change: ChangeBase, options: PrepareOptions) => void
-  /** Deliver accumulated notifications as a single Changeset per subscriber.
-   *  Called by `runBatch` at the depth-0 release (success or aborted-catch)
-   *  and directly by `announce`. Mutable — the
-   *  changefeed layer wraps this at interpretation time. */
-  flush: (options: BatchOptions) => void
+  /** Deliver one sealed batch. The base does nothing; the changefeed layer
+   *  wraps it. Called in seal order by the context's delivery dispatcher. */
+  deliver: (batch: SealedBatch) => void
   /**
-   * The bracket primitive. Pushes a frame on entry; on `work()` success,
-   * pops and (at depth 0) invokes the substrate bracket + `ctx.flush(opts)`;
-   * on `work()` throw, replays this frame's recorded inverses LIFO
-   * (each prepared with `ingress: "compensate"`), pops, and (at depth 0)
-   * flushes with `aborted: true`, then rethrows.
+   * Run an authored block in its own frame and return the authored ops the
+   * frame captured (what `batch()` returns).
    *
-   * Inner frames (depth > 0 at entry) push/pop without invoking the
-   * substrate bracket and without flushing — the depth-0 transition is
-   * the single delivery point per outermost block. This preserves the
-   * "one Changeset per outermost `batch(doc, fn)` per affected
-   * subscriber" contract.
+   * The outermost frame is one native commit: it runs inside
+   * `substrate.runBatch`, calls `substrate.afterBatch()` and seals before the
+   * commit, and is delivered after it. If `work` throws, the frame's recorded
+   * inverses are applied LIFO (`ingress: "compensate"`), and at the outermost
+   * frame the batch is sealed with `aborted: true` before the error is
+   * rethrown. Inner frames only contribute ops to the outermost one.
    */
-  readonly runBatch: (work: () => void, options: CommitOptions) => void
+  readonly runBatch: (work: () => void, options: CommitOptions) => Op[]
+  /**
+   * Report ops the substrate has already applied, with σ already in
+   * agreement with λ. The ops never reach `substrate.prepare` or
+   * `afterBatch`; subscribers receive them with `replay: true`. An empty
+   * list announces nothing.
+   */
+  readonly announce: (ops: readonly Op[], origin?: string) => void
   /** Depth-aware combinator: outside any frame opens an implicit
    *  single-op `runBatch` (auto-commit); inside a frame just calls
    *  `prepare`. Helper methods on refs route through this so multi-helper
    *  blocks collapse into one Changeset. */
   readonly dispatch: (path: Path, change: ChangeBase) => void
-  /** `runWriter` for the change-Writer monad — snapshot the current
-   *  writer-log marker. */
-  readonly [FORWARD_OPS_MARKER]: () => number
-  /** `execWriter` for the change-Writer monad — the authored ops logged
-   *  since `marker`. */
-  readonly [FORWARD_OPS_SINCE]: (marker: number) => Op[]
-  /** Optional shared cascade budget. When the changefeed layer wires its
-   *  per-context dispatcher in `ensurePrepareWiring`, it threads this lease
-   *  through so that cross-doc and tick-induced re-entry across cooperating
-   *  dispatchers share one budget. Attached by `createRef({ lease })` before
-   *  interpretation runs; absent on standalone substrates, in which case
-   *  the dispatcher creates its own private lease. */
+  /** Shared cascade budget, attached by `createRef({ lease })`. It must be
+   *  attached before the context's first write: the delivery dispatcher is
+   *  created on first use and keeps the lease it finds then. Without one,
+   *  the dispatcher creates a private lease. */
   lease?: Lease
 }
 
 /**
- * Whether `ctx` carries the prepare/flush pipeline, i.e. was built by
+ * Whether `ctx` carries the prepare/deliver pipeline, i.e. was built by
  * `buildWritableContext`. The caching, addressing and changefeed layers keep
  * their `RefContext` signatures and wrap these only on a writable stack.
  */
 export function hasPreparePipeline(
   ctx: RefContext,
-): ctx is RefContext & Pick<WritableContext, "prepare" | "flush"> {
+): ctx is RefContext & Pick<WritableContext, "prepare" | "deliver"> {
   return (
     "prepare" in ctx &&
     typeof ctx.prepare === "function" &&
-    "flush" in ctx &&
-    typeof ctx.flush === "function"
+    "deliver" in ctx &&
+    typeof ctx.deliver === "function"
   )
 }
 
 // ---------------------------------------------------------------------------
-// announce — report ops a substrate has already applied
+// Traces — the ops of one batch, and the two projections of them
 // ---------------------------------------------------------------------------
 
-/**
- * Tell the changefeed about ops the substrate has already applied, after it
- * has brought σ into agreement with λ. Substrates call this for every change
- * no local writer authored: a merge, a native event, a decay tick.
- *
- * There is no bracket to open and nothing for the substrate to do, so the
- * ops never reach `substrate.prepare` or `afterBatch`. The prepare-loop feeds
- * the changefeed layers, and one `flush` delivers the whole payload.
- * Subscribers receive it with `replay: true`.
- */
-export function announce(
-  ctx: WritableContext,
-  ops: readonly Op[],
-  origin?: string,
-): void {
-  for (const { path, change } of ops) {
-    ctx.prepare(path, change, ANNOUNCE)
+/** One prepared op. `authored` is false for compensations and announcements. */
+export interface TraceEntry {
+  readonly op: Op
+  readonly authored: boolean
+}
+
+/** The authored ops after position `from`: a `runBatch` frame's return value. */
+export function authoredSince(
+  trace: readonly TraceEntry[],
+  from: number,
+): Op[] {
+  const ops: Op[] = []
+  for (let i = from; i < trace.length; i++) {
+    const entry = trace[i]
+    if (entry.authored) ops.push(entry.op)
   }
-  ctx.flush({ ingress: "announce", origin })
+  return ops
+}
+
+/** A trace as a sealed batch: every op, in order. */
+export function seal(
+  trace: readonly TraceEntry[],
+  options: BatchOptions,
+): SealedBatch {
+  return { options, ops: trace.map(entry => entry.op) }
 }
 
 const AUTHOR: PrepareOptions = { ingress: "author" }
@@ -339,17 +295,18 @@ export interface SubstrateCapabilities {
   ) => string
 }
 
+type DeliveryMsg = { readonly type: "deliver"; readonly batch: SealedBatch }
+
 /**
  * Builds a WritableContext around a substrate's mutation primitives.
  *
- * The substrate provides the ground floor of the prepare/flush pipeline,
- * and sees only authored ops and their compensations:
+ * The substrate sees only authored ops and their compensations:
  * - `substrate.prepare(path, change, recordInverse)` — apply the change to
  *   σ and λ; for a forward op, record its inverse on the active frame.
- * - `substrate.afterBatch()` — end of an authored batch (plain logs the
- *   batch; CRDT substrates drain their coalescing buffers).
- * - `substrate.runBatch?(body, options)` — optional transaction-boundary
- *   bracket, invoked at the outermost depth transition.
+ * - `substrate.afterBatch()` — end of an authored batch, inside the bracket
+ *   (plain logs the batch; CRDT substrates drain their coalescing buffers).
+ * - `substrate.runBatch?(body, options)` — optional native bracket, invoked
+ *   around the outermost frame.
  */
 export function buildWritableContext(
   substrate: SubstratePrepare,
@@ -365,15 +322,9 @@ export function buildWritableContext(
   const inverseStack: InverseEntry[] = []
   const frameStarts: number[] = []
 
-  // Writer log for the change-Writer monad: the authored ops, in order.
-  // `batch()` slices it via FORWARD_OPS_MARKER/SINCE to recover its Op[]
-  // return value. Cleared at the outermost runBatch release (success or
-  // aborted) so it doesn't grow without bound.
-  //
-  // This log is INDEPENDENT of the with-changefeed accumulator (which
-  // handles notification grouping). Two concerns, two logs — `batch()`'s
-  // return value works on any writable stack, with or without observation.
-  const writerLog: Op[] = []
+  // One trace per open batch. An announcement made while an authored batch
+  // is open pushes its own trace, so neither batch captures the other's ops.
+  const traces: TraceEntry[][] = []
 
   // Substrates call this after computing a forward op's inverse; it pushes
   // onto the active frame's stack range.
@@ -381,58 +332,84 @@ export function buildWritableContext(
     inverseStack.push({ path, inverse })
   }
 
-  // Base prepare. Layers like withChangefeed wrap this (replacing
-  // `ctx.prepare`) to accumulate notification entries; layers like
+  // Delivers sealed batches in seal order. Created on first use so that it
+  // picks up the lease `createRef` attaches to the context.
+  let deliveries: DispatcherHandle<DeliveryMsg> | undefined
+  const delivery = (): DispatcherHandle<DeliveryMsg> => {
+    deliveries ??= createDispatcher<DeliveryMsg>(
+      msg => ctx.deliver(msg.batch),
+      { lease: ctx.lease, label: "changefeed" },
+    )
+    return deliveries
+  }
+  const release = (batch: SealedBatch): void => {
+    delivery().dispatch({ type: "deliver", batch })
+  }
+
+  // Base prepare: the substrate call for the ingress, then the op joins the
+  // open batch's trace. Layers like withChangefeed wrap this (replacing
+  // `ctx.prepare`) to resolve paths and mark them populated; layers like
   // withCaching wrap it to invalidate caches at the target path.
   const prepare = (
     path: Path,
     change: ChangeBase,
     options: PrepareOptions,
   ): void => {
+    const trace = traces.at(-1)
+    if (trace === undefined) {
+      throw new Error("ctx.prepare called outside runBatch or announce")
+    }
     switch (options.ingress) {
       case "author":
-        writerLog.push({ path, change })
         substrate.prepare(path, change, recordInverse)
-        return
+        break
       case "compensate":
         substrate.prepare(path, change, null)
-        return
+        break
       case "announce":
-        return
+        break
     }
+    trace.push({ op: { path, change }, authored: options.ingress === "author" })
   }
 
-  // Base flush: end the substrate's authored batch. The changefeed layer
-  // wraps this and delivers accumulated Changesets after it returns, so
-  // subscribers see the updated version and log.
-  const flush = (options: BatchOptions): void => {
-    if (options.ingress === "author") substrate.afterBatch()
+  // Base deliver: nothing to deliver to. The changefeed layer wraps it.
+  const deliver = (_batch: SealedBatch): void => {}
+
+  // The native bracket around the outermost frame. Substrates without one
+  // (plain, ephemeral) run the frame directly.
+  const bracket: (work: () => void, options: CommitOptions) => void =
+    substrate.runBatch?.bind(substrate) ?? (work => work())
+
+  // Close a batch's trace: pop it, so a stray prepare after the seal throws
+  // instead of joining a batch that is already sealed.
+  const closeTrace = (trace: TraceEntry[]): void => {
+    if (traces.at(-1) === trace) traces.pop()
   }
 
-  // Bake the substrate-runBatch reference once. Substrates that
-  // implement runBatch get their bracket invoked at the outermost
-  // depth transition; substrates that don't (Plain) get the trivial
-  // path (just invoke the body).
-  const substrateRunBatch = substrate.runBatch
+  const sealAndRelease = (trace: TraceEntry[], options: BatchOptions): void => {
+    closeTrace(trace)
+    release(seal(trace, options))
+  }
 
-  // The bracket primitive. One wrapper, three handlers (substrate,
-  // changefeed-flush via `ctx.flush`, inverse-stack via the frameStarts
-  // range). Inner frames push/pop without invoking substrate.runBatch
-  // or flushing — the depth-0 transition is the single delivery point
-  // per outermost block.
   const runBatch: WritableContext["runBatch"] = (work, opts) => {
+    const outermost = frameStarts.length === 0
+    if (outermost) traces.push([])
+    const trace = traces.at(-1) ?? []
+    const from = trace.length
+    let captured: Op[] = []
+
     const wrappedWork = (): void => {
       const start = inverseStack.length
       frameStarts.push(start)
       try {
         work()
       } catch (e) {
-        // Undo-replay handler: pop this frame's start, replay its
-        // recorded inverses LIFO via ctx.prepare with `ingress: "compensate"`.
+        // Undo-replay handler: pop this frame's start, replay its recorded
+        // inverses LIFO via ctx.prepare with `ingress: "compensate"`.
         // Routing through ctx.prepare (not substrate.prepare) keeps the
-        // changefeed accumulator filling so subscribers see the full op
-        // log on the aborted Changeset; the substrate receives no recorder,
-        // so it does not record the inverse-of-the-inverse.
+        // compensations in the trace, so the aborted Changeset shows the
+        // full op log; the substrate receives no recorder, so it does not
+        // record the inverse-of-the-inverse.
         // `?? 0` rather than an assertion: the push/pop are paired by
         // construction, so an empty stack cannot happen — and if it ever did,
         // compensating the whole log is the safe reading, not crashing.
@@ -443,12 +420,9 @@ export function buildWritableContext(
             ctx.prepare(path, inverse, COMPENSATE)
           }
           inverseStack.length = frameStart
-          // Only the outermost frame flushes — the inner frame's catch
-          // pops + compensates but lets the rethrow propagate to the
-          // outer frame's wrappedWork.
           if (frameStarts.length === 0) {
-            ctx.flush({ ...opts, ingress: "author", aborted: true })
-            writerLog.length = 0
+            substrate.afterBatch()
+            sealAndRelease(trace, { ...opts, ingress: "author", aborted: true })
           }
         } catch (compErr: any) {
           const err =
@@ -459,32 +433,44 @@ export function buildWritableContext(
         throw e
       }
       frameStarts.pop()
-      // Outermost success: deliver one Changeset for the whole block.
-      // The forward inverses recorded on this frame stay on the stack
-      // if we're an inner frame — they belong to the outer's range.
-      // On the outermost frame, frameStarts is empty after the pop,
-      // and any remaining inverses on the stack should have been
-      // popped by inner frames already; reset defensively.
+      captured = authoredSince(trace, from)
       if (frameStarts.length === 0) {
-        // Outermost success — drop the inverse range and flush.
-        // (Inner-frame contributions to the outer's range remain on
-        // the stack across inner pops, but the outermost release is
-        // where the whole block's range gets discarded.)
+        // Inner frames' inverses stay on the stack across inner pops; the
+        // outermost release is where the whole block's range is discarded.
         inverseStack.length = 0
-        ctx.flush({ ...opts, ingress: "author" })
-        writerLog.length = 0
+        substrate.afterBatch()
+        sealAndRelease(trace, { ...opts, ingress: "author" })
       }
     }
 
-    // Substrate bracket is invoked only at the outermost depth transition.
-    // Inner ctx.runBatch calls just run frame management. Loro's per-
-    // substrate depth counter and Yjs's reliance on native transact
-    // nesting are both subsumed by this single boundary detection.
-    if (frameStarts.length === 0 && substrateRunBatch) {
-      substrateRunBatch.call(substrate, wrappedWork, opts)
-    } else {
+    if (!outermost) {
       wrappedWork()
+      return captured
     }
+    // Hold deliveries for the native bracket: this batch is sealed inside
+    // it, and anything announced while the native commit runs is sealed
+    // after it, so both are delivered in seal order once the commit closes.
+    try {
+      delivery().hold(() => bracket(wrappedWork, opts))
+    } finally {
+      closeTrace(trace)
+    }
+    return captured
+  }
+
+  const announce: WritableContext["announce"] = (ops, origin) => {
+    if (ops.length === 0) return
+    const trace: TraceEntry[] = []
+    traces.push(trace)
+    try {
+      for (const { path, change } of ops) {
+        ctx.prepare(path, change, ANNOUNCE)
+      }
+    } catch (error) {
+      closeTrace(trace)
+      throw error
+    }
+    sealAndRelease(trace, { ingress: "announce", origin })
   }
 
   // Depth-aware dispatch combinator:
@@ -492,8 +478,8 @@ export function buildWritableContext(
   //   implicit single-op runBatch — auto-commit semantics. Subscribers
   //   see a degenerate Changeset of one change.
   // - frameStarts.length > 0 (inside a frame, e.g. a batch(doc, fn)
-  //   body): just call prepare. The outer frame owns the flush boundary,
-  //   so multi-helper blocks collapse into one Changeset.
+  //   body): just call prepare. The outer frame owns the seal, so
+  //   multi-helper blocks collapse into one Changeset.
   const dispatch = (path: Path, change: ChangeBase): void => {
     if (frameStarts.length === 0) {
       runBatch(() => {
@@ -507,14 +493,10 @@ export function buildWritableContext(
   const ctx: WritableContext = {
     reader: substrate.reader,
     prepare,
-    flush,
+    deliver,
     runBatch,
+    announce,
     dispatch,
-    // Writer-log accessors over `writerLog` (the change-Writer monad's
-    // log). Always live regardless of stack composition — `batch()`
-    // works whether or not the observation layer is in play.
-    [FORWARD_OPS_MARKER]: () => writerLog.length,
-    [FORWARD_OPS_SINCE]: (marker: number) => writerLog.slice(marker),
   }
 
   if (capabilities.nativeResolver) {

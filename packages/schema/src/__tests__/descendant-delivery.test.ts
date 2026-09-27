@@ -308,7 +308,7 @@ describe("a batch is one unit of delivery", () => {
     expect(seen[0]?.changes).toHaveLength(2)
   })
 
-  it("carries aborted and the whole writer log when a batch throws", () => {
+  it("carries aborted and the whole op trace when a batch throws", () => {
     const doc: any = createDoc(Doc)
     const seen = record(doc)
 

@@ -345,7 +345,7 @@ The substrate boundary knows nothing about provenance: `prepare`, `afterBatch` a
 2. Advance σ via `applyChange(shadow, path, change)`.
 3. Advance λ via the substrate-native path (Loro: applyDiff or coalescing buffer; Yjs: applyChangeToYjs inside the ambient transact).
 
-The inverse stack belongs to the bracket primitive (`WritableContext.runBatch`'s wrapper). On the bracket's depth-0 success release, the frame's inverse range is discarded and `ctx.flush` fires. On a throw, the catch path replays the frame's inverses LIFO through `ctx.prepare(path, inverse, { ingress: "compensate" })`, which reaches the substrate with `recordInverse === null`, then flushes with `aborted: true`, then rethrows. The bracket's commit contains forward + inverse ops with net-zero delta when the outermost throws.
+The inverse stack belongs to the bracket primitive (`WritableContext.runBatch`'s wrapper). On the bracket's depth-0 success release, the frame's inverse range is discarded, `afterBatch` runs, and the batch is sealed. On a throw, the catch path replays the frame's inverses LIFO through `ctx.prepare(path, inverse, { ingress: "compensate" })`, which reaches the substrate with `recordInverse === null`, then seals the batch with `aborted: true`, then rethrows. The bracket's commit contains forward + inverse ops with net-zero delta when the outermost throws.
 
 This is how `batch(doc, d => { d.title.insert(0, "hi"); d.items.push(x); })` becomes one atomic changefeed emission with read-your-writes inside the block, and how a throwing block becomes one batched native event with net-zero delta plus one `Changeset` with `aborted: true`.
 
@@ -684,7 +684,7 @@ CRDT substrates (Loro, Yjs) maintain a **shadow**: a `PlainState` object that se
 
 **On everything else** (a merge, a raw native write), the CRDT doc holds the ops first (via `doc.import`, `Y.applyUpdate`, or the native call). The event bridge re-materializes the shadow from the CRDT doc and only then announces the ops, so `ctx.reader` already reflects the new state when any subscriber runs.
 
-**A substrate announces only after λ and σ agree.** Every change that a local writer did not author reaches the changefeed as an announcement, `announce(ctx, ops, origin)` (`src/interpreters/writable.ts`), issued after the substrate has taken the ops into λ and brought σ up to date. The announcement never calls `substrate.prepare` or `afterBatch`; it only feeds the changefeed layers and delivers. Those layers work from the ops alone, so σ is final for every observer.
+**A substrate announces only after λ and σ agree.** Every change that a local writer did not author reaches the changefeed as an announcement, `ctx.announce(ops, origin)` (`src/interpreters/writable.ts`), issued after the substrate has taken the ops into λ and brought σ up to date. The announcement never calls `substrate.prepare` or `afterBatch`; it only feeds the changefeed layers and delivers. Those layers work from the ops alone, so σ is final for every observer.
 
 | announcer | reconcile λ | reconcile σ |
 |---|---|---|
@@ -1059,14 +1059,10 @@ These are the primitives `step`, `with-changefeed`, and `Position` build on.
 
 Source: `packages/schema/src/facade/batch.ts`, `src/step.ts`, `src/inverse.ts`, `src/interpreters/with-changefeed.ts`, `src/interpreters/writable.ts`.
 
-`batch(doc, fn)` is the atomic mutation facade. Under the three-primitive substrate contract, it is implemented as a thin `runWriter` / `execWriter` wrapper around `ctx.runBatch`:
+`batch(doc, fn)` is the atomic mutation facade. `ctx.runBatch` returns the authored ops its frame captured, so `batch` is one line:
 
 ```ts
-batch(doc, fn) = ctx.runBatch(() => {
-  const marker = ctx[FORWARD_OPS_MARKER]()
-  fn(doc)
-  return ctx[FORWARD_OPS_SINCE](marker)
-}, opts)
+batch(doc, fn, opts) = ctx.runBatch(() => fn(doc), opts)
 ```
 
 **Convention.** A single mutation needs no `batch()` — a bare helper call (`doc.x.set(v)`) opens an implicit single-op `runBatch` and auto-commits. Reach for `batch()` only to (a) group ≥2 writes into one atomic commit + one `Changeset`, (b) capture the returned `Op[]`, or (c) attach `origin`/`source` provenance. The name leads with batching; the atomic-abort guarantee (a throwing block compensates LIFO and emits one `Changeset` with `aborted: true`) is the contract that makes a multi-write batch safe — it is still a *transaction in the algebraic sense*, just not a DB-style transaction with isolation/durability.
@@ -1074,17 +1070,17 @@ batch(doc, fn) = ctx.runBatch(() => {
 End-to-end flow:
 
 1. `change` resolves `ref[TRANSACT]` → the `WritableContext`.
-2. `ctx.runBatch(work, opts)` opens a frame (push on `frameStarts`/`inverseStack`). At depth-0 entry it invokes the substrate's `runBatch` bracket (Loro `doc.commit()`, Yjs `Y.transact`) wrapping the whole body.
+2. `ctx.runBatch(work, opts)` opens a frame (push on `frameStarts`/`inverseStack`). At depth-0 entry it opens the batch's **trace** and invokes the substrate's `runBatch` bracket (Loro `doc.commit()` after the body, Yjs `Y.transact`) inside the delivery dispatcher's `hold`.
 3. `fn(doc)` runs. Inside `fn`, each helper (`.set`, `.push`, `.insert`, …) routes through `ctx.dispatch(path, change)` — the depth-aware combinator. Inside a frame, dispatch is just `ctx.prepare`; outside any frame it opens an implicit single-op runBatch (auto-commit).
-4. `ctx.prepare(path, change, { ingress: "author" })` appends to the writer log (for `batch()`'s return value) and calls `substrate.prepare(path, change, recordInverse)`. The substrate captures σ at the change's target path, computes the inverse via `invert(pre, change)` and records it on the active frame, then advances σ and λ in lockstep.
-5. After `fn` returns, the bracket's depth-0 release calls `ctx.flush` exactly once → `wrappedFlush` → `substrate.afterBatch()` → `planDelivery` → `deliverNotifications`. One `Changeset` per affected subscriber.
-6. If `fn` throws, the catch path replays this frame's recorded inverses LIFO through `ctx.prepare(path, inverse, { ingress: "compensate" })` (reaching the substrate with `recordInverse === null`, and never logged), then flushes with `aborted: true`, then rethrows. External observers see one batched native event whose ops net to zero.
+4. `ctx.prepare(path, change, { ingress: "author" })` calls `substrate.prepare(path, change, recordInverse)` and appends the op to the trace. The substrate captures σ at the change's target path, computes the inverse via `invert(pre, change)` and records it on the active frame, then advances σ and λ in lockstep.
+5. After `fn` returns, still inside the bracket, the depth-0 release calls `substrate.afterBatch()` and **seals** the batch: the trace becomes a `SealedBatch` (`{ options, ops }`) and is dispatched for delivery. The native commit closes, the `hold` ends, and the delivery dispatcher calls `ctx.deliver(batch)` → `planDelivery` → `deliverNotifications`. One `Changeset` per affected subscriber.
+6. If `fn` throws, the catch path replays this frame's recorded inverses LIFO through `ctx.prepare(path, inverse, { ingress: "compensate" })` (reaching the substrate with `recordInverse === null`), runs `afterBatch`, seals the batch with `aborted: true`, then rethrows once it has been delivered. External observers see one batched native event whose ops net to zero.
 
 The substrate's `runBatch` bracket invocation is gated on `frameStarts.length === 0`: substrate.runBatch is invoked at most once per outermost block, regardless of how deeply `dispatch` nests. The exchange sees the transaction as a single `merge` source: after commit the substrate's `exportSince()` captures the entire delta.
 
 ### Depth-aware `dispatch`
 
-`WritableContext.dispatch` is a depth-aware combinator. The 5 ref-helper files (`scalar.set`, `sequence.push`, etc.) and the addressing layer's `REMOVE` handler all route through it, and it branches on one local condition: `dispatch = frameStarts.length === 0 ? implicitSingleOpRunBatch : justPrepare`. Inside a batch a dispatch is just a prepare, because the outer frame owns the flush boundary; outside one it opens an auto-committing single-op `runBatch`.
+`WritableContext.dispatch` is a depth-aware combinator. The 5 ref-helper files (`scalar.set`, `sequence.push`, etc.) and the addressing layer's `REMOVE` handler all route through it, and it branches on one local condition: `dispatch = frameStarts.length === 0 ? implicitSingleOpRunBatch : justPrepare`. Inside a batch a dispatch is just a prepare, because the outer frame owns the seal; outside one it opens an auto-committing single-op `runBatch`.
 
 Keeping the combinator rather than converting every helper is what lets in-block helpers collapse into one substrate commit and one `Changeset`, with no per-helper bracket re-entry.
 
@@ -1096,15 +1092,31 @@ Keeping the combinator rather than converting every helper is what lets in-block
 
 Under the three-primitive substrate contract, `ctx.runBatch` is **one bracket primitive with three handlers**, not three concentric brackets. Inside the bracket, `prepare` is the single effect; the three handlers all key off the same `frameStarts.length` depth:
 
-1. **Substrate handler** — invoked only at the depth-0 entry. Loro: `doc.commit()` at the wrap-end. Yjs: `Y.transact(doc, work, KYNETA_ORIGIN)`. PlainSubstrate omits this method; the ctx-level wrapper invokes the body directly. The Loro per-substrate depth counter is no longer needed — ctx-level outermost detection subsumes it.
+1. **Substrate handler** — invoked only at the depth-0 entry. Loro: `doc.commit()` after the body, in a `finally` so an aborted batch is committed too. Yjs: `Y.transact(doc, work, options.origin)`. PlainSubstrate omits this method; the ctx-level wrapper invokes the body directly. The Loro per-substrate depth counter is no longer needed — ctx-level outermost detection subsumes it.
 
-2. **Changefeed-flush handler** — fires exactly once at the depth 1→0 transition. Success path: `ctx.flush(opts)`. Catch path: `ctx.flush({ ...opts, aborted: true })`. Inner frames push/pop without flushing — the depth-0 release is the single delivery point per outermost block.
+2. **Seal handler** — fires exactly once at the depth 1→0 transition, inside the bracket. It runs `substrate.afterBatch()` and seals the batch: success path `{ ...opts, ingress: "author" }`, catch path with `aborted: true`. Inner frames push/pop without sealing — the depth-0 release is the single seal per outermost block. Delivery happens after the bracket closes (see below).
 
 3. **Inverse-stack handler** — every successful authored `prepare` pushes an `InverseEntry` (path + reverse arrow). On throw, the frame's range is replayed LIFO through `ctx.prepare(path, inverse, { ingress: "compensate" })`, which hands the substrate no recorder, so the inverse of an inverse is never recorded. External observers see one batched native event whose ops net to zero.
 
 The three handlers are co-extensive — they all open and close at the same boundary. Every authored write goes through `ctx.runBatch` (`batch`, `applyChanges`, or `dispatch`'s auto-commit); `announce` bypasses it, because the substrate has already applied those ops and there is nothing to bracket.
 
-Substrate.runBatch is invoked at most once per outermost `batch(doc, fn)` — re-entrant subscriber writes open their own outermost runBatch (frameStarts goes to 0 between outer flush and subscriber re-entry), each block is its own atomic abort unit and gets its own commit.
+Substrate.runBatch is invoked at most once per outermost `batch(doc, fn)`. Re-entrant subscriber writes run after the outer native commit has closed, so each opens its own outermost runBatch: each block is its own atomic abort unit, with its own native commit and its own origin.
+
+### The batch lifecycle: capture, seal, release
+
+Source: `src/interpreters/writable.ts` (`buildWritableContext`, `authoredSince`, `seal`).
+
+**Changesets are delivered in seal order, each after every native commit that was open when it was sealed.** The writable context owns the whole lifecycle, because it is the one place that sees both which ops belong to which batch and when a native commit is open:
+
+- **Capture.** A stack of **traces**, each a list of `{ op, authored }`. The outermost `runBatch` frame opens one, and so does `announce`. The base `prepare` appends every op to the top trace; with no trace open it throws. An announcement made while an authored batch is open gets its own trace, so neither batch can pick up the other's ops.
+- **The trace is also `batch()`'s return value.** Each frame notes the trace length on entry and returns `authoredSince(trace, start)`: the authored ops, without compensations. The sealed changeset carries every entry.
+- **Seal.** At the end of the outermost frame, inside the bracket, `afterBatch` runs and `seal(trace, options)` makes a `SealedBatch`. The trace is popped at once, so a stray prepare afterwards throws instead of joining a sealed batch.
+- **Release.** Each context has one delivery dispatcher (`createDispatcher`, label `"changefeed"`, message `{ type: "deliver", batch }`, the context's `lease`), created on first use. `runBatch` runs the substrate bracket inside `deliveries.hold(...)`: anything sealed while it runs — the batch itself, and any announcement a native listener triggers during the commit — queues, and drains in seal order when the commit closes. The dispatcher's handler calls `ctx.deliver(batch)`, which the changefeed layer wraps.
+
+Two consequences worth knowing:
+
+- **A re-entrant `batch()` during delivery** runs its bracket at once (`hold` inside a drain just runs its function), so its writes land synchronously; its changeset queues behind the one being delivered.
+- **A merge inside a `batch()` body** is announced and sealed before the surrounding batch seals, so it is delivered first, as its own `replay: true` changeset.
 
 ### The step function, and its mutating dual
 
@@ -1185,7 +1197,7 @@ A container's child ref carries `[REMOVE]()` (a symbol method — see `Removable
 
 ### What the write path is NOT
 
-- **Not async.** `batch()` is synchronous. The substrate's writes happen synchronously during `fn`. Notifications for the originating transaction fire synchronously at commit; re-entrant `batch()` calls from inside a subscriber land in the per-context dispatcher's pending queue and produce a separate `Changeset` in a fresh sub-tick of the same outer call — still synchronous from the caller's perspective.
+- **Not async.** `batch()` is synchronous. The substrate's writes happen synchronously during `fn`. Notifications for the originating transaction fire after its native commit and before `batch()` returns; re-entrant `batch()` calls from inside a subscriber queue their changesets on the delivery dispatcher, which drains them before the outer call returns — still synchronous from the caller's perspective.
 - **Not an effect system.** Side effects inside `fn` (network calls, DOM writes) run where they are called. Only the substrate-writable mutations are captured.
 
 ---
@@ -1208,11 +1220,11 @@ The `aborted` flag is tightened: `true` iff the outermost block threw. Auto-comm
 
 ### Re-entrant `batch()` inside subscriber callbacks (drain-to-quiescence)
 
-Subscriber callbacks may mutate freely. `batch()` invoked from inside `subscribe(doc, ...)` or `subscribeNode(doc.field, ...)` does *not* throw — `with-changefeed`'s per-context dispatcher (from `@kyneta/machine`'s `createDispatcher`) enqueues an `accumulate` Msg and the drain-to-quiescence loop processes it in a fresh sub-tick.
+Subscriber callbacks may mutate freely. `batch()` invoked from inside `subscribe(doc, ...)` or `subscribeNode(doc.field, ...)` does *not* throw. The outer batch's native commit has already closed, so the inner `batch()` is an outermost block: its bracket runs at once, and its sealed changeset queues on the context's delivery dispatcher (from `@kyneta/machine`'s `createDispatcher`), whose drain-to-quiescence loop delivers it after the originating Changeset.
 
-Substrate writes inside the re-entrant `batch()` remain **synchronous** — subsequent reads see the new state. The sub-tick's mutations produce their own `Changeset` once the inner `batch()` commits, delivered to subscribers after the originating Changeset.
+Substrate writes inside the re-entrant `batch()` remain **synchronous** — subsequent reads see the new state.
 
-When the host is an `Exchange`, every per-doc dispatcher shares the Exchange's `Lease` with the Synchronizer. Cross-doc A→B→A cascades, and tick-induced re-entry through the synchronizer, are bounded by one cooperating budget. A runaway oscillation throws `BudgetExhaustedError` whose message names the cascade's entry-point frame, a top-N message-type histogram, and a recent-event tail — the label histogram is the cascade *topology* and the count distribution names the *hot path*, so users can locate the responsible subscriber without ad-hoc instrumentation.
+When the host is an `Exchange`, every per-doc delivery dispatcher shares the Exchange's `Lease` with the Synchronizer. Cross-doc A→B→A cascades, and tick-induced re-entry through the synchronizer, are bounded by one cooperating budget. A runaway oscillation throws `BudgetExhaustedError` whose message names the cascade's entry-point frame, a top-N message-type histogram, and a recent-event tail — the label histogram is the cascade *topology* and the count distribution names the *hot path*, so users can locate the responsible subscriber without ad-hoc instrumentation.
 
 See `@kyneta/machine`'s TECHNICAL.md §"Drain to quiescence and shared leases" for the primitive.
 
@@ -1248,7 +1260,7 @@ Every batch declares how it reached the changefeed, in a **required** `ingress`.
 type BatchIngress = "author" | "announce"
 type PrepareIngress = BatchIngress | "compensate"
 
-type BatchOptions =                                   // ctx.flush
+type BatchOptions =                                   // SealedBatch.options
   | (CommitOptions & { ingress: "author"; aborted?: boolean })
   | { ingress: "announce"; origin?: string }
 interface PrepareOptions { ingress: PrepareIngress }  // ctx.prepare
@@ -1256,11 +1268,11 @@ interface CommitOptions { origin?: string; source?: unknown } // batch, applyCha
 interface MergeOptions { origin?: string }            // merge, resetFromEntirety
 ```
 
-| ingress | how it arrives | `substrate.prepare` | writer log | `substrate.afterBatch` | `Changeset.replay` |
+| ingress | how it arrives | `substrate.prepare` | `batch()` return value | `substrate.afterBatch` | `Changeset.replay` |
 |---|---|---|---|---|---|
-| `author` | `dispatch` (inside `runBatch`, or auto-committing) | `(path, change, recordInverse)` | forward op | at the depth-0 flush | `false` |
-| `compensate` | the undo handler inside `runBatch` | `(path, change, null)` | not logged | (the author flush) | — |
-| `announce` | `announce(ctx, ops, origin)` | not called | not logged | not called | `true` |
+| `author` | `dispatch` (inside `runBatch`, or auto-committing) | `(path, change, recordInverse)` | forward op | at the depth-0 seal | `false` |
+| `compensate` | the undo handler inside `runBatch` | `(path, change, null)` | not returned | (the author seal) | — |
+| `announce` | `ctx.announce(ops, origin)` | not called | not returned | not called | `true` |
 
 The union encodes two contracts. Only an authored batch carries `source` (an echo token names a local caller and never survives a merge), and only an authored batch can be `aborted`.
 
@@ -1318,7 +1330,7 @@ Facade vs. protocol vocabulary inversion: facade `subscribe` is deep delivery (`
 
 Two functions form the notification engine:
 
-1. `planDelivery(ops, ownPathKeys, deepKeys)` → `DeliveryPlan` — the Functional Core. Walks the flush's ops **once**, in dispatch order, and answers both channels.
+1. `planDelivery(ops, ownPathKeys, deepKeys)` → `DeliveryPlan` — the Functional Core. Walks a sealed batch's ops **once**, in dispatch order, and answers both channels.
 2. `deliverNotifications(plan, listeners, descendants, options?)` → the Imperative Shell. Builds changesets and calls functions. All the deciding already happened.
 
 **The two channels group differently, and the reason is structural.** A node's own path is a single key, so own-path changes can only come from one place. A node's *subtree* spans many paths, so a deep subscriber's changeset gathers ops from all of them. That gathering is the whole point: **one `batch()` reaches each subscriber as one `Changeset`.**
@@ -1347,13 +1359,13 @@ Ordering *across changed paths* used to be first-touch order and was never contr
 
 #### Replay is where the fan-out is largest
 
-The local-`batch()` framing hides the high-traffic case. An announcement bypasses `ctx.runBatch` but calls `ctx.flush` **once** for its whole payload (`announce`, `src/interpreters/writable.ts`), so one incoming sync merge is one flush over every op in it. An `offer` touching fifty paths once delivered **fifty** changesets to every doc-root subscriber; it delivers one. The factor is the number of distinct paths in a merge payload, which is unbounded in practice, and `@kyneta/exchange`, `@kyneta/react` and `@kyneta/devtools` all sit on that path.
+The local-`batch()` framing hides the high-traffic case. An announcement bypasses `ctx.runBatch` but is sealed and delivered **once** for its whole payload (`announce`, `src/interpreters/writable.ts`), so one incoming sync merge is one flush over every op in it. An `offer` touching fifty paths once delivered **fifty** changesets to every doc-root subscriber; it delivers one. The factor is the number of distinct paths in a merge payload, which is unbounded in practice, and `@kyneta/exchange`, `@kyneta/react` and `@kyneta/devtools` all sit on that path.
 
 Ordering has two halves here, and only one is universal. The engine preserves the relative order of the ops it is handed — that holds on every substrate and both entry points. That those ops arrive in *write* order is true only of a local batch: a merge carries a CRDT diff, so the event bridge reconstructs ops by enumerating what changed rather than replaying a write log. `deliveryConformance` pins the universal half for both drivers and the dispatch-order half for local writes. It runs against all four substrates: plain and ephemeral in this package, Loro and Yjs in theirs.
 
-The per-context dispatcher (`createDispatcher<ChangefeedMsg>` inside `ensurePrepareWiring`) is what makes re-entrant `batch()` calls from inside a subscriber safe: each call dispatches an `accumulate` Msg that drains in a fresh sub-tick. See [Re-entrant `batch()` inside subscriber callbacks](#re-entrant-batch-inside-subscriber-callbacks-drain-to-quiescence).
+The context's delivery dispatcher (see [The batch lifecycle](#the-batch-lifecycle-capture-seal-release)) is what makes re-entrant `batch()` calls from inside a subscriber safe: each one seals its own batch, which queues behind the delivery in progress. See [Re-entrant `batch()` inside subscriber callbacks](#re-entrant-batch-inside-subscriber-callbacks-drain-to-quiescence).
 
-Because the planner runs before any callback, a subscriber that writes during delivery cannot mutate a buffer mid-iteration. The flush also commits to the substrate *before* delivering, so `version()` and `delta()` read from inside a callback reflect the finished batch.
+Because the planner runs before any callback, a subscriber that writes during delivery cannot mutate a buffer mid-iteration. Delivery also comes after `afterBatch` and the native commit, so `version()` and `delta()` read from inside a callback reflect the finished batch.
 
 ### `expandMapOpsToLeaves`
 
@@ -2017,7 +2029,7 @@ The worked example is `__getCacheHandlerCountAtPath` (`src/interpreters/with-cac
 | `src/interpreters/with-readable.ts` | `.current`, `()`, read-by-path. Sequence/movable and map/set cases delegate to shared helpers. |
 | `src/interpreters/with-addressing.ts` | Address-table layer. Sequence/movable and map/set cases delegate to shared helpers. |
 | `src/interpreters/with-caching.ts` | Identity-preserving memoization + `INVALIDATE`. Sequence/movable and map/set cases delegate to shared helpers. |
-| `src/interpreters/writable.ts` | Mutation primitives + `REMOVE` + `TRANSACT` + `announce` + `hasPreparePipeline`. Text/sequence/movable/map/set cases delegate to shared helpers. |
+| `src/interpreters/writable.ts` | Mutation primitives + `REMOVE` + `TRANSACT` + the batch lifecycle (`buildWritableContext`, `SealedBatch`, `authoredSince`, `seal`) + `hasPreparePipeline`. Text/sequence/movable/map/set cases delegate to shared helpers. |
 | `src/interpreters/with-changefeed.ts` | Observation layer + `planDelivery` + `deliverNotifications` + `listenIn` + `createNodeChangefeed` + `wireChangefeed`. All cases use `wireChangefeed` to unify changefeed boilerplate. The notification engine itself is internal — not exported. |
 | `src/interpreters/validate.ts` | Validation interpreter. |
 | `src/interpreters/plain.ts` | Plain-state interpreter (reader + canonical shape). |

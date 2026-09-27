@@ -624,7 +624,7 @@ describe("withCaching: prepare-pipeline invalidation", () => {
     return { doc, store, ctx }
   }
 
-  it("ctx.prepare + ctx.flush invalidates cache at target path (bypassing mutation methods)", () => {
+  it("ctx.prepare invalidates cache at target path (bypassing mutation methods)", () => {
     // This is the RED test for the old code: before Phase 4, prepare was
     // just applyChangeToStore — no invalidation. The cache would be stale.
     const { doc, ctx } = createFullDoc()

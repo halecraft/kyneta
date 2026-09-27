@@ -15,25 +15,21 @@
 // no transitions is still valid — it's a constant. This means
 // withChangefeed works on both read-write AND read-only stacks:
 //
-// - Read-write: ctx has prepare/flush → notifications fire on mutation
-// - Read-only: ctx has no prepare/flush → .subscribe never fires,
+// - Read-write: ctx has prepare/deliver → notifications fire on mutation
+// - Read-only: ctx has no prepare/deliver → .subscribe never fires,
 //   .current still works. Valid static Moore machine.
 //
 // Notification flow (read-write only): the transformer wraps ctx.prepare
-// to apply changes synchronously (substrate write + populated mark) and
-// dispatch an `accumulate` Msg into a per-context dispatcher. It wraps
-// ctx.flush to dispatch a `flush` Msg. The dispatcher's drain-to-quiescence
-// loop catches re-entrant `batch()` calls from inside subscriber
-// callbacks: substrate writes still happen synchronously, and the new
-// accumulator entries produce a fresh Changeset in a subsequent sub-tick.
+// to resolve each op's path and mark it populated, and wraps ctx.deliver
+// to plan and fire notifications for one sealed batch. Capturing each
+// batch's ops, sealing, and delivering in seal order after the native
+// commit belong to the writable context (`buildWritableContext`).
 //
 // Compose: withChangefeed(withWritable(withCaching(withReadable(withNavigation(bottom)))))
 // Or read-only: withChangefeed(withCaching(withReadable(withNavigation(bottom))))
 
 import type { BatchMetadata, HasChangefeed } from "@kyneta/changefeed"
 import { CHANGEFEED } from "@kyneta/changefeed"
-import type { Lease } from "@kyneta/machine"
-import { createDispatcher } from "@kyneta/machine"
 import type { ChangeBase } from "../change.js"
 import { isTreeChange, treeChange } from "../change.js"
 import type {
@@ -67,7 +63,7 @@ import type { BatchOptions, PrepareOptions } from "../substrate.js"
 
 import type { HasRead } from "./bottom.js"
 import { CALL } from "./bottom.js"
-import { hasPreparePipeline } from "./writable.js"
+import { hasPreparePipeline, type SealedBatch } from "./writable.js"
 
 export const POPULATED: unique symbol = Symbol.for("kyneta:populated")
 
@@ -174,7 +170,7 @@ export function attachChangefeed(
  *
  * The planner only needs to ask "is anyone listening at this key?", so taking
  * this shape lets the shell hand over its live subscriber registries directly
- * — no copying a `Map`'s keys into a `Set` on every flush — while keeping the
+ * — no copying a `Map`'s keys into a `Set` on every delivery — while keeping the
  * planner a pure function of plain data for testing.
  */
 export interface KeySet {
@@ -205,7 +201,7 @@ type OwnPathRegistry = Registry<(changeset: Changeset<ChangeBase>) => void>
 type DeepRegistry = Registry<(changeset: Changeset<Op>) => void>
 
 /**
- * What one flush delivers, to whom, and in what order.
+ * What one sealed batch delivers, to whom, and in what order.
  *
  * The two channels group differently, and the reason is structural. A node's
  * own path is a single key, so own-path changes can only ever come from one
@@ -233,7 +229,7 @@ export interface DeliveryPlan {
 }
 
 /**
- * Plan one flush: walk the ops once and answer both channels.
+ * Plan one batch's delivery: walk the ops once and answer both channels.
  *
  * The single pass is not just an optimisation. The deep channel needs ops in
  * *dispatch* order, and any grouping step destroys that: if an ancestor write
@@ -271,7 +267,7 @@ export function planDelivery(
 
     // A change at `a/b/c` concerns subscribers at `a/b/c`, `a/b`, `a`, and the
     // root. That set is just the path's ancestor chain, so it is derived here
-    // from the path itself rather than maintained between flushes.
+    // from the path itself rather than maintained between deliveries.
     for (let i = path.length; i >= 0; i--) {
       // Structural: take the first `i` segments, then compute THAT path's key.
       //
@@ -371,7 +367,7 @@ function listenIn<C>(
 }
 
 /**
- * The metadata a flushed batch puts on each `Changeset`. `replay` is true for
+ * The metadata a sealed batch puts on each `Changeset`. `replay` is true for
  * every announcement: no local writer authored those ops. Only an authored
  * batch carries `source` and `aborted`.
  */
@@ -413,7 +409,7 @@ export function changesetMetadata(options: BatchOptions): BatchMetadata {
  * @param plan - From `planDelivery`.
  * @param listeners - Own-path subscribers, keyed by path (from `ensurePrepareWiring`).
  * @param descendants - Deep subscribers, keyed by their own path.
- * @param options - The flushed batch's options; `changesetMetadata` turns
+ * @param options - The sealed batch's options; `changesetMetadata` turns
  *   them into the metadata every emitted `Changeset` carries.
  */
 export function deliverNotifications(
@@ -494,11 +490,11 @@ export function synthesizeTreeDeleteTerminal(
 }
 
 // ---------------------------------------------------------------------------
-// Prepare/flush wrapping — per-context, idempotent
+// Prepare/deliver wrapping — per-context, idempotent
 // ---------------------------------------------------------------------------
 
 /**
- * Per-context state for the changefeed layer's prepare/flush wrapping.
+ * Per-context state for the changefeed layer's prepare/deliver wrapping.
  *
  * - `listeners` / `descendants`: the two subscriber registries, written into
  *   by `listenIn` when someone subscribes. Together they are the
@@ -508,12 +504,6 @@ export function synthesizeTreeDeleteTerminal(
  *   on substrate reset). Used by `populated` changefeeds.
  * - `populatedListeners`: callbacks waiting for a specific path key to
  *   become populated. Fired at most once per path key, then removed.
- *
- * The notification accumulator (`Op[]`) is encapsulated inside the
- * dispatcher handler's closure — it is no longer persisted on this state
- * record. Likewise, no `isFlushing` flag: re-entrant `batch()` calls from
- * inside subscriber delivery enqueue an `accumulate` Msg back into the
- * per-context dispatcher and drain in a fresh sub-tick.
  */
 interface ContextWiringState {
   readonly listeners: OwnPathRegistry
@@ -522,52 +512,22 @@ interface ContextWiringState {
   readonly populatedListeners: Map<string, Set<() => void>>
 }
 
-/**
- * Internal dispatcher message type for the per-context notification
- * pipeline. Not exported — fully encapsulated inside `with-changefeed.ts`.
- *
- * - `accumulate`: a `prepare` call observed a substrate mutation; queue
- *   its `Op` for the next flush. The substrate write happens synchronously
- *   in `wrappedPrepare` *before* this Msg is dispatched, so the accumulate
- *   Msg carries no options — it's a pure notification-side concern.
- * - `flush`: a `flush` call requested commit + notification delivery.
- *   Carries `options` so the resulting `Changeset` carries the batch's
- *   metadata.
- */
-type ChangefeedMsg =
-  | { type: "accumulate"; op: Op }
-  | { type: "flush"; options: BatchOptions }
-
-// WeakMap ensures a single prepare/flush wrapper per context,
+// WeakMap ensures a single prepare/deliver wrapper per context,
 // shared across all nodes interpreted with that context.
 const contextState = new WeakMap<RefContext, ContextWiringState>()
 
 /**
- * Ensures the given context has its `prepare` and `flush` wrapped
- * for changefeed notification. Returns the shared listener map, or
- * `null` if the context doesn't have `prepare`/`flush` (read-only
- * stack).
- *
- * On read-only stacks, returns `null` — `.subscribe` callbacks are
- * registered in a local listener map but never fired. This produces
- * valid static Moore machines (.current works, .subscribe is a no-op).
+ * Ensures the given context has its `prepare` and `deliver` wrapped
+ * for changefeed notification. On read-only stacks (no `prepare`/`deliver`)
+ * `.subscribe` callbacks are registered in a local listener map but never
+ * fired: a valid static Moore machine.
  *
  * On read-write stacks:
- * - `prepare` wrapping: synchronously calls the inner prepare (substrate
- *   write), marks the path populated, then dispatches an `accumulate`
- *   Msg into the per-context dispatcher to queue this Op for notification.
- * - `flush` wrapping: dispatches a `flush` Msg. The dispatcher's handler
- *   snapshots the queued accumulator, calls `planDelivery` (pure),
- *   calls the inner flush (so the substrate's version and log are
- *   up-to-date), then `deliverNotifications` (imperative) to fire
- *   listeners. Re-entrant `batch()` calls from inside a subscriber land
- *   back in `wrappedPrepare`, which dispatches another `accumulate` Msg.
- *   The dispatcher's drain-to-quiescence loop catches it and the next
- *   `flush` dispatch processes it in a fresh sub-tick.
- *
- * The lease — if attached on `ctx.lease` before this function runs — is
- * shared with the Exchange and Synchronizer, so cross-doc cascades and
- * tick-induced re-entry are bounded by one cooperating budget.
+ * - `prepare` wrapping: resolves the op's path to its addressed form (so
+ *   `path.key` matches listener and cache keys), calls the inner prepare,
+ *   and marks the path populated.
+ * - `deliver` wrapping: plans delivery from the sealed batch's ops
+ *   (`planDelivery`, pure) and fires listeners (`deliverNotifications`).
  */
 
 // WeakMap for read-only contexts: each gets its own orphaned listener
@@ -601,50 +561,14 @@ function ensurePrepareWiring(ctx: RefContext): ChangefeedChannels {
 
   const listeners: OwnPathRegistry = new Map()
   const descendants: DeepRegistry = new Map()
-  // Every op prepared since the last flush, forward and inverse alike, so
-  // an aborted Changeset shows the full op trace.
-  const accumulator: Op[] = []
   const populated = new Set<string>()
   const populatedListeners = new Map<string, Set<() => void>>()
   const originalPrepare = ctx.prepare
-  const originalFlush = ctx.flush
+  const originalDeliver = ctx.deliver
 
-  // Per-context dispatcher. Re-entrant `batch()` calls from inside
-  // subscriber delivery dispatch `accumulate` Msgs back into this same
-  // dispatcher; the drain-to-quiescence loop processes them in fresh
-  // sub-ticks. A `flush` Msg whose `accumulator.length === 0` (no
-  // mutations since the last drain) still calls `originalFlush(options)`
-  // — preserving the invariant that substrate-level flush always runs.
-  const handle = createDispatcher<ChangefeedMsg>(
-    msg => {
-      if (msg.type === "accumulate") {
-        accumulator.push(msg.op)
-        return
-      }
-      // msg.type === "flush"
-      if (accumulator.length === 0) {
-        originalFlush(msg.options)
-        return
-      }
-      // `listeners` and `descendants` are passed as membership tests: the
-      // planner only asks whether a key has subscribers, so there is no need
-      // to snapshot their keys.
-      const plan = planDelivery(accumulator, listeners, descendants)
-      accumulator.length = 0
-      // Commit to the substrate first so version() and delta() reflect
-      // the just-flushed operations when subscribers read them.
-      originalFlush(msg.options)
-      deliverNotifications(plan, listeners, descendants, msg.options)
-    },
-    {
-      lease: (ctx as { lease?: Lease }).lease,
-      label: "changefeed",
-    },
-  )
-
-  // Wrapped prepare: forward to the inner prepare synchronously, mark
-  // populated synchronously, then dispatch the accumulate Msg. Batch
-  // metadata rides on the subsequent `flush` Msg.
+  // Wrapped prepare: resolve the path, forward to the inner prepare, and
+  // mark the path populated. The base context captures the resolved op
+  // into the batch's trace.
   const wrappedPrepare = (
     path: Path,
     change: ChangeBase,
@@ -660,23 +584,19 @@ function ensurePrepareWiring(ctx: RefContext): ChangefeedChannels {
         : path
     originalPrepare(resolved, change, options)
     markPopulated(resolved, populated, populatedListeners)
-    handle.dispatch({ type: "accumulate", op: { path: resolved, change } })
   }
 
-  // Wrapped flush: dispatch a flush Msg carrying the full options. The
-  // handler enforces the order (originalFlush → deliverNotifications)
-  // inside the dispatcher's drain.
-  const wrappedFlush = (options: BatchOptions): void => {
-    handle.dispatch({ type: "flush", options })
+  // Wrapped deliver: plan from the sealed batch's ops, then call the
+  // subscribers. `listeners` and `descendants` are passed as membership
+  // tests: the planner only asks whether a key has subscribers.
+  const wrappedDeliver = (batch: SealedBatch): void => {
+    originalDeliver(batch)
+    const plan = planDelivery(batch.ops, listeners, descendants)
+    deliverNotifications(plan, listeners, descendants, batch.options)
   }
 
   ctx.prepare = wrappedPrepare
-  ctx.flush = wrappedFlush
-
-  // FORWARD_OPS_* accessors are owned by buildWritableContext (it
-  // maintains the writer log directly, so `batch()` works on any
-  // stack with/without the observation layer). The changefeed
-  // accumulator here is a separate concern: notification grouping.
+  ctx.deliver = wrappedDeliver
 
   state = {
     listeners,
@@ -695,7 +615,7 @@ function ensurePrepareWiring(ctx: RefContext): ChangefeedChannels {
  *
  * Test-only, and modelled on `__getCacheHandlerCountAtPath` in
  * `with-caching.ts` — the same problem one interpreter over. A registration
- * that outlives its subscriber costs memory and per-flush work and nothing
+ * that outlives its subscriber costs memory and per-delivery work and nothing
  * else: delivery still calls exactly the callbacks that are subscribed, so a
  * test counting callbacks passes whether or not the registry accretes. Reading
  * the structure is the test that actually holds.
@@ -906,7 +826,7 @@ function getPopulatedState(ctx: RefContext): {
  *
  * Delivery no longer needs that structure. A subscriber records the path it
  * sits at, and `deliverNotifications` finds it by walking each changed path's
- * ancestors — recomputed per flush from the path alone, so there is nothing to
+ * ancestors — recomputed per delivery from the path alone, so there is nothing to
  * keep aligned and no reference to a child ref object that could go stale. See
  * "Why there are no dynamic-collection changefeed factories" in
  * `packages/schema/TECHNICAL.md` for what that machinery was and the bug that
@@ -1037,22 +957,21 @@ function createTreeChangefeed(
  * Notification flows through the changefeed tree, not flat subscriber maps.
  * Each node's `subscribeDescendants` composes its children's changefeeds.
  *
- * **Prepare/flush wrapping:** The transformer wraps `ctx.prepare` to
- * accumulate `{path, change}` entries after each store mutation (no
- * notification fires). It wraps `ctx.flush` to group accumulated
- * entries by path and deliver one `Changeset` per subscriber.
+ * **Prepare/deliver wrapping:** The transformer wraps `ctx.prepare` to
+ * resolve paths and mark them populated, and `ctx.deliver` to turn one
+ * sealed batch into one `Changeset` per affected subscriber.
  *
  * This means:
- * - Auto-commit (single mutation via `dispatch`): `prepare` once + `flush`
- *   once → subscribers receive a `Changeset` with exactly 1 change.
- * - A `batch()` block, `applyChanges`, or an announcement: `prepare` N
- *   times + `flush` once → subscribers receive a `Changeset` with N
- *   changes, and never see partially-applied state.
+ * - Auto-commit (single mutation via `dispatch`): a batch of one op →
+ *   subscribers receive a `Changeset` with exactly 1 change.
+ * - A `batch()` block, `applyChanges`, or an announcement: a batch of N
+ *   ops → subscribers receive a `Changeset` with N changes, and never see
+ *   partially-applied state.
  *
  * ```ts
  * // Full stack (read + write + observe):
  * const interp = withChangefeed(withWritable(withCaching(withReadable(withNavigation(bottom)))))
- * const ctx = createPlainSubstrate(store).context()
+ * const ctx = plainContext(store)
  * const doc = interpret(schema, interp, ctx)
  * doc[CHANGEFEED].subscribe(callback)       // fires on mutation
  *

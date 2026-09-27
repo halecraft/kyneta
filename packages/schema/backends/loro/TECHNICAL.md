@@ -41,8 +41,8 @@ Consumed by applications that bind schemas with `loro.bind(schema)`. Not importe
 | `batchToOps` | Inverse: turn Loro event-emitted `Diff[]` (after `doc.import` or external mutation) into kyneta `Op[]`. | `changeToDiff` — opposite direction |
 | `loroReader` | `Reader` implementation that reads by resolving the container at `path` and extracting its value. | Substrate state — the reader is a live view |
 | `applyDiff` | Loro's bulk-write API. `prepare()` applies structural diffs at once and coalesces plain map diffs, which `afterBatch()` applies in one call. | `doc.import` — imports a binary update; `applyDiff` applies structural diffs |
-| `subscribePreCommit / ourCommits` | Loro's pre-commit hook fires synchronously inside `doc.commit()`, before the subscribe event. The substrate uses it to capture the in-flight commit's identity `(peer, counter+length-1)` into a closure-scoped `Set<string>`; the subscribe handler consumes the matching entry via `delete`-as-predicate against `batch.to` entries. A single-shot `nextIsOurs` flag gates the capture (set sync before `doc.commit()`, cleared by pre-commit on its first fire; `finally` sweeps the empty-commit case). | `inOurCommit` — the old ambient boolean flag |
-| `announce(ctx, ops, origin)` | How the event bridge reports ops the LoroDoc already holds, after re-materializing the shadow. An announcement never reaches `substrate.prepare` or `afterBatch`. Retires the earlier global `inEventHandler` flag. | `batch()` — an authored write, which does reach `prepare` |
+| `subscribePreCommit / ourCommits` | Loro's pre-commit hook fires synchronously inside `doc.commit()`, before the subscribe event. The substrate uses it to capture the in-flight commit's identity `(peer, counter+length-1)` into a closure-scoped `Set<string>`; the subscribe handler consumes the matching entry via `delete`-as-predicate against `batch.to` entries. A `capture` state (`"off" | "open" | "closing"`) gates it: every commit from the start of `work()` through the pre-commit of `runBatch`'s final commit is ours (see [Why the pre-commit hook](#why-the-pre-commit-hook)). | `inOurCommit` — the old ambient boolean flag |
+| `ctx.announce(ops, origin)` | How the event bridge reports ops the LoroDoc already holds, after re-materializing the shadow. An announcement never reaches `substrate.prepare` or `afterBatch`. Retires the earlier global `inEventHandler` flag. | `batch()` — an authored write, which does reach `prepare` |
 | Identity hash | Content-addressed 128-bit hex derived from `(path, generation)` via FNV-1a-128. The Loro container key for every product-field boundary. | A field name |
 | `SchemaBinding` | `{ forward: Map<string, Hash>, backward: Map<Hash, string> }` from `@kyneta/schema`. Threaded through `resolveContainer` so every key lookup uses identity, not name. | A validation rule |
 
@@ -246,17 +246,19 @@ batch(doc, d => { d.title.insert(0, "hi"); d.items.push(x) })
   │                └─ other (text / counter / non-structural seq) →
   │                    doc.applyDiff(group) immediately
   │
-  ├─ flush phase (afterBatch on local writes):
+  ├─ seal phase (afterBatch, at the depth 1→0 release):
   │    flushCoalesceBuffer() — apply each buffered MapDiff via
   │    doc.applyDiff([[cid, {type:"map", updated}]])
   │
-  └─ runBatch finally (depth 1→0):
-       nextIsOurs = true
-       └─ doc.commit({ origin }) ── one commit per outermost batch(); fires one
-                          doc.subscribe batch for the whole logical
-                          action (re-entrant batch()s from
-                          subscribers collapse into the same commit)
-       nextIsOurs = false
+  ├─ runBatch finally:
+  │    capture = "closing"
+  │    └─ doc.commit({ origin }) ── one commit per outermost batch(), also
+  │                       when the body threw; fires one doc.subscribe
+  │                       batch for the whole logical action
+  │    capture = "off"
+  │
+  └─ after the commit: the sealed changeset is delivered. A batch() a
+       subscriber issues is its own outermost block and its own commit.
 ```
 
 The write path advances **both** σ (the shadow) and λ (the LoroDoc tree) at every prepare boundary. PlainSubstrate has σ ≡ λ; CRDT substrates generalise to the two-store product where `applyDiff` is called eagerly inside `prepare` (immediately for structural inserts, via the coalescing buffer for plain MapDiff writes that drain in `afterBatch`). The projection law `σ ≡ Π(λ)` (the naturality condition of `materializeLoroShadow`) is preserved at every prepare return. It is pinned by `projectionConformance` (`@kyneta/schema/testing`), run from `src/__tests__/eager-write-coherence.test.ts`, which compares the substrate's shadow against a fresh `materializeLoroShadow` after each write.
@@ -308,19 +310,25 @@ Under the three-primitive substrate contract (jj:ryquprut), the Loro substrate n
 
 ```ts
 runBatch(work, options) {
-  work()
-  nextIsOurs = true
+  capture = "open"
   try {
-    doc.commit(options?.origin !== undefined ? { origin: options.origin } : undefined)
+    try {
+      work()
+    } finally {
+      capture = "closing"
+      doc.commit(options.origin !== undefined ? { origin: options.origin } : undefined)
+    }
   } finally {
-    nextIsOurs = false
+    capture = "off"
   }
 }
 ```
 
-The ctx-level `WritableContext.runBatch` invokes `substrate.runBatch` only at the depth-0 transition. Within a single outermost `batch(doc, fn)`, the substrate sees exactly one bracket: wrappedWork (prepares + flush + subscriber re-entry) → doc.commit. Inner ctx-level frames (nested `batch()` inside `batch()`'s `fn`) push/pop without re-entering substrate.runBatch — they just contribute prepares to the outer's pending applyDiff queue.
+The ctx-level `WritableContext.runBatch` invokes `substrate.runBatch` only at the depth-0 transition. Within a single outermost `batch(doc, fn)`, the substrate sees exactly one bracket: prepares, then `afterBatch`, then `doc.commit`. Inner ctx-level frames (nested `batch()` inside `batch()`'s `fn`) push/pop without re-entering substrate.runBatch — they just contribute prepares to the outer's pending applyDiff queue.
 
-**Subscriber re-entry produces a separate outermost commit.** When a subscriber fires during the outer's `ctx.flush`, the outer's ctx frame has already popped, so the re-entrant `batch()` sees `frameStarts.length === 0` again and opens its own outermost bracket — its own substrate.runBatch → its own `doc.commit()`. Each block is its own atomic abort unit; each gets its own commit. This is a deliberate semantic shift from the pre-jj:ryquprut depth-counter design (which collapsed re-entries into one commit). The trade-off: cleaner per-block abort semantics (each `batch()` is an independent atomic action) at the cost of slightly chattier Loro commit attribution (one commit per `batch()` block instead of one per logical user action with re-entries).
+**The commit runs in a `finally`.** When `work()` throws, the bracket has already applied the block's compensations, which net to zero but are pending ops. Left uncommitted they would join the next commit, under the next batch's origin.
+
+**Subscriber re-entry produces a separate outermost commit.** Changesets are delivered after the commit closes (`packages/schema/TECHNICAL.md` §"The batch lifecycle"), so a `batch()` a subscriber issues opens its own outermost bracket — its own substrate.runBatch → its own `doc.commit()`, carrying its own origin and only its own ops. Each block is its own atomic abort unit. This replaced the pre-jj:ryquprut depth-counter design, which collapsed re-entries into one commit; one commit per `batch()` block is chattier Loro commit attribution, with cleaner per-block abort semantics. `src/__tests__/delivery-after-commit.test.ts` pins the origins and contents.
 
 ### Load-bearing Loro invariants
 
@@ -353,13 +361,19 @@ The handler:
 2. Skip `batch.by === "checkout"` events — version travel, not mutations.
 3. Call `batchToOps(event.diffs, schema, binding)` → pure conversion from Loro `Diff[]` to kyneta `Op[]`.
 4. Re-materialize the shadow from the LoroDoc (`syncShadow(shadow, materializeLoroShadow(...))`), which already holds these changes.
-5. `announce(ctx, ops, origin)`. The announcement never reaches `substrate.prepare` or `afterBatch`; the changefeed layer delivers `Changeset` notifications with `replay: true` (e.g. for the exchange's echo filter).
+5. `ctx.announce(ops, origin)`. The announcement never reaches `substrate.prepare` or `afterBatch`; the changefeed layer delivers `Changeset` notifications with `replay: true` (e.g. for the exchange's echo filter).
 
 ### Why the pre-commit hook
 
 Loro fires `doc.subscribe` events synchronously inside `doc.commit()`, with nested events from re-entrant commits queued and drained after the current handler exits but still inside the outer commit call.
 
-The pre-commit hook (`subscribePreCommit`) provides a race-free, re-entrancy-safe discriminator. It fires synchronously for *every* commit (including raw external ones), but the `nextIsOurs` flag is only set just-before our own `doc.commit()` and cleared by pre-commit on its first fire — giving it a single-statement lifetime with no re-entrancy window. The captured identity `(peer, counter+length-1)` is intrinsic to the commit and travels via the queued subscribe event's `batch.to` vector, allowing the subscribe handler to match and consume it.
+The pre-commit hook (`subscribePreCommit`) provides a race-free, re-entrancy-safe discriminator. It fires synchronously for *every* commit (including raw external ones), and records the commit's identity while `capture` is not `"off"`:
+
+- `runBatch` sets `"open"` before `work()`. Any commit inside the body is ours: an `export` or `import` in a `batch()` body commits the pending Kyneta ops implicitly, and there may be several.
+- It sets `"closing"` just before its final `doc.commit()`, whose pre-commit returns `capture` to `"off"`. Commits that raw listeners make while reacting to our commit happen after that pre-commit, so they are announced.
+- An empty final commit fires no pre-commit, so `runBatch`'s `finally` returns `capture` to `"off"`.
+
+The captured identity `(peer, counter+length-1)` is intrinsic to the commit and travels via the queued subscribe event's `batch.to` vector, allowing the subscribe handler to match and consume it.
 
 Three properties this gives us:
 1. `batch.origin` is preserved as a transparent pass-through for `options.origin`.

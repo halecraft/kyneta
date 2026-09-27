@@ -42,7 +42,6 @@ import {
 } from "@kyneta/schema"
 import fnv1a from "@sindresorhus/fnv1a"
 import {
-  createSnapshot,
   type Doc,
   decodeStateVector,
   encodeSnapshot,
@@ -176,30 +175,11 @@ export class YjsVersion implements Version {
    * Construct a version from a live `Y.Doc` by snapshotting its full state.
    *
    * Walks the struct store to derive the delete set — O(n) in the number
-   * of items. Use {@link fromDeleteSet} for the incremental path.
+   * of items.
    */
   static fromDoc(doc: Doc): YjsVersion {
     const sv = yjsEncodeStateVector(doc)
     const snap = encodeSnapshot(yjsSnapshot(doc))
-    return new YjsVersion(sv, snap)
-  }
-
-  /**
-   * Construct a version from a `Y.Doc`'s state vector and an externally
-   * maintained delete set — the incremental path that avoids a struct
-   * store walk.
-   *
-   * @param doc  The live Y.Doc (for the state vector).
-   * @param ds   An accumulated delete set, kept in sync by merging
-   *             `transaction.deleteSet` on each transaction.
-   */
-  static fromDeleteSet(
-    doc: Doc,
-    ds: ReturnType<typeof import("yjs").createDeleteSet>,
-  ): YjsVersion {
-    const sv = yjsEncodeStateVector(doc)
-    const svMap = decodeStateVector(sv)
-    const snap = encodeSnapshot(createSnapshot(ds, svMap))
     return new YjsVersion(sv, snap)
   }
 

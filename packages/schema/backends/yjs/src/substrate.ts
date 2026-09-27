@@ -4,13 +4,12 @@
 // - Imperative-eager local writes: `prepare` advances both the shadow σ
 //   AND the native Y.Doc tree λ inside the ambient `Y.transact` opened
 //   by `runBatch`. The projection law `σ ≡ Π(λ)` holds at every prepare
-//   boundary — re-entrant subscribers reading either σ (via the Reader)
-//   or λ (via `unwrap`) see a coherent state.
-// - `runBatch(body)` opens one `Y.transact(doc, body, options?.origin)` per
-//   outermost logical action. Yjs's native transact nesting collapses
-//   inner re-entrant transacts into the outer one for free — no depth
-//   counter needed (unlike Loro). External `observeDeep` consumers see
-//   exactly one batched event per outermost `batch(doc, fn)`.
+//   boundary.
+// - `runBatch(body)` opens one `Y.transact(doc, body, options.origin)` per
+//   outermost logical action, so external `observeDeep` consumers see
+//   exactly one batched event per outermost `batch(doc, fn)`. Kyneta
+//   subscribers run after the transaction closes, so a `batch()` they issue
+//   is a transaction of its own.
 // - JSON-boundary writes (struct.json/list.json/record.json subtrees)
 //   are buffered in a per-target-key coalescer and flushed in
 //   `afterBatch`. Non-boundary writes are applied directly to λ via
@@ -29,7 +28,7 @@
 //
 // `prepare` and `afterBatch` see only Kyneta's own writes. The event bridge
 // handles everything else: the Y.Doc already holds those ops, so it brings σ
-// up to date and announces them via `announce(ctx, ops, origin)`, which never
+// up to date and announces them via `ctx.announce(ops, origin)`, which never
 // calls back into `prepare`.
 //
 // Identity-keying: when a SchemaBinding is provided, all Y.Map key
@@ -58,7 +57,6 @@ import type {
   WritableContext,
 } from "@kyneta/schema"
 import {
-  announce,
   applyChange,
   BACKING_DOC,
   buildWritableContext,
@@ -374,17 +372,7 @@ export function createYjsSubstrate(
     },
 
     version(): YjsVersion {
-      // Derive the deleteSet from the live struct store on every read.
-      // Eager-prepare delivers notifications *inside* the ambient
-      // `Y.transact` opened by `runBatch`, so `afterTransaction` fires
-      // AFTER the changefeed's notify pipeline. Computing from the
-      // store picks up in-progress deletes too, so the exchange's
-      // auto-subscribe sees a version that already reflects the
-      // just-applied mutation.
-      return YjsVersion.fromDeleteSet(
-        doc,
-        Y.createDeleteSetFromStructStore(doc.store),
-      )
+      return YjsVersion.fromDoc(doc)
     },
 
     baseVersion(): YjsVersion {
@@ -483,7 +471,7 @@ export function createYjsSubstrate(
     // no sequential decomposition, so σ is re-materialised from λ in one Π
     // pass rather than stepped op by op, and only then announced.
     syncShadow(shadow, materializeYjsShadow(doc, schema, binding))
-    announce(ctx, ops, origin)
+    ctx.announce(ops, origin)
   })
 
   return substrate as Substrate<YjsVersion>

@@ -3,7 +3,7 @@
 // `batch(doc, fn)` with N helper calls delivers exactly one Changeset
 // per affected subscriber path. Inner runBatch frames (auto-commit
 // dispatch outside, nested batch() inside, etc.) push/pop without
-// triggering ctx.flush — only the outermost frame's release does.
+// sealing — only the outermost frame's release seals a batch.
 //
 // This contract was implicit in the pre-refactor buffer model and is
 // load-bearing under the depth-aware dispatch redesign.

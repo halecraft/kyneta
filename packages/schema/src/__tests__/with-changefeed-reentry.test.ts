@@ -254,32 +254,3 @@ describe("with-changefeed: cross-doc cascade with shared lease", () => {
     expect(docB.v()).toBeGreaterThan(0)
   })
 })
-
-describe("with-changefeed: structural integrity under re-entry", () => {
-  it("substrate flush still runs when accumulator is empty (flush-only Msg)", () => {
-    // Re-entrant flush from a populated subscriber on a different path:
-    // the dispatcher should still call originalFlush when the accumulator
-    // is empty, preserving substrate version/log invariants.
-    const schema = Schema.struct({
-      a: Schema.number(),
-      b: Schema.number(),
-    })
-    const doc = buildPlainDoc(schema, { a: 0, b: 0 })
-
-    // No re-entry; just confirm the no-mutation flush path is reached
-    // by exercising the dispatcher end-to-end.
-    let aFires = 0
-    subscribe(doc.a, () => {
-      aFires++
-    })
-
-    batch(doc, (d: any) => {
-      d.a.set(1)
-    })
-    batch(doc, (d: any) => {
-      d.a.set(1)
-    })
-
-    expect(aFires).toBe(2) // both flushes delivered (no de-dup)
-  })
-})

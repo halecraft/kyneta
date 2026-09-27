@@ -25,7 +25,7 @@ import { findOpaqueBoundary } from "../fold-path.js"
 import { digestToHex } from "../hash.js"
 import type { Path } from "../interpret.js"
 import type { WritableContext } from "../interpreters/writable.js"
-import { announce, buildWritableContext } from "../interpreters/writable.js"
+import { buildWritableContext } from "../interpreters/writable.js"
 import { invert } from "../inverse.js"
 import {
   decodePlainPosition,
@@ -401,8 +401,7 @@ export function createStateSubstrate(
    *
    * σ is written here, before announcing: an announcement never reaches
    * `prepare`. The announcement still has to go through the writable
-   * context, because notifications are accumulated by `ctx.prepare` and
-   * released by `ctx.flush`.
+   * context, which seals the moved ops as one batch and delivers it.
    */
   function announceReprojection(now: number, origin?: string): void {
     const next = projectStateTree(currentTree, schema, now)
@@ -414,11 +413,9 @@ export function createStateSubstrate(
       moved[key] = deepClonePlain(next[key])
       shadow[key] = deepClonePlain(next[key])
     }
-    if (Object.keys(moved).length === 0) return
-
     // A state image of what changed, turned into ops by the same primitive
     // the plain substrate absorbs an entirety payload with.
-    announce(substrate.context(), objectToReplaceOps(moved), origin)
+    substrate.context().announce(objectToReplaceOps(moved), origin)
   }
 
   const substrate = {

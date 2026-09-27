@@ -1,23 +1,29 @@
 import { describe, expect, it } from "vitest"
 import type {
+  BatchOptions,
   ChangeBase,
   Path,
   RecordInverseFn,
   Ref,
+  SubstratePayload,
+  SubstratePrepare,
   WritableContext,
 } from "../index.js"
 import {
-  announce,
+  applyChange,
   batch,
   bottomInterpreter,
   buildWritableContext,
-  FORWARD_OPS_MARKER,
-  FORWARD_OPS_SINCE,
+  createRef,
+  exportSince,
   hasTransact,
   interpret,
+  invert,
+  merge,
   observation,
   plainContext,
   plainReader,
+  plainSubstrateFactory,
   RawPath,
   readable,
   replaceChange,
@@ -30,6 +36,11 @@ import {
   withWritable,
   writable,
 } from "../index.js"
+import {
+  authoredSince,
+  seal,
+  type TraceEntry,
+} from "../interpreters/writable.js"
 
 // ===========================================================================
 // Composed stacks
@@ -735,11 +746,13 @@ describe("writable: write-only stack", () => {
     const ctx: WritableContext = {
       reader: store,
       prepare: (path, change) => dispatched.push({ path, change }),
-      flush: () => {},
-      runBatch: work => work(),
+      deliver: () => {},
+      runBatch: work => {
+        work()
+        return []
+      },
+      announce: () => {},
       dispatch: (path, change) => dispatched.push({ path, change }),
-      [FORWARD_OPS_MARKER]: () => 0,
-      [FORWARD_OPS_SINCE]: () => [],
     }
     const ref = interpret(schema, writeOnlyInterpreter, ctx) as any
 
@@ -954,19 +967,205 @@ describe("writable: announcements never reach the substrate", () => {
       .with(observation)
       .done() as any
     const replays: unknown[] = []
-    subscribe(doc, cs => replays.push(cs.replay))
+    subscribe(doc, cs => replays.push({ replay: cs.replay, origin: cs.origin }))
 
     // The substrate brings σ up to date itself before announcing.
     store.title = "merged"
-    announce(
-      ctx,
+    ctx.announce(
       [{ path: RawPath.empty.field("title"), change: replaceChange("merged") }],
       "sync",
     )
 
     expect(calls).toEqual({ prepare: 0, afterBatch: 0 })
-    expect(replays).toEqual([true])
+    expect(replays).toEqual([{ replay: true, origin: "sync" }])
     expect(doc.title()).toBe("merged")
+  })
+})
+
+// ===========================================================================
+// The batch lifecycle: capture, seal, release
+// ===========================================================================
+
+describe("authoredSince and seal", () => {
+  const op = (key: string) => ({
+    path: RawPath.empty.field(key),
+    change: replaceChange(key),
+  })
+  const trace: TraceEntry[] = [
+    { op: op("a"), authored: true },
+    { op: op("b"), authored: true },
+    { op: op("b-inverse"), authored: false },
+    { op: op("c"), authored: true },
+  ]
+  const keys = (ops: readonly { path: Path }[]) => ops.map(o => o.path.format())
+
+  it.each([
+    [0, ["a", "b", "c"]],
+    [1, ["b", "c"]],
+    [3, ["c"]],
+    [4, []],
+  ])("authoredSince(trace, %i) keeps only authored ops after it", (from, expected) => {
+    expect(keys(authoredSince(trace, from))).toEqual(expected)
+  })
+
+  it("seal keeps every entry in order, with the given options", () => {
+    const options: BatchOptions = { ingress: "author", aborted: true }
+    const sealed = seal(trace, options)
+    expect(keys(sealed.ops)).toEqual(["a", "b", "b-inverse", "c"])
+    expect(sealed.options).toBe(options)
+  })
+})
+
+/**
+ * A two-field doc over a stub substrate that writes straight into `store`.
+ * `onCommit` runs inside the native bracket, after `work`, standing in for
+ * whatever a native commit sets off.
+ */
+function buildLifecycleDoc(options?: {
+  onCommit?: (ctx: WritableContext) => void
+  failCompensation?: boolean
+}) {
+  const schema = Schema.struct({ a: Schema.string(), b: Schema.string() })
+  const store: Record<string, unknown> = { a: "", b: "" }
+  const afterBatch = { calls: 0 }
+  let ctx: WritableContext | undefined
+  const stub: SubstratePrepare = {
+    reader: plainReader(store),
+    prepare: (path, change, recordInverse) => {
+      if (recordInverse === null && options?.failCompensation) {
+        throw new Error("compensation failed")
+      }
+      if (recordInverse) recordInverse(path, invert(path.read(store), change))
+      applyChange(store, path, change)
+    },
+    afterBatch: () => {
+      afterBatch.calls++
+    },
+    runBatch: work => {
+      work()
+      if (ctx && options?.onCommit) options.onCommit(ctx)
+    },
+  }
+  ctx = buildWritableContext(stub, {})
+  const doc = interpret(schema, ctx)
+    .with(readable)
+    .with(writable)
+    .with(observation)
+    .done() as any
+  const seen: {
+    replay: boolean | undefined
+    aborted?: boolean
+    paths: string[]
+  }[] = []
+  subscribe(doc, cs => {
+    seen.push({
+      replay: cs.replay,
+      ...(cs.aborted ? { aborted: true } : {}),
+      paths: cs.changes.map(op => op.path.format()),
+    })
+  })
+  return { ctx, doc, seen, afterBatch }
+}
+
+describe("writable: the batch lifecycle", () => {
+  it("an announcement made during the native commit is delivered after the batch", () => {
+    const { doc, seen } = buildLifecycleDoc({
+      onCommit: ctx =>
+        ctx.announce([
+          { path: RawPath.empty.field("b"), change: replaceChange("peer") },
+        ]),
+    })
+    batch(doc, (d: any) => d.a.set("local"))
+    expect(seen).toEqual([
+      { replay: false, paths: ["a"] },
+      { replay: true, paths: ["b"] },
+    ])
+  })
+
+  it("a merge inside a batch() body is its own changeset, delivered first", () => {
+    const S = Schema.struct({ a: Schema.string(), b: Schema.string() })
+    const peer = plainSubstrateFactory.create(S)
+    const peerDoc = createRef(S, peer)
+    const v0 = peer.version()
+    batch(peerDoc, d => d.b.set("remote"))
+    const delta = exportSince(peerDoc, v0) as SubstratePayload
+
+    const doc = createRef(S, plainSubstrateFactory.create(S))
+    const seen: { replay: boolean | undefined; paths: string[] }[] = []
+    subscribe(doc, cs =>
+      seen.push({
+        replay: cs.replay,
+        paths: cs.changes.map(op => op.path.format()),
+      }),
+    )
+    const ops = batch(doc, d => {
+      d.a.set("local")
+      merge(doc, delta)
+    })
+
+    expect(seen).toEqual([
+      { replay: true, paths: ["b"] },
+      { replay: false, paths: ["a"] },
+    ])
+    expect(ops.map(op => op.path.format())).toEqual(["a"])
+  })
+
+  it("nested batch() calls return their own ops; the outer returns both", () => {
+    const { doc } = buildLifecycleDoc()
+    let inner: readonly { path: Path }[] = []
+    const outer = batch(doc, (d: any) => {
+      d.a.set("1")
+      inner = batch(doc, (d2: any) => d2.b.set("2"))
+    })
+    expect(inner.map(op => op.path.format())).toEqual(["b"])
+    expect(outer.map(op => op.path.format())).toEqual(["a", "b"])
+  })
+
+  it("an aborted batch delivers its forward and inverse ops, and does not leak", () => {
+    const { doc, seen } = buildLifecycleDoc()
+    expect(() =>
+      batch(doc, (d: any) => {
+        d.a.set("x")
+        throw new Error("abort")
+      }),
+    ).toThrow("abort")
+    const next = batch(doc, (d: any) => d.b.set("y"))
+
+    expect(seen).toEqual([
+      { replay: false, aborted: true, paths: ["a", "a"] },
+      { replay: false, paths: ["b"] },
+    ])
+    expect(next.map(op => op.path.format())).toEqual(["b"])
+  })
+
+  it("a failed compensation delivers nothing, and does not leak", () => {
+    const { doc, seen } = buildLifecycleDoc({ failCompensation: true })
+    expect(() =>
+      batch(doc, (d: any) => {
+        d.a.set("x")
+        throw new Error("abort")
+      }),
+    ).toThrow("compensation failed")
+    const next = batch(doc, (d: any) => d.b.set("y"))
+
+    expect(seen).toEqual([{ replay: false, paths: ["b"] }])
+    expect(next.map(op => op.path.format())).toEqual(["b"])
+  })
+
+  it("an empty batch still ends the substrate's batch once and delivers nothing", () => {
+    const { doc, seen, afterBatch } = buildLifecycleDoc()
+    batch(doc, () => {})
+    expect(afterBatch.calls).toBe(1)
+    expect(seen).toEqual([])
+  })
+
+  it("ctx.prepare outside runBatch or announce throws", () => {
+    const { ctx } = buildLifecycleDoc()
+    expect(() =>
+      ctx.prepare(RawPath.empty.field("a"), replaceChange("x"), {
+        ingress: "author",
+      }),
+    ).toThrow("outside runBatch or announce")
   })
 })
 
@@ -1023,11 +1222,13 @@ it("[TRANSACT] is present on write-only stack refs", () => {
   const ctx: WritableContext = {
     reader: plainReader(store),
     prepare: (path, change) => dispatched.push({ path, change }),
-    flush: () => {},
-    runBatch: work => work(),
+    deliver: () => {},
+    runBatch: work => {
+      work()
+      return []
+    },
+    announce: () => {},
     dispatch: (path, change) => dispatched.push({ path, change }),
-    [FORWARD_OPS_MARKER]: () => 0,
-    [FORWARD_OPS_SINCE]: () => [],
   }
   const ref = interpret(schema, writeOnlyInterpreter, ctx) as any
   // Write-only product ref has [TRANSACT] (child .n is not navigable

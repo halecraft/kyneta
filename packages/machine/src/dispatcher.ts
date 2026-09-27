@@ -72,17 +72,52 @@ function recordDispatch(lease: Lease, label: string, type: string): void {
 // ---------------------------------------------------------------------------
 
 /**
+ * The stack at the point a cascade stopped looking ordinary, complete.
+ *
+ * The frame that entered the cascade sits below every nested drain, so its
+ * depth grows with the cascade. V8 keeps only `Error.stackTraceLimit` frames
+ * (10 by default), innermost first, which would cut it off. This runs once
+ * per runaway cascade, so the limit is lifted for this one capture.
+ */
+function captureOrigin(): Error {
+  const errorConstructor = Error as { stackTraceLimit?: number }
+  const limit = errorConstructor.stackTraceLimit
+  errorConstructor.stackTraceLimit = Number.POSITIVE_INFINITY
+  try {
+    return new Error("cascade origin")
+  } finally {
+    errorConstructor.stackTraceLimit = limit
+  }
+}
+
+/** Frames `formatOrigin` keeps from each end of a long stack. */
+const ORIGIN_INNER_FRAMES = 5
+const ORIGIN_OUTER_FRAMES = 15
+
+/**
  * Pure formatter for the cascade-origin section of `BudgetExhaustedError`'s
  * message. Strips the synthetic `Error: cascade origin` header from the
  * captured stack — it's the label we used to *construct* the Error solely
  * to grab a stack, not a meaningful frame.
+ *
+ * A long stack keeps its innermost frames (where the budget tripped) and its
+ * outermost ones (where the cascade entered), and elides the repeating middle.
  */
 export function formatOrigin(origin: Error | undefined): string {
   const stack = origin?.stack
   if (!stack) return ""
   const lines = stack.split("\n")
   const start = lines[0]?.startsWith("Error") ? 1 : 0
-  const frames = lines.slice(start).map(l => `    ${l.trim()}`)
+  const all = lines.slice(start).map(l => `    ${l.trim()}`)
+  const keep = ORIGIN_INNER_FRAMES + ORIGIN_OUTER_FRAMES
+  const frames =
+    all.length <= keep
+      ? all
+      : [
+          ...all.slice(0, ORIGIN_INNER_FRAMES),
+          `    … ${all.length - keep} frames …`,
+          ...all.slice(all.length - ORIGIN_OUTER_FRAMES),
+        ]
   return `  cascade entered from:\n${frames.join("\n")}\n`
 }
 
@@ -152,7 +187,21 @@ export type DispatcherOptions = {
 
 export interface DispatcherHandle<Msg> {
   dispatch(msg: Msg): void
+  /**
+   * Run `fn` with this dispatcher busy: messages dispatched meanwhile queue,
+   * and drain in FIFO order when `fn` returns or throws. Inside a drain, or
+   * inside another hold, it just runs `fn`. If `fn` threw and the drain also
+   * throws, the drain's error is thrown with `cause` set to `fn`'s error.
+   */
+  hold<T>(fn: () => T): T
   readonly queueDepth: number
+}
+
+/** `later` as an `Error`, with `earlier` as its cause. */
+function withCause(later: unknown, earlier: unknown): Error {
+  const error = later instanceof Error ? later : new Error(String(later))
+  error.cause = earlier
+  return error
 }
 
 /**
@@ -184,42 +233,56 @@ export function createDispatcher<Msg>(
   // its history, and the frame has to exist by the time the error is built.
   const originWatermark = Math.min(lease.historyCapacity, lease.budget)
 
-  function dispatch(msg: Msg): void {
-    pending.push(msg)
-    if (isDispatching) return
+  function drain(): void {
+    while (head < pending.length) {
+      const next = pending[head]
+      head += 1
+      lease.iterations += 1
+      // Capture the cascade's provenance — late, and only once.
+      //
+      // `new Error` walks the stack: microseconds, on a path every write
+      // in the system goes through. Capturing at the entry point would
+      // buy a diagnostic for a failure that needs `budget` iterations to
+      // occur, and charge every ordinary cascade for it.
+      //
+      // Deferring loses nothing. The `dispatch` call that opened this
+      // drain has not returned — it is running this very loop — so its
+      // caller frames are still beneath us, and an Error built here names
+      // the same entry point. `originWatermark` picks the moment.
+      if (lease.origin === undefined && lease.iterations > originWatermark) {
+        lease.origin = captureOrigin()
+      }
+      const type =
+        typeof next === "object" && next !== null && "type" in next
+          ? String((next as { type: unknown }).type)
+          : "<untyped>"
+      recordDispatch(lease, label, type)
+      if (lease.iterations > lease.budget) {
+        throw new BudgetExhaustedError(label, lease)
+      }
+      handler(next, dispatch)
+    }
+  }
 
+  /** Run `fn` with this dispatcher busy, then drain what it queued. */
+  function session<T>(fn: () => T): T {
     isDispatching = true
     const owns = lease.depth === 0
     lease.depth += 1
     try {
-      while (head < pending.length) {
-        const next = pending[head]
-        head += 1
-        lease.iterations += 1
-        // Capture the cascade's provenance — late, and only once.
-        //
-        // `new Error` walks the stack: microseconds, on a path every write
-        // in the system goes through. Capturing at the entry point would
-        // buy a diagnostic for a failure that needs `budget` iterations to
-        // occur, and charge every ordinary cascade for it.
-        //
-        // Deferring loses nothing. The `dispatch` call that opened this
-        // drain has not returned — it is running this very loop — so its
-        // caller frames are still beneath us, and an Error built here names
-        // the same entry point. `originWatermark` picks the moment.
-        if (lease.origin === undefined && lease.iterations > originWatermark) {
-          lease.origin = new Error("cascade origin")
+      let result: T
+      try {
+        result = fn()
+      } catch (error) {
+        try {
+          drain()
+        } catch (drainError) {
+          throw withCause(drainError, error)
         }
-        const type =
-          typeof next === "object" && next !== null && "type" in next
-            ? String((next as { type: unknown }).type)
-            : "<untyped>"
-        recordDispatch(lease, label, type)
-        if (lease.iterations > lease.budget) {
-          throw new BudgetExhaustedError(label, lease)
-        }
-        handler(next, dispatch)
+        throw error
       }
+      drain()
+      return result
     } finally {
       pending.splice(0, head)
       head = 0
@@ -234,8 +297,20 @@ export function createDispatcher<Msg>(
     }
   }
 
+  function dispatch(msg: Msg): void {
+    pending.push(msg)
+    if (isDispatching) return
+    session(() => {})
+  }
+
+  function hold<T>(fn: () => T): T {
+    if (isDispatching) return fn()
+    return session(fn)
+  }
+
   return {
     dispatch,
+    hold,
     get queueDepth(): number {
       return pending.length - head
     },

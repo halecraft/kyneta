@@ -17,13 +17,7 @@
 
 import type { Op } from "../changefeed.js"
 import type { HasRemove, WritableContext } from "../interpreters/writable.js"
-import {
-  FORWARD_OPS_MARKER,
-  FORWARD_OPS_SINCE,
-  hasTransact,
-  REMOVE,
-  TRANSACT,
-} from "../interpreters/writable.js"
+import { hasTransact, REMOVE, TRANSACT } from "../interpreters/writable.js"
 import type { CommitOptions } from "../substrate.js"
 
 // ---------------------------------------------------------------------------
@@ -94,13 +88,7 @@ export function batch<D extends object>(
     origin: options?.origin,
     source: options?.source,
   }
-  let captured: Op[] = []
-  ctx.runBatch(() => {
-    const marker = ctx[FORWARD_OPS_MARKER]()
-    fn(ref)
-    captured = ctx[FORWARD_OPS_SINCE](marker)
-  }, opts)
-  return captured
+  return ctx.runBatch(() => fn(ref), opts)
 }
 
 // ---------------------------------------------------------------------------

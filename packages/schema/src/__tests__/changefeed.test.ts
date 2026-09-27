@@ -1259,9 +1259,9 @@ describe("changefeed: flush boundary enforcement", () => {
 
     // Subscribe to x; when x changes, mutate y via batch().
     // Pre-1.6.0 this threw "Mutation during notification delivery is not
-    // supported." Post-1.6.0 the per-context dispatcher drains the
-    // re-entrant change in a fresh sub-tick: both writes land, both
-    // subscribers fire, and subsequent reads see the new state.
+    // supported." Now the re-entrant change is its own batch, delivered
+    // after this one: both writes land, both subscribers fire, and
+    // subsequent reads see the new state.
     let xFired = 0
     let yFired = 0
     getChangefeed(doc.x).subscribe(() => {

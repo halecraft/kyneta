@@ -302,6 +302,7 @@ export type {
   ProductRef,
   RichTextRef,
   ScalarRef,
+  SealedBatch,
   SequenceRef,
   SubstrateCapabilities,
   TextRef,
@@ -311,10 +312,7 @@ export type {
   WritableSetRef,
 } from "./interpreters/writable.js"
 export {
-  announce,
   buildWritableContext,
-  FORWARD_OPS_MARKER,
-  FORWARD_OPS_SINCE,
   hasRemove,
   hasTransact,
   REMOVE,

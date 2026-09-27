@@ -149,6 +149,102 @@ describe("createDispatcher", () => {
 // Lease diagnostic state — origin frame and message-type histogram
 // ---------------------------------------------------------------------------
 
+describe("DispatcherHandle.hold", () => {
+  type Msg = { type: "m"; tag: string }
+
+  it("queues messages dispatched during fn and drains them in order before returning", () => {
+    const seen: string[] = []
+    const handle = createDispatcher<Msg>(msg => {
+      seen.push(msg.tag)
+    })
+    const result = handle.hold(() => {
+      handle.dispatch({ type: "m", tag: "a" })
+      handle.dispatch({ type: "m", tag: "b" })
+      seen.push("fn-end")
+      return 7
+    })
+    expect(result).toBe(7)
+    expect(seen).toEqual(["fn-end", "a", "b"])
+  })
+
+  it("inside a drain, runs fn directly and its messages join the running drain", () => {
+    const seen: string[] = []
+    const handle = createDispatcher<Msg>((msg, dispatch) => {
+      seen.push(msg.tag)
+      if (msg.tag === "outer") {
+        handle.hold(() => {
+          dispatch({ type: "m", tag: "held" })
+          seen.push("held-fn")
+        })
+        dispatch({ type: "m", tag: "after" })
+      }
+    })
+    handle.dispatch({ type: "m", tag: "outer" })
+    expect(seen).toEqual(["outer", "held-fn", "held", "after"])
+  })
+
+  it("a hold nested in a hold runs fn directly", () => {
+    const seen: string[] = []
+    const handle = createDispatcher<Msg>(msg => {
+      seen.push(msg.tag)
+    })
+    handle.hold(() => {
+      handle.hold(() => handle.dispatch({ type: "m", tag: "inner" }))
+      seen.push("outer-fn")
+    })
+    expect(seen).toEqual(["outer-fn", "inner"])
+  })
+
+  it("drains when fn throws, and rethrows fn's error", () => {
+    const seen: string[] = []
+    const handle = createDispatcher<Msg>(msg => {
+      seen.push(msg.tag)
+    })
+    const boom = new Error("boom")
+    expect(() =>
+      handle.hold(() => {
+        handle.dispatch({ type: "m", tag: "a" })
+        throw boom
+      }),
+    ).toThrow(boom)
+    expect(seen).toEqual(["a"])
+  })
+
+  it("when fn and the drain both throw, the drain's error carries fn's as its cause", () => {
+    const handle = createDispatcher<Msg>(() => {
+      throw new Error("handler")
+    })
+    const boom = new Error("boom")
+    let caught: unknown
+    try {
+      handle.hold(() => {
+        handle.dispatch({ type: "m", tag: "a" })
+        throw boom
+      })
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(Error)
+    expect((caught as Error).message).toBe("handler")
+    expect((caught as Error).cause).toBe(boom)
+  })
+
+  it("held messages count against the lease, and an owning hold resets it on exit", () => {
+    const lease = createLease({ budget: 5 })
+    const handle = createDispatcher<Msg>(
+      (msg, dispatch) => {
+        dispatch(msg)
+      },
+      { lease, label: "loop" },
+    )
+    expect(() =>
+      handle.hold(() => handle.dispatch({ type: "m", tag: "x" })),
+    ).toThrow(BudgetExhaustedError)
+    expect(lease.depth).toBe(0)
+    expect(lease.iterations).toBe(0)
+  })
+})
+
 describe("Lease diagnostic state", () => {
   it("origin is cleared when the owning drain exits cleanly", () => {
     // Guards against a refactor of the cleanup block forgetting to
@@ -332,6 +428,50 @@ describe("formatOrigin", () => {
     expect(out).toContain("cascade entered from:")
     expect(out).toContain("at testFn (file.ts:42:3)")
     expect(out).not.toContain("Error: cascade origin")
+  })
+})
+
+describe("formatOrigin elision", () => {
+  it("keeps the innermost and outermost frames of a long stack", () => {
+    const frames = Array.from({ length: 40 }, (_, i) => `at f${i} (x.ts:${i})`)
+    const origin = new Error("cascade origin")
+    origin.stack = ["Error: cascade origin", ...frames].join("\n")
+    const rendered = formatOrigin(origin).split("\n")
+    expect(rendered[1]).toBe("    at f0 (x.ts:0)")
+    expect(rendered[5]).toBe("    at f4 (x.ts:4)")
+    expect(rendered[6]).toBe("    … 20 frames …")
+    expect(rendered[7]).toBe("    at f25 (x.ts:25)")
+    expect(rendered.at(-2)).toBe("    at f39 (x.ts:39)")
+  })
+
+  it("captures the cascade's entry frame however deep the cascade nests", () => {
+    // The origin is captured on iteration 4, inside b's drain, which runs
+    // beneath a's handler and twelve frames of `deep`: the entry frame is
+    // far outside V8's default 10-frame window.
+    const lease = createLease({ budget: 60, historyCapacity: 3 })
+    const deep = (n: number, then: () => void): void =>
+      n === 0 ? then() : deep(n - 1, then)
+    const a = createDispatcher<{ type: "a" }>(
+      () => deep(12, () => b.dispatch({ type: "b" })),
+      { lease, label: "a" },
+    )
+    const b = createDispatcher<{ type: "b" }>(
+      () => a.hold(() => a.dispatch({ type: "a" })),
+      { lease, label: "b" },
+    )
+    let caught: unknown
+    function enterTheCascade(): void {
+      a.dispatch({ type: "a" })
+    }
+    try {
+      enterTheCascade()
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(BudgetExhaustedError)
+    expect((caught as BudgetExhaustedError).lease.origin?.stack).toContain(
+      "enterTheCascade",
+    )
   })
 })
 

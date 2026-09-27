@@ -561,7 +561,8 @@ export interface MergeOptions {
 }
 
 /**
- * Batch-level options, taken by `ctx.flush`.
+ * Batch-level options: what a sealed batch (`SealedBatch.options`) carries
+ * to `ctx.deliver`.
  *
  * Only an authored batch carries `source` or can be `aborted` (the outermost
  * `batch()` block threw and was compensated).
@@ -594,7 +595,7 @@ export type RecordInverseFn = (path: Path, inverse: ChangeBase) => void
  * These see only local writes and their compensations. Every other change
  * (a merge, a native event, a decay tick) is applied by the substrate itself,
  * which then brings σ into agreement with λ and announces the ops through
- * `announce(ctx, ops, origin)`, which never calls back into `prepare` or
+ * `ctx.announce(ops, origin)`, which never calls back into `prepare` or
  * `afterBatch`.
  *
  * Caching and changefeed layers wrap the context built over these; the
@@ -617,8 +618,10 @@ export interface SubstratePrepare {
   ): void
 
   /**
-   * End of an authored batch, called once at the depth-0 flush and before
-   * changefeed delivery, so subscribers see the updated version and log.
+   * End of an authored batch, called once when its outermost frame ends,
+   * inside `runBatch`'s bracket and so before the native commit. Its work is
+   * part of that commit, and subscribers, who run after it, see the updated
+   * version and log.
    *
    * For PlainSubstrate: mints the lineage on the first authored flush and
    * logs the batch. For CRDT substrates: drains the coalescing buffer.

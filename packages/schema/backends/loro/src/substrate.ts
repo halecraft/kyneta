@@ -18,9 +18,8 @@
 //   from reprocessing commits we just issued ourselves, leaving the
 //   user-facing `batch.origin` slot free for `options.origin` round-trip.
 //   Loro's pre-commit hook fires synchronously inside `doc.commit()`,
-//   before the subscribe event. A single-shot `nextIsOurs` flag gates
-//   the capture (set sync before `doc.commit()`, cleared by pre-commit
-//   on its first fire; `finally` sweeps the empty-commit case).
+//   before the subscribe event. Every commit from the start of `work()`
+//   through the pre-commit of `runBatch`'s final commit is ours.
 //
 // The event bridge contract: wrapping a LoroDoc in a kyneta substrate
 // means subscribing to the kyneta doc observes ALL mutations to the
@@ -29,11 +28,10 @@
 //
 // `prepare` and `afterBatch` see only Kyneta's own writes. The event bridge
 // handles everything else: the LoroDoc already holds those ops, so it brings
-// σ up to date and announces them via `announce(ctx, ops, origin)`, which
+// σ up to date and announces them via `ctx.announce(ops, origin)`, which
 // never calls back into `prepare`.
 
 import {
-  announce,
   applyChange,
   BACKING_DOC,
   buildWritableContext,
@@ -206,12 +204,14 @@ export function createLoroSubstrate(
   // `subscribePreCommit`) rather than via the user-facing `batch.origin`
   // slot, which is reserved for `options.origin` round-trip.
   //
-  // `nextIsOurs` is set true synchronously before each `doc.commit()`
-  // we issue and cleared by the pre-commit hook on its first fire — it
-  // has a single-statement lifetime, no re-entrancy window. The `finally`
-  // in runBatch sweeps the empty-commit case (where pre-commit never
-  // fires; verified by probe — see TECHNICAL.md "Why pre-commit hook").
-  let nextIsOurs = false
+  // Which commits are ours. `runBatch` sets "open" before `work()`: any
+  // commit inside it (an implicit one from an `export` or `import` in a
+  // `batch()` body) carries Kyneta's ops. It sets "closing" just before its
+  // final commit, whose pre-commit returns this to "off", so commits made by
+  // raw listeners reacting to that commit are announced. An empty final
+  // commit fires no pre-commit (see TECHNICAL.md "Why the pre-commit
+  // hook"), so `runBatch`'s `finally` also returns it to "off".
+  let capture: "off" | "open" | "closing" = "off"
 
   // Pending own-commit identities: `${peer}:${counter+length-1}`
   // matches the tail entry of `batch.to` for the corresponding event.
@@ -443,17 +443,23 @@ export function createLoroSubstrate(
       // Ctx-level outermost detection (frameStarts.length === 0)
       // means substrate.runBatch is invoked at most once per outermost
       // batch(doc, fn). No per-substrate depth counter needed.
-      nextIsOurs = true
+      capture = "open"
       try {
-        work()
-        doc.commit(
-          options.origin !== undefined ? { origin: options.origin } : undefined,
-        )
+        try {
+          work()
+        } finally {
+          // Commit even when `work` threw: the batch's compensations are
+          // pending, and left uncommitted they would join the next commit
+          // under the next batch's origin.
+          capture = "closing"
+          doc.commit(
+            options.origin !== undefined
+              ? { origin: options.origin }
+              : undefined,
+          )
+        }
       } finally {
-        // Empty-commit safety: if no event fired (probe-verified
-        // behavior), pre-commit never cleared the flag. This ensures a
-        // subsequent external raw commit doesn't get misclassified.
-        nextIsOurs = false
+        capture = "off"
       }
     },
 
@@ -597,16 +603,10 @@ export function createLoroSubstrate(
   // --- Event bridge (registered once at construction) ---
 
   doc.subscribePreCommit(e => {
-    // We set nextIsOurs true synchronously before work() in runBatch.
-    // Loro's exportSince() (called by Exchange sync during ctx.flush() inside work())
-    // triggers an implicit commit. Setting this flag early ensures we capture
-    // that implicit commit's identity. We clear it on first fire to prevent
-    // any subsequent raw external commits from being misclassified.
-    if (nextIsOurs) {
-      const tail = e.changeMeta.counter + e.changeMeta.length - 1
-      ourCommits.add(`${e.changeMeta.peer}:${tail}`)
-      nextIsOurs = false
-    }
+    if (capture === "off") return
+    const tail = e.changeMeta.counter + e.changeMeta.length - 1
+    ourCommits.add(`${e.changeMeta.peer}:${tail}`)
+    if (capture === "closing") capture = "off"
   })
 
   doc.subscribe(batch => {
@@ -643,7 +643,7 @@ export function createLoroSubstrate(
     // composition would double-count, so σ is re-materialised from λ in
     // one Π pass, and only then announced.
     syncShadow(shadow, materializeLoroShadow(doc, schema, binding))
-    announce(ctx, ops, origin)
+    ctx.announce(ops, origin)
   })
 
   return substrate as Substrate<LoroVersion>

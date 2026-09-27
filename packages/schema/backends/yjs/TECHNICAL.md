@@ -268,8 +268,8 @@ Yjs's natural programming model is imperative: open a `Y.transact`, mutate share
 batch(doc, d => { d.title.insert(0, "hi"); d.items.push(x) })
   │
   ├─ runBatch opens ONE Y.transact(doc, body, options.origin)
-  │   (re-entrant runBatch calls nest natively — Yjs collapses them
-  │   into the outermost transact; no depth counter needed)
+  │   (a Y.transact that external code wraps around batch() nests
+  │   natively — Yjs collapses it into the outermost transact)
   │
   ├─ prepare phase (per mutation, applies to both σ and λ EAGERLY):
   │    1. applyChange(shadow, path, change)        ── σ advances
@@ -278,14 +278,16 @@ batch(doc, d => { d.title.insert(0, "hi"); d.items.push(x) })
   │       │       in the json-boundary coalescing buffer
   │       └─ no:  applyChangeToYjs(rootMap, ...)   ── λ advances
   │
-  └─ afterBatch (local writes):
+  └─ afterBatch (at the depth 1→0 release, then the batch is sealed):
        flushJsonBoundaryBuffer() — for each buffered entry:
          Y.Map parent → target.set(key, value)
          Y.Array parent → target.delete(index, 1); target.insert(index, [value])
        (runs inside the still-open Y.transact)
   │
-  └─ runBatch's transact closes — Yjs fires ONE observeDeep batch
-    covering all ops in the outermost logical action
+  ├─ runBatch's transact closes — Yjs fires ONE observeDeep batch
+  │ covering all ops in the outermost logical action, then afterTransaction
+  │
+  └─ the sealed changeset is delivered to Kyneta subscribers
 ```
 
 `applyChangeToYjs` is straightforward imperative mutation: resolve the target via `resolveYjsType`, then call `Y.Text.insert` / `Y.Array.insert` / `Y.Map.set` / etc. depending on the change type.
@@ -296,9 +298,11 @@ Writes targeting a path that crosses a `struct.json` / `list.json` / `record.jso
 
 Non-boundary writes bypass the buffer entirely and go straight to `applyChangeToYjs` during prepare — text, sequence, map, and replace changes all apply imperatively to their live targets.
 
-### Nested-transact collapse under re-entry
+### Re-entry: each block is its own transaction
 
-Yjs's `Y.transact` natively collapses nesting: an inner `Y.transact` call inside an outer one runs as part of the outer transact and emits no separate `observeDeep` event. The substrate's `runBatch` just opens `Y.transact(work, options.origin)` without any depth counter — Yjs handles the collapse. Practical effect: a subscriber's re-entrant `batch(doc, ...)` from inside `deliverNotifications` opens a nested transact that folds into the outer one, producing a single batched `observeDeep` for the whole logical user action. External Yjs providers (y-websocket, y-webrtc) ship one binary update per outermost `batch(doc, fn)` — strictly fewer / smaller-equal updates than the pre-Phase-3 design.
+Kyneta subscribers run after `runBatch`'s transaction has closed (`packages/schema/TECHNICAL.md` §"The batch lifecycle"). A `batch(doc, ...)` a subscriber issues is therefore its own outermost block: its own `Y.transact`, its own `observeDeep` event, and its own origin. External Yjs providers (y-websocket, y-webrtc) ship one binary update per outermost block, re-entrant ones included. `src/__tests__/delivery-after-commit.test.ts` pins the transactions' origins and contents.
+
+Yjs's `Y.transact` still collapses nesting when external code wraps a `batch()` in its own `Y.transact`: the inner transact runs as part of the outer one, and `KYNETA_MARK` travels with the shared transaction.
 
 `CommitOptions.origin` (the app-level provenance label) flows through the kyneta `Changeset.origin` channel and becomes Yjs's `transaction.origin`, so Yjs ecosystem tools that key on origin see the app's label. The event-bridge handler recognises and skips its own writes by the `KYNETA_MARK` that `runBatch` sets in `transaction.meta`.
 
@@ -324,9 +328,11 @@ Source: `materializeValue` (shared, `@kyneta/schema/src/materialize-value.ts` �
 - **Not an `applyDiff`-style bulk operation.** Unlike Loro, Yjs has no single-call diff primitive. Mutations are imperative; the batching comes from `Y.transact`.
 - **Reversible via in-bracket inverse compensation** (post-jj:ryquprut). The kyneta `WritableContext.runBatch` records inverses on every `substrate.prepare` and replays them inside the same `Y.transact` if `fn` throws. External `observeDeep` consumers see one batched event whose ops net to zero. The kyneta-Changeset surfaces `aborted: true` to its subscribers. Yjs's own `Y.UndoManager` is orthogonal — it observes COMMITTED transactions and applies compensating commits AFTER the fact; the kyneta inverse-compensation path happens INSIDE the same transact, producing a single batched event instead of two.
 
-### Yjs lifecycle ordering inside the bracket
+### Yjs lifecycle ordering around the bracket
 
-Under the eager-prepare model, `afterTransaction` fires AFTER `deliverNotifications` — `runBatch` opens the transact, the body's `ctx.flush` triggers `deliverNotifications` *inside* the transact body, and `afterTransaction` doesn't fire until the body returns. Concrete consequence: hooking `afterTransaction` for state that subscribers need at delivery time will see stale data. This is why `version()` derives the deleteSet from `doc.store` on every call rather than maintaining a separately-accumulated deleteSet via `afterTransaction` (the `accumulatedDs` accumulator and its `afterTransaction` handler were retired in jj:ryquprut — the accumulator they maintained was already unused on the version path). Useful for anyone trying to wire other Yjs-lifecycle hooks into the bracket later.
+`runBatch`'s transaction closes before Kyneta subscribers run: Yjs fires `observeDeep` and `afterTransaction` for our transaction first, then the changeset is delivered. Hooks on `afterTransaction` therefore see the finished transaction before any Kyneta subscriber does. If such a hook writes to the document, its transaction is announced by the event bridge after our changeset, in causal order.
+
+`version()` is `YjsVersion.fromDoc(doc)`, the same derivation the replica uses: the state vector plus the delete set read from the struct store.
 
 ---
 
@@ -377,7 +383,7 @@ Three properties this gives us:
 
 Mixing raw CRDT mutations with `batch()` calls inside the same atomic unit (a single Yjs `transact` body) is unsupported. The raw mutations will be silently absorbed into kyneta's own-commit skip and not bridged to the kyneta changefeed. To intermix, use separate transacts for raw mutations. This is a fundamental limit of commit-level discrimination.
 
-Before announcing (`announce(ctx, ops, origin)`), the bridge re-materializes the `PlainState` shadow from the `Y.Doc` via `materializeYjsShadow`, so `ctx.reader` — which reads through `plainReader(shadow)` — already reflects the merged Yjs state when any subscriber runs. The announcement never reaches `substrate.prepare` or `afterBatch`. See [§The functional shadow](../../TECHNICAL.md#the-functional-shadow).
+Before announcing (`ctx.announce(ops, origin)`), the bridge re-materializes the `PlainState` shadow from the `Y.Doc` via `materializeYjsShadow`, so `ctx.reader` — which reads through `plainReader(shadow)` — already reflects the merged Yjs state when any subscriber runs. The announcement never reaches `substrate.prepare` or `afterBatch`. See [§The functional shadow](../../TECHNICAL.md#the-functional-shadow).
 
 `materializeYjsShadow` itself uses the generic `createMaterializeInterpreter` from `@kyneta/schema` core with a Yjs-specific `MaterializeResolver` (created by `createYjsResolver`), rather than defining a bespoke interpreter. The resolver (~50 lines) handles only CRDT-specific value extraction (reading from `Y.Text`, `Y.Map`, `Y.Array`); the structural traversal, zero-default production for missing scalars/sums, and recursive descent are all handled by the shared core interpreter.
 

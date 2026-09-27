@@ -425,14 +425,11 @@ describe("Loro nested-commit semantics under re-entry", () => {
     expect(doc.a()).toBe("outer-write")
     expect(doc.b()).toBe("inner-write")
 
-    // Two non-empty local batches: under the three-primitive substrate
-    // model, the inner re-entrant `batch()` runs INSIDE the outer's
-    // ctx.flush — by which point the outer's frame has already popped.
-    // The inner sees `frameStarts.length === 0`, so its runBatch is
-    // treated as outermost and invokes substrate.runBatch (a separate
-    // Loro commit). Each block is its own atomic abort unit; each
-    // gets its own commit. The Loro depth-counter pattern that used
-    // to collapse these into one commit is gone (see jj:ryquprut).
+    // Two non-empty local batches: the outer is committed before its
+    // changeset is delivered, so the inner re-entrant `batch()` runs with
+    // no frame open and invokes substrate.runBatch for a commit of its
+    // own. Each block is its own atomic abort unit with its own commit;
+    // `delivery-after-commit.test.ts` pins their origins and contents.
     const localBatches = batches.filter(
       b => b.by === "local" && b.eventCount > 0,
     )
