@@ -352,11 +352,11 @@ export class LevelDBStore implements Store {
       key,
     }))
 
-    for (let i = 0; i < records.length; i++) {
+    for (const [i, record] of records.entries()) {
       ops.push({
         type: "put",
         key: recordKey(docId, i),
-        value: encodeStoreRecord(records[i]!),
+        value: encodeStoreRecord(record),
       })
     }
 

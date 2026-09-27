@@ -50,7 +50,7 @@ function encodeViaAlias(msg: ChannelMsg): Uint8Array<ArrayBuffer> {
   const results = pipeline.send(msg)
   pipeline.dispose()
   const first = results[0]
-  if (!first || !first.ok) throw new Error("Pipeline send failed")
+  if (!first?.ok) throw new Error("Pipeline send failed")
   return first.value
 }
 
@@ -350,8 +350,7 @@ describe("Fragmentation", () => {
     // Emit all but the last fragment — should NOT trigger receive yet
     for (let i = 0; i < fragments.length - 1; i++) {
       const frag = fragments.at(i)
-      if (!frag || !frag.ok)
-        throw new Error(`expected ok fragment at index ${i}`)
+      if (!frag?.ok) throw new Error(`expected ok fragment at index ${i}`)
       const ab = frag.value.buffer.slice(
         frag.value.byteOffset,
         frag.value.byteOffset + frag.value.byteLength,
@@ -362,7 +361,7 @@ describe("Fragmentation", () => {
 
     // Emit the last fragment — should complete reassembly
     const lastResult = fragments.at(-1)
-    if (!lastResult || !lastResult.ok)
+    if (!lastResult?.ok)
       throw new Error("expected last fragment to exist and be ok")
     const ab = lastResult.value.buffer.slice(
       lastResult.value.byteOffset,

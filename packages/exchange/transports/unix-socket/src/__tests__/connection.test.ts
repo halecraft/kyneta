@@ -43,7 +43,7 @@ function encodeViaAlias(msg: ChannelMsg): Uint8Array {
   const results = pipeline.send(msg)
   pipeline.dispose()
   const r = results[0]
-  if (!r || !r.ok) throw new Error("Failed to encode message via pipeline")
+  if (!r?.ok) throw new Error("Failed to encode message via pipeline")
   return r.value
 }
 
@@ -106,7 +106,7 @@ describe("UnixSocketConnection", () => {
     expect(frames).toHaveLength(1)
 
     const frame = frames[0]
-    if (!frame || !frame.ok) throw new Error("expected a valid frame")
+    if (!frame?.ok) throw new Error("expected a valid frame")
 
     // Decode through a receive pipeline
     const recvPipeline = new Pipeline({ send: "binary" })
@@ -114,7 +114,7 @@ describe("UnixSocketConnection", () => {
     recvPipeline.dispose()
     expect(results).toHaveLength(1)
     const r = results[0]
-    if (!r || !r.ok) throw new Error("expected successful decode")
+    if (!r?.ok) throw new Error("expected successful decode")
     expect(r.value).toEqual(msg)
   })
 

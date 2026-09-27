@@ -35,7 +35,7 @@ function encodeToBinaryFrame(msg: ChannelMsg): Uint8Array<ArrayBuffer> {
   const results = pipeline.send(msg)
   pipeline.dispose()
   const r = results[0]
-  if (!r || !r.ok) throw new Error("Failed to encode message via pipeline")
+  if (!r?.ok) throw new Error("Failed to encode message via pipeline")
   return r.value
 }
 
@@ -80,7 +80,7 @@ describe("SseConnection — send", () => {
     recvPipeline.dispose()
     expect(results).toHaveLength(1)
     const r = results[0]
-    if (!r || !r.ok) throw new Error("expected successful decode")
+    if (!r?.ok) throw new Error("expected successful decode")
     expect(r.value).toEqual(presentMsg)
   })
 
@@ -199,8 +199,7 @@ describe("SseConnection — handlePostBody", () => {
     const interestResults = sendPipeline.send(interestMsg)
     sendPipeline.dispose()
     const interestFrame = interestResults[0]
-    if (!interestFrame || !interestFrame.ok)
-      throw new Error("expected interest frame")
+    if (!interestFrame?.ok) throw new Error("expected interest frame")
 
     const interestResult = conn.handlePostBody(interestFrame.value)
     expect(interestResult.type).toBe("messages")

@@ -57,7 +57,7 @@ function fromSimplePeer(peer: MockSimplePeer): DataChannelLike {
   }
 
   // Track wrapped listeners for cleanup
-  const wrapperMap = new Map<Function, Function>()
+  const wrapperMap = new Map<(event: any) => void, (...args: any[]) => void>()
 
   return {
     get readyState() {
@@ -82,7 +82,7 @@ function fromSimplePeer(peer: MockSimplePeer): DataChannelLike {
       if (!peerEvent) return
       const wrapped = wrapperMap.get(listener)
       if (wrapped) {
-        peer.off(peerEvent, wrapped as any)
+        peer.off(peerEvent, wrapped)
         wrapperMap.delete(listener)
       }
     },

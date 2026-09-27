@@ -231,6 +231,13 @@ describe("LevelDBStore — store-format gate", () => {
 // encode/decode round-trip — pure function unit tests
 // ---------------------------------------------------------------------------
 
+/** The flags byte an encoded record starts with. */
+function flags(encoded: Uint8Array): number {
+  const byte = encoded[0]
+  if (byte === undefined) throw new Error("expected an encoded record")
+  return byte
+}
+
 describe("encodeStoreRecord / decodeStoreRecord", () => {
   it("round-trips a meta record", () => {
     const record: StoreRecord = makeMetaRecord()
@@ -349,21 +356,21 @@ describe("encodeStoreRecord / decodeStoreRecord", () => {
   it("meta record flags byte has bit 3 set", () => {
     const record: StoreRecord = makeMetaRecord()
     const encoded = encodeStoreRecord(record)
-    expect(encoded[0]! & 0x08).toBe(0x08) // bit 3 set
-    expect(encoded[0]! & 0x80).toBe(0x00) // bit 7 clear (current format)
+    expect(flags(encoded) & 0x08).toBe(0x08) // bit 3 set
+    expect(flags(encoded) & 0x80).toBe(0x00) // bit 7 clear (current format)
   })
 
   it("entry record flags byte has bit 3 clear", () => {
     const record: StoreRecord = makeEntryRecord("entirety", "v1")
     const encoded = encodeStoreRecord(record)
-    expect(encoded[0]! & 0x08).toBe(0x00) // bit 3 clear
-    expect(encoded[0]! & 0x80).toBe(0x00) // bit 7 clear (current format)
+    expect(flags(encoded) & 0x08).toBe(0x00) // bit 3 clear
+    expect(flags(encoded) & 0x80).toBe(0x00) // bit 7 clear (current format)
   })
 
   it("rejects bytes with future-format bit set", () => {
     const record: StoreRecord = makeEntryRecord("entirety", "v1")
     const encoded = encodeStoreRecord(record)
-    encoded[0] = encoded[0]! | 0x80 // set bit 7
+    encoded[0] = flags(encoded) | 0x80 // set bit 7
     expect(() => decodeStoreRecord(encoded)).toThrow(/future-format/)
   })
 
@@ -405,7 +412,7 @@ describe("encodeStoreRecord / decodeStoreRecord", () => {
   it("round-trips an entry record without lineage (legacy, bit 4 clear)", () => {
     const record: StoreRecord = makeEntryRecord("entirety", "v1")
     const encoded = encodeStoreRecord(record)
-    expect(encoded[0]! & 0x10).toBe(0x00) // bit 4 clear — no lineage segment
+    expect(flags(encoded) & 0x10).toBe(0x00) // bit 4 clear — no lineage segment
     const decoded = decodeStoreRecord(encoded)
     expect(decoded.kind).toBe("entry")
     if (decoded.kind === "entry") {
@@ -425,6 +432,6 @@ describe("encodeStoreRecord / decodeStoreRecord", () => {
       version: "e1:1",
     }
     const encoded = encodeStoreRecord(record)
-    expect(encoded[0]! & 0x10).toBe(0x10) // bit 4 set — lineage segment present
+    expect(flags(encoded) & 0x10).toBe(0x10) // bit 4 set — lineage segment present
   })
 })
