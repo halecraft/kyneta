@@ -7,3 +7,4 @@ vendor
 .claude
 .codegraph
 *.log
+/workspace
