@@ -14,11 +14,7 @@ import type { Lease } from "@kyneta/machine"
 import { createLease } from "@kyneta/machine"
 import { batch, json, Schema, subscribe } from "@kyneta/schema"
 import { afterEach, describe, expect, it } from "vitest"
-import {
-  Exchange,
-  type ExchangeParams,
-  type PeerIdentityInput,
-} from "../exchange.js"
+import { Exchange, type ExchangeParams } from "../exchange.js"
 
 async function drain(rounds = 20): Promise<void> {
   for (let i = 0; i < rounds; i++) {
@@ -30,8 +26,7 @@ async function drain(rounds = 20): Promise<void> {
 const activeExchanges: Exchange[] = []
 
 function createExchange(params: Partial<ExchangeParams> = {}): Exchange {
-  const merged = { id: "test" as string | PeerIdentityInput, ...params }
-  const ex = new Exchange(merged as ExchangeParams)
+  const ex = new Exchange({ principal: "test", ...params })
   activeExchanges.push(ex)
   return ex
 }
@@ -58,13 +53,13 @@ function makeMesh(leases?: { alice?: Lease; bob?: Lease; carol?: Lease }) {
   const bridgeBC = new Bridge()
 
   const exchangeA = createExchange({
-    id: "alice",
+    principal: "alice",
     transports: [createBridgeTransport({ transportId: "a", bridge: bridgeAB })],
     departureTimeout: 0,
     lease: leases?.alice,
   })
   const exchangeB = createExchange({
-    id: "bob",
+    principal: "bob",
     transports: [
       createBridgeTransport({ transportId: "b-ab", bridge: bridgeAB }),
       createBridgeTransport({ transportId: "b-bc", bridge: bridgeBC }),
@@ -73,7 +68,7 @@ function makeMesh(leases?: { alice?: Lease; bob?: Lease; carol?: Lease }) {
     lease: leases?.bob,
   })
   const exchangeC = createExchange({
-    id: "carol",
+    principal: "carol",
     transports: [createBridgeTransport({ transportId: "c", bridge: bridgeBC })],
     departureTimeout: 0,
     lease: leases?.carol,
@@ -102,7 +97,10 @@ describe("doc-layer re-entry: same-doc inside a peer-event subscriber", () => {
     // thrown "Mutation during notification delivery is not supported."
     exchangeB.peers.subscribe(cs => {
       for (const ch of cs.changes) {
-        if (ch.type === "peer-departed" && ch.peer.peerId === "alice") {
+        if (
+          ch.type === "peer-departed" &&
+          ch.peer.peerId === exchangeA.peerId
+        ) {
           batch(docB, (d: any) => {
             d.version.set(99)
             d.scratch.set(42)

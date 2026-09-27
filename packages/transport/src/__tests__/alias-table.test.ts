@@ -10,6 +10,11 @@ import {
   DOC_ID_MAX_UTF8_BYTES,
   encodeWireMessage,
   SCHEMA_HASH_MAX_UTF8_BYTES,
+  type WireEstablishMsg,
+  type WireInterestMsg,
+  type WireMessage,
+  type WirePresentMsg,
+  type WireVacantMsg,
 } from "@kyneta/wire"
 import { describe, expect, it } from "vitest"
 import {
@@ -27,14 +32,14 @@ import { PROTOCOL_VERSION } from "../types.js"
 
 const alice: EstablishMsg = {
   type: "establish",
-  identity: { peerId: "alice", type: "user" },
+  identity: { peerId: "alice", principal: "alice", type: "user" },
   features: { alias: true },
   protocolVersion: PROTOCOL_VERSION,
 }
 
 const bob: EstablishMsg = {
   type: "establish",
-  identity: { peerId: "bob", type: "user" },
+  identity: { peerId: "bob", principal: "bob", type: "user" },
   features: { alias: true },
   protocolVersion: PROTOCOL_VERSION,
 }
@@ -64,9 +69,10 @@ describe("alias-table — establish snapshots features", () => {
     const { state, result } = applyInboundAliasing(emptyAliasState(), {
       t: 0x01,
       id: "bob",
+      pr: "bob",
       y: "user",
       f: { a: true },
-    } as any)
+    } as WireMessage)
     expect(result.ok).toBe(true)
     expect(state.peerFeatures).toEqual({ alias: true })
     expect(state.selfFeatures).toBeUndefined()
@@ -80,9 +86,10 @@ describe("alias-table — establish snapshots features", () => {
     state = applyInboundAliasing(state, {
       t: 0x01,
       id: "bob",
+      pr: "bob",
       y: "user",
       f: { a: true },
-    } as any).state
+    } as WireMessage).state
     expect(state.mutualAlias).toBe(true)
   })
 
@@ -92,9 +99,10 @@ describe("alias-table — establish snapshots features", () => {
     state = applyInboundAliasing(state, {
       t: 0x01,
       id: "bob",
+      pr: "bob",
       y: "user",
       // no f field → no peer features
-    } as any).state
+    } as WireMessage).state
     expect(state.mutualAlias).toBe(false)
   })
 
@@ -107,9 +115,10 @@ describe("alias-table — establish snapshots features", () => {
     state = applyInboundAliasing(state, {
       t: 0x01,
       id: "bob",
+      pr: "bob",
       y: "user",
       f: { a: true },
-    } as any).state
+    } as WireMessage).state
     expect(state.mutualAlias).toBe(false)
   })
 })
@@ -149,9 +158,10 @@ describe("alias-table — establish protocolVersion (pv)", () => {
     const withPv = applyInboundAliasing(emptyAliasState(), {
       t: 0x01,
       id: "bob",
+      pr: "bob",
       y: "user",
       pv: [2, 3],
-    } as any)
+    } as WireMessage)
     expect(withPv.result.ok).toBe(true)
     if (withPv.result.ok)
       expect((withPv.result.value as EstablishMsg).protocolVersion).toEqual({
@@ -166,13 +176,35 @@ describe("alias-table — establish protocolVersion (pv)", () => {
       t: 0x01,
       id: "bob",
       y: "user",
-    } as any)
+    } as WireMessage)
     expect(without.result.ok).toBe(true)
     if (without.result.ok)
       expect((without.result.value as EstablishMsg).protocolVersion).toEqual({
         major: 1,
         minor: 0,
       })
+  })
+
+  it("carries the principal both ways; a 1.x peer's absent principal is empty", () => {
+    const out = applyOutboundAliasing(emptyAliasState(), alice)
+    expect(out.result.ok).toBe(true)
+    if (!out.result.ok) return
+    expect((out.result.value as WireEstablishMsg).pr).toBe("alice")
+    const back = applyInboundAliasing(emptyAliasState(), out.result.value)
+    expect(back.result.ok).toBe(true)
+    if (back.result.ok)
+      expect((back.result.value as EstablishMsg).identity.principal).toBe(
+        "alice",
+      )
+
+    const legacy = applyInboundAliasing(emptyAliasState(), {
+      t: 0x01,
+      id: "bob",
+      y: "user",
+    } as WireMessage)
+    expect(legacy.result.ok).toBe(true)
+    if (legacy.result.ok)
+      expect((legacy.result.value as EstablishMsg).identity.principal).toBe("")
   })
 })
 
@@ -182,7 +214,7 @@ describe("alias-table — present always announces aliases", () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.value.t).toBe(0x10) // Present
-    const present = result.value as any
+    const present = result.value as WirePresentMsg
     expect(present.docs[0]).toMatchObject({
       d: "doc-1",
       a: 0,
@@ -197,11 +229,11 @@ describe("alias-table — present always announces aliases", () => {
     state = a.state
     expect(a.result.ok).toBe(true)
     if (!a.result.ok) return
-    expect((a.result.value as any).docs[0].a).toBe(0)
+    expect((a.result.value as WirePresentMsg).docs[0].a).toBe(0)
     const b = applyOutboundAliasing(state, presentDoc1)
     expect(b.result.ok).toBe(true)
     if (!b.result.ok) return
-    expect((b.result.value as any).docs[0].a).toBe(0)
+    expect((b.result.value as WirePresentMsg).docs[0].a).toBe(0)
     expect(state).toBe(b.state) // idempotent: state unchanged
   })
 
@@ -222,7 +254,7 @@ describe("alias-table — present always announces aliases", () => {
     const { result } = applyOutboundAliasing(state, present2)
     expect(result.ok).toBe(true)
     if (!result.ok) return
-    const docs = (result.value as any).docs
+    const docs = (result.value as WirePresentMsg).docs
     expect(docs[0].a).toBe(0)
     expect(docs[1].a).toBe(1)
     expect(docs[0].sa).toBe(0)
@@ -237,9 +269,10 @@ describe("alias-table — sync messages gate use on mutualAlias", () => {
     state = applyInboundAliasing(state, {
       t: 0x01,
       id: "bob",
+      pr: "bob",
       y: "user",
       f: { a: true },
-    } as any).state
+    } as WireMessage).state
     // Send a present to assign an alias to doc-1.
     state = applyOutboundAliasing(state, presentDoc1).state
     return state
@@ -252,8 +285,8 @@ describe("alias-table — sync messages gate use on mutualAlias", () => {
     const { result } = applyOutboundAliasing(state, msg)
     expect(result.ok).toBe(true)
     if (!result.ok) return
-    expect((result.value as any).dx).toBe(0)
-    expect((result.value as any).doc).toBeUndefined()
+    expect((result.value as WireInterestMsg).dx).toBe(0)
+    expect((result.value as WireInterestMsg).doc).toBeUndefined()
   })
 
   it("with mutualAlias off, outbound interest uses doc (full)", () => {
@@ -265,8 +298,8 @@ describe("alias-table — sync messages gate use on mutualAlias", () => {
     const { result } = applyOutboundAliasing(state, msg)
     expect(result.ok).toBe(true)
     if (!result.ok) return
-    expect((result.value as any).doc).toBe("doc-1")
-    expect((result.value as any).dx).toBeUndefined()
+    expect((result.value as WireInterestMsg).doc).toBe("doc-1")
+    expect((result.value as WireInterestMsg).dx).toBeUndefined()
   })
 
   it("with mutualAlias on, present-doc subsequent reference uses shx (schema alias)", () => {
@@ -275,7 +308,7 @@ describe("alias-table — sync messages gate use on mutualAlias", () => {
     const { result } = applyOutboundAliasing(state, presentDoc1)
     expect(result.ok).toBe(true)
     if (!result.ok) return
-    const entry = (result.value as any).docs[0]
+    const entry = (result.value as WirePresentMsg).docs[0]
     expect(entry.shx).toBe(0)
     expect(entry.sh).toBeUndefined()
     expect(entry.a).toBe(0)
@@ -315,9 +348,10 @@ describe("alias-table — vacant", () => {
     state = applyInboundAliasing(state, {
       t: 0x01,
       id: "bob",
+      pr: "bob",
       y: "user",
       f: { a: true },
-    } as any).state
+    } as WireMessage).state
     state = applyOutboundAliasing(state, presentDoc1).state
     return state
   }
@@ -328,9 +362,9 @@ describe("alias-table — vacant", () => {
     const { result } = applyOutboundAliasing(state, msg)
     expect(result.ok).toBe(true)
     if (!result.ok) return
-    expect((result.value as any).t).toBe(0x14)
-    expect((result.value as any).dx).toBe(0)
-    expect((result.value as any).doc).toBeUndefined()
+    expect((result.value as WireVacantMsg).t).toBe(0x14)
+    expect((result.value as WireVacantMsg).dx).toBe(0)
+    expect((result.value as WireVacantMsg).doc).toBeUndefined()
   })
 
   it("with mutualAlias off, outbound vacant uses doc (full)", () => {
@@ -341,8 +375,8 @@ describe("alias-table — vacant", () => {
     const { result } = applyOutboundAliasing(state, msg)
     expect(result.ok).toBe(true)
     if (!result.ok) return
-    expect((result.value as any).doc).toBe("doc-1")
-    expect((result.value as any).dx).toBeUndefined()
+    expect((result.value as WireVacantMsg).doc).toBe("doc-1")
+    expect((result.value as WireVacantMsg).dx).toBeUndefined()
   })
 
   it("round-trips outbound → inbound preserving the vacant message", () => {
@@ -371,7 +405,7 @@ describe("alias-table — unknown-alias error path", () => {
     const { result } = applyInboundAliasing(emptyAliasState(), {
       t: 0x11, // Interest
       dx: 42,
-    } as any)
+    } as WireMessage)
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.error).toEqual({ code: "unknown-doc-alias", alias: 42 })
@@ -389,7 +423,7 @@ describe("alias-table — unknown-alias error path", () => {
           shx: 99,
         },
       ],
-    } as any)
+    } as WireMessage)
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.error).toEqual({ code: "unknown-schema-alias", alias: 99 })
@@ -400,7 +434,7 @@ describe("alias-table — unknown-alias error path", () => {
       t: 0x11,
       doc: "doc-1",
       dx: 5,
-    } as any)
+    } as WireMessage)
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.error.code).toBe("missing-doc-id")
@@ -417,7 +451,7 @@ describe("alias-table — identifier length validation", () => {
     const { result } = applyInboundAliasing(emptyAliasState(), {
       t: 0x11, // Interest
       doc: docId,
-    } as any)
+    } as WireMessage)
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.error).toEqual({
@@ -439,7 +473,7 @@ describe("alias-table — identifier length validation", () => {
           sh: schemaHash,
         },
       ],
-    } as any)
+    } as WireMessage)
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.error).toEqual({
@@ -453,7 +487,7 @@ describe("alias-table — identifier length validation", () => {
     const { result } = applyInboundAliasing(emptyAliasState(), {
       t: 0x11, // Interest
       doc: docId,
-    } as any)
+    } as WireMessage)
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.value.type).toBe("interest")
@@ -475,7 +509,7 @@ describe("alias-table — identifier length validation", () => {
           sh: schemaHash,
         },
       ],
-    } as any)
+    } as WireMessage)
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.value.type).toBe("present")
@@ -490,7 +524,7 @@ describe("alias-table — identifier length validation", () => {
     const { result } = applyInboundAliasing(emptyAliasState(), {
       t: 0x11, // Interest
       doc: docId,
-    } as any)
+    } as WireMessage)
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.value.type).toBe("interest")
@@ -506,7 +540,7 @@ describe("alias-table — identifier length validation", () => {
     const { result } = applyInboundAliasing(emptyAliasState(), {
       t: 0x11, // Interest
       doc: docId,
-    } as any)
+    } as WireMessage)
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.error.code).toBe("doc-id-too-long")
@@ -524,9 +558,10 @@ describe("alias-table — schema-hash compaction", () => {
     state = applyInboundAliasing(state, {
       t: 0x01,
       id: "bob",
+      pr: "bob",
       y: "user",
       f: { a: true },
-    } as any).state
+    } as WireMessage).state
     return state
   }
 
@@ -548,7 +583,7 @@ describe("alias-table — schema-hash compaction", () => {
     state = outResult.state
     expect(outResult.result.ok).toBe(true)
     if (!outResult.result.ok) return
-    const docs = (outResult.result.value as any).docs as Array<
+    const docs = (outResult.result.value as WirePresentMsg).docs as Array<
       Record<string, unknown>
     >
 
@@ -651,7 +686,7 @@ describe("alias-table — schema-hash compaction", () => {
     outState = r2.state
     expect(r2.result.ok).toBe(true)
     if (!r2.result.ok) return
-    const wireDocs = (r2.result.value as any).docs
+    const wireDocs = (r2.result.value as WirePresentMsg).docs
     expect(wireDocs[0].sh).toBeUndefined()
     expect(wireDocs[0].shx).toBe(0)
     expect(wireDocs[1].shx).toBe(0)

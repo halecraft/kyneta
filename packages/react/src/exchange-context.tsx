@@ -40,7 +40,7 @@ export interface ExchangeProviderProps {
  *
  * // Create exactly once at module scope
  * const exchange = new Exchange({
- *   id: "my-peer",
+ *   principal: "alice",
  *   transports: [createWebsocketClient({ url: "ws://localhost:3000/ws", WebSocket })],
  * })
  *
@@ -60,11 +60,11 @@ export function ExchangeProvider({
   const prev = useRef(exchange)
 
   if (prev.current !== exchange) {
-    if (prev.current.peerId === exchange.peerId) {
-      console.error(
-        "🔴 [@kyneta/react] CRITICAL: The `exchange` prop passed to <ExchangeProvider> changed identity, " +
-          "but the `peerId` is the same. An Exchange cannot be safely recreated for the same peer " +
-          "during a session without corrupting distributed state or leaking connections.\n\n" +
+    if (prev.current.principal === exchange.principal) {
+      console.warn(
+        "[@kyneta/react] The `exchange` prop passed to <ExchangeProvider> changed identity, " +
+          `but the principal "${exchange.principal}" is the same. Each Exchange holds its own seat, ` +
+          "so this corrupts nothing, but the old one keeps its connections open until it is shut down.\n\n" +
           "Fix: Create the Exchange exactly once at module scope, or use `useExchangeSingleton`.",
       )
     }

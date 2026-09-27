@@ -11,7 +11,7 @@
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { Exchange, persistentPeerId } from "@kyneta/exchange"
+import { Exchange } from "@kyneta/exchange"
 import { ExchangeProvider } from "@kyneta/react"
 import { createWebsocketClient } from "@kyneta/websocket-transport/browser"
 import { createRoot } from "react-dom/client"
@@ -23,13 +23,16 @@ import "../style.css"
 // ─────────────────────────────────────────────────────────────────────────
 
 const exchange = new Exchange({
-  id: persistentPeerId("todo-react-peer-id"),
+  principal: "todo-react-user",
   transports: [
     createWebsocketClient({ url: `ws://${location.host}/ws`, WebSocket }),
   ],
 })
 
-createRoot(document.getElementById("root")!).render(
+const rootEl = document.getElementById("root")
+if (!rootEl) throw new Error("#root not found")
+
+createRoot(rootEl).render(
   <ExchangeProvider exchange={exchange}>
     <App />
   </ExchangeProvider>,

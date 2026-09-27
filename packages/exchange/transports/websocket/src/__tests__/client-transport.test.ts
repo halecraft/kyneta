@@ -51,7 +51,7 @@ function createMockWebSocketClass() {
 
 const testIdentity: PeerIdentityDetails = {
   peerId: "test-peer-123",
-  name: "Test Peer",
+  principal: "Test Peer",
   type: "user",
 }
 

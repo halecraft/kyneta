@@ -51,7 +51,7 @@ export async function createConnectedPair(
   )
 
   const serverParams: ExchangeParams = {
-    id: serverPeerId,
+    principal: serverPeerId,
     transports: [serverTransport],
     ...(opts.serverStore ? { store: opts.serverStore } : {}),
     ...(opts.schemas ? { schemas: opts.schemas } : {}),
@@ -66,7 +66,7 @@ export async function createConnectedPair(
   })
 
   const clientParams: ExchangeParams = {
-    id: clientPeerId,
+    principal: clientPeerId,
     transports: [clientTransport],
     ...(opts.clientStore ? { store: opts.clientStore } : {}),
     ...(opts.schemas ? { schemas: opts.schemas } : {}),

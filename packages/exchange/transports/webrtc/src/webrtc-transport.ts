@@ -94,7 +94,7 @@ type AttachedChannel = {
  * const webrtcTransport = createWebrtcTransport()
  *
  * const exchange = new Exchange({
- *   id: { peerId: "alice", name: "Alice" },
+ *   principal: "alice",
  *   transports: [webrtcTransport],
  * })
  *
@@ -425,7 +425,7 @@ export class WebrtcTransport extends Transport<DataChannelContext> {
  * import { createWebrtcTransport } from "@kyneta/webrtc-transport"
  *
  * const exchange = new Exchange({
- *   id: { peerId: "alice", name: "Alice" },
+ *   principal: "alice",
  *   transports: [createWebrtcTransport()],
  * })
  * ```

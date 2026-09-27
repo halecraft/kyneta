@@ -225,7 +225,7 @@ import { createWebsocketClient } from "@kyneta/websocket-transport/browser"
 // Create the Exchange once at module scope — it owns persistent network
 // connections and must survive React lifecycle events like StrictMode remounts.
 const exchange = new Exchange({
-  id: "my-peer",
+  principal: "alice",
   transports: [createWebsocketClient({ url: "ws://localhost:3000/ws", WebSocket })],
 })
 
@@ -245,27 +245,32 @@ function SomeComponent() {
 
 ### Why the Exchange must survive React's lifecycle
 
-An Exchange is a participant in a distributed protocol — it manages persistent network connections, sync state, and peer identity. Recreating an Exchange for the same `peerId` during a session is **fatal**: it may send a sync offer, be destroyed by React, and a new Exchange spinning up with the same `peerId` will receive replies meant for the previous instance, corrupting its distributed state.
+An Exchange is a participant in a distributed protocol — it manages persistent network connections, sync state, and a seat. Each Exchange's Runtime issues itself a fresh seat, so a second Exchange for the same principal corrupts nothing: it is another replica, with its own peer id and its own `Line` outboxes. It still costs a second connection and a second copy of every document, and the first keeps both until it is shut down.
 
-React's component model expects components to be safe to tear down and reconstruct. An Exchange is not. It should be created exactly once and live for the lifetime of the client.
+React's component model expects components to be safe to tear down and reconstruct. An Exchange is expensive to. Create it once and let it live for the lifetime of the client.
 
 ### Safe patterns
 
 **Module scope** (recommended): Create the Exchange outside the React tree so it survives all lifecycle events.
 
-**`useExchangeSingleton`** (for async dependencies): When you must wait for React state (e.g., an auth token) before creating the Exchange, use `useExchangeSingleton` from `@kyneta/react`. It guarantees exactly-once creation per `peerId` using a hidden module-level cache:
+**`useExchangeSingleton`** (for async dependencies): When you must wait for something (an auth token, a store that opens asynchronously) before creating the Exchange, use `useExchangeSingleton` from `@kyneta/react`. It creates one Exchange per principal, keyed in a hidden module-level cache. The cache holds the factory's promise, stored before anything is awaited, so StrictMode's double effects and later remounts reuse it; the hook returns `null` until it resolves.
 
 ```tsx
 import { useExchangeSingleton, ExchangeProvider } from "@kyneta/react"
 
 function AppRoot() {
   const { token, user } = useAuth()
-  const peerId = user ? persistentPeerId(`app-${user.id}`) : null
 
-  const exchange = useExchangeSingleton(peerId, () => new Exchange({
-    id: peerId!,
-    transports: [createWebsocketClient({ url: `ws://.../?token=${token}` })],
-  }))
+  const exchange = useExchangeSingleton(user?.id, async () => {
+    const principal = user?.id
+    if (!principal) throw new Error("user id required")
+    const store = await createIndexedDBStore(`app-${principal}`)
+    return new Exchange({
+      principal,
+      store,
+      transports: [createWebsocketClient({ url: `ws://.../?token=${token}` })],
+    })
+  })
 
   if (!exchange) return <LoadingSpinner />
 

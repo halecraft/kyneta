@@ -24,7 +24,7 @@ async function drain(rounds = 60): Promise<void> {
 /** A peer reachable only over the bridges it is given. */
 function peerOn(id: string, bridges: readonly Bridge[]) {
   const exchange = new Exchange({
-    id,
+    principal: id,
     transports: bridges.map((bridge, i) =>
       createBridgeTransport({ transportId: `${id}#${i}`, bridge }),
     ),

@@ -51,7 +51,8 @@ const store = await createPrismaStore({ client: prisma })
 const serverTransport = new WebsocketServerTransport()
 
 const exchange = new Exchange({
-  id: { peerId: "counter-server", name: "server" },
+  principal: "counter-server",
+  type: "service",
   transports: [serverTransport],
 
   /** Persist counter state to Postgres via Prisma */

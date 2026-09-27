@@ -21,7 +21,7 @@ const TestSchema = Schema.struct({
 const TestDoc = json.bind(TestSchema)
 
 function createExchange(options: Partial<ExchangeParams> = {}): Exchange {
-  return new Exchange({ id: "test", ...options } as ExchangeParams)
+  return new Exchange({ principal: "test", ...options })
 }
 
 // ===========================================================================

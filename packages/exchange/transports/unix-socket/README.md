@@ -39,7 +39,7 @@ import { createUnixSocketPeer } from "@kyneta/unix-socket-transport"
 const peer = createUnixSocketPeer({ path: "/tmp/kyneta.sock" })
 
 const exchange = new Exchange({
-  id: { peerId: "service-a", name: "Service A" },
+  principal: "service-a",
   transports: [peer],
 })
 
@@ -64,8 +64,9 @@ const serverTransport = new UnixSocketServerTransport({
 })
 
 const exchange = new Exchange({
-  identity: { peerId: "server", name: "server", type: "service" },
-  transports: [() => serverTransport],
+  principal: "server",
+  type: "service",
+  transports: [serverTransport],
 })
 ```
 
@@ -76,7 +77,8 @@ import { Exchange } from "@kyneta/exchange"
 import { createUnixSocketClient } from "@kyneta/unix-socket-transport"
 
 const exchange = new Exchange({
-  identity: { peerId: "service-a", name: "Service A", type: "service" },
+  principal: "service-a",
+  type: "service",
   transports: [
     createUnixSocketClient({ path: "/tmp/kyneta.sock" }),
   ],

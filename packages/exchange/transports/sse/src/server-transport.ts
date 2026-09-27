@@ -5,19 +5,19 @@
 // framework through the SseConnection's setSendFunction() callback.
 //
 // Usage with Express:
-//   import { SseServerTransport } from "@kyneta/sse-network-adapter/server"
-//   import { createSseExpressRouter } from "@kyneta/sse-network-adapter/express"
+//   import { SseServerTransport } from "@kyneta/sse-transport/server"
+//   import { createSseExpressRouter } from "@kyneta/sse-transport/express"
 //
-//   const serverAdapter = new SseServerTransport()
-//   app.use("/sse", createSseExpressRouter(serverAdapter))
+//   const serverTransport = new SseServerTransport()
+//   app.use("/sse", createSseExpressRouter(serverTransport))
 //
 // Usage with Hono:
-//   import { SseServerTransport } from "@kyneta/sse-network-adapter/server"
-//   import { SseConnection } from "@kyneta/sse-network-adapter/express"
+//   import { SseServerTransport } from "@kyneta/sse-transport/server"
+//   import { SseConnection } from "@kyneta/sse-transport/express"
 //
-//   const serverAdapter = new SseServerTransport()
+//   const serverTransport = new SseServerTransport()
 //   // Wire up GET /events and POST /sync manually using
-//   // serverAdapter.registerConnection() and connection.handlePostBody()
+//   // serverTransport.registerConnection() and connection.handlePostBody()
 
 import type { ChannelMsg, GeneratedChannel, PeerId } from "@kyneta/transport"
 import { randomPeerId, Transport } from "@kyneta/transport"
@@ -122,7 +122,7 @@ export class SseServerTransport extends Transport<PeerId> {
    *
    * @example Express
    * ```typescript
-   * const connection = serverAdapter.registerConnection(peerId)
+   * const connection = serverTransport.registerConnection(peerId)
    * connection.setSendFunction((textFrame) => {
    *   res.write(`data: ${textFrame}\n\n`)
    * })
@@ -130,7 +130,7 @@ export class SseServerTransport extends Transport<PeerId> {
    *
    * @example Hono
    * ```typescript
-   * const connection = serverAdapter.registerConnection(peerId)
+   * const connection = serverTransport.registerConnection(peerId)
    * connection.setSendFunction((textFrame) => {
    *   stream.writeSSE({ data: textFrame })
    * })

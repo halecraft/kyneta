@@ -24,7 +24,7 @@ import { MockDataChannel } from "./mock-data-channel.js"
  */
 function createContext() {
   return createTestTransportContext({
-    identity: { peerId: "local-peer", name: "Local", type: "user" },
+    identity: { peerId: "local-peer", principal: "Local", type: "user" },
   })
 }
 
@@ -40,7 +40,7 @@ async function initializeTransport(
 /** A minimal establish message for send/receive tests. */
 const TEST_MSG: ChannelMsg = {
   type: "establish",
-  identity: { peerId: "remote", name: "R", type: "user" },
+  identity: { peerId: "remote", principal: "R", type: "user" },
   protocolVersion: PROTOCOL_VERSION,
 }
 
@@ -307,7 +307,7 @@ describe("Fragmentation", () => {
       type: "establish",
       identity: {
         peerId: `a]very-long-peer-id-${"x".repeat(200)}`,
-        name: `A Long Name ${"y".repeat(200)}`,
+        principal: `A Long Name ${"y".repeat(200)}`,
         type: "user",
       },
       protocolVersion: PROTOCOL_VERSION,
@@ -331,7 +331,7 @@ describe("Fragmentation", () => {
       type: "establish",
       identity: {
         peerId: `peer-${"z".repeat(200)}`,
-        name: `Name-${"w".repeat(200)}`,
+        principal: `Name-${"w".repeat(200)}`,
         type: "user",
       },
       protocolVersion: PROTOCOL_VERSION,

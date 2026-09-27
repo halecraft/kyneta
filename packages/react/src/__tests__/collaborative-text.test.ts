@@ -47,7 +47,7 @@ function createPeer(
   bridge: Bridge,
 ): { exchange: Exchange; doc: any } {
   const exchange = new Exchange({
-    id: peerId,
+    principal: peerId,
     transports: [createBridgeTransport({ transportId: peerId, bridge })],
     schemas: [NoteDoc],
   })

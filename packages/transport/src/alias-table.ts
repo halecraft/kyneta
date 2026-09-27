@@ -206,7 +206,7 @@ export function applyOutboundAliasing(
       const wire: WireEstablishMsg = {
         t: MessageType.Establish,
         id: msg.identity.peerId,
-        n: msg.identity.name,
+        pr: msg.identity.principal,
         y: msg.identity.type,
       }
       if (msg.features !== undefined) {
@@ -395,7 +395,8 @@ export function applyInboundAliasing(
       }
       const msg: EstablishMsg = {
         type: "establish",
-        identity: { peerId: wire.id, name: wire.n, type: wire.y },
+        // A 1.x peer names no principal, and gets the empty one.
+        identity: { peerId: wire.id, principal: wire.pr ?? "", type: wire.y },
         // Default an absent pv to the baseline at the wire boundary, so the
         // parsed domain message always carries a concrete version (absent
         // and explicit-(1,0) are indistinguishable downstream).

@@ -10,11 +10,7 @@ import { batch, json, Schema, unwrap } from "@kyneta/schema"
 import { defined } from "@kyneta/schema/testing"
 import { yjs } from "@kyneta/yjs-schema"
 import { afterEach, describe, expect, it } from "vitest"
-import {
-  Exchange,
-  type ExchangeParams,
-  type PeerIdentityInput,
-} from "../exchange.js"
+import { Exchange, type ExchangeParams } from "../exchange.js"
 import {
   createObservationBus,
   frameTraceToBody,
@@ -38,7 +34,7 @@ describe("observe — pure mappers", () => {
       to: 7,
       message: {
         type: "establish",
-        identity: { peerId: "bob", type: "user" },
+        identity: { peerId: "bob", principal: "bob", type: "user" },
         protocolVersion: { major: 1, minor: 0 },
       },
     }
@@ -60,8 +56,14 @@ describe("observe — pure mappers", () => {
     const fx: SessionEffect = {
       type: "emit-peer-events",
       events: [
-        { type: "peer-established", peer: { peerId: "bob", type: "user" } },
-        { type: "peer-departed", peer: { peerId: "carol", type: "user" } },
+        {
+          type: "peer-established",
+          peer: { peerId: "bob", principal: "bob", type: "user" },
+        },
+        {
+          type: "peer-departed",
+          peer: { peerId: "carol", principal: "carol", type: "user" },
+        },
       ],
     }
     expect(observeSessionEffect(fx)).toEqual([
@@ -388,9 +390,9 @@ async function drain(rounds = 30): Promise<void> {
 const active: Exchange[] = []
 function createExchange(params: Partial<ExchangeParams> = {}): Exchange {
   const ex = new Exchange({
-    id: "test" as string | PeerIdentityInput,
+    principal: "test",
     ...params,
-  } as ExchangeParams)
+  })
   active.push(ex)
   return ex
 }
@@ -409,12 +411,12 @@ describe("observe — integration (two peers, one bridge)", () => {
   it("threads a local batch end-to-end across all Phase-1 layers", async () => {
     const bridge = new Bridge()
     const alice = createExchange({
-      id: "alice",
+      principal: "alice",
       transports: [createBridgeTransport({ transportId: "alice", bridge })],
       schemas: [TodoDoc],
     })
     const bob = createExchange({
-      id: "bob",
+      principal: "bob",
       transports: [createBridgeTransport({ transportId: "bob", bridge })],
       schemas: [TodoDoc],
     })
@@ -494,11 +496,11 @@ describe("observe — integration (two peers, one bridge)", () => {
     const NoteDoc = yjs.bind(Schema.struct({ title: Schema.text() }))
     const bridge = new Bridge()
     const alice = createExchange({
-      id: "alice",
+      principal: "alice",
       transports: [createBridgeTransport({ transportId: "alice", bridge })],
     })
     const bob = createExchange({
-      id: "bob",
+      principal: "bob",
       transports: [createBridgeTransport({ transportId: "bob", bridge })],
     })
     const aDoc = alice.get("note", NoteDoc)
@@ -523,13 +525,13 @@ describe("observe — integration (two peers, one bridge)", () => {
   it("covers a doc obtained only via remote auto-resolve", async () => {
     const bridge = new Bridge()
     const alice = createExchange({
-      id: "alice",
+      principal: "alice",
       transports: [createBridgeTransport({ transportId: "alice", bridge })],
       schemas: [TodoDoc],
     })
     // bob registers the schema but never calls get() — auto-resolve builds it.
     const bob = createExchange({
-      id: "bob",
+      principal: "bob",
       transports: [createBridgeTransport({ transportId: "bob", bridge })],
       schemas: [TodoDoc],
     })
@@ -559,12 +561,12 @@ describe("observe — integration (two peers, one bridge)", () => {
     const BobDoc = json.bind(Schema.struct({ b: Schema.number() }))
 
     const alice = createExchange({
-      id: "alice",
+      principal: "alice",
       transports: [createBridgeTransport({ transportId: "alice", bridge })],
       schemas: [AliceDoc],
     })
     const bob = createExchange({
-      id: "bob",
+      principal: "bob",
       transports: [createBridgeTransport({ transportId: "bob", bridge })],
       schemas: [BobDoc],
     })
@@ -597,12 +599,12 @@ describe("observe — integration (two peers, one bridge)", () => {
   it("emits wire frames whose send-seq matches the peer's receive-seq", async () => {
     const bridge = new Bridge()
     const alice = createExchange({
-      id: "alice",
+      principal: "alice",
       transports: [createBridgeTransport({ transportId: "alice", bridge })],
       schemas: [TodoDoc],
     })
     const bob = createExchange({
-      id: "bob",
+      principal: "bob",
       transports: [createBridgeTransport({ transportId: "bob", bridge })],
       schemas: [TodoDoc],
     })
@@ -640,7 +642,7 @@ describe("observe — integration (two peers, one bridge)", () => {
   })
 
   it("Loro exposes a history summary + safe valueAt time-travel; plain does not", async () => {
-    const ex = createExchange({ id: "solo", schemas: [TodoDoc] })
+    const ex = createExchange({ principal: "solo", schemas: [TodoDoc] })
     const doc = ex.get("h", TodoDoc)
     batch(
       doc,
@@ -696,12 +698,12 @@ describe("observe — integration (two peers, one bridge)", () => {
   it("a throwing sink does not break convergence", async () => {
     const bridge = new Bridge()
     const alice = createExchange({
-      id: "alice",
+      principal: "alice",
       transports: [createBridgeTransport({ transportId: "alice", bridge })],
       schemas: [TodoDoc],
     })
     const bob = createExchange({
-      id: "bob",
+      principal: "bob",
       transports: [createBridgeTransport({ transportId: "bob", bridge })],
       schemas: [TodoDoc],
     })

@@ -28,7 +28,7 @@ import { Exchange } from "@kyneta/exchange"
 import { createWebrtcTransport, WebrtcTransport } from "@kyneta/webrtc-transport"
 
 const exchange = new Exchange({
-  identity: { peerId: "alice", name: "Alice" },
+  principal: "alice",
   transports: [createWebrtcTransport()],
 })
 

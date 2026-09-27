@@ -178,7 +178,7 @@ describe("Binary frame — complete", () => {
   it("round-trips establish", () => {
     const wire = establishWire({
       peerId: "peer-1",
-      name: "Alice",
+      principal: "Alice",
       type: "user",
     })
     const encoded = encodeToFrame(wire)
@@ -228,7 +228,7 @@ describe("Binary frame — batch (via complete frame)", () => {
 
   it("round-trips a batch of mixed messages", () => {
     const wires: WireMessage[] = [
-      establishWire({ peerId: "p1", name: "One", type: "user" }),
+      establishWire({ peerId: "p1", principal: "One", type: "user" }),
       presentWire([
         {
           docId: "d1",

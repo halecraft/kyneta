@@ -19,16 +19,21 @@ export type ChannelId = number
 /** Adapter type identifier — e.g. "bridge", "websocket", "indexeddb". */
 export type TransportType = string
 
+/** Classifies a peer's role. */
+export type PeerType = "user" | "bot" | "service"
+
 /**
- * Peer identity details — the full identity of a peer in the network.
+ * The identity a peer announces in `establish`.
  *
- * `peerId` is the globally unique, stable identifier. `name` is an
- * optional human-readable label. `type` classifies the peer's role.
+ * `peerId` is the peer's seat: the address of one replica. `principal` is who
+ * the peer says it is, and several seats may share one principal.
  */
 export type PeerIdentityDetails = {
-  peerId: PeerId
-  name?: string
-  type: "user" | "bot" | "service"
+  /** The seat: this replica's address. Issued by the Runtime, never chosen. */
+  readonly peerId: PeerId
+  /** Who this peer says it is. Chosen by the application; not verified. */
+  readonly principal: string
+  readonly type: PeerType
 }
 
 // ---------------------------------------------------------------------------

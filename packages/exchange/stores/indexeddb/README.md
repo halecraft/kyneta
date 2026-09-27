@@ -14,11 +14,11 @@ pnpm add @kyneta/indexeddb-store
 
 ```ts
 import { createIndexedDBStore } from "@kyneta/indexeddb-store"
-import { Exchange, persistentPeerId } from "@kyneta/exchange"
+import { Exchange } from "@kyneta/exchange"
 
 const store = await createIndexedDBStore("my-app-db")
 const exchange = new Exchange({
-  id: persistentPeerId("my-peer-id"),
+  principal: "alice",
   store,
   transports: [...],
 })

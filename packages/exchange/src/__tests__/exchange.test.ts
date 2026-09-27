@@ -30,13 +30,10 @@ import type {
 } from "loro-crdt"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { docStatus } from "../doc-status.js"
-import {
-  Exchange,
-  type ExchangeParams,
-  type PeerIdentityInput,
-} from "../exchange.js"
+import { Exchange, type ExchangeParams } from "../exchange.js"
 import { sync, whenSettled } from "../sync.js"
 import type { DocChange, PeerChange } from "../types.js"
+import { whenPeer } from "../when-peer.js"
 
 // ---------------------------------------------------------------------------
 // Test schemas (bound at module scope)
@@ -70,8 +67,7 @@ async function drain(rounds = 20): Promise<void> {
 const activeExchanges: Exchange[] = []
 
 function createExchange(params: Partial<ExchangeParams> = {}): Exchange {
-  const merged = { id: "test" as string | PeerIdentityInput, ...params }
-  const ex = new Exchange(merged as ExchangeParams)
+  const ex = new Exchange({ principal: "test", ...params })
   activeExchanges.push(ex)
   return ex
 }
@@ -91,18 +87,23 @@ afterEach(async () => {
 
 describe("Exchange", () => {
   describe("constructor", () => {
-    it("creates with explicit peerId", () => {
-      const exchange = new Exchange({
-        id: "my-peer",
-      })
+    it("takes a principal and issues its own seat", () => {
+      const exchange = new Exchange({ principal: "my-peer" })
+      const other = new Exchange({ principal: "my-peer" })
 
-      expect(exchange.peerId).toBe("my-peer")
+      expect(exchange.principal).toBe("my-peer")
+      expect(exchange.peerId).toMatch(/^[0-9a-f]{32}$/)
+      expect(other.peerId).not.toBe(exchange.peerId)
+    })
+
+    it("refuses an empty principal", () => {
+      expect(() => new Exchange({ principal: "" })).toThrow(/principal/)
     })
   })
 
   describe("get()", () => {
     it("returns a Ref<S> that can be read", () => {
-      const exchange = new Exchange({ id: "test" })
+      const exchange = new Exchange({ principal: "test" })
       const doc = exchange.get("doc-1", TestDoc)
 
       // The ref should be callable (returns plain value)
@@ -111,7 +112,7 @@ describe("Exchange", () => {
     })
 
     it("returns a Ref<S> with navigation and batch()-applied values", () => {
-      const exchange = new Exchange({ id: "test" })
+      const exchange = new Exchange({ principal: "test" })
       const doc = exchange.get("doc-1", TestDoc)
       batch(doc, (d: any) => {
         d.title.set("Hello")
@@ -123,7 +124,7 @@ describe("Exchange", () => {
     })
 
     it("same docId returns same instance", () => {
-      const exchange = new Exchange({ id: "test" })
+      const exchange = new Exchange({ principal: "test" })
 
       const doc1 = exchange.get("doc-1", TestDoc)
       const doc2 = exchange.get("doc-1", TestDoc)
@@ -132,7 +133,7 @@ describe("Exchange", () => {
     })
 
     it("a schema that cannot read the open document throws, naming the axis", () => {
-      const exchange = new Exchange({ id: "test" })
+      const exchange = new Exchange({ principal: "test" })
 
       exchange.get("doc-1", TestDoc)
       expect(() => exchange.get("doc-1", OtherDoc)).toThrow(
@@ -145,14 +146,14 @@ describe("Exchange", () => {
       // same substrate family, same sync mode. A caller that builds its
       // BoundSchema inside a component, or a library that binds each
       // direction of a protocol separately, must not be punished for it.
-      const exchange = new Exchange({ id: "test" })
+      const exchange = new Exchange({ principal: "test" })
 
       const first = exchange.get("doc-1", TestDoc)
       expect(exchange.get("doc-1", json.bind(testSchema))).toBe(first)
     })
 
     it("batch() values are applied", () => {
-      const exchange = new Exchange({ id: "test" })
+      const exchange = new Exchange({ principal: "test" })
       const doc = exchange.get("doc-1", TestDoc)
       batch(doc, (d: any) => {
         d.title.set("Changed")
@@ -174,11 +175,11 @@ describe("Exchange", () => {
         syncMode: SYNC_AUTHORITATIVE,
       })
 
-      const exchange = new Exchange({ id: "alice-123" })
+      const exchange = new Exchange({ principal: "alice-123" })
       exchange.get("doc-1", Doc)
 
       expect(builder).toHaveBeenCalledWith(
-        expect.objectContaining({ peerId: "alice-123" }),
+        expect.objectContaining({ peerId: exchange.peerId }),
       )
     })
 
@@ -191,7 +192,7 @@ describe("Exchange", () => {
         syncMode: SYNC_AUTHORITATIVE,
       })
 
-      const exchange = new Exchange({ id: "test" })
+      const exchange = new Exchange({ principal: "test" })
       exchange.get("doc-1", DocA)
 
       // Builder is invoked at each use site: registerSchema (capabilities +
@@ -199,7 +200,9 @@ describe("Exchange", () => {
       for (const call of builder.mock.calls as unknown as Array<
         [{ peerId: string }]
       >) {
-        expect(call[0]).toEqual(expect.objectContaining({ peerId: "test" }))
+        expect(call[0]).toEqual(
+          expect.objectContaining({ peerId: exchange.peerId }),
+        )
       }
     })
 
@@ -216,32 +219,32 @@ describe("Exchange", () => {
         syncMode: SYNC_AUTHORITATIVE,
       })
 
-      const exchangeA = new Exchange({ id: "alice" })
-      const exchangeB = new Exchange({ id: "bob" })
+      const exchangeA = new Exchange({ principal: "alice" })
+      const exchangeB = new Exchange({ principal: "bob" })
 
       exchangeA.get("doc-1", Doc)
       exchangeB.get("doc-1", Doc)
 
       // Each exchange passes its own peerId to every builder invocation
       expect(builder).toHaveBeenCalledWith(
-        expect.objectContaining({ peerId: "alice" }),
+        expect.objectContaining({ peerId: exchangeA.peerId }),
       )
       expect(builder).toHaveBeenCalledWith(
-        expect.objectContaining({ peerId: "bob" }),
+        expect.objectContaining({ peerId: exchangeB.peerId }),
       )
-      expect(peerIds).toContain("alice")
-      expect(peerIds).toContain("bob")
+      expect(peerIds).toContain(exchangeA.peerId)
+      expect(peerIds).toContain(exchangeB.peerId)
     })
   })
 
   describe("has()", () => {
     it("returns false for unknown doc", () => {
-      const exchange = new Exchange({ id: "test" })
+      const exchange = new Exchange({ principal: "test" })
       expect(exchange.has("nonexistent")).toBe(false)
     })
 
     it("returns true after get()", () => {
-      const exchange = new Exchange({ id: "test" })
+      const exchange = new Exchange({ principal: "test" })
       exchange.get("doc-1", TestDoc)
       expect(exchange.has("doc-1")).toBe(true)
     })
@@ -249,7 +252,7 @@ describe("Exchange", () => {
 
   describe("destroy()", () => {
     it("removes a document", () => {
-      const exchange = new Exchange({ id: "test" })
+      const exchange = new Exchange({ principal: "test" })
 
       exchange.get("doc-1", TestDoc)
       expect(exchange.has("doc-1")).toBe(true)
@@ -261,11 +264,11 @@ describe("Exchange", () => {
 
   describe("sync()", () => {
     it("returns a SyncRef with peerId and docId", () => {
-      const exchange = new Exchange({ id: "alice" })
+      const exchange = new Exchange({ principal: "alice" })
       const doc = exchange.get("doc-1", TestDoc)
       const s = sync(doc)
 
-      expect(s.peerId).toBe("alice")
+      expect(s.peerId).toBe(exchange.peerId)
       expect(s.docId).toBe("doc-1")
     })
 
@@ -285,7 +288,7 @@ describe("Exchange", () => {
     })
 
     it("peerStates is initially empty", () => {
-      const exchange = new Exchange({ id: "test" })
+      const exchange = new Exchange({ principal: "test" })
       const doc = exchange.get("doc-1", TestDoc)
       expect(sync(doc).peerStates).toEqual([])
     })
@@ -293,7 +296,7 @@ describe("Exchange", () => {
 
   describe("lifecycle", () => {
     it("reset() clears doc cache", () => {
-      const exchange = new Exchange({ id: "test" })
+      const exchange = new Exchange({ principal: "test" })
 
       exchange.get("doc-1", TestDoc)
       expect(exchange.has("doc-1")).toBe(true)
@@ -303,7 +306,7 @@ describe("Exchange", () => {
     })
 
     it("shutdown() clears doc cache", async () => {
-      const exchange = new Exchange({ id: "test" })
+      const exchange = new Exchange({ principal: "test" })
 
       exchange.get("doc-1", TestDoc)
       await exchange.shutdown()
@@ -312,7 +315,7 @@ describe("Exchange", () => {
 
     describe("escape hatches", () => {
       it("ref[SUBSTRATE] returns the substrate for an exchange-created doc", () => {
-        const exchange = new Exchange({ id: "test" })
+        const exchange = new Exchange({ principal: "test" })
         const doc = exchange.get("doc-1", TestDoc)
         batch(doc, (d: any) => {
           d.title.set("Hi")
@@ -339,7 +342,7 @@ describe("Exchange", () => {
           }),
         )
         const exchange = new Exchange({
-          id: "test",
+          principal: "test",
           schemas: [LoroBound],
         })
         const doc = exchange.get("doc-1", LoroBound)
@@ -357,7 +360,7 @@ describe("Exchange", () => {
       })
 
       it("unwrap(ref) returns the PlainState for a plain-backed exchange doc", () => {
-        const exchange = new Exchange({ id: "test" })
+        const exchange = new Exchange({ principal: "test" })
         const doc = exchange.get("doc-1", TestDoc)
 
         // Precise root native: PlainState (the backing JS object), threaded
@@ -373,11 +376,11 @@ describe("Exchange", () => {
         const bridge = new Bridge()
 
         const exchangeA = new Exchange({
-          id: "alice",
+          principal: "alice",
           transports: [createBridgeTransport({ transportId: "alice", bridge })],
         })
         const exchangeB = new Exchange({
-          id: "bob",
+          principal: "bob",
           transports: [createBridgeTransport({ transportId: "bob", bridge })],
         })
 
@@ -424,11 +427,11 @@ describe("Exchange", () => {
     it("peer-established fires when a remote peer connects via Bridge", async () => {
       const bridge = new Bridge()
       const exchange1 = createExchange({
-        id: "alice",
+        principal: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
-      const _exchange2 = createExchange({
-        id: { peerId: "bob", name: "Bob" },
+      const exchange2 = createExchange({
+        principal: "Bob",
         transports: [createBridgeTransport({ transportId: "bob", bridge })],
       })
 
@@ -439,28 +442,28 @@ describe("Exchange", () => {
 
       await drain()
 
-      // Alice should see bob as a peer
+      // Alice sees bob as a peer, keyed by his seat, naming his principal
       expect(exchange1.peers().size).toBe(1)
-      expect(exchange1.peers().has("bob")).toBe(true)
-      const bobIdentity = exchange1.peers().get("bob")
+      expect(exchange1.peers().has(exchange2.peerId)).toBe(true)
+      const bobIdentity = exchange1.peers().get(exchange2.peerId)
       expect(bobIdentity).toBeDefined()
-      expect(bobIdentity?.peerId).toBe("bob")
-      expect(bobIdentity?.name).toBe("Bob")
+      expect(bobIdentity?.peerId).toBe(exchange2.peerId)
+      expect(bobIdentity?.principal).toBe("Bob")
 
       // Should have received a peer-established change
       expect(changes.length).toBe(1)
       expect(changes[0].type).toBe("peer-established")
-      expect(changes[0].peer.peerId).toBe("bob")
+      expect(changes[0].peer.peerId).toBe(exchange2.peerId)
     })
 
     it("peer-departed fires when a remote peer disconnects", async () => {
       const bridge = new Bridge()
       const exchange1 = createExchange({
-        id: "alice",
+        principal: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
       const exchange2 = createExchange({
-        id: "bob",
+        principal: "bob",
         transports: [createBridgeTransport({ transportId: "bob", bridge })],
       })
 
@@ -483,17 +486,17 @@ describe("Exchange", () => {
       // Should have received a peer-departed change
       expect(changes.length).toBe(1)
       expect(changes[0].type).toBe("peer-departed")
-      expect(changes[0].peer.peerId).toBe("bob")
+      expect(changes[0].peer.peerId).toBe(exchange2.peerId)
     })
 
     it("exchange.peers() reflects correct state during subscriber callback", async () => {
       const bridge = new Bridge()
       const exchange1 = createExchange({
-        id: "alice",
+        principal: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
-      const _exchange2 = createExchange({
-        id: "bob",
+      const exchange2 = createExchange({
+        principal: "bob",
         transports: [createBridgeTransport({ transportId: "bob", bridge })],
       })
 
@@ -509,21 +512,22 @@ describe("Exchange", () => {
       // During the callback, peers() should reflect the updated state
       expect(peersDuringCallback).toBeDefined()
       expect(peersDuringCallback?.size).toBe(1)
-      expect(peersDuringCallback?.has("bob")).toBe(true)
+      expect(peersDuringCallback?.has(exchange2.peerId)).toBe(true)
     })
 
     it("multi-transport: one peer-established on first bridge, no second on second bridge", async () => {
+      const errors = vi.spyOn(console, "error")
       const bridge1 = new Bridge()
       const bridge2 = new Bridge()
       const exchange1 = createExchange({
-        id: "alice",
+        principal: "alice",
         transports: [
           createBridgeTransport({ transportId: "alice-1", bridge: bridge1 }),
           createBridgeTransport({ transportId: "alice-2", bridge: bridge2 }),
         ],
       })
-      const _exchange2 = createExchange({
-        id: "bob",
+      const exchange2 = createExchange({
+        principal: "bob",
         transports: [
           createBridgeTransport({ transportId: "bob-1", bridge: bridge1 }),
           createBridgeTransport({ transportId: "bob-2", bridge: bridge2 }),
@@ -541,17 +545,21 @@ describe("Exchange", () => {
       expect(exchange1.peers().size).toBe(1)
       const joinedChanges = changes.filter(c => c.type === "peer-established")
       expect(joinedChanges.length).toBe(1)
-      expect(joinedChanges[0].peer.peerId).toBe("bob")
+      expect(joinedChanges[0].peer.peerId).toBe(exchange2.peerId)
+
+      // A supported topology, so nothing is reported as an error.
+      expect(errors).not.toHaveBeenCalled()
+      errors.mockRestore()
     })
 
     it("shutdown emits peer-departed for all connected peers", async () => {
       const bridge = new Bridge()
       const exchange1 = createExchange({
-        id: "alice",
+        principal: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
-      const _exchange2 = createExchange({
-        id: "bob",
+      const exchange2 = createExchange({
+        principal: "bob",
         transports: [createBridgeTransport({ transportId: "bob", bridge })],
       })
 
@@ -568,18 +576,18 @@ describe("Exchange", () => {
 
       expect(changes.length).toBe(1)
       expect(changes[0].type).toBe("peer-departed")
-      expect(changes[0].peer.peerId).toBe("bob")
+      expect(changes[0].peer.peerId).toBe(exchange2.peerId)
       expect(exchange1.peers().size).toBe(0)
     })
 
     it("reset() emits peer-departed for all connected peers", async () => {
       const bridge = new Bridge()
       const exchange1 = createExchange({
-        id: "alice",
+        principal: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
-      const _exchange2 = createExchange({
-        id: "bob",
+      const exchange2 = createExchange({
+        principal: "bob",
         transports: [createBridgeTransport({ transportId: "bob", bridge })],
       })
 
@@ -596,7 +604,7 @@ describe("Exchange", () => {
 
       expect(changes.length).toBe(1)
       expect(changes[0].type).toBe("peer-departed")
-      expect(changes[0].peer.peerId).toBe("bob")
+      expect(changes[0].peer.peerId).toBe(exchange2.peerId)
       expect(exchange1.peers().size).toBe(0)
     })
 
@@ -607,11 +615,11 @@ describe("Exchange", () => {
     it("involuntary disconnect: peer-disconnected fires, peer preserved in peers()", async () => {
       const bridge = new Bridge()
       const exchange1 = createExchange({
-        id: "alice",
+        principal: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
-      const _exchange2 = createExchange({
-        id: "bob",
+      const exchange2 = createExchange({
+        principal: "bob",
         transports: [createBridgeTransport({ transportId: "bob", bridge })],
       })
 
@@ -624,27 +632,27 @@ describe("Exchange", () => {
       })
 
       // Remove bob's transport — simulates network failure (no depart sent)
-      await _exchange2.removeTransport("bob")
+      await exchange2.removeTransport("bob")
       await drain()
 
       // Alice should see peer-disconnected (not peer-departed)
       expect(changes.length).toBe(1)
       expect(changes[0].type).toBe("peer-disconnected")
-      expect(changes[0].peer.peerId).toBe("bob")
+      expect(changes[0].peer.peerId).toBe(exchange2.peerId)
 
       // Bob is still in alice's peer map — connection is not presence
       expect(exchange1.peers().size).toBe(1)
-      expect(exchange1.peers().has("bob")).toBe(true)
+      expect(exchange1.peers().has(exchange2.peerId)).toBe(true)
     })
 
     it("involuntary disconnect then shutdown: peer-departed fires", async () => {
       const bridge = new Bridge()
       const exchange1 = createExchange({
-        id: "alice",
+        principal: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
       const exchange2 = createExchange({
-        id: "bob",
+        principal: "bob",
         transports: [createBridgeTransport({ transportId: "bob", bridge })],
       })
 
@@ -664,18 +672,18 @@ describe("Exchange", () => {
 
       const departed = changes.filter(c => c.type === "peer-departed")
       expect(departed.length).toBe(1)
-      expect(departed[0].peer.peerId).toBe("bob")
+      expect(departed[0].peer.peerId).toBe(exchange2.peerId)
       expect(exchange1.peers().size).toBe(0)
     })
 
     it("reconnection after involuntary disconnect: peer-reconnected fires", async () => {
       const bridge = new Bridge()
       const exchange1 = createExchange({
-        id: "alice",
+        principal: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
       const exchange2 = createExchange({
-        id: "bob",
+        principal: "bob",
         transports: [createBridgeTransport({ transportId: "bob", bridge })],
       })
 
@@ -700,21 +708,21 @@ describe("Exchange", () => {
       // Alice should see peer-reconnected
       const reconnected = changes.filter(c => c.type === "peer-reconnected")
       expect(reconnected.length).toBe(1)
-      expect(reconnected[0].peer.peerId).toBe("bob")
+      expect(reconnected[0].peer.peerId).toBe(exchange2.peerId)
 
       // Peer still in map (continuously present)
       expect(exchange1.peers().size).toBe(1)
-      expect(exchange1.peers().has("bob")).toBe(true)
+      expect(exchange1.peers().has(exchange2.peerId)).toBe(true)
     })
 
     it("sync resumes after reconnection", async () => {
       const bridge = new Bridge()
       const exchange1 = createExchange({
-        id: "alice",
+        principal: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
       const exchange2 = createExchange({
-        id: "bob",
+        principal: "bob",
         transports: [createBridgeTransport({ transportId: "bob", bridge })],
       })
 
@@ -757,12 +765,12 @@ describe("Exchange", () => {
     it("departureTimeout: 0 — involuntary disconnect triggers immediate peer-departed", async () => {
       const bridge = new Bridge()
       const exchange1 = createExchange({
-        id: "alice",
+        principal: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
         departureTimeout: 0,
       })
       const exchange2 = createExchange({
-        id: "bob",
+        principal: "bob",
         transports: [createBridgeTransport({ transportId: "bob", bridge })],
       })
 
@@ -781,7 +789,7 @@ describe("Exchange", () => {
       // With timeout=0, alice skips peer-disconnected and goes straight to peer-departed
       expect(changes.length).toBe(1)
       expect(changes[0].type).toBe("peer-departed")
-      expect(changes[0].peer.peerId).toBe("bob")
+      expect(changes[0].peer.peerId).toBe(exchange2.peerId)
       expect(exchange1.peers().size).toBe(0)
     })
 
@@ -790,12 +798,12 @@ describe("Exchange", () => {
       try {
         const bridge = new Bridge()
         const exchange1 = createExchange({
-          id: "alice",
+          principal: "alice",
           transports: [createBridgeTransport({ transportId: "alice", bridge })],
           departureTimeout: 5_000,
         })
         const exchange2 = createExchange({
-          id: "bob",
+          principal: "bob",
           transports: [createBridgeTransport({ transportId: "bob", bridge })],
         })
 
@@ -816,7 +824,7 @@ describe("Exchange", () => {
         expect(changes).toEqual([
           {
             type: "peer-disconnected",
-            peer: expect.objectContaining({ peerId: "bob" }),
+            peer: expect.objectContaining({ peerId: exchange2.peerId }),
           },
         ])
         expect(exchange1.peers().size).toBe(1)
@@ -827,7 +835,7 @@ describe("Exchange", () => {
         // peer-departed should have fired
         const departed = changes.filter(c => c.type === "peer-departed")
         expect(departed.length).toBe(1)
-        expect(departed[0].peer.peerId).toBe("bob")
+        expect(departed[0].peer.peerId).toBe(exchange2.peerId)
         expect(exchange1.peers().size).toBe(0)
       } finally {
         vi.useRealTimers()
@@ -839,12 +847,12 @@ describe("Exchange", () => {
       try {
         const bridge = new Bridge()
         const exchange1 = createExchange({
-          id: "alice",
+          principal: "alice",
           transports: [createBridgeTransport({ transportId: "alice", bridge })],
           departureTimeout: 5_000,
         })
         const exchange2 = createExchange({
-          id: "bob",
+          principal: "bob",
           transports: [createBridgeTransport({ transportId: "bob", bridge })],
         })
 
@@ -876,7 +884,7 @@ describe("Exchange", () => {
         const departed = changes.filter(c => c.type === "peer-departed")
         expect(departed.length).toBe(0)
         expect(exchange1.peers().size).toBe(1)
-        expect(exchange1.peers().has("bob")).toBe(true)
+        expect(exchange1.peers().has(exchange2.peerId)).toBe(true)
       } finally {
         vi.useRealTimers()
       }
@@ -1138,11 +1146,11 @@ describe("Exchange", () => {
     it("suspend() on deferred doc throws", async () => {
       const bridge = new Bridge()
       const exchangeA = createExchange({
-        id: "alice",
+        principal: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
       const exchangeB = createExchange({
-        id: "bob",
+        principal: "bob",
         transports: [createBridgeTransport({ transportId: "bob", bridge })],
         resolve: () => Defer(),
       })
@@ -1164,12 +1172,12 @@ describe("Exchange", () => {
       const bridge = new Bridge()
 
       const _exchange1 = createExchange({
-        id: "alice",
+        principal: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
 
       const exchange2 = createExchange({
-        id: "bob",
+        principal: "bob",
         transports: [createBridgeTransport({ transportId: "bob", bridge })],
       })
       exchange2.register({
@@ -1186,12 +1194,12 @@ describe("Exchange", () => {
       const bridge = new Bridge()
 
       const _exchange1 = createExchange({
-        id: "alice",
+        principal: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
 
       const exchange2 = createExchange({
-        id: "bob",
+        principal: "bob",
         transports: [createBridgeTransport({ transportId: "bob", bridge })],
       })
       exchange2.register({
@@ -1210,11 +1218,11 @@ describe("Exchange", () => {
       const bridge = new Bridge()
 
       const alice = new Exchange({
-        id: "alice",
+        principal: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
       const bob = new Exchange({
-        id: "bob",
+        principal: "bob",
         transports: [createBridgeTransport({ transportId: "bob", bridge })],
       })
       activeExchanges.push(alice, bob)
@@ -1222,14 +1230,14 @@ describe("Exchange", () => {
       await drain()
 
       // v1 default features: { alias: true } (set by initSession default).
-      expect(alice.getPeerFeatures("bob")).toEqual({ alias: true })
-      expect(bob.getPeerFeatures("alice")).toEqual({ alias: true })
+      expect(alice.getPeerFeatures(bob.peerId)).toEqual({ alias: true })
+      expect(bob.getPeerFeatures(alice.peerId)).toEqual({ alias: true })
     })
 
     it("returns undefined for a peer that has not established yet", () => {
       const bridge = new Bridge()
       const alice = new Exchange({
-        id: "alice",
+        principal: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
       activeExchanges.push(alice)
@@ -1242,16 +1250,16 @@ describe("Exchange", () => {
   // =========================================================================
 
   describe("writer restart (incarnated PlainVersion)", () => {
-    it("a same-peerId writer that restarts with no persisted store still delivers its writes", async () => {
+    it("a writer that restarts, as a new seat with no persisted store, still delivers its writes", async () => {
       const bridge = new Bridge()
 
       // ── "Session 1" ── alice writes, bob syncs and caches sync state.
       const aliceSession1 = createExchange({
-        id: "alice",
+        principal: "alice",
         transports: [createBridgeTransport({ transportId: "alice-1", bridge })],
       })
       const bob = createExchange({
-        id: "bob",
+        principal: "bob",
         transports: [createBridgeTransport({ transportId: "bob", bridge })],
       })
 
@@ -1273,11 +1281,12 @@ describe("Exchange", () => {
       await aliceSession1.removeTransport("alice-1")
       await drain()
 
-      // ── "Session 2" ── same peerId, brand-new Exchange (no persisted store),
-      // mirroring a real browser refresh. This mints a fresh substrate at
-      // DEFAULT_INCARNATION for "shared-doc", independent of session 1's.
+      // ── "Session 2" ── same principal, brand-new Exchange and seat (no
+      // persisted store), mirroring a real browser refresh. This mints a
+      // fresh substrate at DEFAULT_INCARNATION for "shared-doc", independent
+      // of session 1's.
       const aliceSession2 = createExchange({
-        id: "alice",
+        principal: "alice",
         transports: [createBridgeTransport({ transportId: "alice-2", bridge })],
       })
       const docA2 = aliceSession2.get("shared-doc", TestDoc)
@@ -1317,11 +1326,11 @@ describe("Exchange", () => {
 
       // ── Session 1: many writes to inflate Bob's version ──
       const alice1 = createExchange({
-        id: "alice",
+        principal: "alice",
         transports: [createBridgeTransport({ transportId: "alice-1", bridge })],
       })
       const bob = createExchange({
-        id: "bob",
+        principal: "bob",
         transports: [createBridgeTransport({ transportId: "bob", bridge })],
       })
 
@@ -1341,7 +1350,7 @@ describe("Exchange", () => {
       await drain()
 
       const alice2 = createExchange({
-        id: "alice",
+        principal: "alice",
         transports: [createBridgeTransport({ transportId: "alice-2", bridge })],
       })
       const docA2 = alice2.get("inflated-doc", TestDoc)
@@ -1358,23 +1367,9 @@ describe("Exchange", () => {
 
       // Second write after restart — this is where the bug manifests
       // if the server's inflated version blocks the sync.
-      const bobVBefore = (docB as any)[Symbol.for("kyneta:substrate")]
-        .version()
-        .serialize()
       batch(docA2, d => d.count.set(200))
-      const aliceVAfter = (docA2 as any)[Symbol.for("kyneta:substrate")]
-        .version()
-        .serialize()
-      console.log("DIAG inflated:", { bobVBefore, aliceVAfter })
       await drain()
       await whenSettled(docB)
-      const bobVAfter = (docB as any)[Symbol.for("kyneta:substrate")]
-        .version()
-        .serialize()
-      console.log("DIAG inflated result:", {
-        bobVAfter,
-        bobCount: docB.count(),
-      })
       expect(docB.count()).toBe(200)
     })
 
@@ -1398,7 +1393,7 @@ describe("Exchange", () => {
 
       const bridge = new Bridge()
       const serverExchange = createExchange({
-        id: "server",
+        principal: "server",
         transports: [createBridgeTransport({ transportId: "server", bridge })],
       })
 
@@ -1422,15 +1417,15 @@ describe("Exchange", () => {
 
       // ── Session 1: client sends, server echoes, client receives ──
       const client1 = createExchange({
-        id: "client",
+        principal: "client",
         transports: [
           createBridgeTransport({ transportId: "client-1", bridge }),
         ],
       })
 
       // Do many request/response cycles to inflate versions
-      const sender1 = EchoProto.sender(client1, "server")
-      const receiver1 = EchoProto.claimReceiver(client1, "server")
+      const sender1 = EchoProto.sender(client1, serverExchange.peerId)
+      const receiver1 = EchoProto.claimReceiver(client1, serverExchange.peerId)
       const responses1: number[] = []
       void (async () => {
         for await (const msg of receiver1) responses1.push(msg.value)
@@ -1450,15 +1445,15 @@ describe("Exchange", () => {
       await drain()
 
       const client2 = createExchange({
-        id: "client",
+        principal: "client",
         transports: [
           createBridgeTransport({ transportId: "client-2", bridge }),
         ],
       })
       await drain()
 
-      const sender2 = EchoProto.sender(client2, "server")
-      const receiver2 = EchoProto.claimReceiver(client2, "server")
+      const sender2 = EchoProto.sender(client2, serverExchange.peerId)
+      const receiver2 = EchoProto.claimReceiver(client2, serverExchange.peerId)
       const responses2: number[] = []
       void (async () => {
         for await (const msg of receiver2) responses2.push(msg.value)
@@ -1490,26 +1485,15 @@ describe("Exchange", () => {
       receiver2.close()
     })
 
-    // Expected to fail until each Runtime issues its own peer id
-    // (PLAN-2026-09-27-principal). The two clients share one peer id, so they
-    // are two writers of one `Line` outbox, a plain document. Their lineages
-    // converge on the later one (the lineage-collision rule), and a message
-    // the earlier one wrote but the server had not taken in is never
-    // delivered. With a seat per Runtime they write two outboxes, both
-    // messages arrive, and this test passes: then drop `.fails`.
-    it.fails("double-mount race (same peerId, two concurrent client Exchanges — StrictMode/HMR): both messages arrive (production repro)", async () => {
-      // Production repro (jj:5e9e318542ee2006ccb720fd4ec9f819): the actual
-      // trigger observed in production is TWO client Exchange instances
-      // sharing the same peerId connecting concurrently (e.g. React
+    it("double-mount race (one principal, two concurrent client Exchanges — StrictMode/HMR): both messages arrive (production repro)", async () => {
+      // Production repro (jj:5e9e318542ee2006ccb720fd4ec9f819): TWO client
+      // Exchange instances for one user connecting concurrently (React
       // StrictMode's double-invoke, or an HMR reload racing the previous
-      // module instance's teardown) — not a clean sequential restart.
-      // Each instance mints its own lineage; cross-traffic between them
-      // causes the server's cached lineage for this peerId to whiplash
-      // between the two, so a steady-state `since`-kind push from one
-      // instance can arrive while the server's local lineage reflects the
-      // other. Confirmed to reproduce the exact production stack trace
-      // (`PlainSubstrate.resetFromEntirety expects a JSON entirety
-      // payload`) when the synchronizer's guard is removed.
+      // module instance's teardown). When the caller chose the peer id, both
+      // shared it: two writers of one Line outbox, a plain document, whose
+      // lineages converged on one and lost the other's message in flight.
+      // Each Runtime now issues its own seat, so the two clients write two
+      // outboxes and both messages arrive.
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
       const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
       const { Line } = await import("../line.js")
@@ -1524,7 +1508,7 @@ describe("Exchange", () => {
 
       const bridge = new Bridge()
       const server = createExchange({
-        id: "loomi-server",
+        principal: "loomi-server",
         transports: [createBridgeTransport({ transportId: "server", bridge })],
       })
       const serverReceived: Array<{ id: string; request: boolean }> = []
@@ -1534,39 +1518,42 @@ describe("Exchange", () => {
           for await (const msg of receiver) serverReceived.push(msg)
         })()
       })
+      const isServer = (p: PeerIdentityDetails) =>
+        p.principal === "loomi-server"
 
       // Client "instance 1" mounts.
       const client1 = createExchange({
-        id: "87f8ec6c3fb92285",
+        principal: "user-87f8ec6c",
         transports: [
           createBridgeTransport({ transportId: "client-1", bridge }),
         ],
       })
-      const sender1 = RealProto.sender(client1, "loomi-server")
-      // Client 1 mints the later lineage, so the server, which takes client
-      // 1's outbox first, refuses client 2's: the loss is deterministic.
-      vi.setSystemTime(Date.UTC(2026, 0, 2))
-      sender1.send({ id: "req-1", request: true })
 
-      // Client "instance 2" mounts with the SAME peerId almost immediately
-      // (StrictMode/HMR double-invoke) — no drain, no clean teardown of
-      // instance 1 in between.
+      // Client "instance 2" mounts for the same user almost immediately
+      // (StrictMode/HMR double-invoke), with no clean teardown of instance 1
+      // in between.
       const client2 = createExchange({
-        id: "87f8ec6c3fb92285",
+        principal: "user-87f8ec6c",
         transports: [
           createBridgeTransport({ transportId: "client-2", bridge }),
         ],
       })
-      const sender2 = RealProto.sender(client2, "loomi-server")
-      vi.setSystemTime(Date.UTC(2026, 0, 1))
+      expect(client2.peerId).not.toBe(client1.peerId)
+
+      const sender1 = RealProto.sender(
+        client1,
+        (await whenPeer(client1, isServer)).peerId,
+      )
+      sender1.send({ id: "req-1", request: true })
+      const sender2 = RealProto.sender(
+        client2,
+        (await whenPeer(client2, isServer)).peerId,
+      )
       sender2.send({ id: "req-2", request: true })
-      vi.useRealTimers()
 
       await drain(60)
 
-      // Both requests still arrive — the lineage-boundary guard recovers via
-      // a fresh interest/entirety round-trip rather than crashing and
-      // dropping the offer.
+      // Both requests arrive, and nothing crashes on the way.
       const ids = serverReceived.map(m => m.id)
       expect(ids).toContain("req-1")
       expect(ids).toContain("req-2")
@@ -1610,11 +1597,11 @@ describe("deferred promotion is independent of schema-registration order", () =>
     ): Promise<readonly string[]> {
       const bridge = new Bridge()
       const alice = createExchange({
-        id: "alice",
+        principal: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
       const bob = createExchange({
-        id: "bob",
+        principal: "bob",
         transports: [createBridgeTransport({ transportId: "bob", bridge })],
       })
 
@@ -1647,12 +1634,12 @@ describe("get() on a deferred document checks all three axes", () => {
     // could not decode a single byte Alice would send.
     const bridge = new Bridge()
     const alice = createExchange({
-      id: "alice",
+      principal: "alice",
       transports: [createBridgeTransport({ transportId: "alice", bridge })],
       replicas: [loro.replica()],
     })
     const bob = createExchange({
-      id: "bob",
+      principal: "bob",
       transports: [createBridgeTransport({ transportId: "bob", bridge })],
       replicas: [loro.replica()],
     })
@@ -1677,11 +1664,11 @@ describe("get() on a deferred document checks all three axes", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
     const bridge = new Bridge()
     const alice = createExchange({
-      id: "alice",
+      principal: "alice",
       transports: [createBridgeTransport({ transportId: "alice", bridge })],
     })
     const bob = createExchange({
-      id: "bob",
+      principal: "bob",
       transports: [createBridgeTransport({ transportId: "bob", bridge })],
     })
 

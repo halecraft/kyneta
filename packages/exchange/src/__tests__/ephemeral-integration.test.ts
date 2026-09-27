@@ -41,13 +41,13 @@ describe("ephemeral substrate — field-level LWW through a live Exchange", () =
     const bridge = new Bridge()
 
     const exchangeA = new Exchange({
-      id: "alice",
+      principal: "alice",
       transports: [createBridgeTransport({ transportId: "alice", bridge })],
       schemas: [StateDoc],
     })
 
     const exchangeB = new Exchange({
-      id: "bob",
+      principal: "bob",
       transports: [createBridgeTransport({ transportId: "bob", bridge })],
       schemas: [StateDoc],
     })
@@ -105,12 +105,12 @@ describe("ephemeral substrate — field-level LWW through a live Exchange", () =
     // simply never updates.
     const bridge = new Bridge()
     const exchangeA = new Exchange({
-      id: "alice",
+      principal: "alice",
       transports: [createBridgeTransport({ transportId: "alice", bridge })],
       schemas: [StateDoc],
     })
     const exchangeB = new Exchange({
-      id: "bob",
+      principal: "bob",
       transports: [createBridgeTransport({ transportId: "bob", bridge })],
       schemas: [StateDoc],
     })
@@ -164,7 +164,7 @@ describe("a three-peer mesh settles", () => {
     const exchanges = ids.map(
       id =>
         new Exchange({
-          id,
+          principal: id,
           transports: [createBridgeTransport({ transportId: id, bridge })],
           schemas: [MeshDoc],
         }),
@@ -216,12 +216,12 @@ describe("a change ships itself, not the document", () => {
     const quietBytes = async (rosterSize: number): Promise<number> => {
       const bridge = new Bridge()
       const alice = new Exchange({
-        id: "alice",
+        principal: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
         schemas: [Roster],
       })
       const bob = new Exchange({
-        id: "bob",
+        principal: "bob",
         transports: [createBridgeTransport({ transportId: "bob", bridge })],
         schemas: [Roster],
       })
@@ -267,12 +267,12 @@ describe("a peer that misses an update is repaired precisely", () => {
   it("sends the missing leaves, not the whole roster", async () => {
     const bridge = new Bridge()
     const alice = new Exchange({
-      id: "alice",
+      principal: "alice",
       transports: [createBridgeTransport({ transportId: "alice", bridge })],
       schemas: [Roster],
     })
     const bob = new Exchange({
-      id: "bob",
+      principal: "bob",
       transports: [createBridgeTransport({ transportId: "bob", bridge })],
       schemas: [Roster],
     })
@@ -320,12 +320,12 @@ describe("a peer that misses an update is repaired precisely", () => {
     // alice, she could not read it and would resend the whole document.
     const bridge = new Bridge()
     const alice = new Exchange({
-      id: "alice",
+      principal: "alice",
       transports: [createBridgeTransport({ transportId: "alice", bridge })],
       schemas: [Roster],
     })
     const bob = new Exchange({
-      id: "bob",
+      principal: "bob",
       transports: [createBridgeTransport({ transportId: "bob-1", bridge })],
       schemas: [Roster],
     })
@@ -401,7 +401,7 @@ describe("a roster of peers all writing their own key", () => {
       .map(
         id =>
           new Exchange({
-            id,
+            principal: id,
             transports: [createBridgeTransport({ transportId: id, bridge })],
             schemas: [Roster],
           }),
@@ -478,12 +478,12 @@ describe("a delete survives promotion", () => {
   it("a relayed document opened later keeps its deletes", async () => {
     const bridge = new Bridge()
     const alice = new Exchange({
-      id: "alice",
+      principal: "alice",
       transports: [createBridgeTransport({ transportId: "alice", bridge })],
       schemas: [Roster],
     })
     const bob = new Exchange({
-      id: "bob",
+      principal: "bob",
       transports: [createBridgeTransport({ transportId: "bob", bridge })],
       resolve: () => Replicate(),
     })

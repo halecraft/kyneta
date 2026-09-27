@@ -69,7 +69,7 @@ describe("createLineDocSchema", () => {
   })
 
   it("the envelope's ack field is named ackLineage, not ackIncarnation", () => {
-    const exchange = new Exchange({ id: "test" })
+    const exchange = new Exchange({ principal: "test" })
     const bound = json.bind(createLineDocSchema(SimpleSchema))
     const doc = exchange.get("envelope-shape-check" as any, bound)
     // Structural presence of the renamed field, and absence of the old
@@ -85,7 +85,7 @@ describe("createLineDocSchema", () => {
     // `pnpm verify`'s type-check stage). At runtime, confirm the typed
     // `Version.lineage` property Line relies on is reachable directly off
     // `version(doc)` without any cast, for any substrate-backed doc.
-    const exchange = new Exchange({ id: "test" })
+    const exchange = new Exchange({ principal: "test" })
     const bound = json.bind(createLineDocSchema(SimpleSchema))
     const doc = exchange.get("lineage-access-check" as any, bound)
     batch(doc, (d: any) => d.nextSeq.set(1))

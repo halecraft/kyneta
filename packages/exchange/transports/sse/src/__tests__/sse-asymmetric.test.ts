@@ -48,14 +48,14 @@ function recoverAll(
 
 const serverEstablish: EstablishMsg = {
   type: "establish",
-  identity: { peerId: "server", name: "Server", type: "service" },
+  identity: { peerId: "server", principal: "Server", type: "service" },
   features: { alias: true },
   protocolVersion: PROTOCOL_VERSION,
 }
 
 const clientEstablish: EstablishMsg = {
   type: "establish",
-  identity: { peerId: "client", name: "Client", type: "user" },
+  identity: { peerId: "client", principal: "Client", type: "user" },
   features: { alias: true },
   protocolVersion: PROTOCOL_VERSION,
 }

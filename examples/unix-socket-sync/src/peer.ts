@@ -7,7 +7,6 @@
 // over a single socket path. Kill any instance and the rest heal.
 
 import { Exchange } from "@kyneta/exchange"
-import { randomPeerId } from "@kyneta/random"
 import { subscribe } from "@kyneta/schema"
 import { createUnixSocketPeer } from "@kyneta/unix-socket-transport"
 import {
@@ -25,7 +24,8 @@ import { type PeerInfo, render, startInput } from "./tui.js"
 // ---------------------------------------------------------------------------
 
 const SOCKET_PATH = process.env.SOCKET_PATH ?? "/tmp/kyneta-sync.sock"
-const peerId = `peer-${randomPeerId()}`
+// Who this peer is: the process id is unique on the machine the socket is on.
+const principal = `peer-${process.pid}`
 
 // ---------------------------------------------------------------------------
 // Exchange + unix socket peer
@@ -37,7 +37,7 @@ const peerId = `peer-${randomPeerId()}`
 const peer = createUnixSocketPeer({ path: SOCKET_PATH })
 
 const exchange = new Exchange({
-  id: { peerId, name: peerId },
+  principal,
   transports: [peer],
 })
 
@@ -51,7 +51,7 @@ type ScalarFieldRef = { (): unknown; set(value: unknown): void }
 const scalarFields = doc as unknown as Record<string, ScalarFieldRef>
 
 // Write our presence into the document — a single mutation auto-commits.
-doc.peers.set(peerId, true)
+doc.peers.set(principal, true)
 
 // ---------------------------------------------------------------------------
 // State
@@ -72,10 +72,10 @@ function rerender() {
 
   // Read peer info from the document's peers record
   const peersRecord = doc.peers()
-  const peerIds = Object.keys(peersRecord).filter(id => peersRecord[id])
+  const principals = Object.keys(peersRecord).filter(id => peersRecord[id])
 
   const info: PeerInfo = {
-    peerIds,
+    principals,
     role: peer.role,
   }
 
@@ -90,7 +90,7 @@ exchange.peers.subscribe(changeset => {
   for (const peerChange of changeset.changes) {
     if (peerChange.type === "peer-departed") {
       // Remove departed peer from the document's peers record (single write).
-      doc.peers.delete(peerChange.peer.peerId)
+      doc.peers.delete(peerChange.peer.principal)
     }
   }
   // Re-render after cleanup
@@ -127,7 +127,7 @@ const stopInput = startInput(action => {
 
 function applyChange(direction: Direction) {
   const field = fields[selectedIndex]
-  const currentValue = (doc as any)[field.key]()
+  const currentValue = scalarFields[field.key]()
 
   let newValue: unknown
   switch (field.type) {
@@ -159,7 +159,7 @@ function applyChange(direction: Direction) {
 async function cleanup() {
   stopInput()
   // Remove our presence from the document (single write).
-  doc.peers.delete(peerId)
+  doc.peers.delete(principal)
   // exchange.shutdown() stops the peer transport like any other.
   await exchange.shutdown()
   // Clear screen and show cursor

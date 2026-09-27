@@ -5,11 +5,7 @@
 import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import { Schema } from "@kyneta/schema"
 import { afterEach, describe, expect, it } from "vitest"
-import {
-  Exchange,
-  type ExchangeParams,
-  type PeerIdentityInput,
-} from "../exchange.js"
+import { Exchange, type ExchangeParams } from "../exchange.js"
 import { Line } from "../line.js"
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -24,8 +20,7 @@ async function drain(rounds = 30): Promise<void> {
 const activeExchanges: Exchange[] = []
 
 function createExchange(params: Partial<ExchangeParams> = {}): Exchange {
-  const merged = { id: "test" as string | PeerIdentityInput, ...params }
-  const ex = new Exchange(merged as ExchangeParams)
+  const ex = new Exchange({ principal: "test", ...params })
   activeExchanges.push(ex)
   return ex
 }
@@ -63,11 +58,11 @@ describe("protocol.listen", () => {
   it("server responds to client request via onReceive", async () => {
     const bridge = new Bridge()
     const exchangeClient = createExchange({
-      id: "client",
+      principal: "client",
       transports: [createBridgeTransport({ transportId: "client", bridge })],
     })
     const exchangeServer = createExchange({
-      id: "server",
+      principal: "server",
       transports: [createBridgeTransport({ transportId: "server", bridge })],
     })
     await drain()
@@ -92,8 +87,11 @@ describe("protocol.listen", () => {
       })()
     })
 
-    const clientSender = RPC.sender(exchangeClient, "server")
-    const clientReceiver = RPC.claimReceiver(exchangeClient, "server")
+    const clientSender = RPC.sender(exchangeClient, exchangeServer.peerId)
+    const clientReceiver = RPC.claimReceiver(
+      exchangeClient,
+      exchangeServer.peerId,
+    )
     const clientReceived: Array<{ result: string; id: number }> = []
     collect(clientReceiver, clientReceived)
 
@@ -118,20 +116,20 @@ describe("protocol.listen", () => {
     const bridge1 = new Bridge()
     const bridge2 = new Bridge()
     const exchangeServer = createExchange({
-      id: "server",
+      principal: "server",
       transports: [
         createBridgeTransport({ transportId: "server1", bridge: bridge1 }),
         createBridgeTransport({ transportId: "server2", bridge: bridge2 }),
       ],
     })
     const exchangeClient1 = createExchange({
-      id: "client1",
+      principal: "client1",
       transports: [
         createBridgeTransport({ transportId: "client1", bridge: bridge1 }),
       ],
     })
     const exchangeClient2 = createExchange({
-      id: "client2",
+      principal: "client2",
       transports: [
         createBridgeTransport({ transportId: "client2", bridge: bridge2 }),
       ],
@@ -158,16 +156,16 @@ describe("protocol.listen", () => {
       collect(receiver, entry.msgs)
     })
 
-    const clientSender1 = RPC.sender(exchangeClient1, "server")
-    const clientSender2 = RPC.sender(exchangeClient2, "server")
+    const clientSender1 = RPC.sender(exchangeClient1, exchangeServer.peerId)
+    const clientSender2 = RPC.sender(exchangeClient2, exchangeServer.peerId)
 
     clientSender1.send({ method: "from-1", id: 1 })
     clientSender2.send({ method: "from-2", id: 2 })
     await drain()
 
     expect(serverEntries.length).toBe(2)
-    const entry1 = serverEntries.find(e => e.peer === "client1")
-    const entry2 = serverEntries.find(e => e.peer === "client2")
+    const entry1 = serverEntries.find(e => e.peer === exchangeClient1.peerId)
+    const entry2 = serverEntries.find(e => e.peer === exchangeClient2.peerId)
     expect(entry1?.msgs).toEqual([{ method: "from-1", id: 1 }])
     expect(entry2?.msgs).toEqual([{ method: "from-2", id: 2 }])
 
@@ -180,20 +178,20 @@ describe("protocol.listen", () => {
     const bridge1 = new Bridge()
     const bridge2 = new Bridge()
     const exchangeServer = createExchange({
-      id: "server",
+      principal: "server",
       transports: [
         createBridgeTransport({ transportId: "server1", bridge: bridge1 }),
         createBridgeTransport({ transportId: "server2", bridge: bridge2 }),
       ],
     })
     const exchangeClientA = createExchange({
-      id: "client-a",
+      principal: "client-a",
       transports: [
         createBridgeTransport({ transportId: "client-a", bridge: bridge1 }),
       ],
     })
     const exchangeClientB = createExchange({
-      id: "client-b",
+      principal: "client-b",
       transports: [
         createBridgeTransport({ transportId: "client-b", bridge: bridge2 }),
       ],
@@ -209,17 +207,17 @@ describe("protocol.listen", () => {
     const unsub1 = listener.onReceive((_s, r) => cb1Peers.push(r.peer))
     listener.onReceive((_s, r) => cb2Peers.push(r.peer))
 
-    const line1 = P.sender(exchangeClientA, "server")
+    const line1 = P.sender(exchangeClientA, exchangeServer.peerId)
     await drain()
-    expect(cb1Peers).toEqual(["client-a"])
-    expect(cb2Peers).toEqual(["client-a"])
+    expect(cb1Peers).toEqual([exchangeClientA.peerId])
+    expect(cb2Peers).toEqual([exchangeClientA.peerId])
 
     unsub1()
 
-    const line2 = P.sender(exchangeClientB, "server")
+    const line2 = P.sender(exchangeClientB, exchangeServer.peerId)
     await drain()
-    expect(cb1Peers).toEqual(["client-a"])
-    expect(cb2Peers).toEqual(["client-a", "client-b"])
+    expect(cb1Peers).toEqual([exchangeClientA.peerId])
+    expect(cb2Peers).toEqual([exchangeClientA.peerId, exchangeClientB.peerId])
 
     listener.dispose()
     line1.close()
@@ -230,20 +228,20 @@ describe("protocol.listen", () => {
     const bridge1 = new Bridge()
     const bridge2 = new Bridge()
     const exchangeServer = createExchange({
-      id: "server",
+      principal: "server",
       transports: [
         createBridgeTransport({ transportId: "server1", bridge: bridge1 }),
         createBridgeTransport({ transportId: "server2", bridge: bridge2 }),
       ],
     })
     const exchangeClient1 = createExchange({
-      id: "client1",
+      principal: "client1",
       transports: [
         createBridgeTransport({ transportId: "client1", bridge: bridge1 }),
       ],
     })
     const exchangeClient2 = createExchange({
-      id: "client2",
+      principal: "client2",
       transports: [
         createBridgeTransport({ transportId: "client2", bridge: bridge2 }),
       ],
@@ -262,10 +260,13 @@ describe("protocol.listen", () => {
       capturedReceiver = receiver
     })
 
-    const clientSender1 = P.sender(exchangeClient1, "server")
-    const clientReceiver1 = P.claimReceiver(exchangeClient1, "server")
+    const clientSender1 = P.sender(exchangeClient1, exchangeServer.peerId)
+    const clientReceiver1 = P.claimReceiver(
+      exchangeClient1,
+      exchangeServer.peerId,
+    )
     await drain()
-    expect(onLinePeers).toEqual(["client1"])
+    expect(onLinePeers).toEqual([exchangeClient1.peerId])
 
     const serverReceived: { value: number }[] = []
     collect(capturedReceiver, serverReceived)
@@ -275,9 +276,9 @@ describe("protocol.listen", () => {
     listener.dispose()
 
     // Second client connects — onReceive should NOT fire
-    const clientSender2 = P.sender(exchangeClient2, "server")
+    const clientSender2 = P.sender(exchangeClient2, exchangeServer.peerId)
     await drain()
-    expect(onLinePeers).toEqual(["client1"])
+    expect(onLinePeers).toEqual([exchangeClient1.peerId])
 
     // Existing Line from client1 is still functional
     clientSender1.send({ value: 42 })
@@ -298,11 +299,11 @@ describe("protocol.listen", () => {
   it("client's queued messages delivered immediately on onReceive", async () => {
     const bridge = new Bridge()
     const exchangeClient = createExchange({
-      id: "client",
+      principal: "client",
       transports: [createBridgeTransport({ transportId: "client", bridge })],
     })
     const exchangeServer = createExchange({
-      id: "server",
+      principal: "server",
       transports: [createBridgeTransport({ transportId: "server", bridge })],
     })
     await drain()
@@ -315,7 +316,7 @@ describe("protocol.listen", () => {
       capturedReceiver = receiver
     })
 
-    const clientSender = P.sender(exchangeClient, "server")
+    const clientSender = P.sender(exchangeClient, exchangeServer.peerId)
     clientSender.send({ value: 1 })
     clientSender.send({ value: 2 })
     clientSender.send({ value: 3 })
@@ -345,18 +346,18 @@ describe("protocol.listen", () => {
   it("late listen: client connects before server starts listening", async () => {
     const bridge = new Bridge()
     const exchangeClient = createExchange({
-      id: "client",
+      principal: "client",
       transports: [createBridgeTransport({ transportId: "client", bridge })],
     })
     const exchangeServer = createExchange({
-      id: "server",
+      principal: "server",
       transports: [createBridgeTransport({ transportId: "server", bridge })],
     })
     await drain()
 
     const P = Line.protocol({ topic: "late-listen", schema: SimpleSchema })
 
-    const clientSender = P.sender(exchangeClient, "server")
+    const clientSender = P.sender(exchangeClient, exchangeServer.peerId)
     clientSender.send({ value: 42 })
     await drain()
 
@@ -368,7 +369,7 @@ describe("protocol.listen", () => {
     await drain()
 
     expect(capturedReceiver).not.toBeNull()
-    expect(capturedReceiver.peer).toBe("client")
+    expect(capturedReceiver.peer).toBe(exchangeClient.peerId)
 
     const iter = capturedReceiver[Symbol.asyncIterator]()
     const result = await Promise.race([
@@ -388,11 +389,11 @@ describe("protocol.listen", () => {
   it("listeners on different topics are independent", async () => {
     const bridge = new Bridge()
     const exchangeClient = createExchange({
-      id: "client",
+      principal: "client",
       transports: [createBridgeTransport({ transportId: "client", bridge })],
     })
     const exchangeServer = createExchange({
-      id: "server",
+      principal: "server",
       transports: [createBridgeTransport({ transportId: "server", bridge })],
     })
     await drain()
@@ -409,10 +410,10 @@ describe("protocol.listen", () => {
     const rpcListener = RpcProto.listen(exchangeServer)
     rpcListener.onReceive((_s, r) => rpcPeers.push(r.peer))
 
-    const chatLine = ChatProto.sender(exchangeClient, "server")
+    const chatLine = ChatProto.sender(exchangeClient, exchangeServer.peerId)
     await drain()
 
-    expect(chatPeers).toEqual(["client"])
+    expect(chatPeers).toEqual([exchangeClient.peerId])
     expect(rpcPeers).toEqual([])
 
     chatListener.dispose()
@@ -424,19 +425,19 @@ describe("protocol.listen", () => {
     const bridgeAS = new Bridge()
     const bridgeBS = new Bridge()
     const exchangeA = createExchange({
-      id: "alice",
+      principal: "alice",
       transports: [
         createBridgeTransport({ transportId: "alice", bridge: bridgeAS }),
       ],
     })
     createExchange({
-      id: "bob",
+      principal: "bob",
       transports: [
         createBridgeTransport({ transportId: "bob", bridge: bridgeBS }),
       ],
     })
     const exchangeServer = createExchange({
-      id: "server",
+      principal: "server",
       transports: [
         createBridgeTransport({ transportId: "server-a", bridge: bridgeAS }),
         createBridgeTransport({ transportId: "server-b", bridge: bridgeBS }),
@@ -449,13 +450,13 @@ describe("protocol.listen", () => {
     const listener = P.listen(exchangeServer)
     listener.onReceive((_s, r) => serverPeers.push(r.peer))
 
-    const lineToServer = P.sender(exchangeA, "server")
+    const lineToServer = P.sender(exchangeA, exchangeServer.peerId)
     await drain()
-    expect(serverPeers).toEqual(["alice"])
+    expect(serverPeers).toEqual([exchangeA.peerId])
 
     const lineToBob = P.sender(exchangeA, "bob")
     await drain()
-    expect(serverPeers).toEqual(["alice"]) // unchanged
+    expect(serverPeers).toEqual([exchangeA.peerId]) // unchanged
 
     listener.dispose()
     lineToServer.close()
@@ -470,11 +471,11 @@ describe("protocol.listen", () => {
     // document.
     const bridge = new Bridge()
     const exchangeClient = createExchange({
-      id: "client",
+      principal: "client",
       transports: [createBridgeTransport({ transportId: "client", bridge })],
     })
     const exchangeServer = createExchange({
-      id: "server",
+      principal: "server",
       transports: [createBridgeTransport({ transportId: "server", bridge })],
     })
     await drain()
@@ -496,8 +497,8 @@ describe("protocol.listen", () => {
       })()
     })
 
-    const sender = Echo.sender(exchangeClient, "server")
-    const receiver = Echo.claimReceiver(exchangeClient, "server")
+    const sender = Echo.sender(exchangeClient, exchangeServer.peerId)
+    const receiver = Echo.claimReceiver(exchangeClient, exchangeServer.peerId)
     const received: Array<{ value: number }> = []
     collect(receiver, received)
 

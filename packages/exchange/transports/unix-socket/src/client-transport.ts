@@ -102,7 +102,7 @@ export class UnixSocketClientTransport extends SocketTransport {
  * import { createUnixSocketClient } from "@kyneta/unix-socket-transport"
  *
  * const exchange = new Exchange({
- *   id: { peerId: "service-a", name: "Service A" },
+ *   principal: "service-a",
  *   transports: [createUnixSocketClient({ path: "/tmp/kyneta.sock" })],
  * })
  * ```

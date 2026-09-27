@@ -8,9 +8,9 @@
 //   import { WebsocketServerTransport } from "@kyneta/websocket-transport/server"
 //   import { createBunWebsocketHandlers } from "@kyneta/websocket-transport/bun"
 //
-//   const serverAdapter = new WebsocketServerTransport()
+//   const serverTransport = new WebsocketServerTransport()
 //   Bun.serve({
-//     websocket: createBunWebsocketHandlers(serverAdapter),
+//     websocket: createBunWebsocketHandlers(serverTransport),
 //     fetch(req, server) { server.upgrade(req); return new Response("", { status: 101 }) },
 //   })
 //
@@ -18,10 +18,10 @@
 //   import { WebsocketServerTransport, wrapNodeWebsocket } from "@kyneta/websocket-transport/server"
 //   import { WebSocketServer } from "ws"
 //
-//   const serverAdapter = new WebsocketServerTransport()
+//   const serverTransport = new WebsocketServerTransport()
 //   const wss = new WebSocketServer({ server })
 //   wss.on("connection", (ws) => {
-//     const { start } = serverAdapter.handleConnection({ socket: wrapNodeWebsocket(ws) })
+//     const { start } = serverTransport.handleConnection({ socket: wrapNodeWebsocket(ws) })
 //     start()
 //   })
 //
@@ -253,7 +253,7 @@ export class WebsocketServerTransport extends Transport<PeerId> {
    *
    * @example Bun
    * ```typescript
-   * const { start } = serverAdapter.handleConnection({
+   * const { start } = serverTransport.handleConnection({
    *   socket: wrapBunWebsocket(ws),
    * })
    * start()
@@ -262,7 +262,7 @@ export class WebsocketServerTransport extends Transport<PeerId> {
    * @example Node.js ws
    * ```typescript
    * wss.on("connection", (ws) => {
-   *   const { start } = serverAdapter.handleConnection({
+   *   const { start } = serverTransport.handleConnection({
    *     socket: wrapNodeWebsocket(ws),
    *   })
    *   start()

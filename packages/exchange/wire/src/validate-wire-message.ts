@@ -104,8 +104,8 @@ function validateEstablish(
   obj: Record<string, unknown>,
 ): Result<WireMessage, WireValidationError> {
   if (!isString(obj.id)) return fail("id must be a string", ["id"])
-  if (obj.n !== undefined && !isString(obj.n))
-    return fail("n must be a string", ["n"])
+  if (obj.pr !== undefined && !isString(obj.pr))
+    return fail("pr must be a string", ["pr"])
   if (!isString(obj.y) || !VALID_PEER_TYPES.has(obj.y))
     return fail('y must be one of "user", "bot", "service"', ["y"])
   if (obj.f !== undefined) {
@@ -132,6 +132,10 @@ function validateEstablish(
         ["pv"],
       )
   }
+  // `pr` joined in 2.0. A 1.x establish without it must still parse, so the
+  // major mismatch is reported rather than lost to a decode failure.
+  if (obj.pr === undefined && Array.isArray(obj.pv) && obj.pv[0] >= 2)
+    return fail("pr is required from protocol 2.0", ["pr"])
   return ok(obj as unknown as WireMessage)
 }
 

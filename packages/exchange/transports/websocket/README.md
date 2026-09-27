@@ -18,14 +18,15 @@ Use `createBunWebsocketHandlers` for zero-boilerplate integration with `Bun.serv
 
 ```/dev/null/bun-server.ts#L1-18
 import { Exchange } from "@kyneta/exchange"
-import { WebsocketServerAdapter } from "@kyneta/websocket-transport/server"
+import { WebsocketServerTransport } from "@kyneta/websocket-transport/server"
 import { createBunWebsocketHandlers, type BunWebsocketData } from "@kyneta/websocket-transport/bun"
 
-const serverAdapter = new WebsocketServerAdapter()
+const serverTransport = new WebsocketServerTransport()
 
 const exchange = new Exchange({
-  identity: { peerId: "server", name: "server", type: "service" },
-  adapters: [serverAdapter],
+  principal: "server",
+  type: "service",
+  transports: [serverTransport],
 })
 
 Bun.serve<BunWebsocketData>({
@@ -33,7 +34,7 @@ Bun.serve<BunWebsocketData>({
     server.upgrade(req)
     return new Response("upgrade failed", { status: 400 })
   },
-  websocket: createBunWebsocketHandlers(serverAdapter),
+  websocket: createBunWebsocketHandlers(serverTransport),
 })
 ```
 
@@ -50,7 +51,7 @@ Bun.serve<BunWebsocketData>({
   websocket: {
     open(ws) {
       const socket = wrapBunWebsocket(ws)
-      serverAdapter.handleConnection({ socket }).start()
+      serverTransport.handleConnection({ socket }).start()
     },
     message(ws, msg) {
       const data = msg instanceof ArrayBuffer ? new Uint8Array(msg) : msg
@@ -69,19 +70,20 @@ Use `wrapNodeWebsocket` to adapt the `ws` library's `WebSocket` to the framework
 
 ```/dev/null/node-server.ts#L1-16
 import { WebSocketServer } from "ws"
-import { WebsocketServerAdapter, wrapNodeWebsocket } from "@kyneta/websocket-transport/server"
+import { WebsocketServerTransport, wrapNodeWebsocket } from "@kyneta/websocket-transport/server"
 
-const serverAdapter = new WebsocketServerAdapter()
+const serverTransport = new WebsocketServerTransport()
 
 const exchange = new Exchange({
-  identity: { peerId: "server", name: "server", type: "service" },
-  adapters: [serverAdapter],
+  principal: "server",
+  type: "service",
+  transports: [serverTransport],
 })
 
 const wss = new WebSocketServer({ port: 3000 })
 
 wss.on("connection", (ws) => {
-  const { start } = serverAdapter.handleConnection({ socket: wrapNodeWebsocket(ws) })
+  const { start } = serverTransport.handleConnection({ socket: wrapNodeWebsocket(ws) })
   start()
 })
 ```
@@ -103,8 +105,8 @@ const adapter = createWebsocketClient({
 })
 
 const exchange = new Exchange({
-  identity: { peerId: "browser-client", name: "Alice", type: "user" },
-  adapters: [adapter],
+  principal: "alice",
+  transports: [adapter],
 })
 ```
 
@@ -124,8 +126,9 @@ const adapter = createServiceWebsocketClient({
 })
 
 const exchange = new Exchange({
-  identity: { peerId: "worker-1", name: "worker-1", type: "service" },
-  adapters: [adapter],
+  principal: "worker",
+  type: "service",
+  transports: [adapter],
 })
 ```
 

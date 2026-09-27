@@ -38,13 +38,13 @@ async function connected<D>(
   open: (exchange: Exchange) => D,
 ): Promise<{ peer: ScriptedPeer; version: string; doc: D }> {
   const peer = new ScriptedPeer()
-  const exchange = new Exchange({ id: "us", transports: [peer] })
+  const exchange = new Exchange({ principal: "us", transports: [peer] })
   exchanges.push(exchange)
   const doc = open(exchange)
   await Promise.resolve()
   peer.receive({
     type: "establish",
-    identity: { peerId: "them", type: "user" },
+    identity: { peerId: "them", principal: "them", type: "user" },
     protocolVersion: PROTOCOL_VERSION,
   })
   const [present] = peer.sentOf("present")

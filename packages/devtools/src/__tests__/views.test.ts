@@ -27,7 +27,7 @@ async function drain(rounds = 30): Promise<void> {
 const active: Exchange[] = []
 function peer(id: string, bridge: Bridge): Exchange {
   const ex = new Exchange({
-    id,
+    principal: id,
     transports: [createBridgeTransport({ transportId: id, bridge })],
     schemas: [TodoDoc],
   })
@@ -68,15 +68,17 @@ describe("views — cross-peer docId grouping", () => {
     const view = docView(model, "d")
     expect(view.docId).toBe("d")
     const peers = new Set(view.activity.map(e => e.peerId))
-    expect(peers.has("alice")).toBe(true)
-    expect(peers.has("bob")).toBe(true)
+    expect(peers.has(alice.peerId)).toBe(true)
+    expect(peers.has(bob.peerId)).toBe(true)
 
     // docView also exposes the doc's sync entries.
     expect(view.sync.some(s => s.state === "synced")).toBe(true)
 
     // docActivity is per-peer ordered (by seq, ascending within a peer).
     const acts = docActivity(model, "d")
-    const aliceSeqs = acts.filter(e => e.peerId === "alice").map(e => e.seq)
+    const aliceSeqs = acts
+      .filter(e => e.peerId === alice.peerId)
+      .map(e => e.seq)
     expect([...aliceSeqs].sort((x, y) => x - y)).toEqual(aliceSeqs)
 
     // timeline is non-empty and stable per-peer ordered.

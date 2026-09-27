@@ -79,7 +79,7 @@ describe("replicate documents", () => {
     // The throw then escaped into a changefeed dispatch, so it did not merely
     // skip one document — it aborted the dispatch feeding everything
     // downstream of the source.
-    const exchange = new Exchange({ id: "relay" })
+    const exchange = new Exchange({ principal: "relay" })
     const [source] = SourceNS.fromExchange(exchange, NoteDoc)
 
     expect(() => {
@@ -96,7 +96,7 @@ describe("replicate documents", () => {
   })
 
   it("does not index one that existed before the source attached", () => {
-    const exchange = new Exchange({ id: "relay" })
+    const exchange = new Exchange({ principal: "relay" })
     exchange.replicate(
       "relayed",
       plainReplicaFactory,
@@ -114,7 +114,7 @@ describe("replicate documents", () => {
     // change a document's readability, never its tier. Written as a
     // conservation check so that a phase added later, or a `get()` that learns
     // to upgrade a replicate document, is covered without editing this test.
-    const exchange = new Exchange({ id: "relay" })
+    const exchange = new Exchange({ principal: "relay" })
     exchange.replicate(
       "before-attach",
       plainReplicaFactory,
@@ -150,7 +150,7 @@ describe("replicate documents", () => {
 
 describe("the handle emits once per change", () => {
   it("createDoc emits a single +1, and delete returns it to zero", () => {
-    const exchange = new Exchange({ id: "peer" })
+    const exchange = new Exchange({ principal: "peer" })
     const [source, handle] = SourceNS.fromExchange(exchange, NoteDoc)
     const weights = foldDeltas(source)
 
@@ -176,7 +176,7 @@ describe("suspension is not a membership condition", () => {
     // `info.suspended` and skipped. Suspension is sync-graph state — the
     // document is still interpreted, still present, still holds a live
     // readable ref — so it is still a member.
-    const exchange = new Exchange({ id: "peer" })
+    const exchange = new Exchange({ principal: "peer" })
     exchange.get("note-1", NoteDoc)
     exchange.suspend("note-1")
 
@@ -186,7 +186,7 @@ describe("suspension is not a membership condition", () => {
   })
 
   it("suspend and resume leave the document indexed and emit nothing", () => {
-    const exchange = new Exchange({ id: "peer" })
+    const exchange = new Exchange({ principal: "peer" })
     const [source] = SourceNS.fromExchange(exchange, NoteDoc)
     exchange.get("note-1", NoteDoc)
 
@@ -218,11 +218,11 @@ describe("deferred documents", () => {
     const bridge = new Bridge()
     return {
       alice: new Exchange({
-        id: "alice",
+        principal: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
       }),
       bob: new Exchange({
-        id: "bob",
+        principal: "bob",
         transports: [createBridgeTransport({ transportId: "bob", bridge })],
         resolve: () => Defer(),
       }),
@@ -269,7 +269,7 @@ describe("deferred documents", () => {
 
 describe("every path agrees", () => {
   it("a fresh source matches a long-lived one, in contents and in deltas", () => {
-    const exchange = new Exchange({ id: "peer" })
+    const exchange = new Exchange({ principal: "peer" })
     exchange.replicate(
       "relayed",
       plainReplicaFactory,
@@ -330,7 +330,7 @@ describe("Source.of infers its document and item types", () => {
         ),
       }),
     )
-    const exchange = new Exchange({ id: "typing" })
+    const exchange = new Exchange({ principal: "typing" })
 
     const source = SourceNS.of(
       exchange,

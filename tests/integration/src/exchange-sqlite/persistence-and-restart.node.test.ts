@@ -236,14 +236,14 @@ describe("SQLite-backed exchanges: persistence + restart over WebSocket", () => 
 
       const serverExchange = lifecycle.registerExchange(
         new Exchange({
-          id: "server",
+          principal: "server",
           store: serverStore,
           schemas: [YjsDoc],
         }),
       )
       const clientExchange = lifecycle.registerExchange(
         new Exchange({
-          id: "client",
+          principal: "client",
           store: clientStore,
           schemas: [YjsDoc],
         }),

@@ -1,4 +1,4 @@
-// server — barrel export for @kyneta/sse-network-adapter/server.
+// server — barrel export for @kyneta/sse-transport/server.
 //
 // This is the server-side entry point. It exports everything needed
 // to create an SSE server adapter with any framework.

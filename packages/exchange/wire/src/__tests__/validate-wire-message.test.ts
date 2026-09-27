@@ -71,6 +71,7 @@ describe("establish (t: 0x01)", () => {
   it("accepts a valid establish message", () => {
     const r = validateWireMessage({
       t: MessageType.Establish,
+      pr: "alice",
       id: "peer1",
       y: "user",
     })
@@ -80,9 +81,9 @@ describe("establish (t: 0x01)", () => {
   it("accepts establish with optional fields", () => {
     const r = validateWireMessage({
       t: MessageType.Establish,
+      pr: "alice",
       id: "peer1",
       y: "service",
-      n: "MyService",
       f: { a: true, s: false },
     })
     expect(r.ok).toBe(true)
@@ -91,6 +92,7 @@ describe("establish (t: 0x01)", () => {
   it("accepts establish with unknown extra fields (forward compat)", () => {
     const r = validateWireMessage({
       t: MessageType.Establish,
+      pr: "alice",
       id: "peer1",
       y: "user",
       xyz: 42,
@@ -101,15 +103,48 @@ describe("establish (t: 0x01)", () => {
   it("rejects missing id", () => {
     const r = validateWireMessage({
       t: MessageType.Establish,
+      pr: "alice",
       y: "user",
     })
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.error.path).toEqual(["id"])
   })
 
+  it("rejects a 2.0 establish without pr", () => {
+    const r = validateWireMessage({
+      t: MessageType.Establish,
+      id: "peer1",
+      y: "user",
+      pv: [2, 0],
+    })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error.path).toEqual(["pr"])
+  })
+
+  it("accepts a 1.x establish without pr, so its version can be reported", () => {
+    const r = validateWireMessage({
+      t: MessageType.Establish,
+      id: "peer1",
+      y: "user",
+    })
+    expect(r.ok).toBe(true)
+  })
+
+  it("rejects wrong type for pr", () => {
+    const r = validateWireMessage({
+      t: MessageType.Establish,
+      pr: 7,
+      id: "peer1",
+      y: "user",
+    })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error.path).toEqual(["pr"])
+  })
+
   it("rejects missing y", () => {
     const r = validateWireMessage({
       t: MessageType.Establish,
+      pr: "alice",
       id: "peer1",
     })
     expect(r.ok).toBe(false)
@@ -119,6 +154,7 @@ describe("establish (t: 0x01)", () => {
   it("rejects wrong type for id", () => {
     const r = validateWireMessage({
       t: MessageType.Establish,
+      pr: "alice",
       id: 123,
       y: "user",
     })
@@ -129,6 +165,7 @@ describe("establish (t: 0x01)", () => {
   it("rejects invalid y value", () => {
     const r = validateWireMessage({
       t: MessageType.Establish,
+      pr: "alice",
       id: "peer1",
       y: "invalid",
     })
@@ -139,6 +176,7 @@ describe("establish (t: 0x01)", () => {
   it("rejects non-boolean f.a", () => {
     const r = validateWireMessage({
       t: MessageType.Establish,
+      pr: "alice",
       id: "peer1",
       y: "user",
       f: { a: "yes" },
@@ -154,6 +192,7 @@ describe("establish (t: 0x01)", () => {
     ]) {
       const r = validateWireMessage({
         t: MessageType.Establish,
+        pr: "alice",
         id: "peer1",
         y: "user",
         pv,
@@ -165,6 +204,7 @@ describe("establish (t: 0x01)", () => {
   it("accepts establish with pv absent (forward-tolerant)", () => {
     const r = validateWireMessage({
       t: MessageType.Establish,
+      pr: "alice",
       id: "p",
       y: "user",
     })
@@ -184,6 +224,7 @@ describe("establish (t: 0x01)", () => {
     ]) {
       const r = validateWireMessage({
         t: MessageType.Establish,
+        pr: "alice",
         id: "peer1",
         y: "user",
         pv,

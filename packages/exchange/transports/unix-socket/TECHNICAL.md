@@ -249,7 +249,7 @@ import { UnixSocketServerTransport } from "@kyneta/unix-socket-transport"
 
 const server = new UnixSocketServerTransport({ path: "/tmp/kyneta.sock" })
 
-const exchange = new Exchange({ transports: [() => server] })
+const exchange = new Exchange({ transports: [server] })
 ```
 
 ### Peer (leaderless)

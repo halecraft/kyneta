@@ -61,12 +61,12 @@ function localWrites<D extends object>(backend: Backend<D>): void {
     async function pair(store: InMemoryStoreData) {
       const bridge = new Bridge()
       const alice = new Exchange({
-        id: "alice",
+        principal: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
         store: createInMemoryStore({ sharedData: store }),
       })
       const bob = new Exchange({
-        id: "bob",
+        principal: "bob",
         transports: [createBridgeTransport({ transportId: "bob", bridge })],
       })
       exchanges.push(alice, bob)
@@ -79,7 +79,7 @@ function localWrites<D extends object>(backend: Backend<D>): void {
     /** Alice's document, as a restarted Alice loads it from her store. */
     async function reload(store: InMemoryStoreData): Promise<D> {
       const restarted = new Exchange({
-        id: "alice",
+        principal: "alice",
         store: createInMemoryStore({ sharedData: store }),
       })
       exchanges.push(restarted)
@@ -207,11 +207,11 @@ function writtenDuringMerge<D extends object>(c: DuringMerge<D>): void {
   it(`${c.name}: reaches the peer, which is not sent its own write back`, async () => {
     const bridge = new Bridge()
     const alice = new Exchange({
-      id: "alice",
+      principal: "alice",
       transports: [createBridgeTransport({ transportId: "alice", bridge })],
     })
     const bob = new Exchange({
-      id: "bob",
+      principal: "bob",
       transports: [createBridgeTransport({ transportId: "bob", bridge })],
     })
     exchanges.push(alice, bob)
@@ -311,7 +311,6 @@ describe("a destroyed document", () => {
     // would mark the id dirty, and the new document created under that id
     // would be persisted and pushed on its behalf.
     const runtime = new Runtime({
-      peerId: "alice",
       store: createInMemoryStore(),
     })
     const old = runtime.get("doc", yjsDoc)

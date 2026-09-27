@@ -175,8 +175,8 @@ export function syncModeToWire(mode: SyncMode): SyncModeWireValue {
  * Compact field names used in CBOR wire objects:
  *
  *   t   — message type discriminator (MessageTypeValue)
- *   id  — peerId (string)
- *   n   — name (string, optional)
+ *   id  — peerId, the seat (string)
+ *   pr  — principal (string; required from protocol 2.0)
  *   y   — peer type ("user" | "bot" | "service")
  *   docs — present docs array
  *   doc — docId (string)
@@ -207,7 +207,8 @@ export type WireFeaturesCompact = {
 export type WireEstablishMsg = {
   t: typeof MessageType.Establish
   id: string
-  n?: string
+  /** Required from protocol 2.0; absent only from a 1.x peer. */
+  pr?: string
   y: "user" | "bot" | "service"
   f?: WireFeaturesCompact
   /** Sparse: absent ⇒ [1, 0], emitted only when non-default. The logical

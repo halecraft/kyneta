@@ -16,7 +16,7 @@ import { type PeerIdentityDetails, PROTOCOL_VERSION } from "../types.js"
 
 const testIdentity: PeerIdentityDetails = {
   peerId: "test-peer",
-  name: "Test Peer",
+  principal: "Test Peer",
   type: "user",
 }
 

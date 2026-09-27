@@ -13,10 +13,10 @@ describe("BridgeTransport", () => {
     const bridge = new Bridge()
 
     const ctxA = createTransportContext({
-      identity: { peerId: "peer-a", type: "user" },
+      identity: { peerId: "peer-a", principal: "peer-a", type: "user" },
     })
     const ctxB = createTransportContext({
-      identity: { peerId: "peer-b", type: "user" },
+      identity: { peerId: "peer-b", principal: "peer-b", type: "user" },
     })
 
     const adapterA = new BridgeTransport({ transportId: "peer-a", bridge })
@@ -53,7 +53,7 @@ describe("BridgeTransport", () => {
 
     await adapterA._initialize(
       createTransportContext({
-        identity: { peerId: "peer-a", type: "user" },
+        identity: { peerId: "peer-a", principal: "peer-a", type: "user" },
         onChannelEstablish: channel =>
           establishedChannels.push(channel.channelId),
       }),
@@ -62,7 +62,7 @@ describe("BridgeTransport", () => {
 
     await adapterB._initialize(
       createTransportContext({
-        identity: { peerId: "peer-b", type: "user" },
+        identity: { peerId: "peer-b", principal: "peer-b", type: "user" },
         onChannelEstablish: channel =>
           establishedChannels.push(channel.channelId),
       }),
@@ -95,7 +95,7 @@ describe("BridgeTransport", () => {
     })
 
     const ctxB = createTransportContext({
-      identity: { peerId: "peer-b", type: "user" },
+      identity: { peerId: "peer-b", principal: "peer-b", type: "user" },
       onChannelReceive: (_channelId, message) => {
         received.push(message)
         resolveReceived()
@@ -103,7 +103,7 @@ describe("BridgeTransport", () => {
     })
 
     const ctxA = createTransportContext({
-      identity: { peerId: "peer-a", type: "user" },
+      identity: { peerId: "peer-a", principal: "peer-a", type: "user" },
     })
 
     const adapterA = new BridgeTransport({ transportId: "peer-a", bridge })

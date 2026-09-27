@@ -25,6 +25,7 @@
 import type { Changeset } from "@kyneta/changefeed"
 import type { Lease, ObservableHandle } from "@kyneta/machine"
 import { createLease, createObservableProgram } from "@kyneta/machine"
+import { randomPeerId } from "@kyneta/random"
 import type {
   BoundSchema,
   DocRef,
@@ -275,8 +276,8 @@ function createPublication(): Publication {
  * attached (e.g. a standalone `Runtime` later wrapped in an `Exchange`).
  * `readyInfo` is captured when the entry is created, and announced by
  * `#becomeReady` once the document is ready; `announced` tracks whether
- * `onDocReady` has actually fired for it yet, so repeated or out-of-order
- * `setHooks` calls never double-announce. Context: jj:mrlnmlus.
+ * `onDocReady` has actually fired for it yet, so the `setHooks` backfill and
+ * `#becomeReady` never both announce one document. Context: jj:mrlnmlus.
  *
  * `hydration` is the storage half of the document's readiness — see
  * {@link HydrationLatch} and `settle.ts`. `publication` is where its own
@@ -383,9 +384,6 @@ export type RuntimeHooks = {
  * Options for creating a {@link Runtime}.
  */
 export type RuntimeParams = {
-  /** The local peer ID — used for substrate factory construction. */
-  peerId: string
-
   /** The store documents persist to and load from. */
   store?: Store
 
@@ -425,7 +423,7 @@ export type RuntimeParams = {
  * directly:
  *
  * ```typescript
- * const runtime = new Runtime({ peerId: "alice", store: createInMemoryStore() })
+ * const runtime = new Runtime({ store: createInMemoryStore() })
  * const doc = runtime.get("my-doc", TodoDoc)
  * await runtime.flush() // persist
  * await runtime.shutdown()
@@ -435,7 +433,11 @@ export type RuntimeParams = {
  * it via {@link RuntimeHooks}.
  */
 export class Runtime {
-  readonly peerId: string
+  /**
+   * This replica's seat: a fresh random id, never chosen by the caller, so no
+   * other writer holds it and no earlier writer's history is missing from it.
+   */
+  readonly peerId: string = randomPeerId()
   readonly lease: Lease
 
   readonly #store: Store | undefined
@@ -463,21 +465,19 @@ export class Runtime {
   /** One timer per document whose failed write waits to be retried. */
   readonly #retryTimers = new Map<DocId, ReturnType<typeof setTimeout>>()
 
-  /** Network hooks — set by Exchange. Undefined for standalone use. */
-  #hooks: RuntimeHooks = {}
+  /** Network hooks, set once by the Exchange that owns this Runtime. */
+  #hooks: RuntimeHooks | undefined
 
   /** Tick clock infrastructure. */
   readonly #tickIntervalMs: number
   #tickTimer: ReturnType<typeof setInterval> | null = null
 
   constructor({
-    peerId,
     store,
     onStoreError,
     lease,
     tickInterval = 1000,
-  }: RuntimeParams) {
-    this.peerId = peerId
+  }: RuntimeParams = {}) {
     this.lease = lease ?? createLease()
     this.#store = store
     this.#tickIntervalMs = tickInterval
@@ -548,15 +548,21 @@ export class Runtime {
    * Set the lifecycle hooks. The Exchange calls this during construction
    * to bridge the Runtime into the Synchronizer.
    *
+   * Once per Runtime: a second call throws. Two Exchanges over one Runtime
+   * would share its seat and sync its documents twice.
+   *
    * Backfills `onDocReady` for every already-live, non-deferred document
    * in the cache — covers the "standalone Runtime later wrapped in an
    * Exchange" path (`new Exchange(runtime, params)`), where documents
    * created via `runtime.get()`/`runtime.replicate()` before this call
-   * fired `onDocReady` against the (then-empty) hook set and were never
-   * announced. `#register` is idempotent per entry, so this is safe
-   * regardless of call order or repeated `setHooks` calls. Context: jj:mrlnmlus.
+   * fired `onDocReady` with no hooks set and were never announced.
+   * Context: jj:mrlnmlus.
    */
   setHooks(hooks: RuntimeHooks): void {
+    if (this.#hooks)
+      throw new Error(
+        "[runtime] this Runtime already belongs to an Exchange; two Exchanges over one Runtime would share its seat",
+      )
     this.#hooks = hooks
     if (hooks.onDocReady) {
       for (const [, entry] of this.#docCache) {
@@ -770,7 +776,7 @@ export class Runtime {
 
     this.#evict(docId)
     if (touchesStore) this.#storeHandle?.dispatch({ type: "destroy", docId })
-    this.#hooks.onDocDestroyed?.(docId)
+    this.#hooks?.onDocDestroyed?.(docId)
   }
 
   /**
@@ -791,7 +797,7 @@ export class Runtime {
       return // Already suspended — idempotent
     }
     cached.suspended = true
-    this.#hooks.onDocSuspended?.(docId)
+    this.#hooks?.onDocSuspended?.(docId)
   }
 
   /**
@@ -808,7 +814,7 @@ export class Runtime {
       )
     }
     cached.suspended = false
-    this.#hooks.onDocResumed?.(docId)
+    this.#hooks?.onDocResumed?.(docId)
   }
 
   /**
@@ -990,7 +996,7 @@ export class Runtime {
       toward,
     )
     if (replica.version().serialize() !== before.serialize()) {
-      this.#hooks.onDocAdvanced?.(docId)
+      this.#hooks?.onDocAdvanced?.(docId)
     }
 
     if (untaken.length > 0) {
@@ -1381,7 +1387,7 @@ export class Runtime {
       this.#markLocalChangeDirty(docId),
     )
     const stopChangesets = subscribe(entry.ref, changeset =>
-      this.#hooks.onDocChangeset?.(docId, changeset),
+      this.#hooks?.onDocChangeset?.(docId, changeset),
     )
     return () => {
       stopLocalUpdates()
@@ -1462,7 +1468,7 @@ export class Runtime {
       this.#reportPersistence(entry)
     }
     this.onStateAdvanced(docId)
-    this.#hooks.onDocAdvanced?.(docId)
+    this.#hooks?.onDocAdvanced?.(docId)
   }
 
   /**
@@ -1483,7 +1489,7 @@ export class Runtime {
     entry: Extract<DocCacheEntry, { mode: "interpret" | "replicate" }>,
   ): void {
     if (entry.announced) return
-    if (!this.#hooks.onDocReady) return
+    if (!this.#hooks?.onDocReady) return
     this.#hooks.onDocReady(entry.readyInfo)
     entry.announced = true
   }
@@ -1662,7 +1668,7 @@ export class Runtime {
     // are then none, and the signal sends nothing.
     if (publication.ownHigh !== undefined && this.#gateOpen(entry)) {
       publication.ownHigh = undefined
-      this.#hooks.onDocPublishable?.(docId)
+      this.#hooks?.onDocPublishable?.(docId)
     }
     this.#reportPersistence(entry)
   }

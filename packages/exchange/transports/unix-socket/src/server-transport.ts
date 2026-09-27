@@ -33,7 +33,7 @@ export interface UnixSocketServerOptions {
  * Fixed-role Unix socket server transport for `@kyneta/exchange`.
  *
  * Listens on a unix domain socket path and hosts one channel per accepted
- * connection. Pass via `new Exchange({ transports: [() => server] })`.
+ * connection. Pass via `new Exchange({ transports: [server] })`.
  */
 export function createUnixSocketServer(
   options: UnixSocketServerOptions,

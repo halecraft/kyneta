@@ -20,11 +20,7 @@ import {
   Schema,
 } from "@kyneta/schema"
 import { afterEach, describe, expect, it } from "vitest"
-import {
-  Exchange,
-  type ExchangeParams,
-  type PeerIdentityInput,
-} from "../exchange.js"
+import { Exchange, type ExchangeParams } from "../exchange.js"
 import { sync } from "../sync.js"
 
 // ---------------------------------------------------------------------------
@@ -41,8 +37,7 @@ async function drain(rounds = 20): Promise<void> {
 const activeExchanges: Exchange[] = []
 
 function createExchange(params: Partial<ExchangeParams> = {}): Exchange {
-  const merged = { id: "test" as string | PeerIdentityInput, ...params }
-  const ex = new Exchange(merged as ExchangeParams)
+  const ex = new Exchange({ principal: "test", ...params })
   activeExchanges.push(ex)
   return ex
 }
@@ -103,11 +98,11 @@ describe("initial content via batch() syncs to peers", () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
-      id: "alice",
+      principal: "alice",
       transports: [createBridgeTransport({ transportId: "alice", bridge })],
     })
     const exchangeB = createExchange({
-      id: "bob",
+      principal: "bob",
       transports: [createBridgeTransport({ transportId: "bob", bridge })],
     })
 
@@ -144,11 +139,11 @@ describe("snapshot import preserves ref identity", () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
-      id: "alice",
+      principal: "alice",
       transports: [createBridgeTransport({ transportId: "alice", bridge })],
     })
     const exchangeB = createExchange({
-      id: "bob",
+      principal: "bob",
       transports: [createBridgeTransport({ transportId: "bob", bridge })],
     })
 
@@ -173,11 +168,11 @@ describe("snapshot import preserves ref identity", () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
-      id: "alice",
+      principal: "alice",
       transports: [createBridgeTransport({ transportId: "alice", bridge })],
     })
     const exchangeB = createExchange({
-      id: "bob",
+      principal: "bob",
       transports: [createBridgeTransport({ transportId: "bob", bridge })],
     })
 
@@ -188,7 +183,7 @@ describe("snapshot import preserves ref identity", () => {
     await drain()
 
     // The SyncRef obtained before sync should still be valid
-    expect(syncRef.peerId).toBe("bob")
+    expect(syncRef.peerId).toBe(exchangeB.peerId)
     expect(syncRef.docId).toBe("doc-1")
   })
 })
@@ -212,11 +207,11 @@ describe("ephemeral convergence", () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
-      id: "alice",
+      principal: "alice",
       transports: [createBridgeTransport({ transportId: "alice", bridge })],
     })
     const exchangeB = createExchange({
-      id: "bob",
+      principal: "bob",
       transports: [createBridgeTransport({ transportId: "bob", bridge })],
     })
 
@@ -266,12 +261,12 @@ describe("collaborative sync uses deltas when sender is ahead", () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
-      id: "alice",
+      principal: "alice",
       transports: [createBridgeTransport({ transportId: "alice", bridge })],
       schemas: [LoroDoc],
     })
     const exchangeB = createExchange({
-      id: "bob",
+      principal: "bob",
       transports: [createBridgeTransport({ transportId: "bob", bridge })],
       schemas: [LoroDoc],
     })
@@ -314,11 +309,11 @@ describe("universal version comparison rejects stale offers for all strategies",
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
-      id: "alice",
+      principal: "alice",
       transports: [createBridgeTransport({ transportId: "alice", bridge })],
     })
     const exchangeB = createExchange({
-      id: "bob",
+      principal: "bob",
       transports: [createBridgeTransport({ transportId: "bob", bridge })],
     })
 
@@ -393,14 +388,14 @@ describe("plain replica snapshot import falls back to replicaFactory.fromSnapsho
 
     // Alice — full interpreter with plain/authoritative substrate
     const exchangeA = createExchange({
-      id: "alice",
+      principal: "alice",
       transports: [
         createBridgeTransport({ transportId: "alice", bridge: bridgeAR }),
       ],
     })
 
     const relay = createExchange({
-      id: "relay",
+      principal: "relay",
       transports: [
         createBridgeTransport({ transportId: "relay-a", bridge: bridgeAR }),
       ],
@@ -427,7 +422,7 @@ describe("plain replica snapshot import falls back to replicaFactory.fromSnapsho
     )
 
     const exchangeB = createExchange({
-      id: "bob",
+      principal: "bob",
       transports: [
         createBridgeTransport({ transportId: "bob", bridge: bridgeRB }),
       ],
@@ -478,12 +473,12 @@ describe("schema hash compatibility", () => {
     )
 
     const exchangeA = createExchange({
-      id: "alice",
+      principal: "alice",
       transports: [createBridgeTransport({ transportId: "alice", bridge })],
       schemas: [SchemaA],
     })
     const exchangeB = createExchange({
-      id: "bob",
+      principal: "bob",
       transports: [createBridgeTransport({ transportId: "bob", bridge })],
       schemas: [SchemaB],
     })
@@ -520,7 +515,7 @@ describe("schema hash compatibility", () => {
     )
 
     const exchangeA = createExchange({
-      id: "alice",
+      principal: "alice",
       transports: [
         createBridgeTransport({ transportId: "alice", bridge: bridgeAR }),
       ],
@@ -528,7 +523,7 @@ describe("schema hash compatibility", () => {
     })
 
     const relay = createExchange({
-      id: "relay",
+      principal: "relay",
       transports: [
         createBridgeTransport({ transportId: "relay-a", bridge: bridgeAR }),
         createBridgeTransport({ transportId: "relay-c", bridge: bridgeRC }),
@@ -538,7 +533,7 @@ describe("schema hash compatibility", () => {
     })
 
     const exchangeC = createExchange({
-      id: "charlie",
+      principal: "charlie",
       transports: [
         createBridgeTransport({ transportId: "charlie", bridge: bridgeRC }),
       ],

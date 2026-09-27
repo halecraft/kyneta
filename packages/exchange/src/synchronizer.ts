@@ -711,8 +711,13 @@ export class Synchronizer {
         }
       },
     })
+  }
 
-    // Start all adapters
+  /**
+   * Start every transport. The Exchange calls this last, once everything a
+   * transport's first peer can reach is wired.
+   */
+  start(): void {
     this.transports.startAll()
   }
 

@@ -4,7 +4,7 @@
 > **Role**: Substrate-agnostic document sync runtime. Orchestrates channel topology, document convergence, and persistence above any transport and any `@kyneta/schema` substrate — via two pure TEA programs (session + sync), a Synchronizer shell that owns the serialized dispatch queue, a **Runtime** (the local imperative shell: documents + store + lease + clock), and an **Exchange** façade (the network shell: transports + peers + governance) that composes a Runtime.
 > **Depends on**: `@kyneta/schema` (peer), `@kyneta/changefeed` (peer), `@kyneta/transport` (direct)
 > **Depended on by**: `@kyneta/react` (peer), `@kyneta/leveldb-store`, `@kyneta/indexeddb-store`, `@kyneta/sqlite-store`, `@kyneta/postgres-store`, `@kyneta/prisma-store`, `@kyneta/sql-store-core`, application code, every transport package (dev)
-> **Canonical symbols**: `Exchange`, `ExchangeParams`, `Runtime`, `RuntimeParams`, `RuntimeHooks`, `DocReadyInfo`, `Synchronizer`, `SessionModel`, `SessionInput`, `SessionEffect`, `SyncModel`, `SyncInput`, `SyncEffect`, `updateSession`, `updateSync`, `Governance`, `Policy`, `composeGate`, `GatePredicate`, `EpochBoundaryPredicate`, `Line`, `LineProtocol`, `Capabilities`, `ReplicaLike`, `ReplicaFactoryLike`, `ReplicaKey`, `DEFAULT_REPLICAS`, `Interpret`, `Replicate`, `Defer`, `Reject`, `Disposition`, `PeerIdentityInput`, `PeerChange`, `DocChange`, `DocInfo`, `PeerState`, `PeerSyncState`, `PeerDocSyncState`, `Connectivity`, `deriveConnectivity`, `Store`, `StoreRecord`, `StoreMeta`, `DocMetadata`, `persistentPeerId`, `releasePeerId`, `resolveLease`, `LeaseState`, `sync` (helper), `SyncMode`, `SYNC_COLLABORATIVE`, `SYNC_AUTHORITATIVE`, `SYNC_EPHEMERAL`, `requiresBidirectionalSync`, `BindingTarget`, `createBindingTarget`
+> **Canonical symbols**: `Exchange`, `ExchangeParams`, `Runtime`, `RuntimeParams`, `RuntimeHooks`, `DocReadyInfo`, `Synchronizer`, `SessionModel`, `SessionInput`, `SessionEffect`, `SyncModel`, `SyncInput`, `SyncEffect`, `updateSession`, `updateSync`, `Governance`, `Policy`, `composeGate`, `GatePredicate`, `EpochBoundaryPredicate`, `Line`, `LineProtocol`, `Capabilities`, `ReplicaLike`, `ReplicaFactoryLike`, `ReplicaKey`, `DEFAULT_REPLICAS`, `Interpret`, `Replicate`, `Defer`, `Reject`, `Disposition`, `PeerNaming`, `PeerChange`, `DocChange`, `DocInfo`, `PeerState`, `PeerSyncState`, `PeerDocSyncState`, `Connectivity`, `deriveConnectivity`, `Store`, `StoreRecord`, `StoreMeta`, `DocMetadata`, `whenPeer`, `sync` (helper), `SyncMode`, `SYNC_COLLABORATIVE`, `SYNC_AUTHORITATIVE`, `SYNC_EPHEMERAL`, `requiresBidirectionalSync`, `BindingTarget`, `createBindingTarget`
 > **Key invariant(s)**:
 > 1. The exchange never inspects `SubstratePayload` contents. Payloads are opaque blobs carried by `offer` messages; only the substrate produces and consumes them.
 > 2. The session program never sees documents. The sync program never sees channels, transports, or connection state. They share a single dispatch queue and communicate exclusively through `sync-event` effects the shell forwards.
@@ -29,7 +29,7 @@ Imported by applications to construct the top-level sync graph; by `@kyneta/reac
 - How does the exchange hand merge decisions back to the application? → [`Policy` and `Governance`](#policy-and-governance)
 - What is a `Line` and when should I use it? → [`Line` — reliable message streams](#line--reliable-message-streams)
 - How does compaction interact with sync? → [Compaction and lineage boundaries](#compaction-and-lineage-boundaries)
-- What does `peerId` continuity buy me? → [Peer-ID continuity](#peer-id-continuity)
+- Why is `peerId` issued, and what is a principal? → [Seats and principals](#seats-and-principals)
 - How do reactive `peers` / `documents` collections behave? → [Reactive collections](#reactive-collections)
 - How do I tell an empty document from one that has not loaded? → [Document readiness](#document-readiness--a-conjunction-over-layers)
 - How do I write a document's defaults exactly once? → [Document readiness](#document-readiness--a-conjunction-over-layers)
@@ -72,8 +72,9 @@ Imported by applications to construct the top-level sync graph; by `@kyneta/reac
 | Departure | A peer leaving the sync graph. Explicit (`depart` message), channel-drop + expired grace timer, or `destroy()` on a local doc. | Disconnection — channel drop without grace-timer expiry is *disconnection*, not departure |
 | Lineage boundary | A merge that discards local state and adopts an incoming entirety — triggered when a remote peer advances past our version via `advance(to)` / compaction, **or** when the incoming version's explicit `Version.lineage` differs from ours (e.g. a writer restart with no persisted store mints a fresh `PlainVersion` lineage). Gated by `Policy.canReset`. | `reset` on a durable log |
 | `Line` | A reliable bidirectional message stream between two peers, implemented as two authoritative documents (one per direction) with automatic seqno + ack pruning. | A socket, a channel, a queue |
-| `LineProtocol` | The reified schema pair + topic from `Line.protocol(opts)`. Exposes `sender(peerId)`, `claimReceiver(peerId)`, `manager(peerId)` (client), and `listen(onReceive)` (server). | `Line` — `LineProtocol` *creates* `Line` capabilities |
-| `persistentPeerId` | Browser-only helper: assigns each tab a unique `peerId` that survives reload, via a `localStorage` CAS-based lease protocol. | A cookie, a UUID generator |
+| `LineProtocol` | The reified schema pair + topic from `Line.protocol(opts)`. Exposes `sender(exchange, peerId)`, `claimReceiver(exchange, peerId)`, `manager(exchange, peerId)` (client), addressed by the remote seat, and `listen(exchange)` (server). | `Line` — `LineProtocol` *creates* `Line` capabilities |
+| Seat | A replica's `peerId`: issued fresh by each Runtime, never chosen, so no other writer holds it. | The principal |
+| Principal | Who a peer says it is (`ExchangeParams.principal`, `PeerIdentityDetails.principal`). Several seats may share one; policies key on it. Not verified. | The seat |
 | `Store` | The persistence interface from this package. Methods: `append`, `loadAll`, `mark`, `compact`, `delete`, `currentMeta`, `listDocIds`, `close`. An instance is owned by one Runtime; several instances may open one storage. | A reactive store — this is an append log with compaction by mark. |
 | `StoreRecord` | Tagged union: `{ kind: "meta", meta: StoreMeta }` or `{ kind: "entry", payload: SubstratePayload, version: string }` — one durably-persisted record of doc state. | A `ChannelMsg` |
 | `StoreMeta` | `Omit<DocMetadata, "supportedHashes">` — the metadata subset persisted per-doc in the store. | `DocMetadata` — `StoreMeta` omits `supportedHashes` |
@@ -88,7 +89,7 @@ Four layers:
 
 | Layer | Kind | Source | Role |
 |-------|------|--------|------|
-| `Exchange` | Class (façade) | `src/exchange.ts` | Public API: `get`, `destroy`, `suspend`, `resume`, `addTransport`, `removeTransport`, `peers`, `documents`. Owns `Synchronizer`, `Governance`, `Capabilities`, `Store[]`, `AnyTransport[]`. |
+| `Exchange` | Class (façade) | `src/exchange.ts` | Public API: `get`, `destroy`, `suspend`, `resume`, `addTransport`, `removeTransport`, `peers`, `documents`. Owns `Synchronizer`, `Governance`, `Capabilities`, `AnyTransport[]`, and a `Runtime`, which owns the `Store`. |
 | `Synchronizer` | Class (shell) | `src/synchronizer.ts` | The imperative shell. Owns the dispatch queue, the map of registered documents (the Runtime's `DocReadyInfo` records, read-only), the transport adapters, the reactive-collection handles. Runs both programs, interprets effects. |
 | Session program | Pure `Program` | `src/session-program.ts` | Channel topology + peer identity + departure. No document knowledge. |
 | Sync program | Pure `Program` | `src/sync-program.ts` | Document convergence + merge-strategy dispatch + ready state. No channel knowledge. |
@@ -100,7 +101,7 @@ Plus cross-cutting facilities:
 | Governance | `src/governance.ts` | Composable policies (`canShare` / `canAccept` / `canConnect` / `canReset` / `resolve`). |
 | Capabilities | `src/capabilities.ts` | Replica-type + schema registry keyed by `ReplicaKey`. |
 | Line | `src/line.ts` | Reliable bidirectional message stream built above `exchange.get`. |
-| Persistent peer ID | `src/persistent-peer-id.ts` | Browser-only lease protocol for per-tab unique, reload-stable `peerId`. |
+| Seats | `src/runtime.ts`, `src/when-peer.ts` | Each Runtime issues its own `peerId`; `whenPeer` finds a peer's seat by predicate. |
 | Storage | `src/store/*.ts` | `Store` interface, in-memory implementation, shared utilities (`validateAppend`, `resolveMetaFromBatch`); production impls in `@kyneta/leveldb-store`, `@kyneta/indexeddb-store`, `@kyneta/sqlite-store`, `@kyneta/postgres-store`, `@kyneta/prisma-store`. SQL-family stores share pure helpers (`toRow`, `fromRow`, `planAppend`, `planCompact`) via `@kyneta/sql-store-core`. |
 
 ### What the exchange is NOT
@@ -109,7 +110,7 @@ Plus cross-cutting facilities:
 - **Not pub/sub.** There is no broker, no ordering guarantee across unrelated docs, no multi-party fan-out primitive. One doc's sync is one doc's sync.
 - **Not a database.** It persists via the `Store` interface, but it is not a store. It writes what the substrate exports; it reads what the substrate can interpret.
 - **Not a transport.** Transports are injected (`transports: [...]`) — the exchange does not open sockets.
-- **Not thread-safe across processes.** One `Exchange` instance per process. Multiple tabs coordinate via `persistentPeerId`; multiple processes coordinate via distinct peer IDs and a shared transport.
+- **Not thread-safe across processes.** One `Exchange` instance per process. Tabs and processes each hold their own seat and meet over a shared transport.
 
 ### What the Synchronizer is NOT
 
@@ -250,7 +251,7 @@ Per peer and document the sync model keeps a `status`, three versions, and `offe
 
 **Warn/error-only — it never gates.** The peer's `syncEffect` is emitted unchanged, so an incompatible peer remains observable and enters the sync graph (data simply will not converge). This deliberately avoids inventing a "visible-but-inert" peer state — the per-doc schema-hash mismatch path (`sync-program.ts`) already establishes the precedent of *skipping work*, never withholding the peer, so the frozen `SyncRef`/`peerStates` surface is untouched. `PROTOCOL_VERSION` is `(2, 0)`, the first real major: 2.0 added `accept` and removed `offer.reciprocate`, so a 1.x peer neither acknowledges what it applies nor understands being told. Such a peer gets the error diagnostic and still enters the sync graph; refusing to sync with it remains a separate decision.
 
-Both programs emit one unified `diagnostic` effect carrying a structured `Diagnostic` (`src/types.ts`) — a discriminated union keyed on `code` (`self-connection`, `duplicate-peer`, `protocol-skew`, `protocol-mismatch`, `replica-type-mismatch`, `schema-hash-mismatch`, `sync-mode-mismatch`) with `severity`, `message`, `peer`, and — per variant — `local`/`remote` and `docId`. **No optionals:** each cause carries exactly its fields, and deferred causes (`store-error`, `wire-reassembly`) become new variants, never new optionals on the existing ones. The shell maps `severity` to `console.error`/`console.warn` for both programs. `code` is the programmatic `kind` the planned structured `onProtocolWarning` callback (jj:wkwskqsy) would expose. This folds in the former `SyncEffect` `{ type: "warning" }` (schema-hash / replica-type / syncMode mismatches), now `severity: "error"` since they prevent convergence. Context: jj:nztkqwpm.
+Both programs emit one unified `diagnostic` effect carrying a structured `Diagnostic` (`src/types.ts`) — a discriminated union keyed on `code` (`self-connection`, `protocol-skew`, `protocol-mismatch`, `replica-type-mismatch`, `schema-hash-mismatch`, `sync-mode-mismatch`, `lineage-collision`) with `severity`, `message`, `peer`, and — per variant — `local`/`remote` and `docId`. **No optionals:** each cause carries exactly its fields, and deferred causes (`store-error`, `wire-reassembly`) become new variants, never new optionals on the existing ones. The shell maps `severity` to `console.error`/`console.warn` for both programs. `code` is the programmatic `kind` the planned structured `onProtocolWarning` callback (jj:wkwskqsy) would expose. This folds in the former `SyncEffect` `{ type: "warning" }` (schema-hash / replica-type / syncMode mismatches), now `severity: "error"` since they prevent convergence. Context: jj:nztkqwpm.
 
 ### Sync-mode dispatch
 
@@ -322,7 +323,7 @@ Each capability handle's `close()` decrements the reference count. The underlyin
 
 ### Writer restarts and lineage
 
-`Line`'s outbox/inbox documents are ordinary `json.bind()` (`SYNC_AUTHORITATIVE`) docs, so they're backed by `PlainVersion` — which carries an `lineage` (see `@kyneta/schema`'s [`PlainVersion`](../schema/TECHNICAL.md#plainversion); `lineage` is a universal `Version` property, not Plain-specific). A writer that restarts with no persisted store (e.g. a browser refresh with the same `peerId`) mints a fresh lineage. `Line` reads this via the substrate-agnostic `version(doc).lineage` — no knowledge of `PlainVersion` or any concrete substrate, and no `as any` casts.
+`Line`'s outbox/inbox documents are ordinary `json.bind()` (`SYNC_AUTHORITATIVE`) docs, so they're backed by `PlainVersion` — which carries an `lineage` (see `@kyneta/schema`'s [`PlainVersion`](../schema/TECHNICAL.md#plainversion); `lineage` is a universal `Version` property, not Plain-specific). An outbox gets a fresh lineage when its side of the `Line` is destroyed and reopened, restarting at `seq` 1. A process restart does not do it: the restarted process is a new seat and writes a new outbox. `Line` reads the lineage via the substrate-agnostic `version(doc).lineage` — no knowledge of `PlainVersion` or any concrete substrate, and no `as any` casts.
 
 `Line`'s own envelope schema carries its sequence cursor paired with the lineage it was computed against: `ackSeq: number` + `ackLineage: string` (replacing the bare `ack: number`, and renamed from `ackIncarnation`). This is necessary because `Line`'s hand-rolled `seq`/`ack` counters are well-ordered *only within one lineage* of the doc they're stamped on — exactly the same category error `PlainVersion` itself avoids by carrying lineage alongside value. Both comparison sites that trusted a bare counter — `#processInbox`'s dedup guard (`msg.seq <= #lastProcessedSeq`) and `#pruneOutbox`'s prune guard (`msg.seq <= remoteAck`) — detect a peer-lineage mismatch and reset safely: the receiver's `#lastProcessedSeq` resets to `0` when the inbox's lineage changes (a fresh lineage has no history to have "already processed"), and the sender's `#pruneOutbox` refuses to prune anything unless `ackLineage` matches its own outbox's current lineage (an ack from before the sender's own restart cannot certify anything about messages minted after it). The `""` structural default for `ackLineage` is the "never acked" sentinel — real lineages are always non-empty. This fix is entirely contained within `Line` and `packages/exchange/src/line.ts`; the sync layer above needs no changes.
 
@@ -447,54 +448,41 @@ The two exist because "I'm done with this doc" has two distinct flavours — int
 
 ---
 
-## Peer-ID continuity
+## Seats and principals
 
-Source: `src/exchange.ts` → `validatePeerId`, `src/persistent-peer-id.ts`.
+Source: `src/runtime.ts` → `Runtime.peerId`; `src/exchange.ts` → `ExchangeParams.principal`, `validatePrincipal`; `src/when-peer.ts`.
 
-The `peerId` in `ExchangeParams.id` is **required** (enforced by the type: `string` or `{ peerId: string, … }`) and must be:
+A peer's identity does two jobs, and each has its own field.
 
-| Invariant | Why |
-|-----------|-----|
-| Stable across restarts | A CRDT's version vector is indexed by peer. Changing the peer across boot fragments history — the new peer has no relationship with the old peer's ops, so sync starts from scratch and the merged doc "forks" relative to other peers. |
-| Unique across concurrent peers | Two peers with the same ID will merge each other's ops as their own, producing incorrect causality. |
+| Field | Job | Chosen by |
+|-------|-----|-----------|
+| `peerId`, the **seat** | The address of one replica. It keys the session and sync peer tables and the transports' connection maps, and the Yjs and Loro bindings hash it into the CRDT peer number, so it decides which addresses the replica's operations occupy. | The Runtime: `randomPeerId()`, 128 bits, fresh per Runtime. |
+| `principal` | Who the peer says it is: a user, a service, a server fleet. Policies key on it. Several seats may share one. Carried in `establish`; not verified. | The application: `new Exchange({ principal })`. |
 
-The stability requirement is why `new Exchange({ id })` takes a value rather than generating one. The library does not know what counts as "the same participant" across boots — it could be a device, a user, a browser tab, a service replica. The caller decides.
+The seat carries an invariant a CRDT depends on:
+
+> A replica may issue operations under identity `c` only if (1) it is the only live writer holding `c`, and (2) its state contains every operation ever issued under `c` for that document.
+
+When the caller chose the peer id, callers broke it in ordinary use. A store-less page that reloaded kept its id but not its documents, so it wrote at addresses its earlier session had already used; a duplicated tab copied the id through `sessionStorage`, so two live pages wrote under one. Either way the replicas reached equal version vectors over different contents, and never synced again. A caller cannot check the invariant, so the caller no longer chooses: every Runtime issues itself a **session seat**, a fresh random id that no one has written under. A fresh id has no history, so it satisfies both halves with no coordination. The cost is one version-vector entry per writing session per CRDT document, bounded by sessions. PLAN-2026-09-27-durable-seats will let a store issue a **durable seat** that survives restarts, under a lock that keeps the invariant.
+
+Which one to read:
+
+- **Who** (governance, authority, display): `principal`. `p => p.principal === "my-server"`.
+- **Which replica** (`exchange.peers` keys, `sync(doc).peerStates`, a `Line`'s remote): `peerId`. A seat changes when its process restarts; to find one by principal, use `whenPeer(exchange, p => p.principal === "server")`, which resolves with the first matching peer in `exchange.peers`, including one in its grace period.
+
+Two different peers can no longer share a seat, so a second channel for a connected seat is one peer connected over several transports (or a reconnect overlapping its predecessor), which the session model supports. `self-connection` remains: a remote peer presenting this exchange's own seat means a transport looped back to its own Exchange. One Runtime cannot back two Exchanges either: `Runtime.setHooks` refuses a second owner, before the second Exchange starts any transport.
 
 ### The substrate's own copy of the invariant
 
-A stable `peerId` string is necessary but not sufficient. Each substrate translates it into whatever its CRDT uses to attribute operations — Yjs a numeric `clientID`, Loro a `PeerID` — and *when* that translation is claimed matters as much as its value.
+Each substrate translates the seat into whatever its CRDT uses to attribute operations — Yjs a numeric `clientID`, Loro a `PeerID` — and *when* that translation is claimed matters as much as its value.
 
-The translation is a hash, `peerNumber` from `@kyneta/schema` (53 bits for Yjs, 64 for Loro), so two distinct `peerId` strings can still collide after it. At 53 bits that takes about 13 million writing peers for a 1% chance. See §"Peer identity and when a substrate may claim it" in `packages/schema/TECHNICAL.md`.
+The translation is a hash, `peerNumber` from `@kyneta/schema` (53 bits for Yjs, 64 for Loro), so two distinct seats can still collide after it. At 53 bits that takes about 13 million writing peers for a 1% chance. See §"Peer identity and when a substrate may claim it" in `packages/schema/TECHNICAL.md`.
 
-Because a CRDT addresses operations by `(peer, counter)` and the counter restarts at zero on a fresh document, a peer that claims its identity before loading its own stored history writes to addresses that history already occupies. The merge deduplicates by address and one of the two operations is silently dropped.
+Because a CRDT addresses operations by `(peer, counter)` and the counter restarts at zero on a fresh document, a peer that claims an identity with stored history before loading that history writes to addresses the history already occupies. The merge deduplicates by address and one of the two operations is silently dropped. A session seat has no stored history, but a durable seat will.
 
 So a **store-backed document claims its substrate identity after hydration, not at construction**. `Runtime.createInterpretDoc` takes `beginHydration` from `@kyneta/schema` when a store is configured and calls the returned `adopt()` once the load resolves — before `registerDoc`, so peers never see the transient identity in an announcement. Without a store there is nothing to import and identity is claimed immediately.
 
 One consequence worth knowing: a document written to *before* it has hydrated contributes its early operations under a transient identity, which shows up as one extra version-vector entry that never grows. Waiting for the document to settle avoids it, which the readiness layer already asks for on independent grounds. See §"Peer identity and when a substrate may claim it" in `packages/schema/TECHNICAL.md` for the rule and which backends need it.
-
-### Browser tabs: `persistentPeerId`
-
-The multi-tab browser case is subtle enough to deserve its own helper. A tab wants a peer ID that:
-
-- Survives reload in this tab.
-- Is unique against other concurrent tabs.
-- Reuses the stable "device" ID when no other tab is active (so a single-tab user's peer ID is stable across browser sessions).
-
-`persistentPeerId(key)` implements this via a `localStorage` **compare-and-swap** lease, factored as FC/IS:
-
-```
-resolveLease(state)        // pure decision: cached | primary | fresh
-persistentPeerId(key)      // imperative: gather → plan → execute
-releasePeerId(key)         // clears the lease holder (pagehide, testing)
-```
-
-The `resolveLease` pure core is independently tested. Storage keys (`key`, `key + ":held"`, sessionStorage equivalents) are documented at the top of `src/persistent-peer-id.ts`.
-
-### What `persistentPeerId` is NOT
-
-- **Not a UUID generator.** The fresh-tab peer uses `randomPeerId()` (from `@kyneta/random`), but the primary case returns a *stable* device-level ID.
-- **Not cross-domain.** `localStorage` is origin-scoped. Different domains mean different devices.
-- **Not a server-side helper.** Server processes should pass explicit `peerId` strings; the lease protocol assumes `localStorage` / `sessionStorage`.
 
 ---
 
@@ -704,7 +692,8 @@ The default (`true`) includes every peer we push to in the cohort: the LCV consi
 
 ```ts
 new Exchange({
-  id: { peerId: "server", type: "service" },
+  principal: "server",
+  type: "service",
   cohort: (_docId, peer) => peer.type === "service" ? true : false,
 })
 ```
@@ -804,7 +793,7 @@ Every readiness surface — `settled`, `settledWith`, `docStatus`, `docStatusFee
 That is an invariant rather than a stylistic preference, and it is written down because 3.0.0 shipped without it. `whenSettled` had a second, private copy of "has the authority answered?" that checked only `hasReconciled` (or `reconciledMatching`, when the caller passed a `peer` predicate, an option since removed in favour of `authority`). It never consulted `Policy.authority`. The two copies disagreed in both directions:
 
 - **Over-waiting.** A server declaring `authority: "self"` with a transport configured — the normal shape of a server, since it has to listen for clients — hung forever inside `initialize`. `settled(doc)` was already `true` and `docStatus(doc)` already read `"empty"`; only the promise disagreed. The `"self"` rule exists precisely to say "my own storage is the last word, there is nobody to wait for", and the wait ignored it.
-- **Under-waiting.** A client declaring `authority: p => p.peerId === "server"` resolved as soon as *any* peer reconciled, including another equally-empty client. `initialize` then returned `"loaded"` — "the document already had data" — on the word of a peer that had never seen it.
+- **Under-waiting.** A client declaring `authority: p => p.principal === "server"` resolved as soon as *any* peer reconciled, including another equally-empty client. `initialize` then returned `"loaded"` — "the document already had data" — on the word of a peer that had never seen it.
 
 The test gap that hid this is worth naming, because it is the reusable lesson: **every** `authority` scenario in the suite was transportless, and with no transports configured every rule in `derivePeerSettled` short-circuits to `true` via the `isOffline` branch. The truth table was exhaustive and the integration tests were green, yet nothing exercised the authority rules against a live transport. Tests for a rule with a short-circuit have to defeat the short-circuit, or they test only the short-circuit. The cases in `__tests__/authority.test.ts` and `__tests__/integration.test.ts` §"whenSettled — authority" now configure a bridge transport for exactly this reason.
 
@@ -883,13 +872,14 @@ The residual hazard is an application returning `Reject()` from its own
 the document is empty. Worth knowing, because `initialize` makes the
 consequence larger than it used to be.
 
-### Identify the authority by peer ID, not role
+### Identify the authority by principal, not role
 
 `PeerIdentityDetails.type` has three values, so `p => p.type === "service"` is
 the tempting check. It is too loose for anything gating a write: the multi-peer
 devtools inspector described in `PRODUCT.md` is itself an Exchange peer and
 would very likely identify as a service. Prefer
-`p => p.peerId === "my-server"`.
+`p => p.principal === "my-server"`. Not `peerId`: that is the server's seat,
+issued per process, and it changes when the server restarts.
 
 ### When a seed must be positional
 
@@ -1198,9 +1188,10 @@ const chatLine = Line.protocol({
   schema: ChatMessage,               // BoundSchema<S>
 })
 
-// Client
-const sender = chatLine.sender(exchange, peerId)
-const receiver = chatLine.claimReceiver(exchange, peerId)
+// Client: a Line is addressed by the remote seat, found by principal
+const server = await whenPeer(exchange, p => p.principal === "server")
+const sender = chatLine.sender(exchange, server.peerId)
+const receiver = chatLine.claimReceiver(exchange, server.peerId)
 sender.send({ text: "hello" })
 for await (const msg of receiver) {
   console.log(msg)
@@ -1221,11 +1212,18 @@ Properties:
 
 | Property | Mechanism |
 |----------|-----------|
-| Reliability | Built on authoritative docs — missed messages replay from the persisted log. One exception: two Exchanges sharing one peer id (React StrictMode's double mount, an HMR reload racing its predecessor) are two writers of one outbox, whose lineages converge on the later one, and a message the earlier one had in flight is lost. A `Line` does not re-send. Give each Exchange its own peer id; PLAN-2026-09-27-principal makes that structural. |
+| Reliability | Built on authoritative docs — missed messages replay from the persisted log. Each outbox has one writer, the seat its id names, so two Exchanges for one principal (React StrictMode's double mount) write two outboxes. |
 | Order | Monotone `seq` within a direction; reader consumes in `seq` order. |
 | Bounded storage | Receiver's `ack` triggers sender's pruning of acked messages. |
 | Multiple peers | Each peer-pair gets its own Line doc; `LineProtocol` creates + tears down as peers come and go. |
 | Application payload | User supplies `send` / `recv` schemas. The envelope (`seq`, `ackSeq`, `ackLineage`, `nextSeq`) is this package's concern. |
+
+**Addressed by seat.** Each outbox is written only by the seat its id names (`lineDocId(topic, from, to)`). Addressed by principal, a user's two tabs would share one outbox and the second could not send. Pass a `peerId`, never a principal.
+
+Two limitations, until PLAN-2026-09-27-durable-seats and a retention policy:
+
+- **`Line`s do not survive a server restart.** A restarted server is a new seat. Clients keep their `Line`s to the old seat, which never returns; they find the new seat with `whenPeer` and open new `Line`s, and anything in flight to the old seat is lost.
+- **`Line` documents to a seat that never returns stay stored** on its peer, and every store-less session is a new seat. A server cannot observe a session seat's end: a crashed process, a killed tab and a sleeping laptop all look like silence. A leftover `Line` loses nothing and takes storage, so removing it is a retention policy, designed separately.
 
 ### `LineProtocol`: reified protocol objects
 
@@ -1298,8 +1296,8 @@ For durability guarantees, use the `cohort` predicate to prevent compaction past
 | Type | File | Role |
 |------|------|------|
 | `Exchange` | `src/exchange.ts` | Public façade. Constructor, `get`, `destroy`, `suspend`, `resume`, `addTransport`, `removeTransport`, `peers`, `documents`, `registerReplica`, `registerPolicy`. |
-| `ExchangeParams` | `src/exchange.ts` | Constructor options: `id`, `transports`, `store`, `governance`, `policies`, `resolve`, `canShare`, `canAccept`, `departureTimeout`, `replicas`. |
-| `PeerIdentityInput` | `src/exchange.ts` | Input variant of `PeerIdentityDetails` with optional `type`. |
+| `ExchangeParams` | `src/exchange.ts` | Constructor options: `principal`, `type`, `transports`, `store`, `schemas`, `replicas`, `departureTimeout`, the local concerns (`lease`, `tickInterval`, `onStoreError`), and one initial `Policy` (`resolve`, `canShare`, `canAccept`, …). |
+| `PeerNaming` | `src/exchange.ts` | `{ principal, type? }`: who an Exchange says it is. Its seat comes from the Runtime. |
 | `Disposition` | `src/exchange.ts` | `Interpret \| Replicate \| Defer \| Reject`. |
 | `Synchronizer` | `src/synchronizer.ts` | Shell class. Public only for `@kyneta/react`'s internal use; applications never construct one. |
 | `DocReadyInfo` | `src/runtime.ts` | The one record of a registered document, owned by the Runtime and read by the Synchronizer. |
@@ -1311,7 +1309,7 @@ For durability guarantees, use the `cohort` predicate to prevent compaction past
 | `Governance` / `composeGate` | `src/governance.ts` | Composer class + pure composition function. |
 | `Capabilities` / `ReplicaKey` / `DEFAULT_REPLICAS` / `createCapabilities` | `src/capabilities.ts` | Replica + schema registry. |
 | `Line` / `LineProtocol` / `createLineDocSchema` | `src/line.ts` | Reliable message-stream primitive. |
-| `persistentPeerId` / `releasePeerId` / `resolveLease` / `LeaseState` | `src/persistent-peer-id.ts` | Browser-tab peer-ID lease helper + pure core. |
+| `whenPeer` | `src/when-peer.ts` | Resolves with the first peer in `exchange.peers` matching a predicate. |
 | `Store` / `StoreRecord` / `StoreMeta` / `DocMetadata` | `src/store/store.ts` | Persistence interface. |
 | `validateAppend` | `src/store/store.ts` | Shared meta-first invariant guard for `append` implementations. |
 | `PeerChange` / `DocChange` / `DocInfo` / `PeerState` / `PeerSyncState` / `PeerDocSyncState` / `Connectivity` | `src/types.ts` | Reactive-collection change types and snapshot shapes. |
@@ -1323,7 +1321,7 @@ For durability guarantees, use the `cohort` predicate to prevent compaction past
 | File | Role |
 |------|------|
 | `src/index.ts` | Public barrel. Re-exports `bind` / `json` / `ephemeral` / `SyncMode` / `SYNC_COLLABORATIVE` / `SYNC_AUTHORITATIVE` / `SYNC_EPHEMERAL` / `requiresBidirectionalSync` from `@kyneta/schema`; exports exchange-specific types. |
-| `src/exchange.ts` | `Exchange` class, `ExchangeParams`, disposition types, `phaseOf`, `peerId` validation, `registerReplica`, `registerPolicy`, reactive-collection wiring. |
+| `src/exchange.ts` | `Exchange` class, `ExchangeParams`, disposition types, `phaseOf`, principal validation, `registerReplica`, `registerPolicy`, reactive-collection wiring. |
 | `src/synchronizer.ts` | Shell. Dispatch queue, registered-document map, effect interpreter, emit methods (`#emitPeerSyncChanges`, `#emitStateAdvanced`, `#emitDocEvents`, `#emitPeerEvents`), `declareVacant` / `hasReconciled` / `reconciledMatching` / `connectivity` / `awaitReconciliation`, transport + storage integration. |
 | `src/session-program.ts` | Pure session program: `SessionModel`, inputs, effects, `updateSession`, transition collapse. |
 | `src/sync-program.ts` | Pure sync program: `SyncModel`, `DocEntry`, inputs, effects, `updateSync`, per-message handlers. |
@@ -1332,16 +1330,16 @@ For durability guarantees, use the `cohort` predicate to prevent compaction past
 | `src/capabilities.ts` | `Capabilities`, `ReplicaKey`, `ReplicaEntry`, `DEFAULT_REPLICAS`, `createCapabilities`. |
 | `src/line.ts` | `Line`, `LineProtocol`, envelope schema, ack-based pruning. |
 | `src/async-queue.ts` | Bounded async queue used by `Line`. |
-| `src/persistent-peer-id.ts` | Browser-tab peer-ID lease; FC/IS split. Imports `randomPeerId` and `randomHex` from `@kyneta/random`. |
+| `src/when-peer.ts` | `whenPeer`: find a peer's seat by predicate. |
 | `src/interpret.ts` | Pure phase classifier: `DocPhase`, `InterpretAction`, `planInterpretation`. The one rule all three interpretation doors consult. |
 | `src/sync.ts` | `sync(doc)` helper + `registerSync`. |
 | `src/types.ts` | `DocChange`, `DocInfo`, `PeerChange`, `PeerDocSyncState`, `PeerState`, `PeerSyncState`, `Connectivity`. |
 | `src/observe.ts` | — | DevTools observation protocol (`ObsEvent`), bus (`createObservationBus`), and pure effect/msg/changeset/frame mappers. Experimental. |
-| `src/utils.ts` | `validatePeerId`. (Random ID generation extracted to `@kyneta/random`.) |
-| `src/store/` | — | `Store` interface, in-memory implementation, shared utilities (`seq-tracker.ts`, `validateAppend` in `store.ts`). |
+| `src/utils.ts` | `validatePrincipal`. |
+| `src/store/` | — | `Store` interface, in-memory implementation, the store program, shared utilities (`validateAppend` in `store.ts`). |
 | `src/transport/` | — | Transport-manager glue. |
 | `src/testing/` | — | Test-only helpers exported from `@kyneta/exchange/testing`. |
-| `src/__tests__/` | 17 files | Full dispatch-loop, governance, capabilities, line, persistent-peer-id, storage, compaction, classification, and end-to-end tests. |
+| `src/__tests__/` | — | Full dispatch-loop, governance, capabilities, line, seats, storage, compaction, classification, and end-to-end tests. |
 
 ## Observation bus (experimental)
 

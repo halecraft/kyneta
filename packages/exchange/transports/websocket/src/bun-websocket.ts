@@ -53,13 +53,13 @@ export type BunWebsocketData = {
  * import { WebsocketServerTransport } from "@kyneta/websocket-transport/server"
  * import { wrapBunWebsocket, type BunWebsocketData } from "@kyneta/websocket-transport/bun"
  *
- * const serverAdapter = new WebsocketServerTransport()
+ * const serverTransport = new WebsocketServerTransport()
  *
  * Bun.serve<BunWebsocketData>({
  *   websocket: {
  *     open(ws) {
  *       const socket = wrapBunWebsocket(ws)
- *       serverAdapter.handleConnection({ socket }).start()
+ *       serverTransport.handleConnection({ socket }).start()
  *     },
  *     message(ws, msg) {
  *       const data = msg instanceof ArrayBuffer ? new Uint8Array(msg) : msg
@@ -126,14 +126,14 @@ export function wrapBunWebsocket(
  * import { WebsocketServerTransport } from "@kyneta/websocket-transport/server"
  * import { createBunWebsocketHandlers, type BunWebsocketData } from "@kyneta/websocket-transport/bun"
  *
- * const serverAdapter = new WebsocketServerTransport()
+ * const serverTransport = new WebsocketServerTransport()
  *
  * Bun.serve<BunWebsocketData>({
  *   fetch(req, server) {
  *     server.upgrade(req)
  *     return new Response("upgrade failed", { status: 400 })
  *   },
- *   websocket: createBunWebsocketHandlers(serverAdapter),
+ *   websocket: createBunWebsocketHandlers(serverTransport),
  * })
  * ```
  */

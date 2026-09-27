@@ -21,7 +21,7 @@ Eight message types form the exchange protocol:
 
 | Discriminator (CBOR) | Type | Direction | Purpose |
 |----------------------|------|-----------|---------|
-| `0x01` | `establish` | Bidirectional | Announce peer identity |
+| `0x01` | `establish` | Bidirectional | Announce the peer's seat and principal |
 | `0x02` | `depart` | Bidirectional | Signal peer departure |
 | `0x10` | `present` | Bidirectional | Announce document IDs and metadata |
 | `0x11` | `interest` | Bidirectional | Request a specific document's state |
@@ -139,8 +139,8 @@ v1 has no transport-prefix layer. The frame type byte (offset 1 of the 6-byte he
 | Wire field | Full name | Type | Used by |
 |------------|-----------|------|---------|
 | `t` | type | integer discriminator | All messages |
-| `id` | peerId | `string` | establish |
-| `n` | name | `string` (optional) | establish |
+| `id` | peerId (the seat) | `string` | establish |
+| `pr` | principal | `string` | establish (required from `pv` `[2,0]`; a `[1,x]` peer omits it) |
 | `y` | type | `"user" \| "bot" \| "service"` | establish |
 | `f` | features | `WireFeatures` (compact map) | establish (optional) |
 | `pv` | protocolVersion | `[major, minor]` (two integers) | establish (optional; absent ⇒ `[1,0]`, the baseline; omitted only at the baseline) |
@@ -172,10 +172,10 @@ Decoders MUST tolerate absent optional fields by applying these defaults:
 | `r` (reciprocate) | `false` | Interests only; most don't reciprocate |
 | `pe` (payload encoding) | `0` (json) | When omitted on `offer` |
 | `v` (version) | `undefined` | Absent means LWW initial-sync |
-| `n` (name) | `undefined` | Optional display name |
+| `pr` (principal) | `""` | Only a `[1,x]` peer omits it |
 | `f` (features) | `undefined` | Treated as no features advertised — no alias/streamed/datagram |
 | `shs` (supported hashes) | `undefined` | Absent means just the primary hash |
-| `pv` (protocolVersion) | `[1, 0]` | Absent ⇒ peer supports only the 2.0 sync wire-contract |
+| `pv` (protocolVersion) | `[1, 0]` | Absent ⇒ the peer speaks the `[1,0]` baseline |
 
 ### Binary Encoding Flow
 
@@ -415,7 +415,7 @@ The current revision is `[2, 0]`, the first real major: it added `accept` and re
 
 ### Establish negotiation-core invariant
 
-The part of `establish` carrying `id`, `y`, and `pv` is a **permanent meta-contract**, invariant across all protocol revisions. Future revisions may extend `establish` or change other messages but may never break a peer's ability to parse another peer's identity + `protocolVersion`. The establish validator stays tolerant of unknown fields.
+The part of `establish` carrying `id`, `y`, and `pv` is a **permanent meta-contract**, invariant across all protocol revisions. Future revisions may extend `establish` or change other messages but may never break a peer's ability to parse another peer's identity + `protocolVersion`. The establish validator stays tolerant of unknown fields. So `pr`, added in `[2,0]`, is required only of an `establish` whose `pv` is `[2,0]` or later: a `[1,x]` peer's `establish` still parses, and its major mismatch is reported.
 
 ## DocId and Schema Hash Aliasing
 

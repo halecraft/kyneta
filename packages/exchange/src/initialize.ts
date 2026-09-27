@@ -106,7 +106,7 @@ const inFlight = new WeakMap<object, Promise<"created" | "loaded">>()
  *
  * ```ts
  * // Server — authoritative, loads from disk, never waits for a client
- * const exchange = new Exchange({ id: "server", store: ...,
+ * const exchange = new Exchange({ principal: "server", store: ...,
  *                                 authority: "self" })
  * await initialize(doc, d => d.set({ title: "Untitled", posts: [] }))
  *

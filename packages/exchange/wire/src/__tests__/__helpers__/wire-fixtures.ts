@@ -27,17 +27,17 @@ import {
 
 export function establishWire(opts: {
   peerId: string
+  principal: string
   type: "user" | "bot" | "service"
-  name?: string
   features?: { alias?: boolean; streamed?: boolean; datagram?: boolean }
   protocolVersion?: [number, number]
 }): WireEstablishMsg {
   const wire: WireEstablishMsg = {
     t: MessageType.Establish,
     id: opts.peerId,
+    pr: opts.principal,
     y: opts.type,
   }
-  if (opts.name !== undefined) wire.n = opts.name
   if (opts.features !== undefined) {
     wire.f = {}
     if (opts.features.alias !== undefined) wire.f.a = opts.features.alias

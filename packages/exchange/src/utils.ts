@@ -5,14 +5,14 @@
 // ---------------------------------------------------------------------------
 
 /**
- * Validate that a peer ID is a non-empty string.
+ * Validate that a principal is a non-empty string.
  *
- * @throws If peerId is empty or not a string.
+ * @throws If principal is empty or not a string.
  */
-export function validatePeerId(peerId: string): void {
-  if (typeof peerId !== "string" || peerId.length === 0) {
+export function validatePrincipal(principal: string): void {
+  if (typeof principal !== "string" || principal.length === 0) {
     throw new Error(
-      `Invalid peerId: expected a non-empty string, got ${JSON.stringify(peerId)}`,
+      `Invalid principal: expected a non-empty string, got ${JSON.stringify(principal)}`,
     )
   }
 }

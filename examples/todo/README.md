@@ -61,7 +61,7 @@ export const TodoDoc = loro.bind(TodoSchema)
 // Server
 const wsServer = new WebsocketServerTransport()
 const exchange = new Exchange({
-  id: { peerId: "server", name: "server" },
+  principal: "server",
   transports: [wsServer],
 })
 const doc = exchange.get("todos", TodoDoc)
@@ -69,7 +69,7 @@ const doc = exchange.get("todos", TodoDoc)
 // Client
 const wsClient = new WebsocketClientTransport({ url: `ws://${location.host}/ws` })
 const exchange = new Exchange({
-  id: "client",
+  principal: "client",
   transports: [wsClient]
 })
 const doc = exchange.get("todos", TodoDoc)

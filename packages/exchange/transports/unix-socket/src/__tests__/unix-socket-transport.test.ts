@@ -90,7 +90,7 @@ describe("Unix Socket Transport — integration", () => {
     })
 
     const serverExchange = new Exchange({
-      id: { peerId: "server-peer", name: "Server" },
+      principal: "server-peer",
       transports: [serverTransport],
     })
     exchanges.push(serverExchange)
@@ -105,7 +105,7 @@ describe("Unix Socket Transport — integration", () => {
     })
 
     const clientExchange = new Exchange({
-      id: { peerId: "client-peer", name: "Client" },
+      principal: "client-peer",
       transports: [clientTransport],
     })
     exchanges.push(clientExchange)
@@ -127,7 +127,7 @@ describe("Unix Socket Transport — integration", () => {
     })
 
     const serverExchange1 = new Exchange({
-      id: { peerId: "server-peer-1", name: "Server 1" },
+      principal: "server-peer-1",
       transports: [serverTransport1],
     })
     exchanges.push(serverExchange1)
@@ -147,7 +147,7 @@ describe("Unix Socket Transport — integration", () => {
     })
 
     const clientExchange = new Exchange({
-      id: { peerId: "client-peer", name: "Client" },
+      principal: "client-peer",
       transports: [clientTransport],
     })
     exchanges.push(clientExchange)
@@ -182,7 +182,7 @@ describe("Unix Socket Transport — integration", () => {
     })
 
     const serverExchange2 = new Exchange({
-      id: { peerId: "server-peer-2", name: "Server 2" },
+      principal: "server-peer-2",
       transports: [serverTransport2],
     })
     exchanges.push(serverExchange2)
@@ -222,7 +222,7 @@ describe("Unix Socket Transport — integration", () => {
       cleanup: true,
     })
     const serverExchange1 = new Exchange({
-      id: { peerId: "server-1", name: "Server 1" },
+      principal: "server-1",
       transports: [serverTransport1],
     })
 
@@ -242,7 +242,7 @@ describe("Unix Socket Transport — integration", () => {
     })
 
     const serverExchange2 = new Exchange({
-      id: { peerId: "server-2", name: "Server 2" },
+      principal: "server-2",
       transports: [serverTransport2],
     })
     exchanges.push(serverExchange2)
@@ -257,7 +257,7 @@ describe("Unix Socket Transport — integration", () => {
     })
 
     const clientExchange = new Exchange({
-      id: { peerId: "client-peer", name: "Client" },
+      principal: "client-peer",
       transports: [clientTransport],
     })
     exchanges.push(clientExchange)
@@ -274,7 +274,7 @@ describe("Unix Socket Transport — integration", () => {
     })
 
     const clientExchange = new Exchange({
-      id: { peerId: "client-peer", name: "Client" },
+      principal: "client-peer",
       transports: [clientTransport],
     })
     exchanges.push(clientExchange)
@@ -299,7 +299,7 @@ describe("Unix Socket Transport — integration", () => {
     })
 
     const serverExchange = new Exchange({
-      id: { peerId: "server-peer", name: "Server" },
+      principal: "server-peer",
       transports: [serverTransport],
     })
     // Don't push to exchanges — we manage lifecycle manually
@@ -324,7 +324,7 @@ describe("Unix Socket Transport — integration", () => {
     })
 
     const serverExchange = new Exchange({
-      id: { peerId: "server-peer", name: "Server" },
+      principal: "server-peer",
       transports: [serverTransport],
     })
     exchanges.push(serverExchange)
@@ -338,7 +338,7 @@ describe("Unix Socket Transport — integration", () => {
       reconnect: { enabled: false },
     })
     const clientExchange1 = new Exchange({
-      id: { peerId: "client-1", name: "Client 1" },
+      principal: "client-1",
       transports: [clientTransport1],
     })
     exchanges.push(clientExchange1)
@@ -348,7 +348,7 @@ describe("Unix Socket Transport — integration", () => {
       reconnect: { enabled: false },
     })
     const clientExchange2 = new Exchange({
-      id: { peerId: "client-2", name: "Client 2" },
+      principal: "client-2",
       transports: [clientTransport2],
     })
     exchanges.push(clientExchange2)

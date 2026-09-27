@@ -18,11 +18,7 @@
 import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import { batch, ephemeral, json, Schema } from "@kyneta/schema"
 import { afterEach, describe, expect, it } from "vitest"
-import {
-  Exchange,
-  type ExchangeParams,
-  type PeerIdentityInput,
-} from "../exchange.js"
+import { Exchange, type ExchangeParams } from "../exchange.js"
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -38,8 +34,7 @@ async function drain(rounds = 20): Promise<void> {
 const activeExchanges: Exchange[] = []
 
 function createExchange(params: Partial<ExchangeParams> = {}): Exchange {
-  const merged = { id: "test" as string | PeerIdentityInput, ...params }
-  const ex = new Exchange(merged as ExchangeParams)
+  const ex = new Exchange({ principal: "test", ...params })
   activeExchanges.push(ex)
   return ex
 }
@@ -75,12 +70,12 @@ describe("cohort governance predicate", () => {
     const bridge = new Bridge()
 
     const server = createExchange({
-      id: "server",
+      principal: "server",
       transports: [createBridgeTransport({ transportId: "server", bridge })],
     })
 
     const client = createExchange({
-      id: "client",
+      principal: "client",
       transports: [createBridgeTransport({ transportId: "client", bridge })],
     })
 
@@ -120,11 +115,11 @@ describe("cohort governance predicate", () => {
     // compaction trims nothing.
     const bridge = new Bridge()
     const writer = createExchange({
-      id: "writer",
+      principal: "writer",
       transports: [createBridgeTransport({ transportId: "writer", bridge })],
     })
     const reader = createExchange({
-      id: "reader",
+      principal: "reader",
       transports: [createBridgeTransport({ transportId: "reader", bridge })],
     })
     const doc = writer.get("doc-1", TestDoc)
@@ -149,7 +144,8 @@ describe("cohort governance predicate", () => {
     const bridgeSB = new Bridge()
 
     const server = createExchange({
-      id: { peerId: "server", type: "service" },
+      principal: "server",
+      type: "service",
       transports: [
         createBridgeTransport({ transportId: "server-r", bridge: bridgeSR }),
         createBridgeTransport({ transportId: "server-b", bridge: bridgeSB }),
@@ -158,14 +154,16 @@ describe("cohort governance predicate", () => {
     })
 
     const relay = createExchange({
-      id: { peerId: "relay", type: "service" },
+      principal: "relay",
+      type: "service",
       transports: [
         createBridgeTransport({ transportId: "relay", bridge: bridgeSR }),
       ],
     })
 
     const browser = createExchange({
-      id: { peerId: "browser", type: "user" },
+      principal: "browser",
+      type: "user",
       transports: [
         createBridgeTransport({ transportId: "browser", bridge: bridgeSB }),
       ],
@@ -216,13 +214,15 @@ describe("cohort governance predicate", () => {
     const bridge = new Bridge()
 
     const server = createExchange({
-      id: { peerId: "server", type: "service" },
+      principal: "server",
+      type: "service",
       transports: [createBridgeTransport({ transportId: "server", bridge })],
       cohort: (_docId, peer) => peer.type === "service",
     })
 
     const client = createExchange({
-      id: { peerId: "client", type: "user" },
+      principal: "client",
+      type: "user",
       transports: [createBridgeTransport({ transportId: "client", bridge })],
     })
 
@@ -276,13 +276,15 @@ describe("cohort governance predicate", () => {
     const bridge = new Bridge()
 
     const server = createExchange({
-      id: { peerId: "server", type: "service" },
+      principal: "server",
+      type: "service",
       transports: [createBridgeTransport({ transportId: "server", bridge })],
       cohort: () => true,
     })
 
     const client = createExchange({
-      id: { peerId: "client", type: "user" },
+      principal: "client",
+      type: "user",
       transports: [createBridgeTransport({ transportId: "client", bridge })],
     })
 
@@ -326,13 +328,15 @@ describe("cohort governance predicate", () => {
 
     // Only the "durable" doc has cohort protection; "ephemeral" does not.
     const server = createExchange({
-      id: { peerId: "server", type: "service" },
+      principal: "server",
+      type: "service",
       transports: [createBridgeTransport({ transportId: "server", bridge })],
       cohort: (docId, _peer) => docId === "durable",
     })
 
     const client = createExchange({
-      id: { peerId: "client", type: "service" },
+      principal: "client",
+      type: "service",
       transports: [createBridgeTransport({ transportId: "client", bridge })],
     })
 
@@ -374,13 +378,15 @@ describe("cohort governance predicate", () => {
     const bridge = new Bridge()
 
     const server = createExchange({
-      id: { peerId: "server", type: "service" },
+      principal: "server",
+      type: "service",
       transports: [createBridgeTransport({ transportId: "server", bridge })],
       cohort: () => false,
     })
 
     const client = createExchange({
-      id: { peerId: "client", type: "user" },
+      principal: "client",
+      type: "user",
       transports: [createBridgeTransport({ transportId: "client", bridge })],
     })
 
@@ -426,13 +432,13 @@ describe("ephemeral sync-mode dispatch", () => {
   it("never routes an inter-peer push through the compaction-reset path", async () => {
     let resetCount = 0
     const alice = createExchange({
-      id: "alice",
+      principal: "alice",
       canReset: () => {
         resetCount++
         return true
       },
     })
-    const bob = createExchange({ id: "bob" })
+    const bob = createExchange({ principal: "bob" })
 
     const bridge = new Bridge()
     alice.addTransport(createBridgeTransport({ transportId: "alice", bridge }))

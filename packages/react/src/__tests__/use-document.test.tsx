@@ -29,7 +29,7 @@ const TestDoc = json.bind(TestSchema)
 // ---------------------------------------------------------------------------
 
 function createWrapper() {
-  const exchange = new Exchange({ id: "test" })
+  const exchange = new Exchange({ principal: "test" })
   return ({ children }: { children: ReactNode }) => (
     <ExchangeProvider exchange={exchange}>{children}</ExchangeProvider>
   )

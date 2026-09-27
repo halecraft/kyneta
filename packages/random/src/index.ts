@@ -17,11 +17,12 @@ export function randomHex(byteCount: number): string {
 }
 
 /**
- * Generate a random peer ID — a 16-character hex string.
+ * Generate a random peer ID: 128 bits as a 32-character hex string.
  *
- * Used as keys in CRDT version vectors, so must be unique
- * but does not require cryptographic unpredictability.
+ * A peer ID is a seat, the key of a writer's entries in CRDT version vectors.
+ * It must be unique with overwhelming probability across every writing session
+ * a document ever sees. It need not be unpredictable.
  */
 export function randomPeerId(): string {
-  return randomHex(8)
+  return randomHex(16)
 }

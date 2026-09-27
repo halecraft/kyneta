@@ -35,12 +35,12 @@ describe("multi-transport peer discovery", () => {
     const bAB = new Bridge()
     const bBC = new Bridge()
     const A = new Exchange({
-      id: "alice",
+      principal: "alice",
       transports: [createBridgeTransport({ transportId: "a", bridge: bAB })],
       schemas: [Doc],
     })
     const B = new Exchange({
-      id: "bob",
+      principal: "bob",
       transports: [
         createBridgeTransport({ transportId: "b-ab", bridge: bAB }),
         createBridgeTransport({ transportId: "b-bc", bridge: bBC }),
@@ -48,16 +48,16 @@ describe("multi-transport peer discovery", () => {
       schemas: [Doc],
     })
     const C = new Exchange({
-      id: "carol",
+      principal: "carol",
       transports: [createBridgeTransport({ transportId: "c", bridge: bBC })],
       schemas: [Doc],
     })
 
     await drain()
 
-    expect([...A.peers().keys()].sort()).toEqual(["bob"])
-    expect([...B.peers().keys()].sort()).toEqual(["alice", "carol"])
-    expect([...C.peers().keys()].sort()).toEqual(["bob"])
+    expect([...A.peers().keys()]).toEqual([B.peerId])
+    expect([...B.peers().keys()].sort()).toEqual([A.peerId, C.peerId].sort())
+    expect([...C.peers().keys()]).toEqual([B.peerId])
 
     await A.shutdown()
     await B.shutdown()

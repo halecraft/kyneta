@@ -184,7 +184,7 @@ async function drain(rounds = 30): Promise<void> {
 const active: Exchange[] = []
 function peer(id: string, bridge: Bridge): Exchange {
   const ex = new Exchange({
-    id,
+    principal: id,
     transports: [createBridgeTransport({ transportId: id, bridge })],
     schemas: [TodoDoc],
   })

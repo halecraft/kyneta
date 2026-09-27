@@ -42,7 +42,8 @@ const out = createWriteStream("observations.ndjson", { flags: "a" })
 const serverTransport = new WebsocketServerTransport()
 
 const exchange = new Exchange({
-  id: { peerId: "todo-react-server", name: "server" },
+  principal: "todo-react-server",
+  type: "service",
   transports: [serverTransport],
 
   /** Uncomment to add local storage persistence via LevelDB */

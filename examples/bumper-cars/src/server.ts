@@ -43,11 +43,8 @@ await buildClient()
 const serverTransport = new WebsocketServerTransport()
 
 const exchange = new Exchange({
-  id: {
-    peerId: "bumper-cars-server",
-    name: "bumper-cars-server",
-    type: "service",
-  },
+  principal: "bumper-cars-server",
+  type: "service",
   transports: [serverTransport],
   schemas: [PlayerInputDoc],
 
@@ -64,8 +61,10 @@ const exchange = new Exchange({
   // Outbound flow control: which peers see which documents?
   //
   // • game-state: visible to everyone (all clients render it)
-  // • input:*:    only visible to the owning peer
-  //               (the server reads them locally, not via sync)
+  // • input:*:    only visible to the owning seat. Input documents are
+  //               keyed by seat, not principal: one car per tab, so a
+  //               player's two tabs drive two cars. (The server reads
+  //               them locally, not via sync.)
   canShare(docId, peer) {
     if (docId.startsWith("input:")) {
       const owner = docId.slice("input:".length)
@@ -78,7 +77,7 @@ const exchange = new Exchange({
   // Inbound flow control: whose mutations are accepted?
   //
   // • game-state: reject all remote writes (server is the single writer)
-  // • input:*:    accept only from the owning peer
+  // • input:*:    accept only from the owning seat
   canAccept(docId, peer) {
     if (docId === "game-state") {
       return false

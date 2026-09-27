@@ -75,9 +75,11 @@ export type LineageBoundaryPredicate = (
  *   so it never waits for anyone else. This is what a server declares.
  * - `"any"` — the first peer to answer is good enough. Correct in hub-and-spoke,
  *   the dominant topology, because a client links only to the server.
- * - a predicate — that specific peer is the authority. Prefer identifying it by
- *   `peerId` rather than by `type`: a server is a `"service"`, but so is any
- *   other service peer on the network, including a devtools inspector.
+ * - a predicate — a peer it matches is the authority. Identify it by
+ *   `principal`, as in `p => p.principal === "my-server"`, rather than by
+ *   `type`: a server is a `"service"`, but so is any other service peer on
+ *   the network, including a devtools inspector. Not by `peerId` either: a
+ *   seat is issued per process and changes when the server restarts.
  */
 export type Authority =
   | "self"

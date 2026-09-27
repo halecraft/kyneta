@@ -38,7 +38,7 @@ function exchangeOn(
   store?: InMemoryStoreData,
 ): Exchange {
   const exchange = new Exchange({
-    id,
+    principal: id,
     transports: links.map(link => createBridgeTransport(link)),
     ...(store ? { store: createInMemoryStore({ sharedData: store }) } : {}),
   })

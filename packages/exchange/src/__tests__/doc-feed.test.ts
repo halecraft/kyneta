@@ -15,11 +15,7 @@ import {
   SYNC_AUTHORITATIVE,
 } from "@kyneta/schema"
 import { afterEach, describe, expect, it } from "vitest"
-import {
-  Exchange,
-  type ExchangeParams,
-  type PeerIdentityInput,
-} from "../exchange.js"
+import { Exchange, type ExchangeParams } from "../exchange.js"
 import type { DocChange, DocInfo } from "../types.js"
 
 // ---------------------------------------------------------------------------
@@ -36,8 +32,7 @@ async function drain(rounds = 20): Promise<void> {
 const activeExchanges: Exchange[] = []
 
 function createExchange(params: Partial<ExchangeParams> = {}): Exchange {
-  const merged = { id: "test" as string | PeerIdentityInput, ...params }
-  const ex = new Exchange(merged as ExchangeParams)
+  const ex = new Exchange({ principal: "test", ...params })
   activeExchanges.push(ex)
   return ex
 }
@@ -75,7 +70,7 @@ describe("exchange.documents", () => {
   describe("reactive map basics", () => {
     it("returns empty ReadonlyMap initially", () => {
       const exchange = createExchange({
-        id: "alice",
+        principal: "alice",
       })
 
       const docs = exchange.documents()
@@ -85,7 +80,7 @@ describe("exchange.documents", () => {
 
     it("hasChangefeed returns true", () => {
       const exchange = createExchange({
-        id: "alice",
+        principal: "alice",
       })
 
       expect(hasChangefeed(exchange.documents)).toBe(true)
@@ -93,7 +88,7 @@ describe("exchange.documents", () => {
 
     it("after get(): documents.has() is true, get() returns { mode: 'interpret' }", () => {
       const exchange = createExchange({
-        id: "alice",
+        principal: "alice",
       })
 
       exchange.get("doc-1", TestDoc)
@@ -109,7 +104,7 @@ describe("exchange.documents", () => {
 
     it("after replicate(): documents.get() returns { mode: 'replicate' }", () => {
       const exchange = createExchange({
-        id: "alice",
+        principal: "alice",
       })
 
       exchange.replicate(
@@ -128,7 +123,7 @@ describe("exchange.documents", () => {
 
     it("after destroy(): documents.has() is false", () => {
       const exchange = createExchange({
-        id: "alice",
+        principal: "alice",
       })
 
       exchange.get("doc-1", TestDoc)
@@ -141,7 +136,7 @@ describe("exchange.documents", () => {
 
     it("documents.size reflects the number of tracked docs", () => {
       const exchange = createExchange({
-        id: "alice",
+        principal: "alice",
       })
 
       expect(exchange.documents.size).toBe(0)
@@ -158,7 +153,7 @@ describe("exchange.documents", () => {
 
     it("documents.keys() iterates over all tracked doc IDs", () => {
       const exchange = createExchange({
-        id: "alice",
+        principal: "alice",
       })
 
       exchange.get("doc-a", TestDoc)
@@ -172,7 +167,7 @@ describe("exchange.documents", () => {
 
     it("[Symbol.iterator] iterates over [docId, DocInfo] pairs", () => {
       const exchange = createExchange({
-        id: "alice",
+        principal: "alice",
       })
 
       exchange.get("doc-1", TestDoc)
@@ -202,7 +197,7 @@ describe("exchange.documents", () => {
   describe("subscription events", () => {
     it("subscribe receives doc-created for get()", () => {
       const exchange = createExchange({
-        id: "alice",
+        principal: "alice",
       })
 
       const changes: DocChange[] = []
@@ -219,7 +214,7 @@ describe("exchange.documents", () => {
 
     it("subscribe receives doc-created for replicate()", () => {
       const exchange = createExchange({
-        id: "alice",
+        principal: "alice",
       })
 
       const changes: DocChange[] = []
@@ -241,7 +236,7 @@ describe("exchange.documents", () => {
 
     it("subscribe receives doc-removed on destroy", () => {
       const exchange = createExchange({
-        id: "alice",
+        principal: "alice",
       })
 
       exchange.get("doc-1", TestDoc)
@@ -262,14 +257,14 @@ describe("exchange.documents", () => {
       const bridge = new Bridge()
 
       const exchangeA = createExchange({
-        id: "alice",
+        principal: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
 
       const changes: DocChange[] = []
 
       const exchangeB = createExchange({
-        id: "bob",
+        principal: "bob",
         transports: [createBridgeTransport({ transportId: "bob", bridge })],
         resolve: () => Defer(),
       })
@@ -296,12 +291,12 @@ describe("exchange.documents", () => {
       const bridge = new Bridge()
 
       const exchangeA = createExchange({
-        id: "alice",
+        principal: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
 
       const exchangeB = createExchange({
-        id: "bob",
+        principal: "bob",
         transports: [createBridgeTransport({ transportId: "bob", bridge })],
         resolve: () => Defer(),
       })
@@ -331,7 +326,7 @@ describe("exchange.documents", () => {
 
     it("unsubscribe stops receiving events", () => {
       const exchange = createExchange({
-        id: "alice",
+        principal: "alice",
       })
 
       const changes: DocChange[] = []
@@ -357,7 +352,7 @@ describe("exchange.documents", () => {
   describe("consistency with existing APIs", () => {
     it("exchange.documentIds() still returns interpret-mode docs from #docCache", () => {
       const exchange = createExchange({
-        id: "alice",
+        principal: "alice",
       })
 
       exchange.get("doc-1", TestDoc)
@@ -378,7 +373,7 @@ describe("exchange.documents", () => {
 
     it("exchange.has(docId) still reads from #docCache", () => {
       const exchange = createExchange({
-        id: "alice",
+        principal: "alice",
       })
 
       exchange.get("doc-1", TestDoc)
@@ -391,12 +386,12 @@ describe("exchange.documents", () => {
       const bridge = new Bridge()
 
       const exchangeA = createExchange({
-        id: "alice",
+        principal: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
 
       const exchangeB = createExchange({
-        id: "bob",
+        principal: "bob",
         transports: [createBridgeTransport({ transportId: "bob", bridge })],
         resolve: () => Defer(),
       })
@@ -410,7 +405,7 @@ describe("exchange.documents", () => {
 
     it("after quiescence, documents and #docCache contain the same doc IDs", () => {
       const exchange = createExchange({
-        id: "alice",
+        principal: "alice",
       })
 
       exchange.get("doc-1", TestDoc)
@@ -446,7 +441,7 @@ describe("exchange.documents", () => {
   describe("reset/shutdown", () => {
     it("reset() emits synthetic doc-removed events for all tracked docs", () => {
       const exchange = createExchange({
-        id: "alice",
+        principal: "alice",
       })
 
       exchange.get("doc-1", TestDoc)
@@ -467,7 +462,7 @@ describe("exchange.documents", () => {
 
     it("after reset(), documents.size is 0", () => {
       const exchange = createExchange({
-        id: "alice",
+        principal: "alice",
       })
 
       exchange.get("doc-1", TestDoc)
@@ -481,7 +476,7 @@ describe("exchange.documents", () => {
 
     it("shutdown() emits synthetic doc-removed events for all tracked docs", async () => {
       const exchange = createExchange({
-        id: "alice",
+        principal: "alice",
       })
 
       exchange.get("doc-1", TestDoc)
@@ -503,12 +498,12 @@ describe("exchange.documents", () => {
       const bridge = new Bridge()
 
       const exchangeA = createExchange({
-        id: "alice",
+        principal: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
 
       const exchangeB = createExchange({
-        id: "bob",
+        principal: "bob",
         transports: [createBridgeTransport({ transportId: "bob", bridge })],
         resolve: () => Defer(),
       })
@@ -544,12 +539,12 @@ describe("exchange.documents", () => {
       const bridge = new Bridge()
 
       const exchangeA = createExchange({
-        id: "alice",
+        principal: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
 
       const exchangeB = createExchange({
-        id: "bob",
+        principal: "bob",
         transports: [createBridgeTransport({ transportId: "bob", bridge })],
         schemas: [TestDoc],
       })
@@ -574,12 +569,12 @@ describe("exchange.documents", () => {
       const bridge = new Bridge()
 
       const exchangeA = createExchange({
-        id: "alice",
+        principal: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
 
       const exchangeB = createExchange({
-        id: "bob",
+        principal: "bob",
         transports: [createBridgeTransport({ transportId: "bob", bridge })],
         schemas: [CollabDoc],
       })
@@ -607,12 +602,12 @@ describe("exchange.documents", () => {
       const bridge = new Bridge()
 
       const exchangeA = createExchange({
-        id: "alice",
+        principal: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
 
       const exchangeB = createExchange({
-        id: "bob",
+        principal: "bob",
         transports: [createBridgeTransport({ transportId: "bob", bridge })],
         schemas: [CollabDoc],
       })
@@ -639,7 +634,7 @@ describe("exchange.documents", () => {
 
     it("exchange.documents() reflects correct state during subscriber callback", () => {
       const exchange = createExchange({
-        id: "alice",
+        principal: "alice",
       })
 
       let docsDuringCallback: ReadonlyMap<string, DocInfo> | undefined
@@ -665,7 +660,7 @@ describe("exchange.documents", () => {
   describe("idempotency", () => {
     it("calling get() twice for the same doc does not emit duplicate doc-created", () => {
       const exchange = createExchange({
-        id: "alice",
+        principal: "alice",
       })
 
       const changes: DocChange[] = []

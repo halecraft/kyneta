@@ -10,7 +10,7 @@ import {
   type SessionModel,
   type SessionUpdate,
 } from "../session-program.js"
-import type { PeerChange } from "../types.js"
+import type { PeerChange, PeerIdentityDetails } from "../types.js"
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -21,9 +21,9 @@ function makeUpdate(): SessionUpdate {
 }
 
 // Helper identity objects
-const alice = { peerId: "alice", type: "user" as const }
-const bob = { peerId: "bob", type: "user" as const }
-const carol = { peerId: "carol", type: "user" as const }
+const alice = { peerId: "alice", principal: "alice", type: "user" as const }
+const bob = { peerId: "bob", principal: "bob", type: "user" as const }
+const carol = { peerId: "carol", principal: "carol", type: "user" as const }
 
 /**
  * Run an update and split the result into model + effects. The algebra
@@ -43,7 +43,7 @@ function establishChannel(
   update: SessionUpdate,
   model: SessionModel,
   channelId: number,
-  remoteIdentity: { peerId: string; type: "user" | "bot" | "service" },
+  remoteIdentity: PeerIdentityDetails,
   protocolVersion: { major: number; minor: number } = PROTOCOL_VERSION,
 ): [SessionModel, SessionEffect[], readonly PeerChange[]] {
   const allEffects: SessionEffect[] = []
@@ -908,12 +908,16 @@ describe("session-program", () => {
   // =========================================================================
 
   describe("peer identity detection", () => {
-    it("warns on self-connection (same peerId)", () => {
+    it("warns on self-connection (the remote holds our seat)", () => {
       const update = makeUpdate()
       const model = initSession(alice)
 
       // Establish a channel where the remote claims to be alice too
-      const selfAlice = { peerId: "alice", type: "user" as const }
+      const selfAlice = {
+        peerId: "alice",
+        principal: "alice",
+        type: "user" as const,
+      }
       const [, allEffects] = establishChannel(update, model, 1, selfAlice)
 
       const warnings = allEffects.filter(e => e.type === "diagnostic")
@@ -925,24 +929,17 @@ describe("session-program", () => {
       ).toBe(true)
     })
 
-    it("warns on duplicate peerId (second channel from same peer)", () => {
+    it("a second channel for a connected seat is not a diagnostic", () => {
+      // One peer over several transports, or a reconnect that overlaps its
+      // predecessor: seats are issued per Runtime, so it is never two peers.
       const update = makeUpdate()
       let model = initSession(alice)
-
-      // Establish bob on channel 1
       ;[model] = establishChannel(update, model, 1, bob)
 
-      // Establish bob on channel 2 — should warn about duplicate peerId
-      const [, allEffects] = establishChannel(update, model, 2, bob)
+      const [next, allEffects] = establishChannel(update, model, 2, bob)
 
-      const warnings = allEffects.filter(e => e.type === "diagnostic")
-      expect(warnings.length).toBeGreaterThanOrEqual(1)
-      expect(
-        warnings.some(
-          w =>
-            w.type === "diagnostic" && w.message.includes("duplicate peerId"),
-        ),
-      ).toBe(true)
+      expect(allEffects.filter(e => e.type === "diagnostic")).toEqual([])
+      expect(next.peers.get("bob")?.channels).toEqual(new Set([1, 2]))
     })
   })
 

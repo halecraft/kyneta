@@ -65,27 +65,29 @@ describe("Text codec — lifecycle messages", () => {
   it("round-trips establish with full identity", () => {
     const wire = establishWire({
       peerId: "peer-alice-123",
-      name: "Alice",
+      principal: "Alice",
       type: "user",
     })
     const decoded = roundTrip(wire)
     expect(decoded).toEqual(wire)
   })
 
-  it("round-trips establish without optional name", () => {
-    const wire = establishWire({ peerId: "bot-42", type: "bot" })
-    const decoded = roundTrip(wire)
-    expect(decoded.t).toBe(MessageType.Establish)
-    const est = decoded as WireEstablishMsg
-    expect(est.id).toBe("bot-42")
-    expect(est.y).toBe("bot")
-    // name should be absent (undefined), not null or empty string
-    expect(est.n).toBeUndefined()
+  it("refuses a 2.0 establish without a principal at decode", () => {
+    const wire = {
+      t: MessageType.Establish,
+      id: "bot-42",
+      y: "bot",
+      pv: [2, 0],
+    } as unknown as WireMessage
+    expect(() => decodeTextWireMessage(encodeTextWireMessage(wire))).toThrow(
+      WireValidationFailure,
+    )
   })
 
   it("round-trips establish with a non-default protocolVersion (pv)", () => {
     const wire = establishWire({
       peerId: "alice",
+      principal: "alice-principal",
       type: "user",
       protocolVersion: [2, 0],
     })
@@ -94,7 +96,11 @@ describe("Text codec — lifecycle messages", () => {
   })
 
   it("round-trips establish without protocolVersion (default peer)", () => {
-    const wire = establishWire({ peerId: "alice", type: "user" })
+    const wire = establishWire({
+      peerId: "alice",
+      principal: "alice-principal",
+      type: "user",
+    })
     const decoded = roundTrip(wire) as WireEstablishMsg
     expect(decoded.pv).toBeUndefined()
   })
@@ -106,7 +112,11 @@ describe("Text codec — lifecycle messages", () => {
   })
 
   it("uses compact integer discriminators (not human-readable type strings)", () => {
-    const wire = establishWire({ peerId: "p1", type: "user" })
+    const wire = establishWire({
+      peerId: "p1",
+      principal: "p1-principal",
+      type: "user",
+    })
     const encoded = JSON.parse(encodeTextWireMessage(wire)) as Record<
       string,
       unknown
@@ -333,7 +343,7 @@ describe("Text codec — dismiss", () => {
 describe("Text codec — batch", () => {
   it("round-trips a batch of mixed message types", () => {
     const wires: WireMessage[] = [
-      establishWire({ peerId: "p1", name: "Peer One", type: "user" }),
+      establishWire({ peerId: "p1", principal: "Peer One", type: "user" }),
       departWire(),
       presentWire([
         {
@@ -506,6 +516,7 @@ describe("Text codec — WireFeatures negotiation", () => {
   it("round-trips establish with all features advertised", () => {
     const wire = establishWire({
       peerId: "alice",
+      principal: "alice-principal",
       type: "user",
       features: { alias: true, streamed: true, datagram: true },
     })
@@ -514,7 +525,11 @@ describe("Text codec — WireFeatures negotiation", () => {
   })
 
   it("round-trips establish with no features (legacy peer)", () => {
-    const wire = establishWire({ peerId: "alice", type: "user" })
+    const wire = establishWire({
+      peerId: "alice",
+      principal: "alice-principal",
+      type: "user",
+    })
     const decoded = roundTrip(wire) as WireEstablishMsg
     expect(decoded.f).toBeUndefined()
   })
@@ -522,6 +537,7 @@ describe("Text codec — WireFeatures negotiation", () => {
   it("round-trips establish with partial features", () => {
     const wire = establishWire({
       peerId: "alice",
+      principal: "alice-principal",
       type: "user",
       features: { alias: true },
     })

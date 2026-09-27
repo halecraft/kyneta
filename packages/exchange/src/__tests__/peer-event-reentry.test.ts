@@ -12,11 +12,7 @@
 import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import { batch, json, Schema } from "@kyneta/schema"
 import { afterEach, describe, expect, it } from "vitest"
-import {
-  Exchange,
-  type ExchangeParams,
-  type PeerIdentityInput,
-} from "../exchange.js"
+import { Exchange, type ExchangeParams } from "../exchange.js"
 
 async function drain(rounds = 20): Promise<void> {
   for (let i = 0; i < rounds; i++) {
@@ -28,8 +24,7 @@ async function drain(rounds = 20): Promise<void> {
 const activeExchanges: Exchange[] = []
 
 function createExchange(params: Partial<ExchangeParams> = {}): Exchange {
-  const merged = { id: "test" as string | PeerIdentityInput, ...params }
-  const ex = new Exchange(merged as ExchangeParams)
+  const ex = new Exchange({ principal: "test", ...params })
   activeExchanges.push(ex)
   return ex
 }
@@ -59,12 +54,12 @@ function makeMesh() {
   const bridgeBC = new Bridge()
 
   const exchangeA = createExchange({
-    id: "alice",
+    principal: "alice",
     transports: [createBridgeTransport({ transportId: "a", bridge: bridgeAB })],
     departureTimeout: 0,
   })
   const exchangeB = createExchange({
-    id: "bob",
+    principal: "bob",
     transports: [
       createBridgeTransport({ transportId: "b-ab", bridge: bridgeAB }),
       createBridgeTransport({ transportId: "b-bc", bridge: bridgeBC }),
@@ -72,7 +67,7 @@ function makeMesh() {
     departureTimeout: 0,
   })
   const exchangeC = createExchange({
-    id: "carol",
+    principal: "carol",
     transports: [createBridgeTransport({ transportId: "c", bridge: bridgeBC })],
     departureTimeout: 0,
   })
@@ -124,7 +119,10 @@ describe("peer-event reentry", () => {
     // mutation propagates to C.
     exchangeB.peers.subscribe(cs => {
       for (const ch of cs.changes) {
-        if (ch.type === "peer-departed" && ch.peer.peerId === "alice") {
+        if (
+          ch.type === "peer-departed" &&
+          ch.peer.peerId === exchangeA.peerId
+        ) {
           batch(docB, (d: any) => {
             d.version.set(99)
           })
@@ -171,7 +169,10 @@ describe("peer-event reentry", () => {
     let destroyCalledFromInsideEmit = false
     exchangeB.peers.subscribe(cs => {
       for (const ch of cs.changes) {
-        if (ch.type === "peer-departed" && ch.peer.peerId === "alice") {
+        if (
+          ch.type === "peer-departed" &&
+          ch.peer.peerId === exchangeA.peerId
+        ) {
           destroyCalledFromInsideEmit = true
           exchangeB.destroy("room")
         }
@@ -205,7 +206,10 @@ describe("peer-event reentry", () => {
 
     exchangeB.peers.subscribe(cs => {
       for (const ch of cs.changes) {
-        if (ch.type === "peer-departed" && ch.peer.peerId === "alice") {
+        if (
+          ch.type === "peer-departed" &&
+          ch.peer.peerId === exchangeA.peerId
+        ) {
           // Deferred — the existing workaround pattern.
           queueMicrotask(() => {
             batch(docB, (d: any) => {

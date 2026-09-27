@@ -39,7 +39,7 @@ export type UnixSocketPeerHandle = AnyTransport & {
  * import { createUnixSocketPeer } from "@kyneta/unix-socket-transport"
  *
  * const peer = createUnixSocketPeer({ path: "/tmp/kyneta.sock" })
- * const exchange = new Exchange({ id: "alice", transports: [peer] })
+ * const exchange = new Exchange({ principal: "alice", transports: [peer] })
  * // later: peer.role, peer.subscribe(role => render(role))
  * ```
  */

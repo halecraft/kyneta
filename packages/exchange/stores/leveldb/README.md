@@ -17,7 +17,8 @@ import { Exchange } from "@kyneta/exchange"
 import { createLevelDBStore } from "@kyneta/leveldb-store"
 
 const exchange = new Exchange({
-  identity: { peerId: "my-server", name: "server" },
+  principal: "my-server",
+  type: "service",
   store: await createLevelDBStore("./data/exchange-db"),
   transports: [networkTransport],
 })

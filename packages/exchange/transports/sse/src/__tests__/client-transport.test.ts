@@ -27,7 +27,7 @@ import { SseClientTransport } from "../client-transport.js"
 
 const testIdentity: PeerIdentityDetails = {
   peerId: "test-peer",
-  name: "Test Peer",
+  principal: "Test Peer",
   type: "user",
 }
 

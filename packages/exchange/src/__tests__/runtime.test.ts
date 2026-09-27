@@ -1,6 +1,7 @@
 // runtime.test.ts — verifies the Runtime can manage documents standalone
 // (no Exchange, no network transports) with stores and the tick clock.
 
+import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import { loro } from "@kyneta/loro-schema"
 import {
   applyChanges,
@@ -29,7 +30,7 @@ const TodoDoc = json.bind(TodoSchema)
 
 describe("Runtime (standalone, no Exchange)", () => {
   it("creates and retrieves documents", () => {
-    const runtime = new Runtime({ peerId: "alice" })
+    const runtime = new Runtime()
     const doc = runtime.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
 
     expect(doc).toBeDefined()
@@ -39,7 +40,7 @@ describe("Runtime (standalone, no Exchange)", () => {
   })
 
   it("returns the same ref for repeated get() calls", () => {
-    const runtime = new Runtime({ peerId: "alice" })
+    const runtime = new Runtime()
     const doc1 = runtime.get("todo-1", TodoDoc)
     const doc2 = runtime.get("todo-1", TodoDoc)
 
@@ -48,7 +49,7 @@ describe("Runtime (standalone, no Exchange)", () => {
   })
 
   it("destroys documents", () => {
-    const runtime = new Runtime({ peerId: "alice" })
+    const runtime = new Runtime()
     runtime.get("todo-1", TodoDoc)
     expect(runtime.has("todo-1")).toBe(true)
 
@@ -61,7 +62,7 @@ describe("Runtime (standalone, no Exchange)", () => {
     const store = createInMemoryStore()
 
     // First runtime: create and persist
-    const runtime1 = new Runtime({ peerId: "alice", store })
+    const runtime1 = new Runtime({ store })
     const doc1 = runtime1.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
     // A stored plain document refuses writes until it has loaded.
     await whenHydrated(doc1)
@@ -70,7 +71,7 @@ describe("Runtime (standalone, no Exchange)", () => {
     await runtime1.shutdown()
 
     // Second runtime: hydrate from the same store
-    const runtime2 = new Runtime({ peerId: "bob", store })
+    const runtime2 = new Runtime({ store })
     const doc2 = runtime2.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
 
     // Hydration is async — drain
@@ -83,7 +84,7 @@ describe("Runtime (standalone, no Exchange)", () => {
   it("persists a mutation made after the initial flush (not just before it)", async () => {
     const store = createInMemoryStore()
 
-    const runtime1 = new Runtime({ peerId: "alice", store })
+    const runtime1 = new Runtime({ store })
     const doc1 = runtime1.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
 
     // Let initial registration/hydration fully settle FIRST — this is the
@@ -96,7 +97,7 @@ describe("Runtime (standalone, no Exchange)", () => {
     await runtime1.flush()
     await runtime1.shutdown()
 
-    const runtime2 = new Runtime({ peerId: "bob", store })
+    const runtime2 = new Runtime({ store })
     const doc2 = runtime2.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
     await runtime2.flush()
 
@@ -108,7 +109,7 @@ describe("Runtime (standalone, no Exchange)", () => {
     const store = createInMemoryStore()
 
     // Generation 1: create + mutate + persist.
-    const runtime1 = new Runtime({ peerId: "alice", store })
+    const runtime1 = new Runtime({ store })
     const doc1 = runtime1.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
     await whenHydrated(doc1)
     doc1.title.set("Buy milk")
@@ -117,7 +118,7 @@ describe("Runtime (standalone, no Exchange)", () => {
 
     // Generation 2: reopen (hydrates via the "hydrated" branch, since prior
     // stored data exists), mutate again, persist.
-    const runtime2 = new Runtime({ peerId: "alice", store })
+    const runtime2 = new Runtime({ store })
     const doc2 = runtime2.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
     await whenHydrated(doc2)
     doc2.title.set("Buy milk and eggs")
@@ -125,7 +126,7 @@ describe("Runtime (standalone, no Exchange)", () => {
     await runtime2.shutdown()
 
     // Generation 3: reopen and assert both mutations survived.
-    const runtime3 = new Runtime({ peerId: "alice", store })
+    const runtime3 = new Runtime({ store })
     const doc3 = runtime3.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
     await runtime3.flush()
 
@@ -134,7 +135,7 @@ describe("Runtime (standalone, no Exchange)", () => {
   })
 
   it("fires lifecycle hooks", () => {
-    const runtime = new Runtime({ peerId: "alice" })
+    const runtime = new Runtime()
 
     const readyCalls: string[] = []
     const destroyedCalls: string[] = []
@@ -154,7 +155,7 @@ describe("Runtime (standalone, no Exchange)", () => {
   })
 
   it("fires onDocReady with correct mode for replicate docs", () => {
-    const runtime = new Runtime({ peerId: "alice" })
+    const runtime = new Runtime()
 
     const readyCalls: { docId: string; mode: string }[] = []
     runtime.setHooks({
@@ -178,7 +179,7 @@ describe("Runtime (standalone, no Exchange)", () => {
   })
 
   it("suspend and resume are idempotent and throw correctly", () => {
-    const runtime = new Runtime({ peerId: "alice" })
+    const runtime = new Runtime()
     runtime.get("todo-1", TodoDoc)
 
     // Suspend
@@ -199,7 +200,7 @@ describe("Runtime (standalone, no Exchange)", () => {
   it("tick clock starts and stops without errors", () => {
     // The tick is a no-op for substrates without tick(), but the interval
     // must not throw or leak.
-    const runtime = new Runtime({ peerId: "alice", tickInterval: 100 })
+    const runtime = new Runtime({ tickInterval: 100 })
     runtime.get("todo-1", TodoDoc)
 
     // Just verify it doesn't throw; substrates don't implement tick yet.
@@ -207,13 +208,13 @@ describe("Runtime (standalone, no Exchange)", () => {
   })
 
   it("tickInterval: 0 disables the tick", () => {
-    const runtime = new Runtime({ peerId: "alice", tickInterval: 0 })
+    const runtime = new Runtime({ tickInterval: 0 })
     runtime.get("todo-1", TodoDoc)
     expect(() => runtime.shutdown()).not.toThrow()
   })
 
   it("does not fire onDocChangeset when no hooks are set", () => {
-    const runtime = new Runtime({ peerId: "alice" })
+    const runtime = new Runtime()
 
     // Should not throw even though no hooks are wired
     const doc = runtime.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
@@ -223,14 +224,13 @@ describe("Runtime (standalone, no Exchange)", () => {
   })
 
   it("lease is accessible for sharing across components", () => {
-    const runtime = new Runtime({ peerId: "alice" })
+    const runtime = new Runtime()
     expect(runtime.lease).toBeDefined()
-    expect(runtime.peerId).toBe("alice")
     runtime.shutdown()
   })
 
   it("setHooks backfills onDocReady for pre-existing docs, exactly once", () => {
-    const runtime = new Runtime({ peerId: "alice" })
+    const runtime = new Runtime()
 
     // Docs created BEFORE any hooks exist.
     runtime.get("todo-1", TodoDoc)
@@ -252,11 +252,13 @@ describe("Runtime (standalone, no Exchange)", () => {
     expect(readyCalls).toContainEqual({ docId: "todo-2", mode: "replicate" })
     expect(readyCalls).toHaveLength(2)
 
-    // Calling setHooks again must not double-announce.
-    runtime.setHooks({
-      onDocReady: info =>
-        readyCalls.push({ docId: info.docId, mode: info.mode }),
-    })
+    // A Runtime has one owner: a second setHooks throws, announcing nothing.
+    expect(() =>
+      runtime.setHooks({
+        onDocReady: info =>
+          readyCalls.push({ docId: info.docId, mode: info.mode }),
+      }),
+    ).toThrow(/already belongs to an Exchange/)
     expect(readyCalls).toHaveLength(2)
 
     runtime.shutdown()
@@ -267,7 +269,7 @@ describe("Runtime (standalone, no Exchange)", () => {
     const loadAllSpy = vi.spyOn(store, "loadAll")
     const currentMetaSpy = vi.spyOn(store, "currentMeta")
 
-    const runtime = new Runtime({ peerId: "alice", store })
+    const runtime = new Runtime({ store })
     runtime.get("todo-1", TodoDoc)
     await runtime.flush() // hydration settles before any hooks exist
 
@@ -297,7 +299,7 @@ describe("Exchange with pre-constructed Runtime (rare overload)", () => {
     const store = createInMemoryStore()
 
     // Create a standalone Runtime with a store
-    const runtime = new Runtime({ peerId: "alice", store })
+    const runtime = new Runtime({ store })
 
     // Write data via the Runtime directly
     const doc1 = runtime.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
@@ -306,34 +308,57 @@ describe("Exchange with pre-constructed Runtime (rare overload)", () => {
     await runtime.flush()
 
     // Wrap the Runtime in an Exchange for networking
-    const exchange = new Exchange(runtime, {})
+    const exchange = new Exchange(runtime, { principal: "alice" })
 
     // The same document is accessible via the Exchange
     const doc2 = exchange.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
     expect(doc2.title()).toBe("Hello")
 
-    // peerId is derived from the Runtime
-    expect(exchange.peerId).toBe("alice")
+    // The seat is the Runtime's; the principal is the Exchange's
+    expect(exchange.peerId).toBe(runtime.peerId)
+    expect(exchange.principal).toBe("alice")
 
     await exchange.shutdown()
   })
 
-  it("derives peerId from the Runtime, not from params", async () => {
+  it("issues each Runtime its own seat", async () => {
     const { Exchange } = await import("../exchange.js")
-    const runtime = new Runtime({ peerId: "bob" })
-    const exchange = new Exchange(runtime, {})
+    const runtime = new Runtime()
+    const other = new Runtime()
+    const exchange = new Exchange(runtime, { principal: "bob" })
 
-    expect(exchange.peerId).toBe("bob")
-    expect(exchange.runtime.peerId).toBe("bob")
+    expect(runtime.peerId).toMatch(/^[0-9a-f]{32}$/)
+    expect(other.peerId).not.toBe(runtime.peerId)
+    expect(exchange.peerId).toBe(runtime.peerId)
+    expect(exchange.runtime.peerId).toBe(runtime.peerId)
+    await other.shutdown()
 
     await exchange.shutdown()
+  })
+
+  it("refuses a second Exchange over one Runtime, before its transports start", async () => {
+    const runtime = new Runtime()
+    const first = new Exchange(runtime, { principal: "alice" })
+
+    const transport = createBridgeTransport({
+      transportId: "second",
+      bridge: new Bridge(),
+    })
+    const start = vi.spyOn(transport, "_start")
+    expect(
+      () =>
+        new Exchange(runtime, { principal: "alice", transports: [transport] }),
+    ).toThrow(/already belongs to an Exchange/)
+    expect(start).not.toHaveBeenCalled()
+
+    await first.shutdown()
   })
 
   it("backfills sync-graph registration for docs created on the Runtime before the Exchange existed", async () => {
     const { Exchange } = await import("../exchange.js")
     const store = createInMemoryStore()
 
-    const runtime = new Runtime({ peerId: "alice", store })
+    const runtime = new Runtime({ store })
 
     // An interpret-mode doc and a replicate-mode doc, both created BEFORE
     // any Exchange (and therefore any hooks) existed.
@@ -354,7 +379,7 @@ describe("Exchange with pre-constructed Runtime (rare overload)", () => {
     // Before wrapping: neither doc is known to any sync graph (none exists
     // yet), so there's nothing to assert here — the interesting assertion
     // is what happens immediately AFTER wrapping.
-    const exchange = new Exchange(runtime, {})
+    const exchange = new Exchange(runtime, { principal: "test" })
 
     // Both pre-existing docs must now be visible to the Exchange's sync
     // graph — this is the registration the pre-fix code silently skipped.
@@ -371,7 +396,7 @@ describe("Runtime.get and replicate-mode documents", () => {
     // substrate would still report `mode: "interpret"` and pass any structural
     // check, so the assertion is on the *content*: state written into the
     // replica before promotion must be readable through the ref after it.
-    const runtime = new Runtime({ peerId: "alice" })
+    const runtime = new Runtime()
     const boundReplica = json.replica()
     runtime.replicate(
       "todo-1",
@@ -411,7 +436,7 @@ describe("Runtime.get and replicate-mode documents", () => {
     // Promotion says which tier holds the document; suspension says whether it
     // is in the sync graph. Losing the flag here would let a `get()` silently
     // re-announce a document the application had withdrawn.
-    const runtime = new Runtime({ peerId: "alice" })
+    const runtime = new Runtime()
     const boundReplica = json.replica()
     runtime.replicate(
       "todo-1",
@@ -435,7 +460,6 @@ describe("Runtime.get and replicate-mode documents", () => {
     // Doing that while the document's own history is still arriving writes to
     // addresses that history occupies, and the merge drops one of the pair.
     const runtime = new Runtime({
-      peerId: "alice",
       store: createInMemoryStore(),
     })
     const boundReplica = json.replica()
@@ -456,7 +480,7 @@ describe("Runtime.get and replicate-mode documents", () => {
   })
 
   it("throws when the same docId is requested with an unreadable schema", () => {
-    const runtime = new Runtime({ peerId: "alice" })
+    const runtime = new Runtime()
     const OtherDoc = json.bind(Schema.struct({ unrelated: Schema.string() }))
 
     runtime.get("todo-1", TodoDoc)
@@ -471,7 +495,7 @@ describe("Runtime.get and replicate-mode documents", () => {
     // Including one bound by a second `bind()` call over the same schema:
     // the two are interchangeable, and the cached ref is the right answer
     // for both.
-    const runtime = new Runtime({ peerId: "alice" })
+    const runtime = new Runtime()
     const first = runtime.get("todo-1", TodoDoc)
     expect(runtime.get("todo-1", TodoDoc)).toBe(first)
     expect(runtime.get("todo-1", json.bind(TodoSchema))).toBe(first)
@@ -482,7 +506,7 @@ describe("Runtime.get and replicate-mode documents", () => {
     // Nothing to load, so the load is trivially finished. Answering `false`
     // would be defensible and useless: every caller would have to pair the
     // question with an existence check before it meant anything.
-    const runtime = new Runtime({ peerId: "alice" })
+    const runtime = new Runtime()
 
     expect(runtime.hydrated("never-seen")).toBe(true)
     await expect(runtime.whenHydrated("never-seen")).resolves.toBeUndefined()
@@ -495,7 +519,6 @@ describe("Runtime.get and replicate-mode documents", () => {
     // replica — no schema, no interpreter stack, no ref — so `hydrated(ref)`
     // from `settle.ts` has nothing to key on.
     const runtime = new Runtime({
-      peerId: "alice",
       store: createInMemoryStore(),
     })
     const boundReplica = json.replica()
@@ -524,7 +547,6 @@ describe("Runtime.get and replicate-mode documents", () => {
     // true quietly, and because the alternative — persisting a document
     // nothing local owns — is worse than skipping it.
     const runtime = new Runtime({
-      peerId: "alice",
       store: createInMemoryStore(),
     })
 
@@ -560,7 +582,7 @@ describe("storeInputFor", () => {
 describe("a document destroyed while it loads", () => {
   it("is not registered, not written, and its waiters reject", async () => {
     const store = createInMemoryStore()
-    const exchange = new Exchange({ id: "alice", store })
+    const exchange = new Exchange({ principal: "alice", store })
     const doc = exchange.get("todo-1", TodoDoc)
     const loaded = whenHydrated(doc)
     exchange.destroy("todo-1")
@@ -574,7 +596,7 @@ describe("a document destroyed while it loads", () => {
 
   it("does not touch a document created again under the same id", async () => {
     const store = createInMemoryStore()
-    const exchange = new Exchange({ id: "alice", store })
+    const exchange = new Exchange({ principal: "alice", store })
     const first = exchange.get("todo-1", TodoDoc)
     const firstLoaded = whenHydrated(first)
     exchange.destroy("todo-1")
@@ -597,7 +619,7 @@ describe("writing to a stored plain document before it loads", () => {
   /** A store holding `todo-1`, written by an earlier session. */
   async function storeWithTodo(): Promise<Store> {
     const store = createInMemoryStore()
-    const runtime = new Runtime({ peerId: "alice", store })
+    const runtime = new Runtime({ store })
     const doc = runtime.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
     await whenHydrated(doc)
     doc.title.set("stored")
@@ -608,7 +630,7 @@ describe("writing to a stored plain document before it loads", () => {
 
   it("throws for every authored write until loading completes", async () => {
     const store = await storeWithTodo()
-    const runtime = new Runtime({ peerId: "alice", store })
+    const runtime = new Runtime({ store })
     const doc = runtime.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
 
     expect(() => doc.title.set("early")).toThrow("still loading")
@@ -628,7 +650,7 @@ describe("writing to a stored plain document before it loads", () => {
 
   it("keeps the store's lineage across its first write", async () => {
     const store = await storeWithTodo()
-    const runtime = new Runtime({ peerId: "alice", store })
+    const runtime = new Runtime({ store })
     const doc = runtime.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
     await whenHydrated(doc)
     const replica = () =>
@@ -648,7 +670,6 @@ describe("writing to a stored plain document before it loads", () => {
       },
     })
     const runtime = new Runtime({
-      peerId: "alice",
       store: failing,
       onStoreError: () => {},
     })
@@ -661,7 +682,6 @@ describe("writing to a stored plain document before it loads", () => {
   it("does not apply to a concurrent-writer document", async () => {
     const LoroTodo = loro.bind(TodoSchema)
     const runtime = new Runtime({
-      peerId: "alice",
       store: createInMemoryStore(),
     })
     const doc = runtime.get("todo-1", LoroTodo) as DocRef<typeof TodoSchema>

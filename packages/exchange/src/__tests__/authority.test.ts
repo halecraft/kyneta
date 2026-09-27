@@ -19,10 +19,10 @@ import { derivePeerSettled } from "../synchronizer.js"
 const TestDoc = json.bind(Schema.struct({ title: Schema.string() }))
 
 function createExchange(options: Partial<ExchangeParams> = {}): Exchange {
-  return new Exchange({ id: "test", ...options } as ExchangeParams)
+  return new Exchange({ principal: "test", ...options })
 }
 
-const isServer = (p: { peerId: string }) => p.peerId === "server"
+const isServer = (p: { principal: string }) => p.principal === "server"
 
 // ===========================================================================
 // Pure — no Exchange, no transport
@@ -119,7 +119,7 @@ describe("Policy.authority", () => {
     // release, hanging exactly the server this option exists for.
     const bridge = new Bridge()
     const exchange = createExchange({
-      id: "server",
+      principal: "server",
       authority: "self",
       transports: [createBridgeTransport({ transportId: "server", bridge })],
     })

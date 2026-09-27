@@ -134,6 +134,14 @@ function createDocUnderPeerIdUntyped(
  * which never mentions it — or does care, and has to say so. There is no
  * middle state where a caller ends up with an identity it never chose.
  *
+ * Choosing the identity makes the caller responsible for what the exchange
+ * otherwise guarantees: a replica may write under `peerId` only if no other
+ * live document writes under it, and its state holds every operation ever
+ * written under it. So give each live document its own `peerId`, and when
+ * reusing one, pass a `payload` containing everything that identity wrote.
+ * Break either rule and replicas can reach equal version vectors over
+ * different contents, and never sync again.
+ *
  * ```ts
  * const a = createDocAs("peer-a", yjs.bind(schema))
  * const b = createDocAs("peer-b", yjs.bind(schema))
@@ -162,8 +170,8 @@ export const createDocAs: CreateDocAs =
  * For standalone use. **The peer identity is arbitrary** — a fresh random one
  * each time — which is the right default when nothing will read this
  * document's operations but this process. When the identity matters, use
- * {@link createDocAs} and name it. (The exchange takes neither path: it holds
- * its own stable peerId and calls `createRef` directly.)
+ * {@link createDocAs} and name it. (The exchange takes neither path: its
+ * Runtime issues its own peerId and calls `createRef` directly.)
  *
  * Supports an optional `payload` for hydrating from an exported entirety.
  *

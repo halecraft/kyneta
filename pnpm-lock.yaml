@@ -62,6 +62,9 @@ importers:
       '@kyneta/exchange':
         specifier: workspace:^
         version: link:../../packages/exchange
+      '@kyneta/random':
+        specifier: workspace:^
+        version: link:../../packages/random
       '@kyneta/react':
         specifier: workspace:^
         version: link:../../packages/react
@@ -276,9 +279,6 @@ importers:
       '@kyneta/loro-schema':
         specifier: workspace:^
         version: link:../../packages/schema/backends/loro
-      '@kyneta/random':
-        specifier: workspace:^
-        version: link:../../packages/random
       '@kyneta/schema':
         specifier: workspace:^
         version: link:../../packages/schema

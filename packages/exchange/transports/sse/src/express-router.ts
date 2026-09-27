@@ -1,4 +1,4 @@
-// express-router — Express integration for @kyneta/sse-network-adapter.
+// express-router — Express integration for @kyneta/sse-transport.
 //
 // Creates Express routes that integrate with SseServerTransport:
 // - GET endpoint for clients to establish SSE connections
@@ -76,17 +76,18 @@ export interface SseExpressRouterOptions {
  *
  * @example
  * ```typescript
- * import { SseServerTransport } from "@kyneta/sse-network-adapter/server"
- * import { createSseExpressRouter } from "@kyneta/sse-network-adapter/express"
+ * import { SseServerTransport } from "@kyneta/sse-transport/server"
+ * import { createSseExpressRouter } from "@kyneta/sse-transport/express"
  * import { Exchange } from "@kyneta/exchange"
  *
- * const serverAdapter = new SseServerTransport()
+ * const serverTransport = new SseServerTransport()
  * const exchange = new Exchange({
- *   id: { peerId: "server", name: "server", type: "service" },
- *   transports: [() => serverAdapter],
+ *   principal: "server",
+ *   type: "service",
+ *   transports: [serverTransport],
  * })
  *
- * app.use("/sse", createSseExpressRouter(serverAdapter, {
+ * app.use("/sse", createSseExpressRouter(serverTransport, {
  *   syncPath: "/sync",
  *   eventsPath: "/events",
  *   heartbeatInterval: 30000,

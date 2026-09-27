@@ -1,5 +1,5 @@
-// identity-stability.test.ts — a peer keeps its identity, and its data, across
-// a restart.
+// identity-stability.test.ts — a peer keeps its data across a restart, and a
+// document speaks as its Runtime's seat.
 //
 // A CRDT addresses each operation by (peer, counter), and the counter restarts
 // at zero on a fresh document. So a peer that claims its stable identity on an
@@ -7,8 +7,9 @@
 // produces operations at addresses that history already occupies. Merge
 // deduplicates by address, and one of the two is discarded silently.
 //
-// These tests pin both halves of that: the data must survive, and so must the
-// identity.
+// These tests pin that the data survives. The identity does not: every Runtime
+// issues itself a fresh seat. PLAN-2026-09-27-durable-seats lets a store keep
+// one across restarts, and restores the identity assertion.
 
 import { loro } from "@kyneta/loro-schema"
 import {
@@ -18,7 +19,7 @@ import {
   Schema,
   unwrap,
 } from "@kyneta/schema"
-import { yjs } from "@kyneta/yjs-schema"
+import { yjs, yjsClientId } from "@kyneta/yjs-schema"
 import { describe, expect, it } from "vitest"
 import { Runtime } from "../runtime.js"
 import { createInMemoryStore } from "../store/in-memory-store.js"
@@ -38,7 +39,7 @@ async function session<T>(
   bound: BoundSchema<typeof ListSchema, never>,
   use: (doc: any, runtime: Runtime) => Promise<T> | T,
 ): Promise<T> {
-  const runtime = new Runtime({ peerId: "alice", store })
+  const runtime = new Runtime({ store })
   const doc = runtime.get("doc-1", bound)
   const result = await use(doc, runtime)
   await runtime.flush()
@@ -78,55 +79,50 @@ describe("stored data survives a write issued before hydration", () => {
   })
 })
 
-describe("peer identity survives a restart", () => {
+describe("stored data survives a restart", () => {
   it.each([
     ["yjs", yjs.bind(ListSchema)],
     ["loro", loro.bind(ListSchema)],
   ])("%s", async (_name, bound) => {
     const store = createInMemoryStore()
 
-    // Read the identity *after* flushing, in both sessions. A store-backed
-    // document wears a throwaway identity until its stored state has arrived —
-    // that is the whole mechanism here — so sampling before then reads the
-    // transient one and compares two pieces of noise.
-    const first = await session(store, bound as never, async (doc, runtime) => {
+    await session(store, bound as never, async (doc, runtime) => {
       batch(doc, (d: any) => {
         d.items.push("one")
       })
       await runtime.flush()
-      return identityOf(doc)
     })
 
-    // Second session waits for its stored state before looking.
+    // The second session is a new seat, and waits for its stored state.
     const second = await session(
       store,
       bound as never,
       async (doc, runtime) => {
         await runtime.flush()
-        return { id: identityOf(doc), items: doc.items() }
+        batch(doc, (d: any) => {
+          d.items.push("two")
+        })
+        await runtime.flush()
+        return doc.items()
       },
     )
 
-    expect(second.id).toBe(first)
-    // Asserted alongside identity on purpose: a "fix" that stabilised the id by
-    // discarding stored state would otherwise pass, and that is worse than the
-    // defect it replaced.
-    expect(second.items).toEqual(["one"])
+    expect(second).toEqual(["one", "two"])
   })
 })
 
 describe("a document with no store", () => {
-  it("has its identity immediately, and keeps it", () => {
+  it("speaks as its Runtime's seat immediately, and keeps it", async () => {
     // Nothing to import, so there is nothing to defer for. This pins that the
     // deferral is conditional on hydration rather than applied everywhere.
     const bound = yjs.bind(ListSchema)
-    const a = new Runtime({ peerId: "alice" })
-    const b = new Runtime({ peerId: "alice" })
-    expect(identityOf(a.get("doc-1", bound))).toBe(
-      identityOf(b.get("doc-1", bound)),
-    )
-    a.shutdown()
-    b.shutdown()
+    const runtime = new Runtime()
+    const doc = runtime.get("doc-1", bound)
+    const seat = String(yjsClientId(runtime.peerId))
+    expect(identityOf(doc)).toBe(seat)
+    await runtime.flush()
+    expect(identityOf(doc)).toBe(seat)
+    await runtime.shutdown()
   })
 })
 

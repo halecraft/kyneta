@@ -106,11 +106,7 @@ export type SessionInput =
 type SessionDiagnostic = Extract<
   Diagnostic,
   {
-    code:
-      | "self-connection"
-      | "duplicate-peer"
-      | "protocol-skew"
-      | "protocol-mismatch"
+    code: "self-connection" | "protocol-skew" | "protocol-mismatch"
   }
 >
 
@@ -192,36 +188,27 @@ function peerTransition(
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-// PEER IDENTITY WARNING
+// SELF-CONNECTION DIAGNOSTIC
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
-function detectPeerIdentityWarning(
+/**
+ * A remote peer presenting this exchange's own seat. Seats are random and
+ * issued per Runtime, so this means a transport looped back to its own
+ * Exchange. A second channel for an already-connected seat is not a problem:
+ * it is one peer connected over several transports, or a reconnect that
+ * overlaps its predecessor.
+ */
+function detectSelfConnection(
   model: SessionModel,
-  fromChannelId: ChannelId,
   remotePeerId: PeerId,
 ): SessionDiagnostic | undefined {
-  if (remotePeerId === model.identity.peerId) {
-    return {
-      code: "self-connection",
-      severity: "error",
-      peer: remotePeerId,
-      message: `[exchange] self-connection detected — remote peer "${remotePeerId}" has the same peerId as this exchange. This will cause sync failures. Ensure server and client have different peerIds.`,
-    }
+  if (remotePeerId !== model.identity.peerId) return undefined
+  return {
+    code: "self-connection",
+    severity: "error",
+    peer: remotePeerId,
+    message: `[exchange] self-connection detected — remote peer "${remotePeerId}" holds this exchange's own seat. An exchange connected to itself cannot sync.`,
   }
-  const existingPeer = model.peers.get(remotePeerId)
-  if (existingPeer) {
-    const otherChannels = new Set(existingPeer.channels)
-    otherChannels.delete(fromChannelId)
-    if (otherChannels.size > 0) {
-      return {
-        code: "duplicate-peer",
-        severity: "error",
-        peer: remotePeerId,
-        message: `[exchange] duplicate peerId "${remotePeerId}" — peer already has ${otherChannels.size} active channel(s). Two participants sharing the same peerId will corrupt CRDT state. Ensure each browser tab / client has a unique peerId.`,
-      }
-    }
-  }
-  return undefined
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -229,7 +216,7 @@ function detectPeerIdentityWarning(
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
 /**
- * Mirrors `detectPeerIdentityWarning`: surfaces a problem with a peer at
+ * Mirrors `detectSelfConnection`: surfaces a problem with a peer at
  * establish time, but **never gates** — the peer's sync graph entry is
  * untouched, so an incompatible peer stays observable (data just won't
  * converge). We intentionally do not invent a "visible-but-inert" peer
@@ -347,7 +334,7 @@ function completeEstablish(
     nextModel = { ...model, peers }
   }
 
-  const idDiagnostic = detectPeerIdentityWarning(model, channelId, remotePeerId)
+  const idDiagnostic = detectSelfConnection(model, remotePeerId)
   if (idDiagnostic) effects.push({ type: "diagnostic", ...idDiagnostic })
 
   // Diagnostic only — deliberately does not gate the sync graph entry above

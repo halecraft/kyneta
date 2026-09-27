@@ -8,7 +8,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { mount } from "@kyneta/cast"
-import { Exchange, persistentPeerId } from "@kyneta/exchange"
+import { Exchange } from "@kyneta/exchange"
 import { createWebsocketClient } from "@kyneta/websocket-transport/browser"
 import { createApp } from "./app.js"
 import { TodoDoc } from "./schema.js"
@@ -18,7 +18,7 @@ import { TodoDoc } from "./schema.js"
 // ─────────────────────────────────────────────────────────────────────────
 
 const exchange = new Exchange({
-  id: persistentPeerId("todo-peer-id"),
+  principal: "todo-user",
   transports: [
     createWebsocketClient({ url: `ws://${location.host}/ws`, WebSocket }),
   ],
@@ -35,4 +35,6 @@ const doc = exchange.get("todos", TodoDoc)
 // ─────────────────────────────────────────────────────────────────────────
 
 const app = createApp(doc)
-mount(app, document.getElementById("root")!)
+const rootEl = document.getElementById("root")
+if (!rootEl) throw new Error("#root not found")
+mount(app, rootEl)

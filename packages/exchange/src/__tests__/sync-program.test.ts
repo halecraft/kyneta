@@ -23,9 +23,9 @@ import type { Diagnostic } from "../types.js"
 // Test helpers
 // ---------------------------------------------------------------------------
 
-const alice = { peerId: "alice", type: "user" as const }
-const bob = { peerId: "bob", type: "user" as const }
-const carol = { peerId: "carol", type: "user" as const }
+const alice = { peerId: "alice", principal: "alice", type: "user" as const }
+const bob = { peerId: "bob", principal: "bob", type: "user" as const }
+const carol = { peerId: "carol", principal: "carol", type: "user" as const }
 
 function makeUpdate(params?: {
   canShare?: (docId: string, peer: any) => boolean

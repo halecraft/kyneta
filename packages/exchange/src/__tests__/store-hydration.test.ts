@@ -20,11 +20,7 @@ import {
 } from "@kyneta/schema"
 import { yjs } from "@kyneta/yjs-schema"
 import { describe, expect, it } from "vitest"
-import {
-  Exchange,
-  type ExchangeParams,
-  type PeerIdentityInput,
-} from "../exchange.js"
+import { Exchange, type ExchangeParams } from "../exchange.js"
 import { Runtime } from "../runtime.js"
 import { whenHydrated } from "../settle.js"
 import {
@@ -68,8 +64,7 @@ async function drain(ms = 50): Promise<void> {
 }
 
 function createExchange(options: Partial<ExchangeParams> = {}): Exchange {
-  const merged = { id: "test" as string | PeerIdentityInput, ...options }
-  return new Exchange(merged as ExchangeParams)
+  return new Exchange({ principal: "test", ...options })
 }
 
 // ===========================================================================
@@ -90,7 +85,7 @@ describe("Exchange storage hydration", () => {
     await seedBackend.append("doc-1", makePlainEntirety({ title: "old" }))
 
     const exchange = createExchange({
-      id: "peer-1",
+      principal: "peer-1",
       store: createInMemoryStore({ sharedData }),
     })
     const doc = exchange.get("doc-1", TestDoc)
@@ -110,7 +105,7 @@ describe("Exchange storage hydration", () => {
     )
 
     const exchange = createExchange({
-      id: "peer-1",
+      principal: "peer-1",
       store: createInMemoryStore({ sharedData }),
     })
 
@@ -128,7 +123,7 @@ describe("Exchange storage hydration", () => {
 
   it("exchange.get() returns ref synchronously even with storage", () => {
     const exchange = createExchange({
-      id: "peer-1",
+      principal: "peer-1",
       store: createInMemoryStore(),
     })
 
@@ -152,7 +147,7 @@ describe("Exchange storage hydration", () => {
     )
 
     const exchange = createExchange({
-      id: "peer-1",
+      principal: "peer-1",
       store: createInMemoryStore({ sharedData }),
     })
 
@@ -186,7 +181,7 @@ describe("Exchange storage persistence", () => {
     const backend = new InMemoryStore()
 
     const exchange = createExchange({
-      id: "test",
+      principal: "test",
       store: backend,
     })
 
@@ -245,7 +240,7 @@ describe("Exchange storage persistence", () => {
 
     // Exchange A (source) — has the doc
     const exchangeA = createExchange({
-      id: "peer-a",
+      principal: "peer-a",
       transports: [createBridgeTransport({ transportId: "side-a", bridge })],
     })
     const docA = exchangeA.get("doc-1", TestDoc)
@@ -256,7 +251,7 @@ describe("Exchange storage persistence", () => {
 
     // Exchange B (sink) — has storage, discovers doc from A
     const exchangeB = createExchange({
-      id: "peer-b",
+      principal: "peer-b",
       transports: [createBridgeTransport({ transportId: "side-b", bridge })],
       store: backend,
       resolve: () => Replicate(),
@@ -293,7 +288,7 @@ describe("Exchange storage persistence", () => {
     const backend = new InMemoryStore()
 
     const exchange = createExchange({
-      id: "test",
+      principal: "test",
       store: backend,
     })
 
@@ -320,7 +315,7 @@ describe("Exchange storage persistence", () => {
     const backend = new InMemoryStore()
 
     const exchange = createExchange({
-      id: "test",
+      principal: "test",
       store: backend,
     })
 
@@ -349,7 +344,7 @@ describe("Storage round-trip (persist → restart → hydrate)", () => {
 
     // First exchange: create doc, write data, shut down
     const exchange1 = createExchange({
-      id: "peer-1",
+      principal: "peer-1",
       store: createInMemoryStore({ sharedData }),
     })
 
@@ -364,7 +359,7 @@ describe("Storage round-trip (persist → restart → hydrate)", () => {
 
     // Second exchange: should hydrate from storage
     const exchange2 = createExchange({
-      id: "peer-1",
+      principal: "peer-1",
       store: createInMemoryStore({ sharedData }),
     })
 
@@ -387,7 +382,7 @@ describe("Synchronizer purification", () => {
     // This is tested indirectly: an exchange without the doc simply
     // ignores interests. We verify the model has no sentinel entries.
     const exchange = createExchange({
-      id: "peer-1",
+      principal: "peer-1",
     })
 
     // The synchronizer model should have no documents
@@ -400,7 +395,7 @@ describe("Synchronizer purification", () => {
 
   it("no DocEntry has sentinel version ''", async () => {
     const exchange = createExchange({
-      id: "peer-1",
+      principal: "peer-1",
       store: createInMemoryStore(),
     })
 
@@ -416,7 +411,7 @@ describe("Synchronizer purification", () => {
 
   it("DocEntry has no pendingStorageChannels or pendingInterests fields", async () => {
     const exchange = createExchange({
-      id: "peer-1",
+      principal: "peer-1",
       store: createInMemoryStore(),
     })
 
@@ -449,7 +444,7 @@ describe("Yjs storage round-trip", () => {
 
     // First exchange: create doc, write data, shut down
     const exchange1 = createExchange({
-      id: "peer-1",
+      principal: "peer-1",
       store: createInMemoryStore({ sharedData }),
       schemas: [YjsDoc],
     })
@@ -467,7 +462,7 @@ describe("Yjs storage round-trip", () => {
 
     // Second exchange: should hydrate from storage
     const exchange2 = createExchange({
-      id: "peer-1",
+      principal: "peer-1",
       store: createInMemoryStore({ sharedData }),
       schemas: [YjsDoc],
     })
@@ -501,7 +496,7 @@ describe("populated through storage hydration", () => {
   it("marks the doc populated from a hydration replay alone", async () => {
     const sharedData = await seedStoredDoc({ title: "stored", count: 42 })
     const exchange = createExchange({
-      id: "peer-1",
+      principal: "peer-1",
       store: createInMemoryStore({ sharedData }),
     })
 
@@ -522,7 +517,7 @@ describe("populated through storage hydration", () => {
   it("reads false while hydration is pending, though the store has data", async () => {
     const sharedData = await seedStoredDoc({ title: "stored", count: 42 })
     const exchange = createExchange({
-      id: "peer-1",
+      principal: "peer-1",
       store: createInMemoryStore({ sharedData }),
     })
 
@@ -545,7 +540,7 @@ describe("populated through storage hydration", () => {
 
   it("stays false after hydration settles with nothing stored", async () => {
     const exchange = createExchange({
-      id: "peer-1",
+      principal: "peer-1",
       store: createInMemoryStore(),
     })
 
@@ -580,7 +575,7 @@ async function session(
   bound: BoundSchema,
   work: (doc: any, runtime: Runtime) => unknown = () => {},
 ): Promise<{ doc: any; version: string }> {
-  const runtime = new Runtime({ peerId: "alice", store })
+  const runtime = new Runtime({ store })
   const doc: any = runtime.createInterpretDoc("doc", bound)
   await whenHydrated(doc)
   await work(doc, runtime)
@@ -610,7 +605,7 @@ describe("writes made while a document loads", () => {
     )
 
     // Written while the second session is still loading.
-    const runtime = new Runtime({ peerId: "alice", store })
+    const runtime = new Runtime({ store })
     const doc: any = runtime.createInterpretDoc("doc", bound)
     batch(doc, (d: any) => d.b.set("during-load"))
     await runtime.flush()

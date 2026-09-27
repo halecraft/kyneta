@@ -93,7 +93,7 @@ function formatField(
 // ---------------------------------------------------------------------------
 
 export interface PeerInfo {
-  peerIds: string[]
+  principals: string[]
   role: "listener" | "connector" | "negotiating" | "disposed"
 }
 
@@ -131,10 +131,10 @@ export function render(
         : `${DIM}(negotiating...)${RESET}`
 
   // Peer info (displayed below the box).
-  const peerCount = peerInfo.peerIds.length
+  const peerCount = peerInfo.principals.length
   const peerLabel = peerCount === 1 ? "1 peer" : `${peerCount} peers`
   const peerNames =
-    peerInfo.peerIds.length > 0 ? peerInfo.peerIds.join(", ") : "none"
+    peerInfo.principals.length > 0 ? peerInfo.principals.join(", ") : "none"
 
   // Compose.
   const lines = [

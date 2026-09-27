@@ -4,12 +4,8 @@
 import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import { Replicate, Schema } from "@kyneta/schema"
 import { afterEach, describe, expect, it } from "vitest"
-import {
-  Exchange,
-  type ExchangeParams,
-  type PeerIdentityInput,
-} from "../exchange.js"
-import { Line } from "../line.js"
+import { Exchange, type ExchangeParams } from "../exchange.js"
+import { Line, type LineSender } from "../line.js"
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -23,8 +19,7 @@ async function drain(rounds = 30): Promise<void> {
 const activeExchanges: Exchange[] = []
 
 function createExchange(params: Partial<ExchangeParams> = {}): Exchange {
-  const merged = { id: "test" as string | PeerIdentityInput, ...params }
-  const ex = new Exchange(merged as ExchangeParams)
+  const ex = new Exchange({ principal: "test", ...params })
   activeExchanges.push(ex)
   return ex
 }
@@ -64,7 +59,7 @@ describe("hub-and-spoke relay", () => {
     const bridgeSB = new Bridge()
 
     const exchangeA = createExchange({
-      id: "alice",
+      principal: "alice",
       transports: [
         createBridgeTransport({ transportId: "alice", bridge: bridgeAS }),
       ],
@@ -72,7 +67,8 @@ describe("hub-and-spoke relay", () => {
 
     // Schema-free relay — forwards all docs via Replicate()
     createExchange({
-      id: { peerId: "server", type: "service" },
+      principal: "server",
+      type: "service",
       transports: [
         createBridgeTransport({ transportId: "server-a", bridge: bridgeAS }),
         createBridgeTransport({ transportId: "server-b", bridge: bridgeSB }),
@@ -81,7 +77,7 @@ describe("hub-and-spoke relay", () => {
     })
 
     const exchangeB = createExchange({
-      id: "bob",
+      principal: "bob",
       transports: [
         createBridgeTransport({ transportId: "bob", bridge: bridgeSB }),
       ],
@@ -90,10 +86,10 @@ describe("hub-and-spoke relay", () => {
     await drain(40)
 
     const P = Line.protocol({ topic: "relay", schema: SimpleSchema })
-    const aliceSender = P.sender(exchangeA, "bob")
-    const aliceReceiver = P.claimReceiver(exchangeA, "bob")
-    const bobSender = P.sender(exchangeB, "alice")
-    const bobReceiver = P.claimReceiver(exchangeB, "alice")
+    const aliceSender = P.sender(exchangeA, exchangeB.peerId)
+    const aliceReceiver = P.claimReceiver(exchangeA, exchangeB.peerId)
+    const bobSender = P.sender(exchangeB, exchangeA.peerId)
+    const bobReceiver = P.claimReceiver(exchangeB, exchangeA.peerId)
 
     await drain(60)
 
@@ -122,14 +118,15 @@ describe("hub-and-spoke relay", () => {
     const bridgeRS = new Bridge()
 
     const exchangeClient = createExchange({
-      id: "client",
+      principal: "client",
       transports: [
         createBridgeTransport({ transportId: "client", bridge: bridgeCR }),
       ],
     })
 
     createExchange({
-      id: { peerId: "relay", type: "service" },
+      principal: "relay",
+      type: "service",
       transports: [
         createBridgeTransport({ transportId: "relay-c", bridge: bridgeCR }),
         createBridgeTransport({ transportId: "relay-s", bridge: bridgeRS }),
@@ -138,7 +135,7 @@ describe("hub-and-spoke relay", () => {
     })
 
     const exchangeServer = createExchange({
-      id: "server",
+      principal: "server",
       transports: [
         createBridgeTransport({ transportId: "server", bridge: bridgeRS }),
       ],
@@ -152,16 +149,19 @@ describe("hub-and-spoke relay", () => {
       server: ResponseSchema,
     })
 
-    let capturedServerSender: any = null
+    const captured: { sender?: LineSender<{ result: string; id: number }> } = {}
     const serverReceived: Array<{ method: string; id: number }> = []
     const listener = RPC.listen(exchangeServer)
     listener.onReceive((sender, receiver) => {
-      capturedServerSender = sender
+      captured.sender = sender
       collect(receiver, serverReceived)
     })
 
-    const clientSender = RPC.sender(exchangeClient, "server")
-    const clientReceiver = RPC.claimReceiver(exchangeClient, "server")
+    const clientSender = RPC.sender(exchangeClient, exchangeServer.peerId)
+    const clientReceiver = RPC.claimReceiver(
+      exchangeClient,
+      exchangeServer.peerId,
+    )
     const clientReceived: Array<{ result: string; id: number }> = []
     collect(clientReceiver, clientReceived)
 
@@ -170,10 +170,10 @@ describe("hub-and-spoke relay", () => {
     clientSender.send({ method: "relay-ping", id: 1 })
     await drain(100)
 
-    expect(capturedServerSender).not.toBeNull()
+    expect(captured.sender).toBeDefined()
     expect(serverReceived).toEqual([{ method: "relay-ping", id: 1 }])
 
-    capturedServerSender.send({ result: "relay-pong", id: 1 })
+    captured.sender?.send({ result: "relay-pong", id: 1 })
     await drain(100)
 
     expect(clientReceived).toEqual([{ result: "relay-pong", id: 1 }])
@@ -181,6 +181,6 @@ describe("hub-and-spoke relay", () => {
     listener.dispose()
     clientSender.close()
     clientReceiver.close()
-    capturedServerSender?.close()
+    captured.sender?.close()
   })
 })

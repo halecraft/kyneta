@@ -4,7 +4,7 @@
 > **Role**: The abstract transport contract — an `abstract class Transport<G>`, the channel lifecycle, the six-message protocol vocabulary, identity types, the wire pipeline (`Pipeline<S, R>`), alias transformer, stream frame parser, and reconnection utilities.
 > **Depends on**: `@kyneta/wire` (workspace), `@kyneta/machine`, `@kyneta/schema`
 > **Depended on by**: `@kyneta/exchange`, `@kyneta/websocket-transport`, `@kyneta/sse-transport`, `@kyneta/unix-socket-transport`, `@kyneta/webrtc-transport`, `@kyneta/bridge-transport`
-> **Canonical symbols**: `Transport<G>`, `TransportFactory`, `TransportContext`, `Channel`, `ConnectedChannel`, `EstablishedChannel`, `GeneratedChannel`, `ChannelDirectory<G>`, `ChannelMsg`, `LifecycleMsg`, `SyncMsg`, `EstablishMsg`, `DepartMsg`, `PresentMsg`, `InterestMsg`, `OfferMsg`, `DismissMsg`, `AddressedEnvelope`, `ReturnEnvelope`, `PeerIdentityDetails`, `WireFeatures`, `Pipeline`, `Encoding`, `PayloadOf`, `WireOpts`, `FrameTrace`, `FrameStreamParser`, `computeBackoffDelay`, `DEFAULT_RECONNECT`. Re-exports: `Result`, `Ok`, `Err`, `ok`, `err`, `WireError`.
+> **Canonical symbols**: `Transport<G>`, `TransportFactory`, `TransportContext`, `Channel`, `ConnectedChannel`, `EstablishedChannel`, `GeneratedChannel`, `ChannelDirectory<G>`, `ChannelMsg`, `LifecycleMsg`, `SyncMsg`, `EstablishMsg`, `DepartMsg`, `PresentMsg`, `InterestMsg`, `OfferMsg`, `DismissMsg`, `AddressedEnvelope`, `ReturnEnvelope`, `PeerIdentityDetails`, `PeerType`, `WireFeatures`, `Pipeline`, `Encoding`, `PayloadOf`, `WireOpts`, `FrameTrace`, `FrameStreamParser`, `computeBackoffDelay`, `DEFAULT_RECONNECT`. Re-exports: `Result`, `Ok`, `Err`, `ok`, `err`, `WireError`.
 > **Key invariant(s)**: The protocol is exactly eight messages. Two lifecycle (`establish`, `depart`) for channel presence, six sync (`present`, `interest`, `offer`, `accept`, `dismiss`, `vacant`) for document exchange. The `Pipeline` is the single wire orchestrator — all concrete transports use it rather than calling `@kyneta/wire` directly.
 
 A small kit of shared types, one abstract base class, and one wire pipeline that every concrete transport extends and uses. It fixes the shape of a channel, the vocabulary of messages, the split between "channel created" / "channel connected" / "channel established", and the `ChannelMsg ↔ wire` transformation — so that the runtime in `@kyneta/exchange` can drive any transport without caring whether bytes flow over a WebSocket, an SSE stream, a Unix socket, or an in-process bridge.
@@ -117,6 +117,10 @@ Wire evolution is split across three mechanisms by how a peer must react to a di
 `@kyneta/transport` only *declares* the type/constant and (de)serializes the field; the comparison rule and its diagnostics live in `@kyneta/exchange`'s session program (warn/error-only — never gates).
 
 **Establish negotiation-core invariant:** the part of `establish` carrying `id`, `y`, and `protocolVersion` is a permanent meta-contract, invariant across all protocol revisions. Future revisions may extend `establish` or change other messages but may never break a peer's ability to parse another peer's identity + `protocolVersion`.
+
+### `EstablishMsg.identity`
+
+`identity: PeerIdentityDetails` is `{ peerId, principal, type }`. `peerId` is the peer's **seat**, the address of one replica, which the exchange issues fresh per Runtime; `principal` is who the peer says it is, chosen by the application and not verified, and several seats may share one; `type` is `"user" | "bot" | "service"`. On the wire they are `id`, `pr` and `y`. `pr` joined in protocol 2.0, replacing the optional `n` (name). By the invariant above a 1.x `establish` without `pr` must still parse, so the validator requires `pr` only when `pv` names 2.0 or later, and the inbound transform reads an absent one as the empty principal.
 
 ---
 
@@ -318,7 +322,7 @@ Scheduling (`setTimeout`, retry on failure) happens inside each concrete transpo
 | `ChannelMsg` / `LifecycleMsg` / `SyncMsg` | `src/messages.ts` | Message unions. |
 | `EstablishMsg`, `DepartMsg`, `PresentMsg`, `InterestMsg`, `OfferMsg`, `DismissMsg` | `src/messages.ts` | Individual message types. |
 | `AddressedEnvelope` / `ReturnEnvelope` | `src/messages.ts` | Outbound / inbound routing wrappers. |
-| `PeerIdentityDetails` | `src/types.ts` | `{ peerId, name?, type }`. |
+| `PeerIdentityDetails` / `PeerType` | `src/types.ts` | `{ peerId, principal, type }`: the seat, who the peer says it is, and its role. |
 | `PeerId` / `DocId` / `ChannelId` / `TransportType` | `src/types.ts` | String / string / number / string identity aliases. |
 | `Pipeline<S, R>` | `src/pipeline.ts` | The single wire pipeline. |
 | `WireOpts` / `FrameTrace` | `src/pipeline.ts` | Pipeline configuration; `FrameTrace` is the per-frame `onFrame` event. |

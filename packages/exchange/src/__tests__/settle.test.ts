@@ -29,7 +29,7 @@ const TestDoc = json.bind(
 )
 
 function createExchange(options: Partial<ExchangeParams> = {}): Exchange {
-  return new Exchange({ id: "test", ...options } as ExchangeParams)
+  return new Exchange({ principal: "test", ...options })
 }
 
 /** A term whose value the test drives by hand. */

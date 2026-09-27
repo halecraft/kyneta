@@ -12,7 +12,7 @@
 //
 // Usage:
 //   const exchange = new Exchange({
-//     id: "alice",
+//     principal: "alice",
 //     transports: [createWebsocketClient({ url: "ws://localhost:3000/ws" })],
 //     store: createInMemoryStore(),
 //   })
@@ -22,7 +22,6 @@
 //   await whenSettled(doc)
 
 import type { ReactiveMap } from "@kyneta/changefeed"
-import type { Lease } from "@kyneta/machine"
 import type {
   BoundReplica,
   BoundSchema,
@@ -48,6 +47,7 @@ import type {
   DocId,
   PeerId,
   PeerIdentityDetails,
+  PeerType,
   WireFeatures,
 } from "@kyneta/transport"
 import type { Capabilities } from "./capabilities.js"
@@ -58,17 +58,16 @@ import { Governance } from "./governance.js"
 import type { DocPhase } from "./interpret.js"
 import { planInterpretation } from "./interpret.js"
 import type { ObsSink } from "./observe.js"
-import { Runtime } from "./runtime.js"
+import { Runtime, type RuntimeParams } from "./runtime.js"
 import {
   makeSettleTerm,
   registerPeerResolver,
   registerSettleTerm,
 } from "./settle.js"
-import type { Store } from "./store/store.js"
 import { registerSync } from "./sync.js"
 import { derivePeerSettled, Synchronizer } from "./synchronizer.js"
 import type { DocChange, DocInfo, PeerChange } from "./types.js"
-import { validatePeerId } from "./utils.js"
+import { validatePrincipal } from "./utils.js"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -113,15 +112,17 @@ type Get = <S extends SchemaNode, N extends NativeMap>(
 ) => S extends ProductSchema ? DocRef<S, N> : Ref<S, N>
 
 /**
- * Peer identity input — the *input* shape for Exchange construction.
- *
- * Like `PeerIdentityDetails` from `@kyneta/transport`, but with `type`
- * optional (defaults to `"user"` in the Exchange constructor).
+ * Who an Exchange says it is. Its peer id, the seat, is not here: the
+ * {@link Runtime} issues it.
  */
-export type PeerIdentityInput = {
-  peerId: string
-  name?: string
-  type?: "user" | "bot" | "service"
+export type PeerNaming = {
+  /**
+   * The name policies key on: a user, a service, a server fleet. Several
+   * Exchanges may share one. Carried in `establish` and not verified.
+   */
+  principal: string
+  /** Default `"user"`. */
+  type?: PeerType
 }
 
 /**
@@ -129,63 +130,14 @@ export type PeerIdentityInput = {
  * {@link Runtime}. Used by the rare {@link Exchange} constructor overload:
  *
  * ```ts
- * const runtime = new Runtime({ peerId: "alice", store: ... })
- * const exchange = new Exchange(runtime, { transports: [...] })
+ * const runtime = new Runtime({ store: ... })
+ * const exchange = new Exchange(runtime, { principal: "alice", transports: [...] })
  * ```
  *
- * Excludes `id` (derived from `runtime.peerId`) and all local concerns
- * (`store`, `lease`, `tickInterval`, `onStoreError`) — those live in the Runtime.
+ * Excludes the local concerns (`store`, `lease`, `tickInterval`,
+ * `onStoreError`), which live in the Runtime. The peer id is the Runtime's.
  */
-export type ExchangeNetworkParams = {
-  transports?: AnyTransport[]
-  schemas?: BoundSchema[]
-  replicas?: readonly BoundReplica[]
-  departureTimeout?: number
-} & Policy
-
-/**
- * Options for creating an Exchange via the primary (flat) constructor.
- *
- * The Exchange is the **network shell** — it owns transports, peers,
- * governance, and the sync graph. Local concerns (store, lease, clock)
- * are accepted here as flat fields and used to construct an internal
- * {@link Runtime}. The Runtime is an implementation detail — users of
- * this constructor never interact with it directly.
- *
- * For the rare case of wrapping a pre-constructed Runtime, use the
- * second constructor overload: `new Exchange(runtime, networkParams)`.
- */
-export type ExchangeParams = {
-  /**
-   * Peer identity — either a plain peerId string or a full identity object.
-   *
-   * ```ts
-   * // Simple — just a peerId string (90% case)
-   * new Exchange({ id: "alice" })
-   *
-   * // Full — with display name and/or type
-   * new Exchange({ id: { peerId: "alice", name: "Alice", type: "service" } })
-   * ```
-   *
-   * The peerId must satisfy two invariants:
-   *
-   * - **Stability:** The same participant must use the same peerId across
-   *   restarts. Without stability, each boot fragments the CRDT version
-   *   vector with phantom peer entries and breaks causal continuity.
-   *
-   * - **Uniqueness:** Different participants must use different peerIds.
-   *   Two peers sharing a peerId will silently corrupt CRDT state —
-   *   the version vector conflates their operations and `exportSince`
-   *   produces wrong deltas.
-   *
-   * For browser clients, use `persistentPeerId(storageKey)` from
-   * `@kyneta/exchange` — it provides a per-tab unique peerId via a
-   * localStorage CAS lease protocol, stable across reloads.
-   *
-   * For servers, use an explicit string (e.g. `"my-server"`).
-   */
-  id: string | PeerIdentityInput
-
+export type ExchangeNetworkParams = PeerNaming & {
   /**
    * Transport instances for network connectivity.
    *
@@ -196,29 +148,6 @@ export type ExchangeParams = {
    * ```
    */
   transports?: AnyTransport[]
-
-  /**
-   * The store documents persist to and load from.
-   *
-   * ```typescript
-   * store: createInMemoryStore()
-   * ```
-   */
-  store?: Store
-
-  /**
-   * Called when a store operation fails. Receives the docId, operation
-   * name, and error. Default: `console.warn`.
-   */
-  onStoreError?: (docId: DocId, operation: string, error: unknown) => void
-
-  /**
-   * Interval (ms) for the heartbeat tick that drives time-based substrate
-   * projections (e.g. `.decay()`). `0` disables the tick.
-   *
-   * @default 1000
-   */
-  tickInterval?: number
 
   /**
    * Declares document types this Exchange can interpret.
@@ -253,15 +182,21 @@ export type ExchangeParams = {
    * @default 30_000
    */
   departureTimeout?: number
-
-  /**
-   * Optional pre-existing dispatch budget. If omitted, the Exchange
-   * creates a private lease. Pass an explicit lease only when
-   * coordinating multiple Exchanges in the same synchronous call
-   * stack (e.g., test harnesses).
-   */
-  lease?: Lease
 } & Policy
+
+/**
+ * Options for creating an Exchange via the primary (flat) constructor.
+ *
+ * The Exchange is the **network shell** — it owns transports, peers,
+ * governance, and the sync graph. Local concerns (store, lease, clock)
+ * are accepted here as flat fields and used to construct an internal
+ * {@link Runtime}. The Runtime is an implementation detail — users of
+ * this constructor never interact with it directly.
+ *
+ * For the rare case of wrapping a pre-constructed Runtime, use the
+ * second constructor overload: `new Exchange(runtime, networkParams)`.
+ */
+export type ExchangeParams = ExchangeNetworkParams & RuntimeParams
 
 // ---------------------------------------------------------------------------
 // Doc cache entry — re-exported from Runtime for backward compatibility
@@ -291,7 +226,7 @@ export type { DocCacheEntry } from "./runtime.js"
  * import { loro } from "@kyneta/loro-schema"
  *
  * const exchange = new Exchange({
- *   id: "alice",
+ *   principal: "alice",
  *   transports: [createWebsocketClient({ url: "ws://localhost:3000/ws", WebSocket })],
  *   store: createInMemoryStore(),
  * })
@@ -317,7 +252,10 @@ function rethrowErrors(errors: unknown[]): void {
 }
 
 export class Exchange {
+  /** This replica's seat, issued by its {@link Runtime}. */
   readonly peerId: string
+  /** Who this Exchange says it is. */
+  readonly principal: string
 
   readonly #governance: Governance
   readonly #capabilities: Capabilities
@@ -335,7 +273,7 @@ export class Exchange {
    * local concerns (`store`, `lease`, `tickInterval`, `onStoreError`).
    *
    * ```typescript
-   * new Exchange({ id: "alice", transports: [...], store: ... })
+   * new Exchange({ principal: "alice", transports: [...], store: ... })
    * ```
    */
   constructor(params: ExchangeParams)
@@ -345,11 +283,11 @@ export class Exchange {
    * Use this when you need a standalone Runtime first (e.g. local-first
    * app that later upgrades to networked), then attach networking.
    *
-   * The `peerId` is derived from `runtime.peerId` — do not pass `id`.
+   * The `peerId` is `runtime.peerId`.
    *
    * ```typescript
-   * const runtime = new Runtime({ peerId: "alice", store: ... })
-   * const exchange = new Exchange(runtime, { transports: [...] })
+   * const runtime = new Runtime({ store: ... })
+   * const exchange = new Exchange(runtime, { principal: "alice", transports: [...] })
    * ```
    */
   constructor(runtime: Runtime, params: ExchangeNetworkParams)
@@ -358,56 +296,41 @@ export class Exchange {
     paramsOrRuntime: ExchangeParams | Runtime,
     networkParams?: ExchangeNetworkParams,
   ) {
-    const isRuntime = paramsOrRuntime instanceof Runtime
-
-    // ── Resolve peerId and Runtime ──
-    let peerId: string
-    if (isRuntime) {
-      this.#runtime = paramsOrRuntime
-      peerId = paramsOrRuntime.peerId
-    } else {
-      const params = paramsOrRuntime as ExchangeParams
-      const id = params.id
-      peerId = typeof id === "string" ? id : id.peerId
-      validatePeerId(peerId)
-      this.#runtime = new Runtime({
-        peerId,
-        store: params.store,
-        onStoreError: params.onStoreError,
-        lease: params.lease,
-        tickInterval: params.tickInterval,
-      })
-    }
-    this.peerId = peerId
-
-    // ── Extract network params (from flat params or network-only params) ──
+    // The network-only overload carries no local fields, so reading them off
+    // the flat shape yields `undefined` there.
     const {
+      principal,
+      type = "user",
       transports = [],
       schemas = [],
       replicas = DEFAULT_REPLICAS,
       departureTimeout,
+      store,
+      onStoreError,
+      lease,
+      tickInterval,
       ...policyFields
-    } = (
-      isRuntime
-        ? (networkParams as ExchangeNetworkParams)
-        : (paramsOrRuntime as ExchangeParams)
-    ) as ExchangeNetworkParams & {
-      transports?: AnyTransport[]
+    }: ExchangeParams = paramsOrRuntime instanceof Runtime
+      ? (networkParams as ExchangeNetworkParams)
+      : paramsOrRuntime
+
+    validatePrincipal(principal)
+    this.#runtime =
+      paramsOrRuntime instanceof Runtime
+        ? paramsOrRuntime
+        : new Runtime({ store, onStoreError, lease, tickInterval })
+    this.peerId = this.#runtime.peerId
+    this.principal = principal
+
+    const fullIdentity: PeerIdentityDetails = {
+      peerId: this.peerId,
+      principal,
+      type,
     }
 
-    // ── Resolve full identity (for the Synchronizer) ──
-    const fullIdentity: PeerIdentityDetails = isRuntime
-      ? { peerId, type: "user" }
-      : typeof (paramsOrRuntime as ExchangeParams).id === "string"
-        ? { peerId, type: "user" }
-        : {
-            type: "user",
-            ...((paramsOrRuntime as ExchangeParams).id as PeerIdentityInput),
-          }
-
-    // ── Governance — must be initialized before the Synchronizer,
-    // because the Synchronizer may call onEnsureDoc during
-    // _start() if a transport immediately discovers peers.
+    // Transports start last (`#synchronizer.start()` below), so nothing a
+    // transport's first peer reaches is still missing, and a Runtime that
+    // already belongs to an Exchange is refused before any socket opens.
     this.#governance = new Governance()
 
     // Register the initial policy from ExchangeParams.
@@ -418,7 +341,7 @@ export class Exchange {
       schemas,
       replicas: [...replicas],
       resolveFactory: (builder: FactoryBuilder<any>, bound: BoundSchema) =>
-        builder({ peerId, binding: bound.identityBinding }),
+        builder({ peerId: this.peerId, binding: bound.identityBinding }),
     })
 
     // Create synchronizer — call each factory to produce fresh adapter instances.
@@ -581,6 +504,8 @@ export class Exchange {
     this.#synchronizer.onStateAdvanced((docId: DocId) => {
       this.#runtime.onStateAdvanced(docId)
     })
+
+    this.#synchronizer.start()
   }
 
   /**

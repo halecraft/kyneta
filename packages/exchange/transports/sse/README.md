@@ -1,14 +1,14 @@
-# @kyneta/sse-network-adapter
+# @kyneta/sse-transport
 
-SSE (Server-Sent Events) adapter for `@kyneta/exchange` — client, server, and Express integration. Provides real-time sync using SSE for server→client messages and HTTP POST for client→server messages, both encoded with the `@kyneta/wire` text protocol (JSON codec + text framing + text fragmentation).
+SSE (Server-Sent Events) transport for `@kyneta/exchange` — client, server, and Express integration. Provides real-time sync using SSE for server→client messages, as `@kyneta/wire` text frames, and HTTP POST for client→server messages, as binary CBOR frames.
 
 ## Subpath Exports
 
 | Export | Entry point | Environment |
 |--------|-------------|-------------|
-| `@kyneta/sse-network-adapter/client` | `./dist/client.js` | Browser, Bun, Node.js |
-| `@kyneta/sse-network-adapter/server` | `./dist/server.js` | Bun, Node.js |
-| `@kyneta/sse-network-adapter/express` | `./dist/express.js` | Node.js (Express) |
+| `@kyneta/sse-transport/client` | `./dist/client.js` | Browser, Bun, Node.js |
+| `@kyneta/sse-transport/server` | `./dist/server.js` | Bun, Node.js |
+| `@kyneta/sse-transport/express` | `./dist/express.js` | Node.js (Express) |
 
 ## Server Setup
 
@@ -18,20 +18,21 @@ Use `createSseExpressRouter` for zero-boilerplate integration with Express:
 
 ```/dev/null/express-server.ts#L1-20
 import { Exchange } from "@kyneta/exchange"
-import { SseServerAdapter } from "@kyneta/sse-network-adapter/server"
-import { createSseExpressRouter } from "@kyneta/sse-network-adapter/express"
+import { SseServerTransport } from "@kyneta/sse-transport/server"
+import { createSseExpressRouter } from "@kyneta/sse-transport/express"
 import express from "express"
 
 const app = express()
 
-const serverAdapter = new SseServerAdapter()
+const serverTransport = new SseServerTransport()
 
 const exchange = new Exchange({
-  identity: { peerId: "server", name: "server", type: "service" },
-  adapters: [() => serverAdapter],
+  principal: "server",
+  type: "service",
+  transports: [serverTransport],
 })
 
-app.use("/sse", createSseExpressRouter(serverAdapter, {
+app.use("/sse", createSseExpressRouter(serverTransport, {
   syncPath: "/sync",
   eventsPath: "/events",
   heartbeatInterval: 30000,
@@ -42,15 +43,14 @@ app.listen(3000)
 
 ### Hono
 
-For Hono or other frameworks, use `parseTextPostBody` and `SseServerAdapter.registerConnection` directly:
+For Hono or other frameworks, use `SseServerTransport.registerConnection` and `SseConnection.handlePostBody` directly:
 
 ```/dev/null/hono-server.ts#L1-45
-import { SseServerAdapter } from "@kyneta/sse-network-adapter/server"
-import { parseTextPostBody } from "@kyneta/sse-network-adapter/express"
+import { SseServerTransport } from "@kyneta/sse-transport/server"
 import { Hono } from "hono"
 import { streamSSE } from "hono/streaming"
 
-const sseAdapter = new SseServerAdapter()
+const sseTransport = new SseServerTransport()
 
 const app = new Hono()
 
@@ -59,7 +59,7 @@ app.get("/sse/events", async (c) => {
   if (!peerId) return c.json({ error: "peerId required" }, 400)
 
   return streamSSE(c, async (stream) => {
-    const connection = sseAdapter.registerConnection(peerId)
+    const connection = sseTransport.registerConnection(peerId)
 
     // sendFn receives pre-encoded text frame strings
     connection.setSendFunction((textFrame) => {
@@ -67,7 +67,7 @@ app.get("/sse/events", async (c) => {
     })
 
     stream.onAbort(() => {
-      sseAdapter.unregisterConnection(peerId)
+      sseTransport.unregisterConnection(peerId)
     })
 
     await new Promise(() => {}) // keep alive
@@ -78,11 +78,11 @@ app.post("/sse/sync", async (c) => {
   const peerId = c.req.header("x-peer-id")
   if (!peerId) return c.json({ error: "x-peer-id required" }, 400)
 
-  const connection = sseAdapter.getConnection(peerId)
+  const connection = sseTransport.getConnection(peerId)
   if (!connection) return c.json({ error: "Not connected" }, 404)
 
-  const body = await c.req.text()
-  const result = parseTextPostBody(connection.reassembler, body)
+  const body = new Uint8Array(await c.req.arrayBuffer())
+  const result = connection.handlePostBody(body)
 
   if (result.type === "messages") {
     for (const msg of result.messages) {
@@ -102,11 +102,11 @@ Use `createSseClient` for browser-to-server connections:
 
 ```/dev/null/browser-client.ts#L1-13
 import { Exchange } from "@kyneta/exchange"
-import { createSseClient } from "@kyneta/sse-network-adapter/client"
+import { createSseClient } from "@kyneta/sse-transport/client"
 
 const exchange = new Exchange({
-  identity: { peerId: "browser-client", name: "Alice", type: "user" },
-  adapters: [createSseClient({
+  principal: "alice",
+  transports: [createSseClient({
     postUrl: "/sse/sync",
     eventSourceUrl: (peerId) => `/sse/events?peerId=${peerId}`,
     reconnect: { enabled: true },
@@ -157,7 +157,7 @@ Client→server messages are sent via HTTP POST. POST failures (network errors, 
 The public observation API is powered by `createObservableProgram` from `@kyneta/machine`:
 
 ```/dev/null/observe-state.ts#L1-18
-import { createSseClient } from "@kyneta/sse-network-adapter/client"
+import { createSseClient } from "@kyneta/sse-transport/client"
 
 const adapter = createSseClient({
   postUrl: "/sse/sync",
@@ -198,17 +198,6 @@ Fragment frame:  ["2f", 42, 0, 3, 1500, "{\"type\":\"offer\"..."]
 
 The `"2c"` prefix means "version 2, complete, no hash". `seq` is the per-direction message id (it groups a message's fragments). Fragments use `"2f"` and carry `seq`, `index`, `total`, `totalSize`, and a JSON substring chunk.
 
-### Why Text Instead of Binary?
-
-The old `@loro-extended/adapter-sse` used an asymmetric format: binary CBOR for POST, ad-hoc JSON for SSE. The new adapter uses uniform text encoding because:
-
-- Single code path for encode/decode on both client and server
-- Human-readable POST bodies and SSE events for debugging
-- No need for `express.raw()` with `application/octet-stream`
-- Text fragmentation works in both directions
-
-The ~33% bandwidth overhead of base64 for binary payloads (vs. native CBOR byte strings) is acceptable for SSE's use case (chat, presence, signaling). For bandwidth-sensitive workloads, use the WebSocket adapter.
-
 ## Configuration
 
 ### Client Options
@@ -248,13 +237,11 @@ The Express router sends SSE comment heartbeats (`: heartbeat\n\n`) at the confi
 
 ## Custom Framework Integration
 
-The `parseTextPostBody` function provides a framework-agnostic handler for POST requests:
+`SseConnection.handlePostBody` is a framework-agnostic handler for POST requests:
 
-```/dev/null/custom-framework.ts#L1-13
-import { parseTextPostBody } from "@kyneta/sse-network-adapter/express"
-
-// In your framework's request handler
-const result = parseTextPostBody(connection.reassembler, bodyAsString)
+```/dev/null/custom-framework.ts#L1-12
+// In your framework's request handler, with the body as a Uint8Array
+const result = connection.handlePostBody(body)
 
 if (result.type === "messages") {
   for (const msg of result.messages) {
@@ -296,24 +283,24 @@ connection.setSendFunction((textFrame) => {
 ┌──────────────────────────────────────────────────────────┐
 │                        Client                            │
 │  ┌──────────────────┐        ┌───────────────────┐       │
-│  │ SseClientAdapter │        │ EventSource       │       │
-│  │ (text POST)      │───────▶│ (text receive)    │       │
+│  │ SseClientTransport │      │ EventSource       │       │
+│  │ (binary POST)      │─────▶│ (text receive)    │       │
 │  └──────────────────┘        └───────────────────┘       │
 └──────────────────────────────────────────────────────────┘
          │                             ▲
          │ HTTP POST                   │ SSE
-         │ (text wire frame)           │ (text wire frame)
+         │ (binary wire frame)         │ (text wire frame)
          ▼                             │
 ┌──────────────────────────────────────────────────────────┐
 │                        Server                            │
 │  ┌──────────────────┐        ┌───────────────────┐       │
 │  │ Express Router   │        │ SSE Writer        │       │
-│  │ (parseTextPost)  │───────▶│ (sendFn)          │       │
+│  │ (handlePostBody) │───────▶│ (sendFn)          │       │
 │  └──────────────────┘        └───────────────────┘       │
 │           │                             ▲                │
 │           ▼                             │                │
 │  ┌───────────────────────────────────────────────────┐   │
-│  │          SseServerAdapter                         │   │
+│  │          SseServerTransport                         │   │
 │  │  ┌────────────────────────────────────────────┐   │   │
 │  │  │ SseConnection (per peer)                   │   │   │
 │  │  │ - Pipeline (asymmetric encode/decode)    │   │   │
@@ -335,7 +322,7 @@ connection.setSendFunction((textFrame) => {
 }
 ```
 
-Express is an optional peer dependency — only needed if using `@kyneta/sse-network-adapter/express`.
+Express is an optional peer dependency — only needed if using `@kyneta/sse-transport/express`.
 
 ## License
 

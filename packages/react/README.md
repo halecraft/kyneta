@@ -32,7 +32,7 @@ const TodoDoc = loro.bind(TodoSchema)
 // 2. Create the Exchange exactly once at module scope so it survives
 //    React lifecycle events (e.g. StrictMode remounts).
 const exchange = new Exchange({
-  id: "me",
+  principal: "me",
   transports: [/* your transport, e.g. createWebsocketClient(...) */],
 })
 
@@ -119,7 +119,7 @@ const optionalRef: (typeof exampleDoc)["title"] | null = null
 
 ### `<ExchangeProvider exchange={...}>`
 
-Provides an `Exchange` instance to the React subtree. The Exchange must be created **outside** the React component tree (e.g. at module scope) so it survives lifecycle events like StrictMode remounts — the provider neither constructs nor tears it down. Recreating an Exchange for the same `peerId` mid-session can corrupt distributed state and leak connections, so the provider guards against it; for the async-dependency case (e.g. waiting on an auth token before you know your identity), reach for `useExchangeSingleton`.
+Provides an `Exchange` instance to the React subtree. The Exchange must be created **outside** the React component tree (e.g. at module scope) so it survives lifecycle events like StrictMode remounts — the provider neither constructs nor tears it down. Each Exchange holds its own seat, so recreating one for the same principal corrupts nothing, but it opens a second connection while the first stays open; the provider warns when it happens. For the async-dependency case (e.g. waiting on an auth token before you know who the user is), reach for `useExchangeSingleton`.
 
 <!-- ts-docs-standalone -->
 <!-- Not compiled: a fragment from inside a component, or one assuming a document shape the shared prelude does not declare. -->
@@ -130,7 +130,7 @@ import { createWebsocketClient } from "@kyneta/websocket-transport/browser"
 
 // Create exactly once at module scope
 const exchange = new Exchange({
-  id: "my-peer",
+  principal: "alice",
   transports: [createWebsocketClient({ url: "ws://localhost:3000/ws", WebSocket })],
 })
 
@@ -143,18 +143,23 @@ function Root() {
 }
 ```
 
-### `useExchangeSingleton(peerId, factory)`
+### `useExchangeSingleton(principal, factory)`
 
-The async-dependency path. Instantiates an Exchange inside the React tree while still guaranteeing one instance per `peerId` — immune to React 18 StrictMode double-invocation. Pass `peerId` (or `null`/`undefined` while the identity is still loading) and a `factory` invoked at most once per peer; returns the `Exchange`, or `null` until `peerId` is available. Prefer module-scope construction above when you can.
+The async-dependency path. Instantiates an Exchange inside the React tree, one per `principal` — immune to React 18 StrictMode double-invocation. Pass `principal` (or `null`/`undefined` while it is still loading) and a `factory` that returns an `Exchange` or a promise of one, invoked at most once per principal; returns the `Exchange`, or `null` until the principal is known and the factory has resolved. A rejected factory is thrown during render, for an error boundary. Prefer module-scope construction above when you can.
 
 <!-- ts-docs-standalone -->
 <!-- Not compiled: a fragment from inside a component, or one assuming a document shape the shared prelude does not declare. -->
 <!-- ts-docs-verifier:ignore -->
 ```tsx
-const exchange = useExchangeSingleton(user?.id, () => {
-  const id = user?.id
-  if (!id) throw new Error("user id required")
-  return new Exchange({ id, transports: [createWebsocketClient({ url: "ws://localhost:3000/ws", WebSocket })] })
+const exchange = useExchangeSingleton(user?.id, async () => {
+  const principal = user?.id
+  if (!principal) throw new Error("user id required")
+  const store = await createIndexedDBStore(`app-${principal}`)
+  return new Exchange({
+    principal,
+    store,
+    transports: [createWebsocketClient({ url: "ws://localhost:3000/ws", WebSocket })],
+  })
 })
 if (!exchange) return null
 return (
@@ -231,7 +236,7 @@ The 90% gate. Returns a **monotonic** `boolean` that flips to `true` the first t
 const ready = useDocReady(doc)
 if (!ready) return <Spinner />
 // require a service peer specifically:
-const authReady = useDocReady(doc, { authority: (p) => p.peerId === "my-server" })
+const authReady = useDocReady(doc, { authority: (p) => p.principal === "my-server" })
 ```
 
 ### `useSyncState(doc)`

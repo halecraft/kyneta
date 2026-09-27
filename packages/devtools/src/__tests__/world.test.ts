@@ -27,7 +27,7 @@ async function drain(rounds = 30): Promise<void> {
 const active: Exchange[] = []
 function peer(id: string, bridge: Bridge): Exchange {
   const ex = new Exchange({
-    id,
+    principal: id,
     transports: [createBridgeTransport({ transportId: id, bridge })],
     schemas: [TodoDoc],
   })
@@ -64,8 +64,8 @@ describe("world model — two peers (merged stream)", () => {
     await drain()
 
     // peers: exactly alice + bob, regardless of which stream mentioned whom
-    expect(model.peers.has("alice")).toBe(true)
-    expect(model.peers.has("bob")).toBe(true)
+    expect(model.peers.has(alice.peerId)).toBe(true)
+    expect(model.peers.has(bob.peerId)).toBe(true)
     expect(model.peers.size).toBe(2)
     // documents: "d" is known
     expect(model.documents.has("d")).toBe(true)

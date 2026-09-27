@@ -1,4 +1,4 @@
-// express — barrel export for @kyneta/sse-network-adapter/express.
+// express — barrel export for @kyneta/sse-transport/express.
 //
 // This is the Express integration entry point. It exports everything
 // needed to integrate SseServerTransport with Express.

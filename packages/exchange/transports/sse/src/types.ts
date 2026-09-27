@@ -1,4 +1,4 @@
-// types — SSE-specific types for @kyneta/sse-network-adapter.
+// types — SSE-specific types for @kyneta/sse-transport.
 //
 // SSE has a simpler lifecycle than WebSocket — no "ready" state because
 // there's no transport-level handshake. The connection is usable as soon

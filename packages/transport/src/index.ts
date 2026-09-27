@@ -12,6 +12,7 @@ export type {
   DocId,
   PeerId,
   PeerIdentityDetails,
+  PeerType,
   ProtocolVersion,
   TransportType,
 } from "./types.js"

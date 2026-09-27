@@ -7,11 +7,7 @@
 import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import { batch, exportEntirety, json, merge, Schema } from "@kyneta/schema"
 import { afterEach, describe, expect, it } from "vitest"
-import {
-  Exchange,
-  type ExchangeParams,
-  type PeerIdentityInput,
-} from "../exchange.js"
+import { Exchange, type ExchangeParams } from "../exchange.js"
 
 async function drain(rounds = 20): Promise<void> {
   for (let i = 0; i < rounds; i++) {
@@ -23,8 +19,7 @@ async function drain(rounds = 20): Promise<void> {
 const activeExchanges: Exchange[] = []
 
 function createExchange(params: Partial<ExchangeParams> = {}): Exchange {
-  const merged = { id: "test" as string | PeerIdentityInput, ...params }
-  const ex = new Exchange(merged as ExchangeParams)
+  const ex = new Exchange({ principal: "test", ...params })
   activeExchanges.push(ex)
   return ex
 }
@@ -48,12 +43,12 @@ const TestDoc = json.bind(TestSchema)
 function makePair() {
   const bridge = new Bridge()
   const exchangeA = createExchange({
-    id: "alice",
+    principal: "alice",
     transports: [createBridgeTransport({ transportId: "a", bridge })],
     departureTimeout: 0,
   })
   const exchangeB = createExchange({
-    id: "bob",
+    principal: "bob",
     transports: [createBridgeTransport({ transportId: "b", bridge })],
     departureTimeout: 0,
   })
@@ -85,7 +80,7 @@ describe("exchange origin-echo: structural replay discriminator", () => {
     // docA directly (bypassing the wire). The substrate marks the
     // resulting Changeset as a replay; the exchange must skip echoing
     // it back over the wire — regardless of the origin label.
-    const sourceEx = createExchange({ id: "source" })
+    const sourceEx = createExchange({ principal: "source" })
     const sourceDoc = sourceEx.get("source", TestDoc)
     batch(sourceDoc, (d: any) => d.value.set(99))
     await drain()

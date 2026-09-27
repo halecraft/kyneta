@@ -15,7 +15,7 @@ import { PROTOCOL_VERSION } from "../types.js"
 
 const establishMsg: EstablishMsg = {
   type: "establish",
-  identity: { peerId: "peer1", name: "Test", type: "user" },
+  identity: { peerId: "peer1", principal: "Test", type: "user" },
   features: { alias: true },
   protocolVersion: PROTOCOL_VERSION,
 }
@@ -145,7 +145,7 @@ describe("Pipeline — asymmetric round-trip (SSE pair)", () => {
       // Client sends establish (binary out) → server receives (binary in)
       const clientEstablish: EstablishMsg = {
         type: "establish",
-        identity: { peerId: "peer2", name: "Client", type: "user" },
+        identity: { peerId: "peer2", principal: "Client", type: "user" },
         features: { alias: true },
         protocolVersion: PROTOCOL_VERSION,
       }

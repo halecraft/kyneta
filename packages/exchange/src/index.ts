@@ -44,6 +44,7 @@ export type {
   DocId,
   PeerId,
   PeerIdentityDetails,
+  PeerType,
   ProtocolVersion,
   TransportType,
 } from "@kyneta/transport"
@@ -196,7 +197,7 @@ export type {
   Disposition,
   ExchangeNetworkParams,
   ExchangeParams,
-  PeerIdentityInput,
+  PeerNaming,
 } from "./exchange.js"
 export { Exchange } from "./exchange.js"
 
@@ -271,15 +272,10 @@ export {
 } from "./store/index.js"
 
 // ---------------------------------------------------------------------------
-// Peer identity — browser-only persistent peerId generation
+// Peers — find a peer's seat by what it says it is
 // ---------------------------------------------------------------------------
 
-export type { LeaseDecision, LeaseState } from "./persistent-peer-id.js"
-export {
-  persistentPeerId,
-  releasePeerId,
-  resolveLease,
-} from "./persistent-peer-id.js"
+export { whenPeer } from "./when-peer.js"
 
 // ---------------------------------------------------------------------------
 // Line — reliable bidirectional message stream between two peers

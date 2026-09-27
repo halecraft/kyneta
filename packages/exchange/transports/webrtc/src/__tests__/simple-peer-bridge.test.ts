@@ -96,7 +96,7 @@ function fromSimplePeer(peer: MockSimplePeer): DataChannelLike {
 async function initializeTransport(transport: WebrtcTransport) {
   await transport._initialize(
     createTestTransportContext({
-      identity: { peerId: "local", name: "Local", type: "user" },
+      identity: { peerId: "local", principal: "Local", type: "user" },
     }),
   )
   await transport._start()

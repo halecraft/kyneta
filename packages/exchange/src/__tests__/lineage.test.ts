@@ -37,7 +37,7 @@ function open(
   params: Partial<ExchangeParams> = {},
 ) {
   const exchange = new Exchange({
-    id,
+    principal: id,
     transports: bridges.map((bridge, i) =>
       createBridgeTransport({ bridge, transportId: `${id}-${i}` }),
     ),

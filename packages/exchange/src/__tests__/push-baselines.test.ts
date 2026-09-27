@@ -33,7 +33,7 @@ async function drain(ms = 50): Promise<void> {
 
 function exchangeOn(bridge: Bridge, id: string): Exchange {
   const exchange = new Exchange({
-    id,
+    principal: id,
     transports: [createBridgeTransport({ bridge, transportId: id })],
   })
   exchanges.push(exchange)

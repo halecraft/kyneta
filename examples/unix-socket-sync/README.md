@@ -32,12 +32,12 @@ Each peer renders a TUI — a boxed config editor with 6 fields:
   │  Rate Limit    100      │
   │                         │
   ╰─────────────────────────╯
-  3 peers: peer-a1b2c3, peer-d4e5f6, peer-g7h8i9
+  3 peers: peer-48213, peer-48240, peer-48266
 
   ↑↓/jk navigate  ←→/hl change  q quit
 ```
 
-Arrow keys (or vim-style `hjkl`) navigate and change values. The footer shows the live peer count and peer IDs. Changes propagate instantly — edit a field in one terminal and watch it update in every other.
+Arrow keys (or vim-style `hjkl`) navigate and change values. The footer shows the live peer count and each peer's principal (`peer-<pid>`). Changes propagate instantly — edit a field in one terminal and watch it update in every other.
 
 ## Architecture
 

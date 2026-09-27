@@ -3,14 +3,16 @@
 //   Bumper Cars — Client Entry Point
 //
 //   Creates the Exchange via ExchangeProvider and renders the app.
-//   PeerId is persisted in localStorage so reconnecting players keep
-//   their identity (and their car color / name).
+//   The player's id, name and color are kept in localStorage, so a
+//   returning player keeps them. The id is the Exchange's principal; its
+//   seat, the peerId, is issued fresh on every load.
 //
 //   Run with:  bun src/server.ts  (serves the built client)
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { Exchange, persistentPeerId } from "@kyneta/exchange"
+import { Exchange } from "@kyneta/exchange"
+import { randomPeerId } from "@kyneta/random"
 import { ExchangeProvider } from "@kyneta/react"
 import { createWebsocketClient } from "@kyneta/websocket-transport/browser"
 import { createRoot } from "react-dom/client"
@@ -18,9 +20,10 @@ import BumperCarsApp from "./client/bumper-cars-app.js"
 import "./index.css"
 
 // ─────────────────────────────────────────────────────────────────────────
-// Persistent peer identity
+// Persistent player identity
 // ─────────────────────────────────────────────────────────────────────────
 
+const PLAYER_KEY = "bumper-cars-player"
 const NAME_KEY = "bumper-cars-name"
 const COLOR_KEY = "bumper-cars-color"
 
@@ -33,9 +36,9 @@ function getOrCreate(key: string, fallback: () => string): string {
   return value
 }
 
-const peerId = persistentPeerId("bumper-cars-peer-id")
+const playerId = getOrCreate(PLAYER_KEY, randomPeerId)
 
-const initialName = getOrCreate(NAME_KEY, () => `Player-${peerId.slice(-4)}`)
+const initialName = getOrCreate(NAME_KEY, () => `Player-${playerId.slice(-4)}`)
 const initialColor = localStorage.getItem(COLOR_KEY)
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -46,7 +49,7 @@ const rootEl = document.getElementById("root")
 if (!rootEl) throw new Error("#root not found")
 
 const exchange = new Exchange({
-  id: { peerId, name: initialName, type: "user" },
+  principal: playerId,
   transports: [
     createWebsocketClient({ url: `ws://${location.host}/ws`, WebSocket }),
   ],

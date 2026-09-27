@@ -75,7 +75,7 @@ describe("UnixSocketPeerTransport — leaderless healing", () => {
     // --- A: first peer → listener (probe enoent → bind) -------------------
     const peerA = createUnixSocketPeer({ path: socketPath })
     const exA = new Exchange({
-      id: { peerId: "A", name: "A" },
+      principal: "A",
       transports: [peerA],
     })
     exchanges.push(exA)
@@ -92,7 +92,7 @@ describe("UnixSocketPeerTransport — leaderless healing", () => {
     // Use the raw transport so we can assert transportId stability.
     const peerB = new UnixSocketPeerTransport({ path: socketPath })
     const exB = new Exchange({
-      id: { peerId: "B", name: "B" },
+      principal: "B",
       transports: [peerB],
     })
     exchanges.push(exB)
@@ -117,7 +117,7 @@ describe("UnixSocketPeerTransport — leaderless healing", () => {
     // --- C: new peer connects to the freshly-flipped listener B -----------
     const peerC = createUnixSocketPeer({ path: socketPath })
     const exC = new Exchange({
-      id: { peerId: "C", name: "C" },
+      principal: "C",
       transports: [peerC],
     })
     exchanges.push(exC)
@@ -135,7 +135,7 @@ describe("UnixSocketPeerTransport — leaderless healing", () => {
 
     const peerA = createUnixSocketPeer({ path: socketPath })
     const exA = new Exchange({
-      id: { peerId: "A", name: "A" },
+      principal: "A",
       transports: [peerA],
     })
     exchanges.push(exA)
@@ -143,7 +143,7 @@ describe("UnixSocketPeerTransport — leaderless healing", () => {
 
     const peerB = createUnixSocketPeer({ path: socketPath })
     const exB = new Exchange({
-      id: { peerId: "B", name: "B" },
+      principal: "B",
       transports: [peerB],
     })
     exchanges.push(exB)
@@ -164,7 +164,7 @@ describe("UnixSocketPeerTransport — leaderless healing", () => {
     // A fresh connector can still join the surviving listener and sync.
     const peerC = createUnixSocketPeer({ path: socketPath })
     const exC = new Exchange({
-      id: { peerId: "C", name: "C" },
+      principal: "C",
       transports: [peerC],
     })
     exchanges.push(exC)

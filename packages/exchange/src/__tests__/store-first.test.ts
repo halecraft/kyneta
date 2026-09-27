@@ -83,7 +83,7 @@ function open(
   params: Partial<ExchangeParams> = {},
 ): Exchange {
   const exchange = new Exchange({
-    id,
+    principal: id,
     transports: bridges.map((bridge, i) =>
       createBridgeTransport({ bridge, transportId: `${id}-${i}` }),
     ),
@@ -210,7 +210,7 @@ for (const { name, get } of BACKENDS) {
       crash(before)
 
       const after = new Exchange({
-        id: "browser",
+        principal: "browser",
         transports: [
           createBridgeTransport({ bridge, transportId: "browser-reloaded" }),
         ],
@@ -348,7 +348,6 @@ describe("store-first (loro): a store write after a pending native write", () =>
     const bound = loro.bind(LogSchema)
     const data = freshData()
     const first = new Runtime({
-      peerId: "solo",
       store: createInMemoryStore({ sharedData: data }),
       tickInterval: 0,
     })
@@ -362,7 +361,6 @@ describe("store-first (loro): a store write after a pending native write", () =>
     const records = data.records.get("doc")?.length
 
     const second = new Runtime({
-      peerId: "solo",
       store: createInMemoryStore({ sharedData: data }),
       tickInterval: 0,
     })
@@ -496,7 +494,6 @@ describe("store-first: a failed write", () => {
     fakeTimers()
     const flaky = new FlakyStore()
     const runtime = new Runtime({
-      peerId: "solo",
       store: flaky.store,
       tickInterval: 0,
       onStoreError: () => {},
@@ -546,7 +543,6 @@ describe("persistedFeed", () => {
   it("reports each change of persisted", async () => {
     const held = new HeldStore()
     const runtime = new Runtime({
-      peerId: "solo",
       store: held.store,
       tickInterval: 0,
     })
@@ -574,14 +570,14 @@ describe("persistedFeed", () => {
 describe("an interest whose version does not parse", () => {
   it("is answered with the whole document, and the peer is then pushed to", async () => {
     const peer = new ScriptedPeer()
-    const exchange = new Exchange({ id: "us", transports: [peer] })
+    const exchange = new Exchange({ principal: "us", transports: [peer] })
     exchanges.push(exchange)
     const doc = exchange.get("d", json.bind(LogSchema))
     append(doc, "A")
     await Promise.resolve()
     peer.receive({
       type: "establish",
-      identity: { peerId: "them", type: "user" },
+      identity: { peerId: "them", principal: "them", type: "user" },
       protocolVersion: PROTOCOL_VERSION,
     })
     peer.receive({ type: "interest", docId: "d", since: "not a version" })

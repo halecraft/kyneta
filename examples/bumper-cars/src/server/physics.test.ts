@@ -153,8 +153,8 @@ describe("checkCarCollision", () => {
 
     const result = checkCarCollision("a", car1, "b", car2, 1000)
     expect(result.collision).not.toBeNull()
-    expect(result.collision!.peer1).toBe("a")
-    expect(result.collision!.peer2).toBe("b")
+    expect(result.collision?.peer1).toBe("a")
+    expect(result.collision?.peer2).toBe("b")
   })
 
   it("returns null when cars are far apart", () => {
@@ -195,7 +195,7 @@ describe("checkCarCollision", () => {
 
     const result = checkCarCollision("a", car1, "b", car2, 1000)
     expect(result.collision).not.toBeNull()
-    expect(result.collision!.scorers).toContain("a")
+    expect(result.collision?.scorers).toContain("a")
   })
 
   it("returns null for zero distance (degenerate case)", () => {

@@ -33,8 +33,8 @@ describe("tick", () => {
     const result = tick(makeTickInput({ cars }))
 
     // Friction on zero velocity → still zero. Position unchanged.
-    expect(result.cars.get("alice")!.x).toBe(origX)
-    expect(result.cars.get("alice")!.y).toBe(origY)
+    expect(result.cars.get("alice")?.x).toBe(origX)
+    expect(result.cars.get("alice")?.y).toBe(origY)
     expect(result.scoredCollisions).toHaveLength(0)
   })
 
@@ -52,8 +52,8 @@ describe("tick", () => {
     const result = tick(makeTickInput({ cars, inputs }))
 
     // Alice should have moved right; Bob should be ~unchanged
-    expect(result.cars.get("alice")!.x).toBeGreaterThan(200)
-    expect(result.cars.get("bob")!.x).toBeCloseTo(600, 0)
+    expect(result.cars.get("alice")?.x).toBeGreaterThan(200)
+    expect(result.cars.get("bob")?.x).toBeCloseTo(600, 0)
   })
 
   it("moves a car with existing velocity (no input)", () => {
@@ -63,7 +63,7 @@ describe("tick", () => {
     const result = tick(makeTickInput({ cars }))
 
     // Should have moved right (vx applied, then friction reduces it slightly)
-    expect(result.cars.get("alice")!.x).toBeGreaterThan(200)
+    expect(result.cars.get("alice")?.x).toBeGreaterThan(200)
   })
 
   // ─────────────────────────────────────────────────────────────────────
@@ -252,9 +252,9 @@ describe("tick", () => {
     const result = tick(makeTickInput({ cars }))
 
     // After tick, car should be within bounds and velocity reversed
-    expect(result.cars.get("alice")!.x).toBeLessThanOrEqual(
+    expect(result.cars.get("alice")?.x).toBeLessThanOrEqual(
       ARENA_WIDTH - CAR_RADIUS,
     )
-    expect(result.cars.get("alice")!.vx).toBeLessThan(0) // bounced
+    expect(result.cars.get("alice")?.vx).toBeLessThan(0) // bounced
   })
 })

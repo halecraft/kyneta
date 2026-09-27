@@ -28,7 +28,7 @@ describe("randomHex", () => {
 })
 
 describe("randomPeerId", () => {
-  it("returns a 16-char hex string", () => {
-    expect(randomPeerId()).toMatch(/^[0-9a-f]{16}$/)
+  it("returns a 32-char hex string (128 bits)", () => {
+    expect(randomPeerId()).toMatch(/^[0-9a-f]{32}$/)
   })
 })

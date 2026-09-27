@@ -133,6 +133,8 @@ Source: `packages/exchange/wire/src/cbor-encoding.ts`.
 
 Source: `packages/exchange/wire/src/wire-types.ts`. `encodeWireMessage` maps `WireMessage` fields to integer discriminants and short field names to minimize bytes on the wire. The public `MessageType`, `PayloadEncoding`, `PayloadKind` enums (and their `*ToString` / `StringTo*` reverse maps) are exported for any code that must match the wire representation directly.
 
+An `establish` is `{ t, id, pr, y, f?, pv? }`: the seat, the principal, the peer type, features and protocol version. `pr` joined in protocol 2.0 and replaced `n` (name); the validator requires it only when `pv` names 2.0 or later, so a 1.x peer's `establish` still parses and its major mismatch is reported (PROTOCOL.md §"Establish negotiation-core invariant").
+
 `MessageType` allocates discriminators sequentially: `0x01` establish, `0x02` depart, `0x10` present, `0x11` interest, `0x12` offer, `0x13` dismiss, `0x14` vacant, `0x15` accept (`{ t, doc | dx, v }`, the offer's version quoted back). An offer carries no `r`: reciprocation lives on interests only, and an `r` on an offer is ignored like any unknown field.
 
 ---

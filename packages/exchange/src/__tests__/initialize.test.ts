@@ -28,7 +28,7 @@ const TestDoc = json.bind(TestSchema)
 const MergeableDoc = loro.bind(Schema.struct({ title: Schema.text() }))
 
 function createExchange(options: Partial<ExchangeParams> = {}): Exchange {
-  return new Exchange({ id: "test", ...options } as ExchangeParams)
+  return new Exchange({ principal: "test", ...options })
 }
 
 // ===========================================================================
@@ -230,7 +230,7 @@ describe("initialize", () => {
     // why the bug survived a release.
     const bridge = new Bridge()
     const exchange = createExchange({
-      id: "server",
+      principal: "server",
       transports: [createBridgeTransport({ transportId: "server", bridge })],
       authority: "self",
     })
@@ -254,14 +254,14 @@ describe("initialize", () => {
     // are. A mergeable document, because the serialized-writer guard would
     // otherwise refuse the seed before the wait is ever reached.
     const bridge = new Bridge()
-    const isServer = (p: { peerId: string }) => p.peerId === "server"
+    const isServer = (p: { principal: string }) => p.principal === "server"
     const clientA = createExchange({
-      id: "client-a",
+      principal: "client-a",
       transports: [createBridgeTransport({ transportId: "client-a", bridge })],
       authority: isServer,
     })
     const clientB = createExchange({
-      id: "client-b",
+      principal: "client-b",
       transports: [createBridgeTransport({ transportId: "client-b", bridge })],
       authority: isServer,
     })
@@ -290,9 +290,9 @@ describe("initialize", () => {
     // document is empty.
     const bridge = new Bridge()
     const client = createExchange({
-      id: "client-a",
+      principal: "client-a",
       transports: [createBridgeTransport({ transportId: "client-a", bridge })],
-      authority: (p: { peerId: string }) => p.peerId === "server",
+      authority: (p: { principal: string }) => p.principal === "server",
     })
     const doc = client.get("doc-1", MergeableDoc)
 

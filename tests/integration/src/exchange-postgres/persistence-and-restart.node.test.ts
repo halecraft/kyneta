@@ -178,14 +178,14 @@ describeIfEnabled(
 
         const serverExchange = lifecycle.registerExchange(
           new Exchange({
-            id: "server",
+            principal: "server",
             store: serverStore,
             schemas: [YjsDoc],
           }),
         )
         const clientExchange = lifecycle.registerExchange(
           new Exchange({
-            id: "client",
+            principal: "client",
             store: clientStore,
             schemas: [YjsDoc],
           }),
@@ -251,7 +251,7 @@ describeIfEnabled(
       // Write a meta + a couple of entries through sqlite.
       const exchange = lifecycle.registerExchange(
         new Exchange({
-          id: "sqlite-source",
+          principal: "sqlite-source",
           store: sqliteStore,
           schemas: [YjsDoc],
         }),
@@ -298,7 +298,7 @@ describeIfEnabled(
       const pgStore = await createPostgresStore(fromPool(serverPool))
       const pgExchange = lifecycle.registerExchange(
         new Exchange({
-          id: "pg-sink",
+          principal: "pg-sink",
           store: pgStore,
           schemas: [YjsDoc],
         }),

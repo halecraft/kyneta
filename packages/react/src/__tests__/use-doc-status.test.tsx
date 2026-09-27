@@ -21,7 +21,7 @@ afterEach(cleanup)
 
 describe("useDocStatus", () => {
   it("reports empty for a transportless, storeless document", () => {
-    const exchange = new Exchange({ id: "test" })
+    const exchange = new Exchange({ principal: "test" })
     const doc = exchange.get("doc-1", TestDoc)
 
     function Probe() {
@@ -34,7 +34,7 @@ describe("useDocStatus", () => {
   })
 
   it("moves to populated when data arrives", async () => {
-    const exchange = new Exchange({ id: "test", authority: "self" })
+    const exchange = new Exchange({ principal: "test", authority: "self" })
     const doc = exchange.get("doc-1", TestDoc)
 
     function Probe() {
@@ -58,7 +58,7 @@ describe("useInitialize", () => {
     // StrictMode deliberately invokes effects twice in development. The
     // per-document promise cache in `initialize` is what makes that harmless;
     // without it, the defaults would be written twice.
-    const exchange = new Exchange({ id: "test", authority: "self" })
+    const exchange = new Exchange({ principal: "test", authority: "self" })
     const doc = exchange.get("doc-1", TestDoc)
 
     let writes = 0
@@ -89,7 +89,7 @@ describe("useDocReady", () => {
   it("is true on a transportless exchange", () => {
     // The permanent-spinner regression: `ready` used to stay false forever
     // with no transports, because nothing could ever reconcile.
-    const exchange = new Exchange({ id: "test" })
+    const exchange = new Exchange({ principal: "test" })
     const doc = exchange.get("doc-1", TestDoc)
 
     function Probe() {

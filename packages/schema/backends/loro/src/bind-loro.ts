@@ -3,8 +3,8 @@
 // The `loro` binding target provides `loro.bind()` and `loro.replica()` for
 // binding schemas to the Loro substrate with collaborative sync protocol.
 // The factory builder accepts { peerId } and returns a SubstrateFactory that
-// derives one deterministic PeerID from it via loroPeerId, so an exchange's
-// documents all speak as the same peer and stay recognisable across restarts.
+// derives one deterministic PeerID from it via loroPeerId, so all of an
+// exchange's documents speak as its seat, the peer id its Runtime issued.
 //
 // Every construction path claims that PeerID; they differ only in *when*.
 // A document that will first import its own stored history has to wait —

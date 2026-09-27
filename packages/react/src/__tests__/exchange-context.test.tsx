@@ -15,7 +15,7 @@ import { ExchangeProvider, useExchange } from "../exchange-context.js"
 
 describe("useExchange", () => {
   it("returns the Exchange from the provider", () => {
-    const exchange = new Exchange({ id: "test" })
+    const exchange = new Exchange({ principal: "test" })
     const wrapper = ({ children }: { children: ReactNode }) => (
       <ExchangeProvider exchange={exchange}>{children}</ExchangeProvider>
     )
@@ -40,65 +40,57 @@ describe("useExchange", () => {
 // ExchangeProvider lifecycle
 // ---------------------------------------------------------------------------
 
+/** A provider whose exchange the test swaps, returning the swap. */
+function swappable(initial: Exchange): {
+  wrapper: (props: { children: ReactNode }) => ReactNode
+  swap: (next: Exchange) => void
+} {
+  const handle: { set?: (next: Exchange) => void } = {}
+  function Wrapper({ children }: { children: ReactNode }) {
+    const [ex, setEx] = useState(initial)
+    handle.set = setEx
+    return <ExchangeProvider exchange={ex}>{children}</ExchangeProvider>
+  }
+  return {
+    wrapper: Wrapper,
+    swap: next => {
+      act(() => handle.set?.(next))
+    },
+  }
+}
+
 describe("ExchangeProvider", () => {
-  it("warns if the exchange identity changes but peerId remains the same", () => {
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+  it("warns if the exchange identity changes but the principal stays the same", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
 
-    const exchangeA = new Exchange({ id: "test" })
-    const exchangeB = new Exchange({ id: "test" })
+    const exchangeA = new Exchange({ principal: "test" })
+    const exchangeB = new Exchange({ principal: "test" })
+    const { wrapper, swap } = swappable(exchangeA)
+    renderHook(() => useExchange(), { wrapper })
+    expect(warnSpy).not.toHaveBeenCalled()
 
-    // Use a stateful wrapper so we can update the exchange prop on rerender
-    function StatefulWrapper({ children }: { children: ReactNode }) {
-      const [ex, setEx] = useState(exchangeA)
-      // Expose setter for the test
-      ;(StatefulWrapper as any).setExchange = setEx
-      return <ExchangeProvider exchange={ex}>{children}</ExchangeProvider>
-    }
+    swap(exchangeB)
 
-    renderHook(() => useExchange(), {
-      wrapper: StatefulWrapper,
-    })
-
-    expect(errorSpy).not.toHaveBeenCalled()
-
-    // Trigger a rerender with a new exchange for the same peerId
-    act(() => {
-      ;(StatefulWrapper as any).setExchange(exchangeB)
-    })
-
-    expect(errorSpy).toHaveBeenCalledTimes(1)
-    expect(errorSpy.mock.calls[0][0]).toContain(
-      "CRITICAL: The `exchange` prop passed to <ExchangeProvider> changed identity",
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+    expect(String(warnSpy.mock.calls[0]?.[0])).toContain(
+      "The `exchange` prop passed to <ExchangeProvider> changed identity",
     )
 
-    errorSpy.mockRestore()
+    warnSpy.mockRestore()
   })
 
-  it("does not warn if the exchange identity changes and peerId changes", () => {
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+  it("does not warn if the exchange identity changes and the principal changes", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
 
-    const exchangeA = new Exchange({ id: "test1" })
-    const exchangeB = new Exchange({ id: "test2" })
+    const exchangeA = new Exchange({ principal: "test1" })
+    const exchangeB = new Exchange({ principal: "test2" })
+    const { wrapper, swap } = swappable(exchangeA)
+    renderHook(() => useExchange(), { wrapper })
 
-    function StatefulWrapper({ children }: { children: ReactNode }) {
-      const [ex, setEx] = useState(exchangeA)
-      ;(StatefulWrapper as any).setExchange = setEx
-      return <ExchangeProvider exchange={ex}>{children}</ExchangeProvider>
-    }
+    swap(exchangeB)
 
-    renderHook(() => useExchange(), {
-      wrapper: StatefulWrapper,
-    })
+    expect(warnSpy).not.toHaveBeenCalled()
 
-    expect(errorSpy).not.toHaveBeenCalled()
-
-    // Trigger a rerender with a new exchange for a DIFFERENT peerId
-    act(() => {
-      ;(StatefulWrapper as any).setExchange(exchangeB)
-    })
-
-    expect(errorSpy).not.toHaveBeenCalled()
-
-    errorSpy.mockRestore()
+    warnSpy.mockRestore()
   })
 })

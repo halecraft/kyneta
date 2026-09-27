@@ -183,7 +183,7 @@ async function createConnectedPair(opts?: {
   activeServers.push(testServer)
 
   const serverExchange = createExchange({
-    id: serverPeerId,
+    principal: serverPeerId,
     transports: [serverTransport],
   })
 
@@ -195,7 +195,7 @@ async function createConnectedPair(opts?: {
   })
 
   const clientExchange = createExchange({
-    id: clientPeerId,
+    principal: clientPeerId,
     transports: [clientTransport],
   })
 

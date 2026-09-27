@@ -48,7 +48,7 @@ describe("useChangefeed", () => {
   })
 
   it("works with exchange.peers (ReactiveMap)", () => {
-    const exchange = new Exchange({ id: "test" })
+    const exchange = new Exchange({ principal: "test" })
 
     const { result } = renderHook(() => useChangefeed(exchange.peers))
 

@@ -37,7 +37,7 @@ export type TestTransportContext = Omit<
  * @example
  * ```ts
  * const ctx = createTestTransportContext({
- *   identity: { peerId: "peer-a", type: "user" },
+ *   identity: { peerId: "peer-a", principal: "peer-a", type: "user" },
  *   onChannelEstablish: channel => established.push(channel.channelId),
  * })
  * ```
@@ -47,7 +47,7 @@ export function createTestTransportContext(
 ): TestTransportContext {
   let nextChannelId = 1
   const base: TestTransportContext = {
-    identity: { peerId: "test-peer", name: "Test Peer", type: "user" },
+    identity: { peerId: "test-peer", principal: "Test Peer", type: "user" },
     onChannelReceive: vi.fn() as TestTransportContext["onChannelReceive"],
     onChannelAdded: vi.fn() as TestTransportContext["onChannelAdded"],
     onChannelRemoved: vi.fn() as TestTransportContext["onChannelRemoved"],

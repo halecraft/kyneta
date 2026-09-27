@@ -7,9 +7,9 @@
 // registerSchema(), get(), destroy()) — no Exchange modification needed.
 //
 // Protocol-first design: `Line.protocol(opts)` reifies the schema pair +
-// topic into a `LineProtocol` object. The protocol's `open()` method creates
-// a Line to a specific peer (client role), and `listen()` reactively accepts
-// incoming Lines (server role). Both share the same `BoundSchema` references,
+// topic into a `LineProtocol` object. The protocol's `sender()` and
+// `claimReceiver()` open a Line to one peer's seat (client role), and
+// `listen()` reactively accepts incoming Lines (server role). Both share the same `BoundSchema` references,
 // eliminating reference equality conflicts in `exchange.get()`.
 //
 // Generic strategy: The Line class is parameterized over plain message
@@ -194,22 +194,26 @@ export interface LineListener<SendMsg, RecvMsg> {
  * A reified Line protocol — the schema pair + topic that both sides
  * must agree on to communicate. Created once at module scope, shared
  * between `sender()`, `claimReceiver()`, and `listen()`.
+ *
+ * `peer` is always the remote seat, its `peerId`, never a principal: each
+ * outbox has one writer, and several seats may share a principal. Find a
+ * peer's seat with `whenPeer`.
  */
 export interface LineProtocol<ClientMsg, ServerMsg> {
   readonly topic: string
 
   /**
-   * Obtain the shared sender capability for this Line to a specific peer.
+   * Obtain the shared sender capability for this Line to the seat `peer`.
    */
   sender(exchange: Exchange, peer: string): LineSender<ClientMsg>
 
   /**
-   * Exclusively claim the read queue for this Line from a specific peer.
+   * Exclusively claim the read queue for this Line from the seat `peer`.
    * Throws if another component already holds the receiver.
    */
   claimReceiver(exchange: Exchange, peer: string): LineReceiver<ServerMsg>
 
-  /** permanently destroy a Line, its Outbox, and its Inbox. */
+  /** permanently destroy the Line to the seat `peer`, its Outbox, and its Inbox. */
   manager(exchange: Exchange, peer: string): LineManager
 
   /** Listen for incoming Lines as the server role. */
@@ -597,7 +601,7 @@ export class Line<SendMsg, RecvMsg>
         if (docId === outboxDocId) return peer.peerId === exchange.peerId
         // Inbox: affirm the remote peer, abstain for unknowns.
         // Abstain (undefined) instead of veto (false) so that relay
-        // topologies work — the relay server's peerId won't match
+        // topologies work — the relay server's seat won't match
         // remotePeerId, but the exchange-level canAccept can still
         // accept it. Hard veto would block all relay offers.
         // Context: jj:oyouvrss (Phase 4 — canAccept gap workaround)
@@ -650,9 +654,10 @@ export class Line<SendMsg, RecvMsg>
    *   server: ResponseSchema,
    * })
    *
-   * // Client side
-   * const sender = RPC.sender(exchange, "server-peer-id")
-   * const receiver = RPC.claimReceiver(exchange, "server-peer-id")
+   * // Client side: find the server's seat, then address it
+   * const server = await whenPeer(exchange, p => p.principal === "server")
+   * const sender = RPC.sender(exchange, server.peerId)
+   * const receiver = RPC.claimReceiver(exchange, server.peerId)
    * sender.send({ method: "ping", id: 1 })
    *
    * // Server side

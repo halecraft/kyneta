@@ -32,7 +32,8 @@ import { TodoDoc } from "./schema.js"
 const serverTransport = new WebsocketServerTransport()
 
 const exchange = new Exchange({
-  id: { peerId: "todo-server", name: "server" },
+  principal: "todo-server",
+  type: "service",
   transports: [serverTransport],
 })
 

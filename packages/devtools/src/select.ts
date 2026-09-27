@@ -103,7 +103,7 @@ export interface ConvergenceState {
  * / sync-mode — are `error`, jj:nztkqwpm; protocol minor-skew is a `warning`
  * and does NOT gate). Per-doc attribution: `stuckDocs` = pending docs that also
  * carry an `error` diagnostic keyed to that `docId`. A peer/protocol error
- * (`self-connection`/`duplicate-peer`/`protocol-mismatch`, no `docId`) still
+ * (`self-connection`/`protocol-mismatch`, no `docId`) still
  * produces a *global* `stuck` with an empty `stuckDocs` — honest: the failure
  * is peer-scoped, not doc-scoped.
  *

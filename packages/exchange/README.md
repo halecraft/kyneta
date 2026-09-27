@@ -21,7 +21,7 @@ const TodoDoc = loro.bind(
 )
 
 const exchange = new Exchange({
-  id: "alice",
+  principal: "alice",
   transports: [
     createWebsocketClient({ url: "ws://localhost:3000/ws", WebSocket }),
   ],
@@ -98,7 +98,7 @@ declare const TodoDoc: typeof MyDoc
 -->
 ```ts
 const exchange = new Exchange({
-  id: "alice",
+  principal: "alice",
   transports: [createWebsocketClient({ url: "ws://localhost:3000/ws", WebSocket })],
 })
 
@@ -114,7 +114,8 @@ subscribe(doc, changeset => { /* reactive */ })
 import { loro } from "@kyneta/loro-schema"
 
 const relay = new Exchange({
-  id: { peerId: "relay", type: "service" },
+  principal: "relay",
+  type: "service",
   transports: [
     createWebsocketClient({ url: "ws://upstream:3000/ws", WebSocket }),
     createWebsocketClient({ url: "ws://downstream:3001/ws", WebSocket }),
@@ -130,7 +131,7 @@ const relay = new Exchange({
 
 ```ts
 const server = new Exchange({
-  id: "game-server",
+  principal: "game-server",
   transports: [serverTransport],
   resolve: (docId, peer) => {
     if (docId.startsWith("input:")) return Interpret(PlayerInputDoc)
@@ -181,7 +182,7 @@ const ConfigDoc = json.bind(Schema.struct({ theme: Schema.string() }))
 
 // Peer A — creates the document and writes
 const exchangeA = new Exchange({
-  id: "alice",
+  principal: "alice",
   transports: [createWebsocketClient({ url: "ws://localhost:3000/ws", WebSocket })],
 })
 const docA = exchangeA.get("config", ConfigDoc)
@@ -189,7 +190,7 @@ docA.theme.set("dark")
 
 // Peer B — opens the same document and waits for data to arrive
 const exchangeB = new Exchange({
-  id: "bob",
+  principal: "bob",
   transports: [createWebsocketClient({ url: "ws://localhost:3000/ws", WebSocket })],
 })
 const docB = exchangeB.get("config", ConfigDoc)
@@ -217,7 +218,7 @@ doc.theme()  // same API, now backed by a CRDT
 
 ```ts
 const exchange = new Exchange({
-  id: "server",
+  principal: "server",
   transports: [serverTransport],
   store: await createLevelDBStore("./data/exchange-db"),  // ← new
 })
@@ -249,7 +250,7 @@ const presence = exchange.get("my-presence", PresenceDoc) // ephemeral broadcast
 
 ```ts
 const exchange = new Exchange({
-  id: "server",
+  principal: "server",
   transports: [serverTransport],
   canShare: (docId, peer) => {  // ← new: outbound flow control
     if (docId.startsWith("input:")) return peer.peerId === docId.slice(6)
@@ -271,7 +272,8 @@ import { loro } from '@kyneta/loro-schema'
 // The relay has zero knowledge of your schemas.
 // Plain and ephemeral replicas are built-in; add CRDT replicas if relaying Loro/Yjs docs.
 const relay = new Exchange({
-  id: { peerId: "relay", type: "service" },
+  principal: "relay",
+  type: "service",
   transports: [
     createWebsocketClient({ url: "ws://upstream:3000/ws", WebSocket }),
     createWebsocketClient({ url: "ws://downstream:3001/ws", WebSocket }),
@@ -403,7 +405,8 @@ The `Exchange` class is the central orchestrator. It manages document lifecycle,
 
 ```ts
 const exchange = new Exchange({
-  id: { peerId: "alice", name: "Alice", type: "user" },
+  principal: "alice",
+  type: "user",
   transports: [networkTransport],
   store: createInMemoryStore(),
   canShare: (docId, peer) => {
@@ -417,7 +420,7 @@ const exchange = new Exchange({
 })
 ```
 
-> **Peer identity:** `id` identifies the exchange as a participant in causal history. For browser clients, use `persistentPeerId(storageKey)` as the `id` value — it provides a per-tab unique peerId stable across reloads. For servers, pass an explicit string.
+> **Peer identity:** you name a `principal`, who this exchange speaks for: a user, a service. Several exchanges may share one. The exchange issues its own `peerId`, its **seat**: a fresh id each session, which is the address its operations are written under. Key policies on `principal` when you mean *who*, and on `peerId` when you mean *which replica*. Input documents above are keyed by seat, one per tab.
 
 ### Heterogeneous Documents
 
@@ -461,7 +464,7 @@ Four predicates control information flow. All use three-valued logic (`true` / `
 import { Interpret, Replicate, Defer, Reject } from "@kyneta/schema"
 
 const gameExchange = new Exchange({
-  id: "game-server",
+  principal: "game-server",
   transports: [serverTransport],
   resolve: (docId, peer, replicaType, syncMode, schemaHash) => {
     if (docId.startsWith("input:")) return Interpret(PlayerInputDoc)
@@ -482,7 +485,7 @@ declare const TodoDoc: typeof MyDoc
 <!-- ts-docs-verifier:ignore -->
 ```ts
 const exchange = new Exchange({
-  id: "alice",
+  principal: "alice",
   schemas: [TodoDoc, ConfigDoc],  // auto-interpret when peers announce these
 })
 ```
@@ -491,7 +494,7 @@ const exchange = new Exchange({
 
 ```ts
 const exchange = new Exchange({
-  id: "server",
+  principal: "server",
   schemas: [PlayerInputDoc],
 })
 
@@ -520,7 +523,7 @@ A store is a constructor parameter, separate from transports. Durable documents 
 import { createLevelDBStore } from "@kyneta/leveldb-store"
 
 const exchange = new Exchange({
-  id: "server",
+  principal: "server",
   store: await createLevelDBStore("./data/exchange-db"),
   transports: [networkTransport],
 })
@@ -531,7 +534,7 @@ const doc = exchange.get("my-doc", TodoDoc)
 
 **With a store, a local write reaches peers once it is stored.** The exchange holds a document's offers back while the store has not confirmed its own writes, so a crash can never leave peers holding writes this peer's next session does not know it made. That costs one store write of latency. `persisted(doc)` and `await whenPersisted(doc)` tell you when a document's writes are confirmed, and `persistenceError(doc)` why not. A failed store write is retried on its own, 250 ms after the failure and doubling to 30 s. Without a store, writes are sent at once.
 
-**A `json` document has one writer.** If two peers author one (or a writer restarts without its store and writes before it has synced), each mints its own lineage. When the lineages meet, every peer converges on the one minted later, the other's writes are gone, and both sides report a `lineage-collision` diagnostic (an error, on the console and the observation bus). That includes a `Line`'s outbox: two Exchanges sharing one peer id, as React StrictMode's double mount can produce, can lose a message in flight. Give every Exchange its own peer id.
+**A `json` document has one writer.** If two peers author one (or a writer restarts without its store and writes before it has synced), each mints its own lineage. When the lineages meet, every peer converges on the one minted later, the other's writes are gone, and both sides report a `lineage-collision` diagnostic (an error, on the console and the observation bus).
 
 **Write to a stored plain document after it has loaded.** A `json.bind` document with a store refuses writes until loading completes, and throws "still loading" if you try: its history is a sequence, and a write made before that history is known would be overwritten by it. `await whenHydrated(doc)` (storage only) or `await whenSettled(doc)` (storage and the authority) first, or seed defaults with `initialize`. Loro and Yjs documents accept writes while loading and merge them.
 
@@ -556,7 +559,7 @@ declare const exchange: Exchange
 const sharedData = createInMemoryStoreData()
 
 const exchange1 = new Exchange({
-  id: "server",
+  principal: "server",
   store: createInMemoryStore({ sharedData }),
 })
 const doc = exchange1.get("my-doc", TodoDoc)
@@ -565,7 +568,7 @@ doc.title.set("Saved")
 await exchange1.shutdown()
 
 const exchange2 = new Exchange({
-  id: "server",
+  principal: "server",
   store: createInMemoryStore({ sharedData }),
   resolve: () => Interpret(TodoDoc),
 })
@@ -582,7 +585,7 @@ import { sync } from "@kyneta/exchange"
 
 const doc = exchange.get("doc-id", MyDoc)
 
-sync(doc).peerId        // your peer ID
+sync(doc).peerId        // your seat
 sync(doc).docId         // document ID
 sync(doc).peerStates    // raw per-peer sync state (volatile)
 sync(doc).ready         // monotonic readiness latch (the 90% gate)
@@ -613,16 +616,16 @@ exchange.peers.subscribe(changeset => {
   for (const change of changeset.changes) {
     switch (change.type) {
       case "peer-established":  // first channel completed the handshake
-        console.log(`${change.peer.name ?? change.peer.peerId} connected`)
+        console.log(`${change.peer.principal} connected`)
         break
       case "peer-disconnected": // all channels lost — may still reconnect
-        console.log(`${change.peer.name ?? change.peer.peerId} dropped`)
+        console.log(`${change.peer.principal} dropped`)
         break
       case "peer-reconnected":  // re-established before the departure timer
-        console.log(`${change.peer.name ?? change.peer.peerId} reconnected`)
+        console.log(`${change.peer.principal} reconnected`)
         break
       case "peer-departed":     // definitively gone
-        console.log(`${change.peer.name ?? change.peer.peerId} left`)
+        console.log(`${change.peer.principal} left`)
         break
     }
   }
@@ -632,6 +635,39 @@ exchange.peers.subscribe(changeset => {
 **Connection is not presence.** Losing the last channel to a peer does *not* remove it immediately. The peer first goes `peer-disconnected` and is held for `departureTimeout` (default `30_000` ms); reconnect within that window yields `peer-reconnected`, otherwise the timer expires into `peer-departed`. A graceful `shutdown()` — or a received `depart` message, or `departureTimeout: 0` — skips the grace period and departs at once. Set a short `departureTimeout` when dropped peers should disappear quickly (e.g. a live game roster); keep the default so brief network blips don't churn presence.
 
 Multi-transport deduplication: when a peer is connected through multiple transports (e.g. both WebSocket and SSE), `peer-established` fires once on the first channel, and the disconnect/departure transitions fire only when *all* channels are gone. On `shutdown()` or `reset()`, synthetic `peer-departed` events are emitted for all connected peers.
+
+### Reliable messaging — `Line`
+
+A `Line` is a reliable, ordered message stream between two peers, built from two `json` documents, one outbox per direction. It is addressed by the remote peer's seat, never its principal: each outbox has one writer, and a user's two tabs are two seats writing two outboxes. Find a seat by principal with `whenPeer`.
+
+<!-- ts-docs-setup
+declare const exchange: Exchange
+-->
+```ts
+import { Line, whenPeer } from "@kyneta/exchange"
+
+const Chat = Line.protocol({
+  topic: "chat",
+  schema: Schema.struct({ text: Schema.string() }),
+})
+
+// Client: find the server's seat, then address the Line by it.
+const server = await whenPeer(exchange, p => p.principal === "server")
+const sender = Chat.sender(exchange, server.peerId)
+sender.send({ text: "hello" })
+
+// Server: accept a Line from every client that opens one.
+Chat.listen(exchange).onReceive((reply, receiver) => {
+  void (async () => {
+    for await (const msg of receiver) reply.send({ text: `echo: ${msg.text}` })
+  })()
+})
+```
+
+Two limitations, until stores can keep a seat across restarts:
+
+- **`Line`s do not survive a server restart.** A restarted server is a new seat. Clients find it with `whenPeer` and open new `Line`s; anything in flight to the old seat is lost.
+- **`Line` documents to a seat that never returns stay stored** on its peer, and every store-less session is a new seat. Nothing removes them yet.
 
 ### Escape Hatches
 
@@ -690,7 +726,7 @@ const doc = createDoc(BlogSchema)
 await initialize(doc, seedDefaults)
 
 // Local-only, with storage — waits for the load, never for a network
-const exchange = new Exchange({ id: "app", store })
+const exchange = new Exchange({ principal: "app", store })
 await initialize(exchange.get("blog", BlogDoc), seedDefaults)
 
 // Server — authoritative. Declared once, at construction. It has a transport
@@ -698,7 +734,7 @@ await initialize(exchange.get("blog", BlogDoc), seedDefaults)
 // last word, so it seeds as soon as the disk read is done rather than waiting
 // for a client that has nothing to tell it.
 const server = new Exchange({
-  id: "server",
+  principal: "server",
   store,
   transports: [wsServer],
   authority: "self",
@@ -708,14 +744,14 @@ await initialize(server.get("blog", BlogDoc), seedDefaults)
 // Client — waits for the server's answer, and gives up after 3s if it never
 // comes (offline-first).
 const client = new Exchange({
-  id: "client",
+  principal: "client",
   transports: [ws],
-  authority: p => p.peerId === "server",
+  authority: p => p.principal === "server",
 })
 await initialize(client.get("blog", BlogDoc), seedDefaults, { offlineAfter: 3000 })
 ```
 
-### Identify the authority by peer ID, not by role
+### Identify the authority by principal, not by role
 
 `PeerIdentityDetails.type` is one of `"user" | "bot" | "service"`, so the
 tempting client-side check is `p => p.type === "service"`. That is too loose
@@ -727,8 +763,10 @@ reply as the server's verdict.
 <!-- Not compiled: assumes a document shape the shared prelude does not declare. -->
 <!-- ts-docs-verifier:ignore -->
 ```ts
-authority: p => p.peerId === "my-server"   // recommended
+authority: p => p.principal === "my-server"   // recommended
 ```
+
+Not by `peerId` either: that is the server's seat, issued per process, and it changes when the server restarts.
 
 ### Reading the status directly
 
@@ -844,7 +882,8 @@ You only engage the next level when you need it. Each level is additive — it d
 
 | Option | Description |
 |--------|-------------|
-| `id` | `string \| { peerId, name?, type? }` — peer identity. A plain string is shorthand for `{ peerId: string }`. Required for `get()`. |
+| `principal` | `string` — who this exchange speaks for. Required, non-empty. Several exchanges may share one. The exchange issues its own `peerId`. |
+| `type` | `"user" \| "bot" \| "service"` — the peer's role. Default `"user"`. |
 | `transports` | `TransportFactory[]` — network connectivity. |
 | `store` | `Store` — the persistent storage backend. |
 | `schemas` | `BoundSchema[]` — upfront schema registration for auto-resolution. |
@@ -860,7 +899,7 @@ You only engage the next level when you need it. Each level is additive — it d
 
 | Property/Method | Description |
 |----------------|-------------|
-| `peerId` | The local peer ID. |
+| `peerId` | This exchange's seat. |
 | `docId` | The document ID. |
 | `peerStates` | `PeerSyncState[]` — raw per-peer sync state. Each entry is `{ docId, peer, state }` where state is `"pending" \| "synced" \| "vacant"`. Volatile — can regress on reconnect. |
 | `ready` | `boolean` — monotonic readiness latch: `true` once the doc reconciles with ≥1 peer (data or `vacant`); never regresses. The 90% gate. |
@@ -943,9 +982,7 @@ Each binding target is a fixed `(substrate, sync-mode, supported-laws)` bundle. 
 
 | Export | Description |
 |--------|-------------|
-| `persistentPeerId(storageKey)` | Browser-only: per-tab unique peerId via localStorage CAS lease. First tab gets the stable device peerId; concurrent tabs get fresh random peerIds. Stable across reloads. |
-| `releasePeerId(storageKey)` | Release the peerId lease. Clears only the holder token — `sessionStorage` keys survive for reload stability. Called automatically on `pagehide`. |
-| `resolveLease(state)` | Pure decision function for the lease protocol. Exported for testing and advanced use. |
+| `whenPeer(exchange, predicate)` | Resolves with the first peer in `exchange.peers` matching `predicate`: at once if one is listed, including one in its grace period, otherwise when one establishes. No timeout. |
 
 ---
 

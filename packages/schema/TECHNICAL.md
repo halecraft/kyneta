@@ -1743,11 +1743,13 @@ Plain and ephemeral carry no identity and need nothing.
 
 The residual, after the deferral: anything written before hydration lands under the document's transient identity, so that session contributes one version-vector entry that never grows. Bounded, non-compounding, and no data attached. Callers avoid it entirely by waiting for the document to settle before writing — which `@kyneta/exchange`'s readiness layer already asks of them for an independent reason.
 
+**Who chooses the identity.** Under `@kyneta/exchange`, nobody does: each `Runtime` issues itself a fresh random seat (128 bits) and passes it to every factory. A fresh identity has no history anywhere, so nothing it imports was authored by it and the rule is met at construction. The deferral matters when an identity is reused: a seat a store keeps across restarts, or one a caller names with `createDocAs`. A reused identity must also be held by one live document at a time, and its holder must import everything written under it before writing.
+
 **Width, and why it never changes.** Source: `packages/schema/src/hash.ts` → `peerNumber`, `reservePeerNumber`.
 
 A string peer id becomes a backend's peer number through `peerNumber(peerId, bits)`: FNV-1a-64 over the id's UTF-8 bytes, passed through `reservePeerNumber`, then masked to `bits`. Yjs takes 53 bits (`yjsClientId`), the widest id a JS `number` holds exactly; Loro takes 64 (`loroPeerId`), its u64 `PeerID`. `reservePeerNumber` sets bit 0 when the low 53 bits are all zero, so the Yjs number is never `STRUCTURAL_YJS_CLIENT_ID` (0). Reserving once, before masking, keeps the Yjs number the low 53 bits of the Loro one, so two peer ids that differ at 53 bits differ on both backends, and one collision check at 53 bits covers both.
 
-Two peer ids that map to one number collide on every document they share: each writes different operations at the other's addresses, and merge keeps one of each pair. The chance of any collision among `n` writing peers is about `n² / 2^(bits+1)`:
+Two peer ids that map to one number collide on every document they share: each writes different operations at the other's addresses, and merge keeps one of each pair. The chance of any collision among `n` writing peers is about `n² / 2^(bits+1)`. Under `@kyneta/exchange` every Runtime is a new seat, so `n` counts writing sessions, not users:
 
 | width | 10,000 writing peers | ~1% chance at |
 |---|---|---|

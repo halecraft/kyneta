@@ -26,11 +26,7 @@ import { yjs } from "@kyneta/yjs-schema"
 import { decodeImportBlobMeta } from "loro-crdt"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { docStatus } from "../doc-status.js"
-import {
-  Exchange,
-  type ExchangeParams,
-  type PeerIdentityInput,
-} from "../exchange.js"
+import { Exchange, type ExchangeParams } from "../exchange.js"
 import { persistenceError } from "../persistence.js"
 import { Runtime } from "../runtime.js"
 import { whenHydrated } from "../settle.js"
@@ -62,8 +58,7 @@ async function drain(ms = 100): Promise<void> {
 const activeExchanges: Exchange[] = []
 
 function createExchange(params: Partial<ExchangeParams> = {}): Exchange {
-  const merged = { id: "test" as string | PeerIdentityInput, ...params }
-  const ex = new Exchange(merged as ExchangeParams)
+  const ex = new Exchange({ principal: "test", ...params })
   activeExchanges.push(ex)
   return ex
 }
@@ -113,7 +108,7 @@ describe("Storage persist + hydrate", () => {
 
     // Phase 1: create doc, mutate, persist
     const exchange1 = createExchange({
-      id: "server",
+      principal: "server",
       store: createInMemoryStore({ sharedData }),
     })
 
@@ -128,7 +123,7 @@ describe("Storage persist + hydrate", () => {
 
     // Phase 2: new exchange with same storage → hydrate
     const exchange2 = createExchange({
-      id: "server",
+      principal: "server",
       store: createInMemoryStore({ sharedData }),
     })
 
@@ -143,7 +138,7 @@ describe("Storage persist + hydrate", () => {
     const sharedData: InMemoryStoreData = createInMemoryStoreData()
 
     const exchange1 = createExchange({
-      id: "server",
+      principal: "server",
       store: createInMemoryStore({ sharedData }),
       schemas: [CausalDoc],
     })
@@ -157,7 +152,7 @@ describe("Storage persist + hydrate", () => {
     await exchange1.shutdown()
 
     const exchange2 = createExchange({
-      id: "server",
+      principal: "server",
       store: createInMemoryStore({ sharedData }),
       schemas: [CausalDoc],
     })
@@ -172,7 +167,7 @@ describe("Storage persist + hydrate", () => {
     const sharedData: InMemoryStoreData = createInMemoryStoreData()
 
     const exchange1 = createExchange({
-      id: "server",
+      principal: "server",
       store: createInMemoryStore({ sharedData }),
     })
 
@@ -187,7 +182,7 @@ describe("Storage persist + hydrate", () => {
     await exchange1.shutdown()
 
     const exchange2 = createExchange({
-      id: "server",
+      principal: "server",
       store: createInMemoryStore({ sharedData }),
     })
 
@@ -276,7 +271,7 @@ describe("a mutation during an in-flight write", () => {
     // arrives meanwhile is owed, and written once the first lands.
     const sharedData: InMemoryStoreData = createInMemoryStoreData()
     const gate = gatedAppend(createInMemoryStore({ sharedData }))
-    const exchange1 = createExchange({ id: "server", store: gate.store })
+    const exchange1 = createExchange({ principal: "server", store: gate.store })
 
     const doc = exchange1.get("doc-1", SequentialDoc)
     await exchange1.flush()
@@ -294,7 +289,7 @@ describe("a mutation during an in-flight write", () => {
     await exchange1.shutdown()
 
     const exchange2 = createExchange({
-      id: "server",
+      principal: "server",
       store: createInMemoryStore({ sharedData }),
     })
     const restored = exchange2.get("doc-1", SequentialDoc)
@@ -311,7 +306,7 @@ describe("a mutation during an in-flight write", () => {
     // offered it again, so a restart found the document without it.
     const sharedData: InMemoryStoreData = createInMemoryStoreData()
     const gate = gatedAppend(createInMemoryStore({ sharedData }))
-    const exchange1 = createExchange({ id: "server", store: gate.store })
+    const exchange1 = createExchange({ principal: "server", store: gate.store })
 
     gate.hold()
     const doc = exchange1.get("doc-1", SequentialDoc)
@@ -324,7 +319,7 @@ describe("a mutation during an in-flight write", () => {
     await exchange1.shutdown()
 
     const exchange2 = createExchange({
-      id: "server",
+      principal: "server",
       store: createInMemoryStore({ sharedData }),
     })
     const restored = exchange2.get("doc-1", SequentialDoc)
@@ -341,7 +336,7 @@ describe("a mutation during an in-flight write", () => {
     // the first.
     const sharedData: InMemoryStoreData = createInMemoryStoreData()
     const gate = gatedAppend(createInMemoryStore({ sharedData }))
-    const exchange1 = createExchange({ id: "server", store: gate.store })
+    const exchange1 = createExchange({ principal: "server", store: gate.store })
 
     const doc = exchange1.get("doc-1", CausalDoc)
     await exchange1.flush()
@@ -381,7 +376,7 @@ describe("a mutation during an in-flight write", () => {
 
     await exchange1.shutdown()
     const exchange2 = createExchange({
-      id: "server",
+      principal: "server",
       store: createInMemoryStore({ sharedData }),
     })
     const restored = exchange2.get("doc-1", CausalDoc)
@@ -397,7 +392,7 @@ describe("a mutation during an in-flight write", () => {
     const gate = gatedAppend(createInMemoryStore({ sharedData }))
     const errors: unknown[] = []
     const exchange1 = createExchange({
-      id: "server",
+      principal: "server",
       store: gate.store,
       onStoreError: (_docId, _op, error) => errors.push(error),
     })
@@ -420,7 +415,7 @@ describe("a mutation during an in-flight write", () => {
     await exchange1.shutdown()
 
     const exchange2 = createExchange({
-      id: "server",
+      principal: "server",
       store: createInMemoryStore({ sharedData }),
     })
     const restored = exchange2.get("doc-1", SequentialDoc)
@@ -442,7 +437,7 @@ describe("a failed compaction", () => {
     const gate = gatedAppend(createInMemoryStore({ sharedData }))
     let failCompact = true
     const exchange1 = createExchange({
-      id: "server",
+      principal: "server",
       store: wrapStore(gate.store, {
         compact: async (docId, records, through) => {
           if (failCompact) {
@@ -477,7 +472,7 @@ describe("a failed compaction", () => {
     await exchange1.shutdown()
 
     const exchange2 = createExchange({
-      id: "server",
+      principal: "server",
       store: createInMemoryStore({ sharedData }),
     })
     const restored = exchange2.get("doc-1", SequentialDoc)
@@ -526,7 +521,7 @@ describe("a store whose first write fails", () => {
     const flaky = failingFirstWrite(createInMemoryStore({ sharedData }))
 
     const exchange = createExchange({
-      id: "server",
+      principal: "server",
       store: flaky,
       onStoreError: () => {}, // expected here; keep it out of the test output
     })
@@ -559,7 +554,7 @@ describe("transient documents never reach a store", () => {
   it("an interpreted transient document leaves no records", async () => {
     const sharedData: InMemoryStoreData = createInMemoryStoreData()
     const exchange = createExchange({
-      id: "server",
+      principal: "server",
       store: createInMemoryStore({ sharedData }),
     })
 
@@ -578,7 +573,7 @@ describe("transient documents never reach a store", () => {
     // so the store is the one place its behaviour is observable.
     const sharedData: InMemoryStoreData = createInMemoryStoreData()
     const exchange = createExchange({
-      id: "relay",
+      principal: "relay",
       store: createInMemoryStore({ sharedData }),
     })
 
@@ -607,7 +602,7 @@ describe("transient documents never reach a store", () => {
       },
     })
 
-    const exchange = createExchange({ id: "server", store: counting })
+    const exchange = createExchange({ principal: "server", store: counting })
     exchange.get("presence-1", PresenceDoc)
     await exchange.flush()
 
@@ -626,7 +621,7 @@ describe("transient documents never reach a store", () => {
     const sharedData: InMemoryStoreData = createInMemoryStoreData()
 
     const exchange1 = createExchange({
-      id: "server",
+      principal: "server",
       store: createInMemoryStore({ sharedData }),
     })
     const doc = exchange1.get("doc-1", SequentialDoc)
@@ -640,7 +635,7 @@ describe("transient documents never reach a store", () => {
     // Second exchange never calls get() for this document, so it has no cache
     // entry to consult.
     const exchange2 = createExchange({
-      id: "server",
+      principal: "server",
       store: createInMemoryStore({ sharedData }),
     })
     exchange2.destroy("doc-1")
@@ -660,7 +655,7 @@ describe("transient documents never reach a store", () => {
     // `flush()` and `shutdown()` cannot catch that: an unregistered document is
     // not tracked by the store-program, so both complete while it hangs.
     const exchange = createExchange({
-      id: "server",
+      principal: "server",
       store: createInMemoryStore({
         sharedData: createInMemoryStoreData(),
       }),
@@ -684,7 +679,8 @@ describe("Storage + network sync", () => {
     const bridge = new Bridge()
 
     const server = createExchange({
-      id: { peerId: "server", type: "service" },
+      principal: "server",
+      type: "service",
       transports: [
         createBridgeTransport({ transportId: "server-side", bridge }),
       ],
@@ -693,7 +689,7 @@ describe("Storage + network sync", () => {
     })
 
     const peerA = createExchange({
-      id: "peer-a",
+      principal: "peer-a",
       transports: [
         createBridgeTransport({ transportId: "peer-a-side", bridge }),
       ],
@@ -720,7 +716,8 @@ describe("Storage + network sync", () => {
     const bridge2 = new Bridge()
 
     const server2 = createExchange({
-      id: { peerId: "server", type: "service" },
+      principal: "server",
+      type: "service",
       transports: [
         createBridgeTransport({
           transportId: "server-side",
@@ -732,7 +729,7 @@ describe("Storage + network sync", () => {
     })
 
     const peerB = createExchange({
-      id: "peer-b",
+      principal: "peer-b",
       transports: [
         createBridgeTransport({
           transportId: "peer-b-side",
@@ -760,7 +757,8 @@ describe("Storage + network sync", () => {
     const bridge = new Bridge()
 
     const server = createExchange({
-      id: { peerId: "server", type: "service" },
+      principal: "server",
+      type: "service",
       transports: [
         createBridgeTransport({ transportId: "server-side", bridge }),
       ],
@@ -769,7 +767,7 @@ describe("Storage + network sync", () => {
     })
 
     const client = createExchange({
-      id: "client",
+      principal: "client",
       transports: [
         createBridgeTransport({ transportId: "client-side", bridge }),
       ],
@@ -805,7 +803,8 @@ describe("Storage + replicated doc", () => {
 
     // Relay 1: replicate mode + storage
     const relay1 = createExchange({
-      id: { peerId: "relay-1", type: "service" },
+      principal: "relay-1",
+      type: "service",
       transports: [
         createBridgeTransport({ transportId: "relay-side", bridge: bridge1 }),
       ],
@@ -814,7 +813,7 @@ describe("Storage + replicated doc", () => {
     })
 
     const peerA = createExchange({
-      id: "peer-a",
+      principal: "peer-a",
       transports: [
         createBridgeTransport({
           transportId: "peer-a-side",
@@ -847,7 +846,8 @@ describe("Storage + replicated doc", () => {
     const bridge2 = new Bridge()
 
     const relay2 = createExchange({
-      id: { peerId: "relay-2", type: "service" },
+      principal: "relay-2",
+      type: "service",
       transports: [
         createBridgeTransport({ transportId: "relay-side", bridge: bridge2 }),
       ],
@@ -856,7 +856,7 @@ describe("Storage + replicated doc", () => {
     })
 
     const peerB = createExchange({
-      id: "peer-b",
+      principal: "peer-b",
       transports: [
         createBridgeTransport({
           transportId: "peer-b-side",
@@ -886,14 +886,15 @@ describe("a relay's replica after a lineage reset", () => {
   async function relayThroughReset(sharedData: InMemoryStoreData) {
     const bridge = new Bridge()
     const relay = createExchange({
-      id: { peerId: "relay", type: "service" },
+      principal: "relay",
+      type: "service",
       transports: [createBridgeTransport({ transportId: "relay", bridge })],
       store: createInMemoryStore({ sharedData }),
       resolve: () => Replicate(),
     })
 
     const first = createExchange({
-      id: "writer",
+      principal: "writer",
       transports: [createBridgeTransport({ transportId: "first", bridge })],
     })
     batch(first.get("doc-1", SequentialDoc), d => {
@@ -904,7 +905,7 @@ describe("a relay's replica after a lineage reset", () => {
     await first.shutdown()
     const before = relay.synchronizer.getDoc("doc-1")?.replica
 
-    const second = createExchange({ id: "writer" })
+    const second = createExchange({ principal: "writer" })
     batch(second.get("doc-1", SequentialDoc), d => {
       d.title.set("after")
       d.count.set(2)
@@ -928,13 +929,14 @@ describe("a relay's replica after a lineage reset", () => {
 
     const bridge = new Bridge()
     createExchange({
-      id: { peerId: "relay", type: "service" },
+      principal: "relay",
+      type: "service",
       transports: [createBridgeTransport({ transportId: "relay", bridge })],
       store: createInMemoryStore({ sharedData }),
       resolve: () => Replicate(),
     })
     const reader = createExchange({
-      id: "reader",
+      principal: "reader",
       transports: [createBridgeTransport({ transportId: "reader", bridge })],
     })
     const doc = reader.get("doc-1", SequentialDoc)
@@ -963,7 +965,7 @@ describe("Storage + destroy", () => {
     const backend = new InMemoryStore()
 
     const exchange = createExchange({
-      id: "server",
+      principal: "server",
       store: backend,
     })
 
@@ -1015,7 +1017,7 @@ describe("onStoreError callback", () => {
     }
 
     const exchange = createExchange({
-      id: "server",
+      principal: "server",
       store: failingStore,
       onStoreError: (docId, operation, _error) => {
         errors.push({ docId, operation })
@@ -1040,12 +1042,12 @@ describe("No storage (baseline)", () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
-      id: "peer-a",
+      principal: "peer-a",
       transports: [createBridgeTransport({ transportId: "side-a", bridge })],
     })
 
     const exchangeB = createExchange({
-      id: "peer-b",
+      principal: "peer-b",
       transports: [createBridgeTransport({ transportId: "side-b", bridge })],
       resolve: () => Interpret(SequentialDoc),
     })
@@ -1087,7 +1089,6 @@ describe("several instances over one storage", () => {
 
   function open(sharedData: InMemoryStoreData, peerId: string): Runtime {
     const runtime = new Runtime({
-      peerId,
       store: createInMemoryStore({ sharedData }),
       tickInterval: 0,
     })
@@ -1218,7 +1219,6 @@ describe("several instances over one storage", () => {
     })
     const inner = createInMemoryStore({ sharedData })
     const a = new Runtime({
-      peerId: "a",
       store: wrapStore(inner, {
         delete: async docId => {
           await deleting
@@ -1261,12 +1261,12 @@ describe("several instances over one storage", () => {
     const sharedData = createInMemoryStoreData()
     const bridge = new Bridge()
     const server = createExchange({
-      id: "server",
+      principal: "server",
       transports: [createBridgeTransport({ transportId: "server", bridge })],
       store: createInMemoryStore({ sharedData }),
     })
     const peer = createExchange({
-      id: "peer",
+      principal: "peer",
       transports: [createBridgeTransport({ transportId: "peer", bridge })],
     })
     const doc = server.get("doc", plainLog) as LogDoc

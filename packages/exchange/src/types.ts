@@ -63,7 +63,6 @@ export type Connectivity = "online" | "connecting" | "offline"
  */
 export type DiagnosticCode =
   | "self-connection"
-  | "duplicate-peer"
   | "protocol-skew"
   | "protocol-mismatch"
   | "replica-type-mismatch"
@@ -94,8 +93,7 @@ interface Comparison {
  * (jj:qpmkoryn). Context: jj:nztkqwpm.
  */
 export type Diagnostic =
-  | (DiagnosticCore &
-      PeerScoped & { readonly code: "self-connection" | "duplicate-peer" })
+  | (DiagnosticCore & PeerScoped & { readonly code: "self-connection" })
   | (DiagnosticCore &
       PeerScoped &
       Comparison & { readonly code: "protocol-skew" | "protocol-mismatch" })

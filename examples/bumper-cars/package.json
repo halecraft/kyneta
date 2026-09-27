@@ -10,6 +10,7 @@
   "dependencies": {
     "@kyneta/bun-server": "workspace:^",
     "@kyneta/exchange": "workspace:^",
+    "@kyneta/random": "workspace:^",
     "@kyneta/react": "workspace:^",
     "@kyneta/schema": "workspace:^",
     "@kyneta/websocket-transport": "workspace:^",

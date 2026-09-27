@@ -1,5 +1,5 @@
 import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
-import { Exchange, type ExchangeParams } from "@kyneta/exchange"
+import { Exchange } from "@kyneta/exchange"
 import { batch } from "@kyneta/schema"
 import { afterEach, describe, expect, it } from "vitest"
 import type { SubstrateProfile } from "./profiles.js"
@@ -64,17 +64,17 @@ export function runSubstrateConformance(profile: SubstrateProfile): void {
   describe(`substrate conformance — ${profile.name}`, () => {
     const active: Exchange[] = []
     const spawn = (
-      id: string,
+      principal: string,
       bridge: Bridge | null,
       bound: Bound,
     ): Exchange => {
       const ex = new Exchange({
-        id,
+        principal,
         schemas: [bound],
         transports: bridge
-          ? [createBridgeTransport({ transportId: id, bridge })]
+          ? [createBridgeTransport({ transportId: principal, bridge })]
           : [],
-      } as ExchangeParams)
+      })
       active.push(ex)
       return ex
     }

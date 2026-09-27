@@ -7,7 +7,6 @@
   },
   "dependencies": {
     "@kyneta/exchange": "workspace:^",
-    "@kyneta/random": "workspace:^",
     "@kyneta/schema": "workspace:^",
     "@kyneta/loro-schema": "workspace:^",
     "@kyneta/unix-socket-transport": "workspace:^",

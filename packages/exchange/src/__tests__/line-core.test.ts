@@ -4,12 +4,9 @@
 import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import { Schema } from "@kyneta/schema"
 import { afterEach, describe, expect, it } from "vitest"
-import {
-  Exchange,
-  type ExchangeParams,
-  type PeerIdentityInput,
-} from "../exchange.js"
-import { Line } from "../line.js"
+import { Exchange, type ExchangeParams } from "../exchange.js"
+import { Line, lineDocId } from "../line.js"
+import { whenPeer } from "../when-peer.js"
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -23,8 +20,7 @@ async function drain(rounds = 30): Promise<void> {
 const activeExchanges: Exchange[] = []
 
 function createExchange(params: Partial<ExchangeParams> = {}): Exchange {
-  const merged = { id: "test" as string | PeerIdentityInput, ...params }
-  const ex = new Exchange(merged as ExchangeParams)
+  const ex = new Exchange({ principal: "test", ...params })
   activeExchanges.push(ex)
   return ex
 }
@@ -52,7 +48,7 @@ const SimpleSchema = Schema.struct({ value: Schema.number() })
 
 describe("capability model", () => {
   it("sender() is idempotent and returns the same instance", () => {
-    const exchange = createExchange({ id: "alice" })
+    const exchange = createExchange({ principal: "alice" })
     const Chat = Line.protocol({ topic: "chat", schema: SimpleSchema })
     const s1 = Chat.sender(exchange, "bob")
     const s2 = Chat.sender(exchange, "bob")
@@ -60,7 +56,7 @@ describe("capability model", () => {
   })
 
   it("sender close() decrements refCount — teardown only when all refs close", () => {
-    const exchange = createExchange({ id: "alice" })
+    const exchange = createExchange({ principal: "alice" })
     const Chat = Line.protocol({ topic: "chat", schema: SimpleSchema })
     const s1 = Chat.sender(exchange, "bob")
     const s2 = Chat.sender(exchange, "bob")
@@ -72,7 +68,7 @@ describe("capability model", () => {
   })
 
   it("receiver enforces single-iterator constraint", () => {
-    const exchange = createExchange({ id: "alice" })
+    const exchange = createExchange({ principal: "alice" })
     const Chat = Line.protocol({ topic: "chat", schema: SimpleSchema })
     const receiver = Chat.claimReceiver(exchange, "bob")
     expect(receiver[Symbol.asyncIterator]()).toBeDefined()
@@ -84,18 +80,18 @@ describe("capability model", () => {
   it("send() works from any sender reference", async () => {
     const bridge = new Bridge()
     const exchangeA = createExchange({
-      id: "alice",
+      principal: "alice",
       transports: [createBridgeTransport({ transportId: "alice", bridge })],
     })
     const exchangeB = createExchange({
-      id: "bob",
+      principal: "bob",
       transports: [createBridgeTransport({ transportId: "bob", bridge })],
     })
     await drain()
 
     const Chat = Line.protocol({ topic: "chat", schema: SimpleSchema })
-    const aliceSender1 = Chat.sender(exchangeA, "bob")
-    const aliceSender2 = Chat.sender(exchangeA, "bob")
+    const aliceSender1 = Chat.sender(exchangeA, exchangeB.peerId)
+    const aliceSender2 = Chat.sender(exchangeA, exchangeB.peerId)
 
     const bobMessages: any[] = []
     const listener = Chat.listen(exchangeB)
@@ -109,7 +105,7 @@ describe("capability model", () => {
   })
 
   it("re-opening after full close yields a new instance", () => {
-    const exchange = createExchange({ id: "alice" })
+    const exchange = createExchange({ principal: "alice" })
     const Chat = Line.protocol({ topic: "chat", schema: SimpleSchema })
     const s1 = Chat.sender(exchange, "bob")
     s1.close()
@@ -120,7 +116,7 @@ describe("capability model", () => {
   })
 
   it("manager.destroy() terminates the line for all reference holders", () => {
-    const exchange = createExchange({ id: "alice" })
+    const exchange = createExchange({ principal: "alice" })
     const Chat = Line.protocol({ topic: "chat", schema: SimpleSchema })
     const s1 = Chat.sender(exchange, "bob")
     const s2 = Chat.sender(exchange, "bob")
@@ -140,18 +136,18 @@ describe("symmetric send and receive", () => {
   it("sender transmits, receiver consumes via async iterator", async () => {
     const bridge = new Bridge()
     const exchangeA = createExchange({
-      id: "alice",
+      principal: "alice",
       transports: [createBridgeTransport({ transportId: "alice", bridge })],
     })
     const exchangeB = createExchange({
-      id: "bob",
+      principal: "bob",
       transports: [createBridgeTransport({ transportId: "bob", bridge })],
     })
     await drain()
 
     const P = Line.protocol({ topic: "test", schema: SimpleSchema })
-    const aliceSender = P.sender(exchangeA, "bob")
-    const bobReceiver = P.claimReceiver(exchangeB, "alice")
+    const aliceSender = P.sender(exchangeA, exchangeB.peerId)
+    const bobReceiver = P.claimReceiver(exchangeB, exchangeA.peerId)
 
     aliceSender.send({ value: 42 })
     await drain()
@@ -173,18 +169,18 @@ describe("symmetric send and receive", () => {
   it("messages arrive in order", async () => {
     const bridge = new Bridge()
     const exchangeA = createExchange({
-      id: "alice",
+      principal: "alice",
       transports: [createBridgeTransport({ transportId: "alice", bridge })],
     })
     const exchangeB = createExchange({
-      id: "bob",
+      principal: "bob",
       transports: [createBridgeTransport({ transportId: "bob", bridge })],
     })
     await drain()
 
     const P = Line.protocol({ topic: "order", schema: SimpleSchema })
-    const aliceSender = P.sender(exchangeA, "bob")
-    const bobReceiver = P.claimReceiver(exchangeB, "alice")
+    const aliceSender = P.sender(exchangeA, exchangeB.peerId)
+    const bobReceiver = P.claimReceiver(exchangeB, exchangeA.peerId)
 
     aliceSender.send({ value: 1 })
     aliceSender.send({ value: 2 })
@@ -205,7 +201,7 @@ describe("symmetric send and receive", () => {
   })
 
   it("receiver iterator completes when sender closes the line", async () => {
-    const exchange = createExchange({ id: "alice" })
+    const exchange = createExchange({ principal: "alice" })
     const P = Line.protocol({ topic: "close-test", schema: SimpleSchema })
     const sender = P.sender(exchange, "bob")
     const receiver = P.claimReceiver(exchange, "bob")
@@ -224,20 +220,20 @@ describe("symmetric send and receive", () => {
   it("concurrent sends from both sides", async () => {
     const bridge = new Bridge()
     const exchangeA = createExchange({
-      id: "alice",
+      principal: "alice",
       transports: [createBridgeTransport({ transportId: "alice", bridge })],
     })
     const exchangeB = createExchange({
-      id: "bob",
+      principal: "bob",
       transports: [createBridgeTransport({ transportId: "bob", bridge })],
     })
     await drain()
 
     const P = Line.protocol({ topic: "bidir", schema: SimpleSchema })
-    const aliceSender = P.sender(exchangeA, "bob")
-    const aliceReceiver = P.claimReceiver(exchangeA, "bob")
-    const bobSender = P.sender(exchangeB, "alice")
-    const bobReceiver = P.claimReceiver(exchangeB, "alice")
+    const aliceSender = P.sender(exchangeA, exchangeB.peerId)
+    const aliceReceiver = P.claimReceiver(exchangeA, exchangeB.peerId)
+    const bobSender = P.sender(exchangeB, exchangeA.peerId)
+    const bobReceiver = P.claimReceiver(exchangeB, exchangeA.peerId)
 
     const receivedByA: { value: number }[] = []
     const receivedByB: { value: number }[] = []
@@ -260,22 +256,56 @@ describe("symmetric send and receive", () => {
 
 // ── Ack and pruning ──────────────────────────────────────────────────────────
 
+describe("addressing by seat", () => {
+  it("each side finds the other's seat with whenPeer and addresses the Line by it", async () => {
+    const bridge = new Bridge()
+    const client = createExchange({
+      principal: "client",
+      transports: [createBridgeTransport({ transportId: "client", bridge })],
+    })
+    const server = createExchange({
+      principal: "server",
+      transports: [createBridgeTransport({ transportId: "server", bridge })],
+    })
+
+    const serverSeat = await whenPeer(client, p => p.principal === "server")
+    const clientSeat = await whenPeer(server, p => p.principal === "client")
+    expect(serverSeat.peerId).toBe(server.peerId)
+    expect(clientSeat.peerId).toBe(client.peerId)
+
+    const P = Line.protocol({ topic: "by-seat", schema: SimpleSchema })
+    const sender = P.sender(client, serverSeat.peerId)
+    const receiver = P.claimReceiver(server, clientSeat.peerId)
+    const received: { value: number }[] = []
+    void (async () => {
+      for await (const msg of receiver) received.push(msg)
+    })()
+
+    sender.send({ value: 7 })
+    await drain()
+    expect(received).toEqual([{ value: 7 }])
+
+    sender.close()
+    receiver.close()
+  })
+})
+
 describe("ack and pruning", () => {
   it("messages are delivered reliably after many send/receive cycles", async () => {
     const bridge = new Bridge()
     const exchangeA = createExchange({
-      id: "alice",
+      principal: "alice",
       transports: [createBridgeTransport({ transportId: "alice", bridge })],
     })
     const exchangeB = createExchange({
-      id: "bob",
+      principal: "bob",
       transports: [createBridgeTransport({ transportId: "bob", bridge })],
     })
     await drain()
 
     const P = Line.protocol({ topic: "prune", schema: SimpleSchema })
-    const aliceSender = P.sender(exchangeA, "bob")
-    const bobReceiver = P.claimReceiver(exchangeB, "alice")
+    const aliceSender = P.sender(exchangeA, exchangeB.peerId)
+    const bobReceiver = P.claimReceiver(exchangeB, exchangeA.peerId)
 
     const received: { value: number }[] = []
     collect(bobReceiver, received)
@@ -297,7 +327,7 @@ describe("ack and pruning", () => {
 
 describe("duplicate detection", () => {
   it("different topics succeed", () => {
-    const exchange = createExchange({ id: "alice" })
+    const exchange = createExchange({ principal: "alice" })
     const P1 = Line.protocol({ topic: "signaling", schema: SimpleSchema })
     const P2 = Line.protocol({ topic: "rpc", schema: SimpleSchema })
     const s1 = P1.sender(exchange, "bob")
@@ -309,7 +339,7 @@ describe("duplicate detection", () => {
   })
 
   it("close then reopen succeeds", () => {
-    const exchange = createExchange({ id: "alice" })
+    const exchange = createExchange({ principal: "alice" })
     const P = Line.protocol({ topic: "reuse", schema: SimpleSchema })
     const s1 = P.sender(exchange, "bob")
     s1.close()
@@ -325,11 +355,11 @@ describe("multiple Lines per peer pair", () => {
   it("two Lines with different topics are independent", async () => {
     const bridge = new Bridge()
     const exchangeA = createExchange({
-      id: "alice",
+      principal: "alice",
       transports: [createBridgeTransport({ transportId: "alice", bridge })],
     })
     const exchangeB = createExchange({
-      id: "bob",
+      principal: "bob",
       transports: [createBridgeTransport({ transportId: "bob", bridge })],
     })
     await drain()
@@ -337,10 +367,10 @@ describe("multiple Lines per peer pair", () => {
     const SigProto = Line.protocol({ topic: "signaling", schema: SimpleSchema })
     const RpcProto = Line.protocol({ topic: "rpc", schema: SimpleSchema })
 
-    const sigSenderA = SigProto.sender(exchangeA, "bob")
-    const rpcSenderA = RpcProto.sender(exchangeA, "bob")
-    const sigReceiverB = SigProto.claimReceiver(exchangeB, "alice")
-    const rpcReceiverB = RpcProto.claimReceiver(exchangeB, "alice")
+    const sigSenderA = SigProto.sender(exchangeA, exchangeB.peerId)
+    const rpcSenderA = RpcProto.sender(exchangeA, exchangeB.peerId)
+    const sigReceiverB = SigProto.claimReceiver(exchangeB, exchangeA.peerId)
+    const rpcReceiverB = RpcProto.claimReceiver(exchangeB, exchangeA.peerId)
 
     const sigReceived: { value: number }[] = []
     const rpcReceived: { value: number }[] = []
@@ -368,7 +398,7 @@ describe("multiple Lines per peer pair", () => {
 
 describe("closed Line guards", () => {
   it("send() on closed Line throws", () => {
-    const exchange = createExchange({ id: "alice" })
+    const exchange = createExchange({ principal: "alice" })
     const P = Line.protocol({ topic: "guard", schema: SimpleSchema })
     const sender = P.sender(exchange, "bob")
     sender.close()
@@ -376,7 +406,7 @@ describe("closed Line guards", () => {
   })
 
   it("close() is idempotent", () => {
-    const exchange = createExchange({ id: "alice" })
+    const exchange = createExchange({ principal: "alice" })
     const P = Line.protocol({ topic: "idem", schema: SimpleSchema })
     const sender = P.sender(exchange, "bob")
     sender.close()
@@ -388,22 +418,26 @@ describe("closed Line guards", () => {
 // ── Per-Exchange Line registry ───────────────────────────────────────────────
 
 describe("per-Exchange Line registry", () => {
-  it("two Exchange instances with the same peerId can each open a Line", () => {
+  it("two Exchange instances with the same principal each open their own Line", () => {
     const P = Line.protocol({ topic: "registry", schema: SimpleSchema })
-    const ex1 = createExchange({ id: "alice" })
-    const ex2 = createExchange({ id: "alice" })
+    const ex1 = createExchange({ principal: "alice" })
+    const ex2 = createExchange({ principal: "alice" })
     const s1 = P.sender(ex1, "bob")
     const s2 = P.sender(ex2, "bob")
     expect(s1.peer).toBe("bob")
     expect(s2.peer).toBe("bob")
+    // Two seats, so two outboxes: neither writes the other's.
+    expect(lineDocId("registry", ex1.peerId, "bob")).not.toBe(
+      lineDocId("registry", ex2.peerId, "bob"),
+    )
     s1.close()
     s2.close()
   })
 
   it("shutting down one Exchange does not affect the other's open Lines", async () => {
     const P = Line.protocol({ topic: "isolation", schema: SimpleSchema })
-    const ex1 = createExchange({ id: "alice" })
-    const ex2 = createExchange({ id: "alice" })
+    const ex1 = createExchange({ principal: "alice" })
+    const ex2 = createExchange({ principal: "alice" })
     const s1 = P.sender(ex1, "bob")
     const s2 = P.sender(ex2, "bob")
 
@@ -424,11 +458,11 @@ describe("Line policy teardown", () => {
     const bridge = new Bridge()
     const P = Line.protocol({ topic: "teardown", schema: SimpleSchema })
     const exchangeA = createExchange({
-      id: "alice",
+      principal: "alice",
       transports: [createBridgeTransport({ transportId: "alice", bridge })],
     })
     const exchangeB = createExchange({
-      id: "bob",
+      principal: "bob",
       transports: [createBridgeTransport({ transportId: "bob", bridge })],
     })
 
@@ -436,7 +470,7 @@ describe("Line policy teardown", () => {
     const serverSenders: any[] = []
     listener.onReceive(sender => serverSenders.push(sender))
 
-    const clientSender = P.sender(exchangeA, "bob")
+    const clientSender = P.sender(exchangeA, exchangeB.peerId)
     clientSender.send({ value: 1 })
     await drain()
 
@@ -452,7 +486,7 @@ describe("Line policy teardown", () => {
 
   it("exchange.reset() closes all open Lines", () => {
     const P = Line.protocol({ topic: "reset-teardown", schema: SimpleSchema })
-    const exchange = createExchange({ id: "alice" })
+    const exchange = createExchange({ principal: "alice" })
     const sender = P.sender(exchange, "bob")
     expect(sender.closed).toBe(false)
     exchange.reset()
@@ -461,7 +495,7 @@ describe("Line policy teardown", () => {
 
   it("after shutdown + new Exchange, protocol.sender() succeeds", async () => {
     const P = Line.protocol({ topic: "reopen", schema: SimpleSchema })
-    const ex1 = createExchange({ id: "alice" })
+    const ex1 = createExchange({ principal: "alice" })
     const s1 = P.sender(ex1, "bob")
     expect(s1.closed).toBe(false)
 
@@ -471,7 +505,7 @@ describe("Line policy teardown", () => {
 
     expect(s1.closed).toBe(true)
 
-    const ex2 = createExchange({ id: "alice" })
+    const ex2 = createExchange({ principal: "alice" })
     const s2 = P.sender(ex2, "bob")
     expect(s2.closed).toBe(false)
     expect(s2.peer).toBe("bob")
@@ -480,7 +514,7 @@ describe("Line policy teardown", () => {
 
   it("manual close() followed by shutdown() is safe — no double-fire", async () => {
     const P = Line.protocol({ topic: "double-safe", schema: SimpleSchema })
-    const exchange = createExchange({ id: "alice" })
+    const exchange = createExchange({ principal: "alice" })
     const sender = P.sender(exchange, "bob")
     sender.close()
     expect(sender.closed).toBe(true)

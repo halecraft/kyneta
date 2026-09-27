@@ -64,28 +64,29 @@ describe("CBOR codec — lifecycle messages", () => {
   it("round-trips establish with full identity", () => {
     const wire = establishWire({
       peerId: "peer-alice-123",
-      name: "Alice",
+      principal: "Alice",
       type: "user",
     })
     const decoded = roundTrip(wire)
     expect(decoded).toEqual(wire)
   })
 
-  it("round-trips establish without optional name", () => {
-    const wire = establishWire({ peerId: "bot-42", type: "bot" })
-    const decoded = roundTrip(wire)
-    expect(decoded.t).toBe(MessageType.Establish)
-    const est = decoded as WireEstablishMsg
-    expect(est.id).toBe("bot-42")
-    expect(est.y).toBe("bot")
-    // name should be absent (undefined), not null or empty string
-    expect(est.n).toBeUndefined()
+  it("refuses a 2.0 establish without a principal at decode", () => {
+    const wire = {
+      t: MessageType.Establish,
+      id: "bot-42",
+      y: "bot",
+      pv: [2, 0],
+    } as unknown as WireMessage
+    expect(() => decodeWireMessage(encodeWireMessage(wire))).toThrow(
+      WireValidationFailure,
+    )
   })
 
   it("round-trips establish with service identity", () => {
     const wire = establishWire({
       peerId: "service-backend",
-      name: "Backend Service",
+      principal: "Backend Service",
       type: "service",
     })
     const decoded = roundTrip(wire)
@@ -286,7 +287,7 @@ describe("CBOR codec — vacant", () => {
 describe("CBOR codec — batch", () => {
   it("round-trips a batch of mixed message types", () => {
     const wires: WireMessage[] = [
-      establishWire({ peerId: "p1", name: "Peer One", type: "user" }),
+      establishWire({ peerId: "p1", principal: "Peer One", type: "user" }),
       presentWire([
         {
           docId: "d1",
@@ -418,7 +419,7 @@ describe("CBOR codec — multi-byte UTF-8", () => {
   it("round-trips establish with non-ASCII peer name", () => {
     const wire = establishWire({
       peerId: "peer-jp-1",
-      name: "日本語ユーザー",
+      principal: "日本語ユーザー",
       type: "user",
     })
     const decoded = roundTrip(wire)
@@ -427,7 +428,7 @@ describe("CBOR codec — multi-byte UTF-8", () => {
 
   it("round-trips batch containing messages with non-ASCII fields", () => {
     const wires: WireMessage[] = [
-      establishWire({ peerId: "p1", name: "André", type: "user" }),
+      establishWire({ peerId: "p1", principal: "André", type: "user" }),
       offerWire({
         docId: "doc-emoji",
         kind: "entirety",
@@ -555,6 +556,7 @@ describe("CBOR codec — WireFeatures negotiation", () => {
   it("round-trips establish with all features advertised", () => {
     const wire = establishWire({
       peerId: "alice",
+      principal: "alice-principal",
       type: "user",
       features: { alias: true, streamed: true, datagram: true },
     })
@@ -565,6 +567,7 @@ describe("CBOR codec — WireFeatures negotiation", () => {
   it("round-trips establish with only alias advertised", () => {
     const wire = establishWire({
       peerId: "alice",
+      principal: "alice-principal",
       type: "user",
       features: { alias: true },
     })
@@ -573,7 +576,11 @@ describe("CBOR codec — WireFeatures negotiation", () => {
   })
 
   it("round-trips establish with no features (legacy peer)", () => {
-    const wire = establishWire({ peerId: "alice", type: "user" })
+    const wire = establishWire({
+      peerId: "alice",
+      principal: "alice-principal",
+      type: "user",
+    })
     const decoded = roundTrip(wire) as WireEstablishMsg
     expect(decoded.f).toBeUndefined()
   })
@@ -581,6 +588,7 @@ describe("CBOR codec — WireFeatures negotiation", () => {
   it("round-trips establish with explicit-false features", () => {
     const wire = establishWire({
       peerId: "alice",
+      principal: "alice-principal",
       type: "user",
       features: { alias: false, streamed: false },
     })
@@ -592,6 +600,7 @@ describe("CBOR codec — WireFeatures negotiation", () => {
     // Exercises the pv emit path even though (1,0) peers omit it.
     const wire = establishWire({
       peerId: "alice",
+      principal: "alice-principal",
       type: "user",
       protocolVersion: [2, 0],
     })
@@ -600,7 +609,11 @@ describe("CBOR codec — WireFeatures negotiation", () => {
   })
 
   it("round-trips establish without protocolVersion (default peer)", () => {
-    const wire = establishWire({ peerId: "alice", type: "user" })
+    const wire = establishWire({
+      peerId: "alice",
+      principal: "alice-principal",
+      type: "user",
+    })
     const decoded = roundTrip(wire) as WireEstablishMsg
     expect(decoded.pv).toBeUndefined()
   })
