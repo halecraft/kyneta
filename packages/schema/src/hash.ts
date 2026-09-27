@@ -1,10 +1,10 @@
-// hash — deterministic schema fingerprinting and FNV-1a hashing.
+// hash — FNV-1a: schema fingerprints, peer numbers and set digests.
 //
 // Extracted from substrate.ts so that migration.ts can depend on
 // hashing without importing the full substrate interface surface.
 //
-// Implementation routes through `@sindresorhus/fnv1a` (single-pass,
-// bigint-native, true 128-bit FNV-1a over UTF-8 bytes). The canonical
+// Schema fingerprints and peer numbers route through `@sindresorhus/fnv1a`
+// (single-pass, bigint-native, over UTF-8 bytes) at 128 and 64 bits. The canonical
 // serialization is a structured tuple (`canonicalTuple`) serialized once
 // via `JSON.stringify`, which makes injectivity a property of the
 // encoding rather than a per-site escaping discipline. See plans:
@@ -71,6 +71,35 @@ export function computeSchemaHash(schema: SchemaNode): string {
  */
 export function fnv1aHex(input: string): string {
   return fnv1a(input, { size: 128 }).toString(16).padStart(32, "0")
+}
+
+// ---------------------------------------------------------------------------
+// Peer numbers — a peer id's CRDT identity
+// ---------------------------------------------------------------------------
+
+/**
+ * `hash`, with bit 0 set when its low 53 bits are all zero. Yjs reserves
+ * client id 0 for schema containers (`STRUCTURAL_YJS_CLIENT_ID`); doing the
+ * reservation here, once, keeps the 53-bit number the low 53 bits of the
+ * 64-bit one.
+ *
+ * Exported from this module but not the package barrel, so tests can reach
+ * the reservation: no practical search finds a peer id whose hash has 53
+ * zero low bits.
+ */
+export function reservePeerNumber(hash: bigint): bigint {
+  return BigInt.asUintN(53, hash) === 0n ? hash | 1n : hash
+}
+
+/**
+ * A peer id's peer number: the low `bits` bits of
+ * `reservePeerNumber(FNV-1a-64(UTF-8 bytes of peerId))`.
+ * Never 0, and the 53-bit number is always the low 53 bits of the
+ * 64-bit one. A persistence commitment: a stored peer id maps to it on
+ * every run, so its output must never change.
+ */
+export function peerNumber(peerId: string, bits: 53 | 64): bigint {
+  return BigInt.asUintN(bits, reservePeerNumber(fnv1a(peerId, { size: 64 })))
 }
 
 /**

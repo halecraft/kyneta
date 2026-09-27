@@ -23,6 +23,7 @@ Consumed by applications that bind schemas with `loro.bind(schema)`. Not importe
 - Why `.kind()` instead of `instanceof` to discriminate containers? → [Container discrimination across the WASM boundary](#container-discrimination-across-the-wasm-boundary)
 - How does an external `doc.import()` notify kyneta subscribers? → [The event bridge](#the-event-bridge)
 - How do cursors stay stable across concurrent edits? → [`LoroPosition`](#loroposition)
+- Why is a `PeerID` 64 bits wide, past what a JS number holds? → [`PeerID` width](#peerid-width)
 
 ## Vocabulary
 
@@ -483,6 +484,14 @@ const Todo = loro.bind(Schema.struct({
 - **Not asynchronous.** Fully synchronous; the schema and the Loro factory builder are captured at call time.
 - **Not overridable.** The sync mode for `loro` is always `SYNC_COLLABORATIVE`. For different sync semantics, use `@kyneta/schema`'s lower-level `bind()` directly.
 
+## `PeerID` width
+
+Source: `src/bind-loro.ts` → `loroPeerId`.
+
+A peer's `PeerID` is `loroPeerId(peerId)`, which is `peerNumber(peerId, 64)` from `@kyneta/schema` as a decimal string. Loro's `PeerID` is a u64, passed to `setPeerId` as a numeric string, and it round-trips through `export`, `import` and `oplogVersion()` at the full width, so nothing is gained by narrowing it to 53 bits. Two peer ids that share a `PeerID` write different operations at the same `(peer, counter)` addresses on every document they both touch, and a merge keeps only one of each pair. `src/__tests__/wide-peer-id.test.ts` checks a `PeerID` above 2⁵³ through updates and `LoroVersion`.
+
+The low 53 bits of the `PeerID` are the same peer id's Yjs `clientID` (`yjsClientId` in `@kyneta/yjs-schema`); see §"Peer identity and when a substrate may claim it" in `packages/schema/TECHNICAL.md`.
+
 ---
 
 ## Key Types
@@ -490,6 +499,7 @@ const Todo = loro.bind(Schema.struct({
 | Type | File | Role |
 |------|------|------|
 | `loro` | `src/bind-loro.ts` | The binding target: `.bind(schema)`, `.replica()`. |
+| `loroPeerId` | `src/bind-loro.ts` | A peer id's `PeerID`: `peerNumber(peerId, 64)` as a decimal string. See [`PeerID` width](#peerid-width). |
 | `LoroLaws` | `src/bind-loro.ts` | `"lww" \| "additive" \| "positional-ot" \| "positional-ot-move" \| "lww-per-key" \| "tree-move" \| "lww-tag-replaced"`. |
 | `LoroNativeMap` | `src/native-map.ts` | The `NativeMap` functor for Loro. |
 | `LoroVersion` | `src/version.ts` | `Version` over `VersionVector`. |
@@ -508,7 +518,7 @@ const Todo = loro.bind(Schema.struct({
 | File | Role |
 |------|------|
 | `src/index.ts` | Public barrel. Re-exports generic API from `@kyneta/schema`; exports Loro-specific symbols. |
-| `src/bind-loro.ts` | `loro.bind` / `loro.replica` binding target; `LoroLaws`. |
+| `src/bind-loro.ts` | `loro.bind` / `loro.replica` binding target; `LoroLaws`; `loroPeerId`. |
 | `src/substrate.ts` | `LoroSubstrate`, factories, prepare/flush, event bridge, `ensureLoroContainers`, `mergePendingGroups`. |
 | `src/change-mapping.ts` | Pure `changeToDiff` + `batchToOps` for every kyneta change type and every Loro container kind. |
 | `src/loro-resolve.ts` | `stepIntoLoro`, `stepFromDoc`, `PROPS_KEY`; `resolveContainer` is a thin wrapper over the core `foldPath` primitive. |
@@ -525,6 +535,7 @@ const Todo = loro.bind(Schema.struct({
 | `src/__tests__/position.test.ts` | `LoroPosition` cursor stability across concurrent edits. |
 | `src/__tests__/bind-constraints.test.ts` | Compile-time composition-law enforcement (schemas outside `LoroLaws` are rejected). |
 | `src/__tests__/bind-loro.test.ts` | `loro.bind` API surface. |
+| `src/__tests__/wide-peer-id.test.ts` | A `PeerID` above 2⁵³ round-trips through updates and versions. |
 | `src/__tests__/native.test.ts` | `unwrap(ref)` returns the right native container at every depth. |
 | `src/__tests__/loro-guards.test.ts` | `hasKind`, `isLoroContainer`, `isLoroDoc` runtime behaviour. |
 | `src/__tests__/version.test.ts` | `LoroVersion` serialize/parse, `compare`, `meet` algebraic properties. |
@@ -533,7 +544,7 @@ const Todo = loro.bind(Schema.struct({
 
 Tests use real `LoroDoc` instances from `loro-crdt` — no mocks. Two-peer scenarios simulate collaborative editing by constructing two `LoroDoc`s, mutating them independently, and merging via `exportSince` + `merge`. The substrate contract suite from `@kyneta/schema` is replayed against `loroSubstrateFactory` for conformance.
 
-**Tests**: 201 passed, 4 skipped across 11 files (`bind-constraints`: 27, `bind-loro`: 9, `create`: 20, `loro-guards`: included in `native`/`reader`, `native`: 10, `position`: 27 passed + 4 skipped, `reader`: 29, `record-counter-spike`: 26, `structural-merge`: 7, `substrate`: 30, `version`: 18 — approximate per-file breakdown). Run with `cd packages/schema/backends/loro && pnpm exec vitest run`.
+Run with `cd packages/schema/backends/loro && pnpm exec vitest run`.
 
 ## `richtext` support
 

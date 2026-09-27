@@ -10,7 +10,7 @@ import {
 } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
-import { yjs } from "../bind-yjs.js"
+import { yjs, yjsClientId } from "../bind-yjs.js"
 
 // ===========================================================================
 // Identity-keying helpers
@@ -85,9 +85,6 @@ describe("yjs.bind", () => {
         binding: bound.identityBinding,
       })
 
-      const _substrate = factory.create(SimpleSchema)
-
-      // Populate via the substrate's writable context
       const doc = createYjsDocFromFactory(factory, SimpleSchema)
       batch(doc, (d: any) => {
         d.title.insert(0, "Test")
@@ -139,87 +136,24 @@ describe("yjs.bind", () => {
   // -------------------------------------------------------------------------
 
   describe("deterministic clientID", () => {
-    it("same peerId produces same clientID across multiple factory calls", () => {
+    const clientIdOf = (peerId: string): number => {
+      // A fresh bind per document stands in for a restart.
       const bound = yjs.bind(SimpleSchema)
-      const factory = bound.factory({
-        peerId: "stable-peer-id",
-        binding: bound.identityBinding,
-      })
+      const factory = bound.factory({ peerId, binding: bound.identityBinding })
+      return (unwrap(createYjsDocFromFactory(factory, SimpleSchema)) as Y.Doc)
+        .clientID
+    }
 
-      const _s1 = factory.create(SimpleSchema)
-      const _s2 = factory.create(SimpleSchema)
-
-      // Both docs should have the same clientID
-      const doc1 = unwrap(
-        createYjsDocFromFactory(factory, SimpleSchema),
-      ) as Y.Doc
-      const doc2 = unwrap(
-        createYjsDocFromFactory(factory, SimpleSchema),
-      ) as Y.Doc
-
-      expect(doc1.clientID).toBe(doc2.clientID)
+    it("every document claims yjsClientId of the peer id", () => {
+      const clientId = yjsClientId("stable-peer-id")
+      expect(Number.isSafeInteger(clientId)).toBe(true)
+      expect(clientId).toBeGreaterThan(0)
+      expect(clientIdOf("stable-peer-id")).toBe(clientId)
+      expect(clientIdOf("stable-peer-id")).toBe(clientId)
     })
 
     it("different peerIds produce different clientIDs", () => {
-      const bound = yjs.bind(SimpleSchema)
-      const factory1 = bound.factory({
-        peerId: "peer-alpha",
-        binding: bound.identityBinding,
-      })
-      const factory2 = bound.factory({
-        peerId: "peer-beta",
-        binding: bound.identityBinding,
-      })
-
-      const doc1 = unwrap(
-        createYjsDocFromFactory(factory1, SimpleSchema),
-      ) as Y.Doc
-      const doc2 = unwrap(
-        createYjsDocFromFactory(factory2, SimpleSchema),
-      ) as Y.Doc
-
-      expect(doc1.clientID).not.toBe(doc2.clientID)
-    })
-
-    it("clientID is a valid uint32", () => {
-      const bound = yjs.bind(SimpleSchema)
-      const factory = bound.factory({
-        peerId: "test-peer-id-12345",
-        binding: bound.identityBinding,
-      })
-      const doc = unwrap(
-        createYjsDocFromFactory(factory, SimpleSchema),
-      ) as Y.Doc
-
-      expect(typeof doc.clientID).toBe("number")
-      expect(doc.clientID).toBeGreaterThanOrEqual(0)
-      expect(doc.clientID).toBeLessThanOrEqual(0xffffffff)
-      expect(Number.isInteger(doc.clientID)).toBe(true)
-    })
-
-    it("clientID is deterministic across restarts (same string → same number)", () => {
-      const peerId = "deterministic-check-peer"
-
-      // Simulate two separate "sessions" — both should hash to the same value
-      const bound1 = yjs.bind(SimpleSchema)
-      const factory1 = bound1.factory({
-        peerId,
-        binding: bound1.identityBinding,
-      })
-      const doc1 = unwrap(
-        createYjsDocFromFactory(factory1, SimpleSchema),
-      ) as Y.Doc
-
-      const bound2 = yjs.bind(SimpleSchema)
-      const factory2 = bound2.factory({
-        peerId,
-        binding: bound2.identityBinding,
-      })
-      const doc2 = unwrap(
-        createYjsDocFromFactory(factory2, SimpleSchema),
-      ) as Y.Doc
-
-      expect(doc1.clientID).toBe(doc2.clientID)
+      expect(clientIdOf("peer-alpha")).not.toBe(clientIdOf("peer-beta"))
     })
   })
 

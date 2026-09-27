@@ -40,7 +40,7 @@ export {
 // ---------------------------------------------------------------------------
 
 // Namespace — substrate strategies
-export { type LoroLaws, loro } from "./bind-loro.js"
+export { type LoroLaws, loro, loroPeerId } from "./bind-loro.js"
 // Change mapping
 export { batchToOps, changeToDiff } from "./change-mapping.js"
 // Guards — shared Loro runtime type guards

@@ -41,7 +41,7 @@ export {
 
 export type { YjsLaws } from "./bind-yjs.js"
 // Namespace
-export { yjs } from "./bind-yjs.js"
+export { yjs, yjsClientId } from "./bind-yjs.js"
 // Change mapping
 export { applyChangeToYjs, eventsToOps } from "./change-mapping.js"
 // NativeMap — the Yjs functor

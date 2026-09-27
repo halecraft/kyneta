@@ -3,16 +3,12 @@
 // The `yjs` binding target provides `yjs.bind()` and `yjs.replica()` for
 // binding schemas to the Yjs substrate with collaborative sync protocol.
 // The factory builder accepts { peerId } and returns a SubstrateFactory that
-// derives one deterministic clientID from it via hashPeerId, so an exchange's
+// derives one deterministic clientID from it via yjsClientId, so an exchange's
 // documents all speak as the same peer and stay recognisable across restarts.
 //
 // Every construction path claims that clientID; they differ only in *when*.
 // A document that will first import its own stored history has to wait —
 // see `createForHydration` below for what goes wrong otherwise.
-//
-// Yjs clientID is a uint32 number. We use FNV-1a hash truncated to
-// 32 bits, mirroring the Loro binding's hashPeerId pattern but
-// targeting Yjs's number type (not Loro's bigint/53-bit PeerID).
 //
 // Usage:
 //   import { yjs } from "@kyneta/yjs-schema"
@@ -37,7 +33,7 @@ import {
   BACKING_DOC,
   createBindingTarget,
   hasBackingDoc,
-  STRUCTURAL_YJS_CLIENT_ID,
+  peerNumber,
   SYNC_COLLABORATIVE,
 } from "@kyneta/schema"
 import * as Y from "yjs"
@@ -51,31 +47,19 @@ import {
 import { YjsVersion } from "./version.js"
 
 // ---------------------------------------------------------------------------
-// Peer ID hashing — deterministic string → numeric Yjs clientID
+// Peer id → Yjs clientID
 // ---------------------------------------------------------------------------
 
 /**
- * Hash a string peerId to a deterministic numeric Yjs clientID.
+ * The Yjs `clientID` a peer id writes under: its 53-bit `peerNumber`.
  *
- * Yjs clientIDs are unsigned 32-bit integers. We use FNV-1a hash to
- * produce a deterministic uint32 from the string peerId.
- *
- * The hash is deterministic: the same string always produces the same
- * numeric clientID, across restarts and across machines.
+ * 53 bits is the widest id a JS `number` holds exactly; Yjs's own random ids
+ * use only 32, but its encoders carry any safe integer. Never 0, which is
+ * `STRUCTURAL_YJS_CLIENT_ID`, and always the low 53 bits of the peer id's
+ * Loro PeerID (`loroPeerId` in `@kyneta/loro-schema`).
  */
-function hashPeerId(peerId: string): number {
-  // FNV-1a 32-bit hash
-  let hash = 0x811c9dc5
-  for (let i = 0; i < peerId.length; i++) {
-    hash ^= peerId.charCodeAt(i)
-    // Multiply by FNV prime 0x01000193.
-    // Use Math.imul for correct 32-bit integer multiplication.
-    hash = Math.imul(hash, 0x01000193)
-  }
-  // Ensure unsigned 32-bit integer
-  const result = hash >>> 0
-  // Reserve 0 for structural ops — real peers never collide
-  return result === STRUCTURAL_YJS_CLIENT_ID ? 1 : result
+export function yjsClientId(peerId: string): number {
+  return Number(peerNumber(peerId, 53))
 }
 
 // ---------------------------------------------------------------------------
@@ -83,14 +67,14 @@ function hashPeerId(peerId: string): number {
 // ---------------------------------------------------------------------------
 
 /**
- * Create a SubstrateFactory<YjsVersion> whose documents share one deterministic
- * uint32 clientID, derived from the exchange's string peerId.
+ * Create a SubstrateFactory<YjsVersion> whose documents share one
+ * deterministic clientID, `yjsClientId(peerId)`.
  */
 function createYjsFactory(
   peerId: string,
   binding: SchemaBinding,
 ): SubstrateFactory<YjsVersion> {
-  const numericClientId = hashPeerId(peerId)
+  const numericClientId = yjsClientId(peerId)
 
   // Every construction below is this, differing only in where the Y.Doc comes
   // from and whether identity is claimed now or later. Sharing the body keeps

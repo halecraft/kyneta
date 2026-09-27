@@ -458,6 +458,8 @@ The stability requirement is why `new Exchange({ id })` takes a value rather tha
 
 A stable `peerId` string is necessary but not sufficient. Each substrate translates it into whatever its CRDT uses to attribute operations — Yjs a numeric `clientID`, Loro a `PeerID` — and *when* that translation is claimed matters as much as its value.
 
+The translation is a hash, `peerNumber` from `@kyneta/schema` (53 bits for Yjs, 64 for Loro), so two distinct `peerId` strings can still collide after it. At 53 bits that takes about 13 million writing peers for a 1% chance. See §"Peer identity and when a substrate may claim it" in `packages/schema/TECHNICAL.md`.
+
 Because a CRDT addresses operations by `(peer, counter)` and the counter restarts at zero on a fresh document, a peer that claims its identity before loading its own stored history writes to addresses that history already occupies. The merge deduplicates by address and one of the two operations is silently dropped.
 
 So a **store-backed document claims its substrate identity after hydration, not at construction**. `Runtime.createInterpretDoc` takes `beginHydration` from `@kyneta/schema` when stores are configured and calls the returned `adopt()` once the load resolves — before `registerDoc`, so peers never see the transient identity in an announcement. Without stores there is nothing to import and identity is claimed immediately.

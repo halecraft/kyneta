@@ -14,7 +14,7 @@ import {
   unwrap,
 } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
-import { loro } from "../bind-loro.js"
+import { loro, loroPeerId } from "../bind-loro.js"
 
 const testSchema = Schema.struct({
   title: Schema.text(),
@@ -46,43 +46,17 @@ describe("loro.bind()", () => {
     expect(substrate.exportEntirety()).toBeDefined()
   })
 
-  it("same peerId always produces the same Loro PeerID (deterministic hash)", () => {
-    const bound = loro.bind(testSchema)
+  it("every document claims loroPeerId of the peer id", () => {
+    const peerIdOf = (peerId: string): string => {
+      // A fresh bind per document stands in for a restart.
+      const bound = loro.bind(testSchema)
+      const factory = bound.factory({ peerId, binding: bound.identityBinding })
+      return unwrap(createRef(testSchema, factory.create(testSchema))).peerIdStr
+    }
 
-    // Create two factories from the same peerId
-    const factory1 = bound.factory({
-      peerId: "alice-laptop-7f3a",
-      binding: bound.identityBinding,
-    })
-    const factory2 = bound.factory({
-      peerId: "alice-laptop-7f3a",
-      binding: bound.identityBinding,
-    })
-
-    // Create docs and check their peerIdStr matches
-    const sub1 = factory1.create(testSchema)
-    const sub2 = factory2.create(testSchema)
-
-    // Use createRef to build full-stack refs, then unwrap to get LoroDoc
-    const ref1 = createRef(testSchema, sub1)
-    const ref2 = createRef(testSchema, sub2)
-
-    const doc1 = unwrap(ref1)
-    const doc2 = unwrap(ref2)
-
-    // Critical invariant: deterministic — same input → same output
-    expect(doc1.peerIdStr).toBe(doc2.peerIdStr)
-
-    // And different peerId → different PeerID
-    const factory3 = bound.factory({
-      peerId: "bob-desktop-9c2d",
-      binding: bound.identityBinding,
-    })
-    const sub3 = factory3.create(testSchema)
-    const ref3 = createRef(testSchema, sub3)
-    const doc3 = unwrap(ref3)
-
-    expect(doc3.peerIdStr).not.toBe(doc1.peerIdStr)
+    expect(peerIdOf("alice-laptop-7f3a")).toBe(loroPeerId("alice-laptop-7f3a"))
+    expect(peerIdOf("alice-laptop-7f3a")).toBe(loroPeerId("alice-laptop-7f3a"))
+    expect(peerIdOf("bob-desktop-9c2d")).not.toBe(peerIdOf("alice-laptop-7f3a"))
   })
 })
 

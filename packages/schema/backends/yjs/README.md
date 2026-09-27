@@ -97,7 +97,7 @@ const vBefore = version(docB)
 batch(docA, (d) => d.title.insert(5, " v2"))
 
 const delta = exportSince(docA, vBefore)
-merge(docB, delta!)
+if (delta) merge(docB, delta)
 // docB.title() === "Draft v2"
 ```
 
@@ -137,6 +137,16 @@ yjsDoc.getMap("root").toJSON()  // raw state
 yjsDoc.clientID                  // client ID
 ```
 
+### Mapping a `clientID` back to a peer
+
+A document bound with `yjs.bind()` writes under `yjsClientId(peerId)`: a non-zero 53-bit safe integer derived from the exchange's string `peerId`. It is the same on every run and every machine. To attribute Yjs operations (a `Y.Item`'s `id.client`, a state-vector key) to Kyneta peers, compute it from the peer ids you know rather than copying the hash:
+
+```ts
+import { yjsClientId } from "@kyneta/yjs-schema"
+
+const peerByClientId = new Map(knownPeerIds.map(id => [yjsClientId(id), id]))
+```
+
 *Note for raw Y.Doc consumers:* Subscribers attached directly to the underlying `Y.Doc` will newly see `options.origin` faithfully on `transaction.origin` (where previously it was silently dropped).
 
 ## Yjs Ecosystem Compatibility
@@ -170,6 +180,7 @@ The substrate writes one top-level type of its own, `kyneta.clock` (`DELETE_CLOC
 | `batch(doc, fn)` | Transactional mutation |
 | `subscribe(doc, callback)` | Observe changes |
 | `yjs.bind(schema)` | Bind schema for exchange use |
+| `yjsClientId(peerId)` | The Yjs `clientID` a peer id writes under |
 | `unwrap(ref)` | Escape hatch → `Y.Doc` |
 | `text()` | `Schema.text()` convenience — collaborative text schema kind |
 

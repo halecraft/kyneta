@@ -153,6 +153,8 @@ export {
   isPropertyHost,
   samePlainValue,
 } from "./guards.js"
+// Peer numbers — a peer id's CRDT identity, shared by the Yjs and Loro bindings
+export { peerNumber } from "./hash.js"
 export type {
   ChangefeedBrand,
   InterpretBuilder,

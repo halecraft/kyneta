@@ -95,6 +95,16 @@ An external edit is a local write: subscribers receive it with `replay: false`, 
 
 *Note for raw LoroDoc consumers:* Subscribers attached directly to the underlying `LoroDoc` will newly see `options.origin` faithfully on `batch.origin` (where previously it was overwritten by a kyneta sentinel).
 
+### Mapping a `PeerID` back to a peer
+
+A document bound with `loro.bind()` writes under `loroPeerId(peerId)`: a 64-bit `PeerID`, as Loro's decimal string, derived from the exchange's string `peerId`. It is the same on every run and every machine. To attribute Loro operations (a version-vector entry, a change's `peer`) to Kyneta peers, compute it from the peer ids you know rather than copying the hash:
+
+```ts
+import { loroPeerId } from "@kyneta/loro-schema"
+
+const peerByPeerId = new Map(knownPeerIds.map(id => [loroPeerId(id), id]))
+```
+
 ## Sync
 
 Two peers exchange state via `exportSince` / `merge`:
@@ -116,7 +126,7 @@ subscribe(docB, () => console.log("B updated"))
 // Sync A → B
 const sinceVersion = version(docB)
 const delta = exportSince(docA, sinceVersion)
-merge(docB, delta!, { origin: "sync" })
+if (delta) merge(docB, delta, { origin: "sync" })
 // → "B updated"
 // docB.title() === "Hello from A"
 ```
@@ -137,7 +147,8 @@ const docB = createDoc(myBoundSchema)
 
 | Export | Description |
 |--------|-------------|
-| `loro.bind(schema)` | Bind a schema to the Loro CRDT substrate. Enforces `LoroLaws` constraints at compile time — schemas containing unsupported composition laws (e.g. `Schema.set()`) are rejected. Returns a `BoundSchema<S>` for use with `exchange.get()`. The factory builder injects a deterministic numeric Loro PeerID derived from the exchange's string peerId. |
+| `loro.bind(schema)` | Bind a schema to the Loro CRDT substrate. Enforces `LoroLaws` constraints at compile time — schemas containing unsupported composition laws (e.g. `Schema.set()`) are rejected. Returns a `BoundSchema<S>` for use with `exchange.get()`. The factory builder injects `loroPeerId(peerId)`, derived from the exchange's string peerId, as the document's PeerID. |
+| `loroPeerId(peerId)` | The Loro `PeerID` a peer id writes under: 64 bits, as a decimal string. |
 | `unwrap(ref)` | Escape hatch — returns the `LoroDoc` backing a document ref, or the Loro container backing a field ref. Re-exported from `@kyneta/schema`. |
 
 ### Batteries-Included (most users)

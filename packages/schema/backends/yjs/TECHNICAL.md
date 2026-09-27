@@ -22,6 +22,7 @@ Consumed by applications that bind schemas with `yjs.bind(schema)`. Not imported
 - How do structural inserts (a whole struct into a map) commit atomically? → [The write path and populate-then-attach](#the-write-path-and-populate-then-attach)
 - Why is there a reserved `clientID = 0` for structural operations? → [`STRUCTURAL_YJS_CLIENT_ID`](#structural_yjs_client_id)
 - Why is the peer's own `clientID` claimed *after* hydration, not at construction? → [`clientID` and the order it is claimed in](#clientid-and-the-order-it-is-claimed-in)
+- Why is a `clientID` 53 bits wide when Yjs's own ids are 32? → [`clientID` width](#clientid-width)
 - How does a remote `Y.applyUpdate` notify kyneta subscribers? → [The event bridge](#the-event-bridge)
 
 ## Vocabulary
@@ -254,6 +255,16 @@ Row three is the order this binding uses. `createForHydration` builds the docume
 
 Note that this is **not** a Yjs quirk. Loro has the same collision for the same reason and also implements `createForHydration`; the difference is only in the symptom, since Loro does not defend and so keeps a stable `PeerID` while dropping the operation. See §"Peer identity and when a substrate may claim it" in `packages/schema/TECHNICAL.md` for the rule stated in terms of addressing.
 
+## `clientID` width
+
+Source: `src/bind-yjs.ts` → `yjsClientId`.
+
+A peer's `clientID` is `yjsClientId(peerId)`, which is `Number(peerNumber(peerId, 53))` from `@kyneta/schema`. Two peer ids that share a `clientID` write different operations at the same `(clientID, clock)` addresses on every document they both touch, and a merge keeps only one of each pair. The chance of any collision among `n` peers is about `n² / 2^(bits+1)`: 1.2% for 10,000 peers at 32 bits, 5×10⁻⁹ at 53.
+
+Yjs generates only 32-bit ids itself, but `clientID` is a JS `number`, and lib0's `writeVarUint` and `writeVarInt` divide rather than shift, so V1 and V2 updates, state vectors and relative positions carry any safe integer. 53 bits is the widest id a `number` holds exactly. `src/__tests__/wide-peer-id.test.ts` checks a `clientID` above 2³² through updates, state vectors and `YjsVersion`.
+
+The number is never 0, which is `STRUCTURAL_YJS_CLIENT_ID`, and it is the low 53 bits of the same peer id's Loro `PeerID`. `peerNumber` reserves 0 once for both backends; see §"Peer identity and when a substrate may claim it" in `packages/schema/TECHNICAL.md`.
+
 ## Identity-keyed containers
 
 Same idea as in Loro (see `@kyneta/loro-schema/TECHNICAL.md` → "Identity-keyed containers"). Every product-field boundary uses the field's content-addressed identity hash as its `Y.Map` key, not its display name. Renames change display names; identity hashes survive the rename; stored data is untouched.
@@ -482,6 +493,7 @@ This is the same mechanism as the Loro backend, exercised with a narrower law se
 | Type | File | Role |
 |------|------|------|
 | `yjs` | `src/bind-yjs.ts` | The binding target: `.bind(schema)`, `.replica()`. |
+| `yjsClientId` | `src/bind-yjs.ts` | A peer id's `clientID`: `Number(peerNumber(peerId, 53))`. See [`clientID` width](#clientid-width). |
 | `YjsLaws` | `src/bind-yjs.ts` | `"lww" \| "positional-ot" \| "lww-per-key" \| "lww-tag-replaced"` — composition laws Yjs supports. |
 | `YjsNativeMap` | `src/native-map.ts` | The `NativeMap` functor for Yjs. Unsupported kinds map to `undefined`. |
 | `YjsVersion` | `src/version.ts` | `Version` over the Yjs state vector. |
@@ -501,7 +513,7 @@ This is the same mechanism as the Loro backend, exercised with a narrower law se
 | File | Role |
 |------|------|
 | `src/index.ts` | Public barrel. Re-exports generic API from `@kyneta/schema`; exports Yjs-specific symbols. |
-| `src/bind-yjs.ts` | `yjs.bind` / `yjs.replica` binding target; `YjsLaws`. |
+| `src/bind-yjs.ts` | `yjs.bind` / `yjs.replica` binding target; `YjsLaws`; `yjsClientId`. |
 | `src/substrate.ts` | `YjsSubstrate`, factories, prepare/flush, `Y.transact` wrapping, `observeDeep` event bridge, origin-based suppression, the delete clock. |
 | `src/change-mapping.ts` | `applyChangeToYjs` (per kyneta change type → Yjs mutations) + `realizeYjs` (`MaterializedNode` → Yjs shared type, populate-then-attach) + `eventsToOps` (Yjs events → kyneta `Op[]`). |
 | `src/yjs-resolve.ts` | `stepIntoYjs`; `resolveYjsType` is a thin wrapper over the core `foldPath` primitive. |
@@ -518,6 +530,7 @@ This is the same mechanism as the Loro backend, exercised with a narrower law se
 | `src/__tests__/position.test.ts` | `YjsPosition` cursor stability across concurrent edits. |
 | `src/__tests__/bind-constraints.test.ts` | Compile-time composition-law enforcement (`counter`, `movable`, `tree`, `set` all rejected). |
 | `src/__tests__/bind-yjs.test.ts` | `yjs.bind` API surface. |
+| `src/__tests__/wide-peer-id.test.ts` | A `clientID` above 2³² round-trips through updates, state vectors and versions. |
 | `src/__tests__/version.test.ts` | `YjsVersion` serialise/parse, `compare`, `meet`, and the lattice laws (`versionConformance`). |
 
 ## Testing

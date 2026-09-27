@@ -3,7 +3,7 @@
 // The `loro` binding target provides `loro.bind()` and `loro.replica()` for
 // binding schemas to the Loro substrate with collaborative sync protocol.
 // The factory builder accepts { peerId } and returns a SubstrateFactory that
-// derives one deterministic PeerID from it via hashPeerId, so an exchange's
+// derives one deterministic PeerID from it via loroPeerId, so an exchange's
 // documents all speak as the same peer and stay recognisable across restarts.
 //
 // Every construction path claims that PeerID; they differ only in *when*.
@@ -33,6 +33,7 @@ import {
   BACKING_DOC,
   createBindingTarget,
   hasBackingDoc,
+  peerNumber,
   SYNC_COLLABORATIVE,
 } from "@kyneta/schema"
 import type { LoroDoc as LoroDocType, PeerID } from "loro-crdt"
@@ -47,32 +48,16 @@ import {
 import { LoroVersion } from "./version.js"
 
 // ---------------------------------------------------------------------------
-// Peer ID hashing — deterministic string → numeric Loro PeerID
+// Peer id → Loro PeerID
 // ---------------------------------------------------------------------------
 
 /**
- * Hash a string peerId to a deterministic numeric Loro PeerID.
- *
- * Loro PeerIDs are bigints (represented as numeric strings). We use a
- * simple FNV-1a hash to produce a deterministic 53-bit integer from the
- * string peerId. 53 bits is the safe integer range for JavaScript numbers,
- * which Loro accepts via setPeerId().
- *
- * The hash is deterministic: the same string always produces the same
- * numeric PeerID, across restarts and across machines.
+ * The Loro `PeerID` a peer id writes under: its 64-bit `peerNumber`, as the
+ * decimal string Loro uses for a u64. Its low 53 bits are the peer id's Yjs
+ * clientID (`yjsClientId` in `@kyneta/yjs-schema`).
  */
-function hashPeerId(peerId: string): PeerID {
-  // FNV-1a 64-bit hash, truncated to 53 bits for safe JS integer range
-  let hash = BigInt("0xcbf29ce484222325")
-  const prime = BigInt("0x100000001b3")
-  for (let i = 0; i < peerId.length; i++) {
-    hash ^= BigInt(peerId.charCodeAt(i))
-    hash = (hash * prime) & BigInt("0xFFFFFFFFFFFFFFFF")
-  }
-  // Truncate to 53 bits (Number.MAX_SAFE_INTEGER = 2^53 - 1)
-  const truncated = hash & BigInt("0x1FFFFFFFFFFFFF")
-  // Loro expects PeerID as a numeric string
-  return truncated.toString() as PeerID
+export function loroPeerId(peerId: string): PeerID {
+  return peerNumber(peerId, 64).toString() as PeerID
 }
 
 // ---------------------------------------------------------------------------
@@ -87,7 +72,7 @@ function createLoroFactory(
   peerId: string,
   binding: SchemaBinding,
 ): SubstrateFactory<LoroVersion> {
-  const numericPeerId = hashPeerId(peerId)
+  const numericPeerId = loroPeerId(peerId)
 
   // Every construction below is this, differing only in where the LoroDoc
   // comes from and whether identity is claimed now or later. Sharing the body
