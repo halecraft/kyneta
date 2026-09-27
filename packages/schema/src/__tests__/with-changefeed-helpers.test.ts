@@ -28,9 +28,19 @@ describe("changesetMetadata", () => {
       { origin: "o", replay: false, aborted: true, source },
     ],
     [
-      "announce",
-      { ingress: "announce", origin: "sync" } as const,
+      "announce, not authored here",
+      { ingress: "announce", origin: "sync", local: false } as const,
       { origin: "sync", replay: true, aborted: undefined, source: undefined },
+    ],
+    [
+      "announce, a native local write",
+      { ingress: "announce", origin: "binding", local: true } as const,
+      {
+        origin: "binding",
+        replay: false,
+        aborted: undefined,
+        source: undefined,
+      },
     ],
   ])("%s", (_name, options, expected) => {
     expect(changesetMetadata(options)).toEqual(expected)

@@ -973,7 +973,7 @@ describe("writable: announcements never reach the substrate", () => {
     store.title = "merged"
     ctx.announce(
       [{ path: RawPath.empty.field("title"), change: replaceChange("merged") }],
-      "sync",
+      { origin: "sync", local: false },
     )
 
     expect(calls).toEqual({ prepare: 0, afterBatch: 0 })
@@ -1071,9 +1071,10 @@ describe("writable: the batch lifecycle", () => {
   it("an announcement made during the native commit is delivered after the batch", () => {
     const { doc, seen } = buildLifecycleDoc({
       onCommit: ctx =>
-        ctx.announce([
-          { path: RawPath.empty.field("b"), change: replaceChange("peer") },
-        ]),
+        ctx.announce(
+          [{ path: RawPath.empty.field("b"), change: replaceChange("peer") }],
+          { local: false },
+        ),
     })
     batch(doc, (d: any) => d.a.set("local"))
     expect(seen).toEqual([

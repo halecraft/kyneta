@@ -4,13 +4,13 @@
 > **Role**: Substrate-agnostic document sync runtime. Orchestrates channel topology, document convergence, and persistence above any transport and any `@kyneta/schema` substrate — via two pure TEA programs (session + sync), a Synchronizer shell that owns the serialized dispatch queue, a **Runtime** (the local imperative shell: documents + stores + lease + clock), and an **Exchange** façade (the network shell: transports + peers + governance) that composes a Runtime.
 > **Depends on**: `@kyneta/schema` (peer), `@kyneta/changefeed` (peer), `@kyneta/transport` (direct)
 > **Depended on by**: `@kyneta/react` (peer), `@kyneta/leveldb-store`, `@kyneta/indexeddb-store`, `@kyneta/sqlite-store`, `@kyneta/postgres-store`, `@kyneta/prisma-store`, `@kyneta/sql-store-core`, application code, every transport package (dev)
-> **Canonical symbols**: `Exchange`, `ExchangeParams`, `Runtime`, `RuntimeParams`, `RuntimeHooks`, `DocReadyInfo`, `Synchronizer`, `DocRuntime`, `SessionModel`, `SessionInput`, `SessionEffect`, `SyncModel`, `SyncInput`, `SyncEffect`, `updateSession`, `updateSync`, `Governance`, `Policy`, `composeGate`, `GatePredicate`, `EpochBoundaryPredicate`, `Line`, `LineProtocol`, `Capabilities`, `ReplicaLike`, `ReplicaFactoryLike`, `ReplicaKey`, `DEFAULT_REPLICAS`, `Interpret`, `Replicate`, `Defer`, `Reject`, `Disposition`, `PeerIdentityInput`, `PeerChange`, `DocChange`, `DocInfo`, `PeerState`, `PeerSyncState`, `PeerDocSyncState`, `Connectivity`, `deriveConnectivity`, `Store`, `StoreRecord`, `StoreMeta`, `DocMetadata`, `persistentPeerId`, `releasePeerId`, `resolveLease`, `LeaseState`, `sync` (helper), `SyncMode`, `SYNC_COLLABORATIVE`, `SYNC_AUTHORITATIVE`, `SYNC_EPHEMERAL`, `requiresBidirectionalSync`, `BindingTarget`, `createBindingTarget`
+> **Canonical symbols**: `Exchange`, `ExchangeParams`, `Runtime`, `RuntimeParams`, `RuntimeHooks`, `DocReadyInfo`, `Synchronizer`, `SessionModel`, `SessionInput`, `SessionEffect`, `SyncModel`, `SyncInput`, `SyncEffect`, `updateSession`, `updateSync`, `Governance`, `Policy`, `composeGate`, `GatePredicate`, `EpochBoundaryPredicate`, `Line`, `LineProtocol`, `Capabilities`, `ReplicaLike`, `ReplicaFactoryLike`, `ReplicaKey`, `DEFAULT_REPLICAS`, `Interpret`, `Replicate`, `Defer`, `Reject`, `Disposition`, `PeerIdentityInput`, `PeerChange`, `DocChange`, `DocInfo`, `PeerState`, `PeerSyncState`, `PeerDocSyncState`, `Connectivity`, `deriveConnectivity`, `Store`, `StoreRecord`, `StoreMeta`, `DocMetadata`, `persistentPeerId`, `releasePeerId`, `resolveLease`, `LeaseState`, `sync` (helper), `SyncMode`, `SYNC_COLLABORATIVE`, `SYNC_AUTHORITATIVE`, `SYNC_EPHEMERAL`, `requiresBidirectionalSync`, `BindingTarget`, `createBindingTarget`
 > **Key invariant(s)**:
 > 1. The exchange never inspects `SubstratePayload` contents. Payloads are opaque blobs carried by `offer` messages; only the substrate produces and consumes them.
 > 2. The session program never sees documents. The sync program never sees channels, transports, or connection state. They share a single dispatch queue and communicate exclusively through `sync-event` effects the shell forwards.
 > 3. Every reactive output — `exchange.peers`, `exchange.documents`, per-doc ready state — drains at quiescence in snapshot-then-clear order.
 > 4. **FC/IS boundary:** The `Runtime` is the local imperative shell (document cache, stores, hydration, lease, tick clock). The `Exchange` is the network shell (transports, synchronizer, peers). The `Runtime` can be used standalone for local-first apps without any network. Substrates are pure math; the clock (`setInterval`) lives in the Runtime, not in substrates.
-> 5. **Runtime hooks bridge local→network:** The Runtime fires `onDocReady`, `onDocChangeset`, `onDocDestroyed`, `onDocSuspended`, `onDocResumed`. The Exchange wires these into the Synchronizer. A standalone Runtime (no Exchange) leaves them unset — docs work fully without a network. One call runs the other way: the Exchange invokes `Runtime.onStateAdvanced(docId)` when the sync graph advances a document's version. It carries a `docId` and nothing else — the Runtime resolves the document from its own cache, so the network shell never needs to hold local bookkeeping in order to make the call.
+> 5. **Runtime hooks bridge local→network:** The Runtime fires `onDocReady`, `onDocChangeset`, `onDocLocalChange`, `onDocDestroyed`, `onDocSuspended`, `onDocResumed`. The Exchange wires these into the Synchronizer. A standalone Runtime (no Exchange) leaves them unset — docs work fully without a network. Changesets feed observation only; a local change leaves the process through `onDocLocalChange`, which the Runtime fires from the substrate's local-update signal. `onDocReady` hands the Synchronizer the Runtime's own `DocReadyInfo` record, which the Synchronizer reads and never replaces: it asks the Runtime to rebuild a replica (`rebuildReplica`). Two calls run the other way: `rebuildReplica`, and `Runtime.onStateAdvanced(docId)`, which the Exchange invokes when the network advanced a document's version. That call carries a `docId` and nothing else — the Runtime resolves the document from its own cache, so the network shell never needs to hold local bookkeeping in order to make the call.
 
 A document-sync runtime for arbitrary substrates. Hands back an `Exchange` instance that accepts a schema binding (`Todo = loro.bind(...)`), returns typed document refs (`exchange.get("doc1", Todo)`), routes their changes over any registered transport, and exposes `ReactiveMap`s of peers and documents for observation.
 
@@ -44,7 +44,7 @@ Imported by applications to construct the top-level sync graph; by `@kyneta/reac
 | `sync-event` effect | A `SessionEffect` whose payload is a `SyncInput`. The shell drains it into the sync program's pending-input queue in the same dispatch cycle. The one cross-program channel. | A wire message |
 | Dispatch cycle | One inbound input → update → effects executed → (possibly) more inputs queued from `sync-event` effects → update again → … → quiescence. Notifications accumulate throughout, deliver once on drain. | An event-loop tick |
 | Quiescence | The state after one dispatch cycle completes: session queue empty, sync queue empty, no pending `sync-event`s. Notifications drain here. | Async settlement |
-| `DocRuntime` | Per-doc bundle: `Ref<S>`, the `ReplicaLike` / `ReplicaFactoryLike` pair, the schema binding, the mode (`interpret \| replicate \| deferred`), the changefeed subscription, and echo-prevention state. Uses the variance-safe `-Like` interfaces from `@kyneta/schema` to avoid `Replica<any>`. Held by the Synchronizer, not by the programs. | A document — a `DocRuntime` *manages* a document |
+| `DocReadyInfo` | The one record of a registered document: its replica and replica factory (the variance-safe `-Like` interfaces from `@kyneta/schema`, so no `Replica<any>`), the mode, sync mode and schema hash, discriminated by mode so an interpreted document's `replica` is its `Substrate`. Owned by the Runtime, which is the only one to replace its replica; the Synchronizer holds the same object, read-only. Never seen by the programs. | A document's sync state — that is `DocEntry`, in the sync program's model |
 | Phase | Which tier a document sits in: `deferred` (announced by a peer, nothing held), `replicate` (a bare `Replica`, no schema), or `interpret` (substrate + `Ref<S>`). `planInterpretation` (`src/interpret.ts`) classifies on it. Not a fixed classification: `interpret` is reachable from both other phases via `get()`, and the reverse is not reachable at all. | **Suspension** — an orthogonal flag about sync-graph membership, not a fourth phase. A suspended document is still in interpret phase. |
 | `Disposition` vs `InterpretAction` | `Disposition` (`Interpret \| Replicate \| Defer \| Reject`) decides which tier a *newly discovered* document should enter. `InterpretAction` decides how an *existing* document is raised to interpret. | Each other — adjacent, and neither supersedes the other. |
 | `ReactiveMap<K, V, C>` | From `@kyneta/changefeed` — a callable changefeed over a `ReadonlyMap<K, V>` with lifted accessors. | A plain `Map` — this fires the changefeed |
@@ -87,8 +87,8 @@ Four layers:
 
 | Layer | Kind | Source | Role |
 |-------|------|--------|------|
-| `Exchange` | Class (façade) | `src/exchange.ts` | Public API: `get`, `remove`, `destroy`, `suspend`, `resume`, `addTransport`, `removeTransport`, `peers`, `documents`. Owns `Synchronizer`, `Governance`, `Capabilities`, `Store[]`, `AnyTransport[]`. |
-| `Synchronizer` | Class (shell) | `src/synchronizer.ts` | The imperative shell. Owns the dispatch queue, the `DocRuntime` map (keyed by `ReplicaLike` / `ReplicaFactoryLike` from `@kyneta/schema`), the transport adapters, the reactive-collection handles. Runs both programs, interprets effects. |
+| `Exchange` | Class (façade) | `src/exchange.ts` | Public API: `get`, `destroy`, `suspend`, `resume`, `addTransport`, `removeTransport`, `peers`, `documents`. Owns `Synchronizer`, `Governance`, `Capabilities`, `Store[]`, `AnyTransport[]`. |
+| `Synchronizer` | Class (shell) | `src/synchronizer.ts` | The imperative shell. Owns the dispatch queue, the map of registered documents (the Runtime's `DocReadyInfo` records, read-only), the transport adapters, the reactive-collection handles. Runs both programs, interprets effects. |
 | Session program | Pure `Program` | `src/session-program.ts` | Channel topology + peer identity + departure. No document knowledge. |
 | Sync program | Pure `Program` | `src/sync-program.ts` | Document convergence + merge-strategy dispatch + ready state. No channel knowledge. |
 
@@ -284,7 +284,7 @@ When a peer announces an unknown doc, four checks run in order:
 3. **`resolve` callback.** The application's `resolve(peer, docMeta)` runs. It returns one of the four dispositions.
 4. **Two-tiered default (no `resolve` callback).** If `replicaType` is supported (present in `Capabilities` as a replica-only entry), default is `Defer()`. Otherwise `Reject()`.
 
-For *known* docs (already in `DocRuntime`), all three metadata fields — `replicaType`, `syncMode`, `schemaHash` — are validated against the local entry via `mismatchForSync` from `@kyneta/schema`. Any mismatch skips sync, surfacing a structured `diagnostic` (`code: "replica-type-mismatch" | "schema-hash-mismatch" | "sync-mode-mismatch"`, `severity: "error"`, carrying `peer`/`docId`/`local`/`remote`) logged via `console.error`. The axis→code translation is the layer boundary: `@kyneta/schema` names the axes, the exchange names the diagnostics.
+For *known* docs (already registered), all three metadata fields — `replicaType`, `syncMode`, `schemaHash` — are validated against the local entry via `mismatchForSync` from `@kyneta/schema`. Any mismatch skips sync, surfacing a structured `diagnostic` (`code: "replica-type-mismatch" | "schema-hash-mismatch" | "sync-mode-mismatch"`, `severity: "error"`, carrying `peer`/`docId`/`local`/`remote`) logged via `console.error`. The axis→code translation is the layer boundary: `@kyneta/schema` names the axes, the exchange names the diagnostics.
 
 `supportedHashes` admits heterogeneous-schema sync: two peers with different migrated schema versions can sync if their `supportedHashes` sets overlap. Note that this — *intersection*, symmetric — is the sync question. Deciding whether a *local schema can interpret a given document* is a different, directional question (`mismatchForInterpretation`, membership), and the two are deliberately separate functions. See §"The two laws over `supportedHashes`" in `packages/schema/TECHNICAL.md`.
 
@@ -338,7 +338,7 @@ determines *whether* it does anything at all. Suspension participates in neither
 
 | Phase | Effect |
 |-------|--------|
-| absent | Create the `DocRuntime`, register with `Store[]`, broadcast `present`, return a fresh `Ref<S>`. |
+| absent | Create the document, register with `Store[]`, broadcast `present`, return a fresh `Ref<S>`. |
 | interpret | Return the existing `Ref<S>`. No substrate reconstruction. |
 
 | deferred | Promote to interpret; send `interest` to the peer that presented; run sync. |
@@ -429,15 +429,14 @@ identity check itself rather than inheriting it.
 |-----------|-----|-----------|
 | Leave sync graph, keep local state | `exchange.suspend(docId)` | Sends `dismiss`. **Stays in `exchange.documents`**, as `{ mode: "interpret", suspended: true }`. State remains in `Store`. `exchange.get(docId)` still returns the ref — **without** resuming. |
 | Permanent removal | `exchange.destroy(docId)` | Sends `dismiss`. Removes from `exchange.documents`, from `Store`, from all peers' views. Fresh `get` constructs a new doc. |
-| Temporary local removal | `exchange.remove(docId)` | Removes from `exchange.documents` and local `DocRuntime`. Does not send `dismiss`. State remains in `Store`. |
 
-The three exist because "I'm done with this doc" has three distinct flavours — intent to resume (`suspend`), intent to erase (`destroy`), memory pressure / local detach (`remove`). They differ in what leaves the `Store` and whether the peer graph is notified.
+The two exist because "I'm done with this doc" has two distinct flavours — intent to resume (`suspend`) and intent to erase (`destroy`). They differ in what leaves the `Store` and the exchange's document map.
 
 ### What `suspend` is NOT
 
 - **Not a disconnect.** Other docs in the same exchange continue syncing.
 - **Not destructive.** Local state is preserved — `suspend` sets a flag and sends `dismiss`; the ref and substrate are untouched. `get(docId)` therefore keeps working and returns the same ref, but it does **not** un-suspend: only `resume` re-enters the sync graph. That separation is deliberate, so an unrelated read can never restart traffic peers observe — **`get()` never changes sync-graph membership.**
-- **Not a removal.** The document stays in `exchange.documents` with `suspended: true` — which is what that field is for, and what makes `doc-suspended` / `doc-resumed` meaningful events. `destroy` and `remove` are the two that take a document out of the map. Reading the suspend row as "it left the exchange" is the mistake to avoid: `@kyneta/index` once filtered suspended documents out of exchange-backed sources on that belief, which made pausing sync delete rows from every derived view.
+- **Not a removal.** The document stays in `exchange.documents` with `suspended: true` — which is what that field is for, and what makes `doc-suspended` / `doc-resumed` meaningful events. `destroy` is what takes a document out of the map. Reading the suspend row as "it left the exchange" is the mistake to avoid: `@kyneta/index` once filtered suspended documents out of exchange-backed sources on that belief, which made pausing sync delete rows from every derived view.
 - **Not idempotent with `destroy`.** Suspending a destroyed doc is a no-op; destroying a suspended doc completes the destruction.
 
 ---
@@ -493,46 +492,54 @@ The `resolveLease` pure core is independently tested. Storage keys (`key`, `key 
 
 ## The local-write path
 
-Source: `src/runtime.ts` → `#wireDocSubscription`, `src/exchange.ts` → the `onDocChangeset` hook.
+Source: `src/runtime.ts` → `#wire`, `#markLocalChangeDirty`, `#drainLocalChanges`; `src/exchange.ts` → the `onDocLocalChange` hook.
 
-Every local mutation — `batch(doc, fn)`, direct writes on a ref, `applyChanges` — flows through the substrate's changefeed. The Runtime subscribes once per interpreted document (`#wireDocSubscription`) and hands each changeset to the Exchange's `onDocChangeset` hook, which filters by the structural `replay` flag before calling `synchronizer.notifyLocalChange`. The same subscription marks the document dirty for persistence when `replay` is false.
-
-Since `@kyneta/schema` 4.0 that subscription receives **one changeset per transaction**, not one per changed path, and the same holds for an announced merge — an incoming `offer` touching fifty paths now arrives as one changeset rather than fifty. Two mechanisms in `Runtime` were built when it was one per path, and both are retained: `#dirtyLocalChanges` still coalesces several *batches* and several *documents* within one microtask, and the store-program collapses any requests landing during a write into the one write owed after it. What changed is which of them carries the common case, not whether either is needed.
+A local write is anything this peer authors on a document: `batch(doc, fn)`, a write on a ref, `applyChanges`, and a write made directly on the native document reached through `unwrap`, which is how editor bindings (y-prosemirror, y-codemirror, loro-prosemirror) write. Every one of them leaves the process the same way. The substrate reports it through `subscribeLocalUpdates`, the Runtime marks the document dirty, and one drain per microtask persists and then pushes each dirty document.
 
 ```
-batch(doc, d => d.title.insert(0, "hi"))
+batch(doc, fn)  |  unwrap(doc.title).insert(…)  |  an editor binding's transaction
   │
-  ├─ substrate.prepare → applyChangeToYjs / applyDiff / etc.
-  │  afterBatch, seal, native commit (Loro doc.commit / Yjs transaction closes)
-  │  deliver → changefeed emits Changeset with origin: undefined, replay: false
+  ├─ the substrate's local-update signal fires (Yjs: a local transaction's
+  │  `update`; Loro: `subscribeLocalUpdates`; plain, ephemeral: `afterBatch`)
   │
-  ├─ onDocChangeset checks replay:
-  │    if (changeset.replay) return   // echo from remote import; skip
-  │    else notifyLocalChange → dispatch sync/local-doc-change
+  ├─ #markLocalChangeDirty(docId): add to the dirty set, schedule one microtask
   │
-  ├─ sync program update:
-  │    emits send-to-peers { docId, payload: exportSince(peerVersion), version }
-  │
-  ├─ shell interprets: for each peer in synced set,
-  │    envelope to that peer's channel, queue outbound
-  │
-  └─ drain-outbound fires at quiescence:
-       transport.send(envelope)
+  └─ #drainLocalChanges, once per microtask, for each dirty document:
+       ├─ onStateAdvanced(docId) → store program `state-advanced` → persist
+       └─ onDocLocalChange(docId) → synchronizer.notifyLocalChange
+            → sync/local-doc-change → a push to each synced peer, starting
+              from what that peer will hold → offers at quiescence
 ```
+
+**Why not changesets.** The path used to hang off the changefeed: each changeset with `replay: false` was pushed and persisted. A changeset is the schema's account of a write, and not every local write has one:
+
+- a write on the native document arrived through the event bridge as an announcement, and was treated as not local;
+- a Yjs write to a top-level type outside the schema's root map, or a Loro write to a root container the schema does not declare, produces no changeset at all;
+- a native write that shares a transaction or commit with a Kyneta batch is hidden by the batch's own-commit mark.
+
+The local-update signal is the CRDT's own account, so it sees all three. Changesets still reach the `onDocChangeset` hook, which feeds only the observation bus.
+
+**Why one deferred drain.** The signal fires synchronously, sometimes inside a native commit or a merge, and sometimes several times for one batch. The drain keeps the store program and the Synchronizer out of those callbacks, and turns any number of signals, batches and documents in one tick into one persist and one push per document. It is also the one place the order of persist and push is decided. Re-entrancy is not a reason: the Synchronizer's dispatcher already queues re-entrant input.
+
+**Persist, then push.** The drain requests persistence before the push. Neither waits for the other to complete: persistence is asynchronous, and the push leaves at the Synchronizer's next quiescence.
 
 ### Echo prevention
 
-Remote `offer` messages go through `substrate.merge(payload, { origin: "sync" })`. The substrate takes the ops in, brings its shadow up to date, and announces them through `ctx.announce(ops, "sync")`, so every `Changeset` emitted during that merge carries `replay: true`. `onDocChangeset` checks `changeset.replay` and **skips** `notifyLocalChange(docId)`. Without this skip, every incoming `offer` would re-emit a local `offer` back to all peers — an infinite feedback loop.
+A merge fires the local-update signal only for a local write it causes, never for what it brings in, so what arrives from a peer is never sent back as if it were local. Echo prevention is structural: no exchange decision reads `Changeset.replay`. The local writes a merge can cause are real, and are pushed like any other:
 
-Pre-1.6.x the filter checked `changeset.origin === "sync"` — fragile because `origin` is a free-vocabulary app label, so a `batch(doc, fn, { origin: "sync" })` happened to be suppressed (wrong), and a `doc.import(payload, "from-some-other-pubsub")` would echo back to peers (also wrong). `replay` is derived from the batch's `ingress` — apps cannot construct it, the schema layer never reads `origin`'s value, and the discrimination is correct regardless of what labels apps use. Context: jj:qpultxsw.
+- Loro's `import` commits pending native ops before it applies the payload;
+- an observer may write in reaction to what arrived;
+- the Yjs delete clock ticks for a delete that arrived without a tick, which only a plain Yjs peer (through a provider) sends. A Kyneta delete carries its author's tick, so a merge of Kyneta writes never ticks.
 
-Announcing is the substrate's responsibility (every substrate in `@kyneta/schema` announces what it did not author, and `changesetMetadata` derives `replay` from that). The sync-side check is *this* package's responsibility.
+A push starts from what each peer will hold (`ourVersionTheyWillHold`), which already includes what that peer just offered us, so a local write made while taking in a peer's offer is pushed to that peer without the offer itself.
+
+Before the signal, the filter was a changeset's `replay` flag, and before that `changeset.origin === "sync"` — fragile because `origin` is a free-vocabulary app label, so a `batch(doc, fn, { origin: "sync" })` was suppressed and a `doc.import(payload, "from-some-other-pubsub")` echoed. Context: jj:qpultxsw.
 
 #### Line: no inbox echo filter needed
 
 `Line` (`packages/exchange/src/line.ts`) subscribes to its inbox doc's changefeed to dispatch incoming messages. There is **no echo filter** on this subscription — by design, the Line only writes locally to its `outbox`, never to its own `inbox`. Inbox changes are delivered exclusively by merges of remote peer writes, which arrive as announcements (`replay: true`). A previous `changeset.origin === "local"` filter (pre-jj:wpvtoxmw) was dead code — the convention it pinned had no writer in the exchange package — and was removed.
 
-The "exchange never branches on `origin`'s value" invariant is now globally true: every echo-discrimination decision in this package reads `replay` (structural) or relies on the absence of local inbox writes (Line). No code path inspects `origin`.
+The "exchange never branches on `origin`'s value" invariant holds globally, and neither does any exchange decision branch on `replay`: what leaves the process follows the local-update signal, and the Line relies on the absence of local inbox writes. `replay` is for readers such as the observation bus.
 
 ### Same-doc re-entry inside subscribers (post-1.6.0)
 
@@ -543,7 +550,7 @@ This closes the third instance of the "one-pass-only drain" structural flaw call
 ### What the local-write path is NOT
 
 - **Not synchronous with send.** `batch(doc, fn)` returns as soon as the substrate's `onFlush` completes. The wire `offer` fires in the next quiescence drain, which may be the same tick or later depending on re-entrant dispatch.
-- **Not per-mutation.** A transaction containing N mutations emits one changefeed entry, which produces one `sync/local-doc-change` input, which produces one `exportSince` call (one payload) per synced peer.
+- **Not per-mutation.** However many writes, batches and signals a document sees in one microtask, the drain runs once for it: one `sync/local-doc-change` input, and one export per distinct baseline among the synced peers.
 - **Not guaranteed-delivery.** The payload is queued on the transport; delivery depends on the transport.
 
 ---
@@ -876,7 +883,7 @@ A document's ref is returned at once; loading from the stores runs afterwards. `
 2. The store program learns what the store holds: `storeInputFor(docId, outcome)`, a pure mapping (`stored` → `hydrated`, `empty` → `register`, `none` → nothing).
 3. `adopt()` claims the peer identity (Yjs, Loro) and the right to author (plain), before anyone is told the document has loaded — a listener that writes the moment it is told finds the document writable.
 4. The latch resolves `loaded`.
-5. `#register` publishes the document to the sync graph, and an interpreted document starts forwarding its changesets.
+5. `#register` publishes the document to the sync graph, and an interpreted document is wired (`#wire`): its local-update signal marks it dirty for the drain (see [The local-write path](#the-local-write-path)), and its changesets go to the observation hook. `#evict`, which `destroy`, `shutdown` and `reset` go through, unwires it first, so a ref that outlives its document cannot reach whatever is created under its id next.
 
 A failed load only marks the latch `failed`: its state is unknown, so the document is not registered, announced or given a stable identity.
 
@@ -952,7 +959,7 @@ Persistence is driven by a pure Mealy machine: `Program<StoreInput, StoreModel, 
 |-------|---------|
 | `register` | First boot — doc not found in any store during hydration |
 | `hydrated` | Re-boot — doc loaded from a store; carries the version the store holds, and owes a `since` write from it |
-| `state-advanced` | `Runtime.onStateAdvanced` — after a local or remote mutation. Carries only the `docId`. |
+| `state-advanced` | `Runtime.onStateAdvanced` — from the Runtime's local-change drain, or from the Synchronizer after a network import. Carries only the `docId`. |
 | `compact` | `exchange.compact(docId)` called. Carries only the `docId`. |
 | `destroy` | `exchange.destroy(docId)` called |
 | `write-succeeded` | Store `.append()` or `.replace()` resolved successfully |
@@ -966,9 +973,9 @@ Persistence is driven by a pure Mealy machine: `Program<StoreInput, StoreModel, 
 | `persist-delete` | Calls `store.delete(docId)` on each registered store |
 | `store-error` | Calls the `onStoreError` callback |
 
-**Composition with the Exchange.** The Exchange constructor registers a listener via `synchronizer.onStateAdvanced(cb)`. The listener does *not* fire inline with the mutation — it fires at quiescence, after the Synchronizer's `#drainStateAdvanced` method processes the dirty set. The full dispatch chain:
+**Composition with the Exchange.** Each cause of a write reaches the store program by one path. A local change comes from the Runtime's own drain (see [The local-write path](#the-local-write-path)), which calls `onStateAdvanced` directly. A network import comes through the Synchronizer: the Exchange constructor registers a listener via `synchronizer.onStateAdvanced(cb)`, which does *not* fire inline with the merge — it fires at quiescence, after the Synchronizer's `#drainStateAdvanced` method processes the dirty set. The full dispatch chain for an import:
 
-1. A local mutation or remote merge causes the sync program to emit a `notify/state-advanced` notification carrying the affected `docId`s.
+1. A remote merge that changed the document causes the sync program to emit a `notify/state-advanced` notification carrying the affected `docId`s. A local change never does.
 2. `#accumulateSyncNotification` adds each `docId` to a `Set<DocId>` (`#dirtyStateAdvanced`). The set deduplicates: multiple state advances for the same doc within a single dispatch cycle coalesce into one callback.
 3. At quiescence, `#drainPending` calls `#drainStateAdvanced`, which snapshots the dirty set, clears it, and fires each registered listener once per doc.
 4. The Exchange's listener forwards the `docId` to `Runtime.onStateAdvanced`, which dispatches `{ type: 'state-advanced', docId }` into the store-program and does nothing else.
@@ -1034,15 +1041,15 @@ A failed write is retried only when something asks for a write: the write alread
 
 ### Unified persistence via `state-advanced`
 
-Every local mutation and every remote `offer` merge drives the same persistence path. The pipeline (from quiescence drain to durable write):
+Every local change and every remote `offer` merge drives the same persistence path, from its own drain. The pipeline (from drain to durable write):
 
-1. The Synchronizer's `#drainStateAdvanced` fires the Exchange's listener with a `docId` whose state advanced during the just-completed dispatch cycle.
-2. The listener calls `Runtime.onStateAdvanced(docId)`, which dispatches `{ type: 'state-advanced', docId }` into the store-program.
+1. The Runtime's local-change drain, or the Synchronizer's `#drainStateAdvanced` for a network import, names a `docId` whose state advanced.
+2. `Runtime.onStateAdvanced(docId)` dispatches `{ type: 'state-advanced', docId }` into the store-program.
 3. If no write is in flight, the store-program emits `persist` with a `since` write from the confirmed version; otherwise it records the advance as owed.
 4. The executor reads the replica, computes `exportSince(confirmedVersion)`, and fans out `store.append(docId, record)` to each registered store.
 5. On success it feeds `write-succeeded` back, which advances the confirmed version and starts any owed write from there.
 
-Because the dirty set coalesces multiple advances per doc per dispatch cycle, and the store-program collapses requests made during a write, a burst of edits produces at most one write in flight and one owed behind it, however long the burst.
+Because each drain's dirty set coalesces multiple advances per doc, and the store-program collapses requests made during a write, a burst of edits produces at most one write in flight and one owed behind it, however long the burst.
 
 ### What `Store` is NOT
 
@@ -1153,7 +1160,7 @@ Those two facts compose into an invariant worth stating plainly, because it is w
 
 Both triggers converge on the same `offer { payload: { kind: "entirety" | "since" } }` handling, gated by the same `canReset` policy: when the receiver encounters a boundary for a doc that already has local state, two things can happen:
 
-1. **Accept the reset.** Discard local state, adopt the incoming entirety/lineage. For interpret-mode substrates, this calls `Substrate.resetFromEntirety(payload, options)` (the payload says everything the replica takes on, its version included) — a dedicated method, decoupled from the routine `merge()` path (which now assumes shared causal ancestry and never adopts across lineages on its own). For replicate-mode substrates (headless replicas), `ReplicaFactory.fromEntirety()` rebuilds the whole replica.
+1. **Accept the reset.** Discard local state, adopt the incoming entirety/lineage. For interpret-mode substrates, this calls `Substrate.resetFromEntirety(payload, options)` (the payload says everything the replica takes on, its version included) — a dedicated method, decoupled from the routine `merge()` path (which now assumes shared causal ancestry and never adopts across lineages on its own). For replicate-mode substrates (headless replicas), `ReplicaFactory.fromEntirety()` rebuilds the whole replica. The Synchronizer asks the Runtime to do it (`rebuildReplica`), because the Runtime owns the document's `DocReadyInfo`: the rebuilt replica replaces the one in that record, which the Synchronizer, the store executor and promotion all read, so a relay persists and promotes what it rebuilt.
 
    Rebuilding rather than merging is correct for **both** triggers, for the same underlying reason: the incoming image is not a continuation of what we hold. Under `"compaction"` the sender genuinely rewrote its history — `LoroReplica.advance()` exports a `mode: "shallow-snapshot"` and rebuilds via `LoroDoc.fromSnapshot`, and `YjsReplica.advance()` re-projects into a fresh `Y.Doc` because Yjs has no trim primitive at all — so merging keeps local ops whose causal anchors the image no longer carries. Under `"lineage"` there is no shared ancestry to reconcile against in the first place.
 
@@ -1179,12 +1186,12 @@ For durability guarantees, use the `cohort` predicate to prevent compaction past
 
 | Type | File | Role |
 |------|------|------|
-| `Exchange` | `src/exchange.ts` | Public façade. Constructor, `get`, `remove`, `destroy`, `suspend`, `resume`, `addTransport`, `removeTransport`, `peers`, `documents`, `registerReplica`, `registerPolicy`. |
+| `Exchange` | `src/exchange.ts` | Public façade. Constructor, `get`, `destroy`, `suspend`, `resume`, `addTransport`, `removeTransport`, `peers`, `documents`, `registerReplica`, `registerPolicy`. |
 | `ExchangeParams` | `src/exchange.ts` | Constructor options: `id`, `transports`, `stores`, `governance`, `policies`, `resolve`, `canShare`, `canAccept`, `departureTimeout`, `replicas`. |
 | `PeerIdentityInput` | `src/exchange.ts` | Input variant of `PeerIdentityDetails` with optional `type`. |
 | `Disposition` | `src/exchange.ts` | `Interpret \| Replicate \| Defer \| Reject`. |
 | `Synchronizer` | `src/synchronizer.ts` | Shell class. Public only for `@kyneta/react`'s internal use; applications never construct one. |
-| `DocRuntime` | `src/synchronizer.ts` | Per-doc runtime bundle. Internal. |
+| `DocReadyInfo` | `src/runtime.ts` | The one record of a registered document, owned by the Runtime and read by the Synchronizer. |
 | `SessionModel` / `SessionInput` / `SessionEffect` | `src/session-program.ts` | Session-program state + algebra. |
 | `updateSession` | `src/session-program.ts` | Pure `(input, model) → [model, ...effects]`. |
 | `SyncModel` / `SyncInput` / `SyncEffect` / `DocEntry` / `SyncPeerState` / `PeerDocSyncState` | `src/sync-program.ts` | Sync-program state + algebra. |
@@ -1207,7 +1214,7 @@ For durability guarantees, use the `cohort` predicate to prevent compaction past
 |------|------|
 | `src/index.ts` | Public barrel. Re-exports `bind` / `json` / `ephemeral` / `SyncMode` / `SYNC_COLLABORATIVE` / `SYNC_AUTHORITATIVE` / `SYNC_EPHEMERAL` / `requiresBidirectionalSync` from `@kyneta/schema`; exports exchange-specific types. |
 | `src/exchange.ts` | `Exchange` class, `ExchangeParams`, disposition types, `phaseOf`, `peerId` validation, `registerReplica`, `registerPolicy`, reactive-collection wiring. |
-| `src/synchronizer.ts` | Shell. Dispatch queue, `DocRuntime` map, effect interpreter, emit methods (`#emitPeerSyncChanges`, `#emitStateAdvanced`, `#emitDocEvents`, `#emitPeerEvents`), `declareVacant` / `hasReconciled` / `reconciledMatching` / `connectivity` / `awaitReconciliation`, local-change subscription, transport + storage integration. |
+| `src/synchronizer.ts` | Shell. Dispatch queue, registered-document map, effect interpreter, emit methods (`#emitPeerSyncChanges`, `#emitStateAdvanced`, `#emitDocEvents`, `#emitPeerEvents`), `declareVacant` / `hasReconciled` / `reconciledMatching` / `connectivity` / `awaitReconciliation`, transport + storage integration. |
 | `src/session-program.ts` | Pure session program: `SessionModel`, inputs, effects, `updateSession`, transition collapse. |
 | `src/sync-program.ts` | Pure sync program: `SyncModel`, `DocEntry`, inputs, effects, `updateSync`, per-message handlers. |
 | `src/program-types.ts` | Shared `Transition` and `collapse` helper for both programs. |
@@ -1246,7 +1253,7 @@ the bus (`createObservationBus`), and **pure** mappers
 | `engine` | both handles' `subscribeToTransitions` (coalesced; `from !== to`) |
 | `protocol` | OUT = `send`/`send-to-peer(s)`/`send-offers` effects (one observation per recipient, with its own baseline); IN = the `route` input tap |
 | `directory` | `emit-peer-events`/`emit-doc-events` effects, plus the authoritative per-peer-doc **`sync-state`** event teed in `#emitPeerSyncChanges` (`observePeerSyncState`) — the reconciliation result a consumer must not re-derive (jj:pusmrzuy) |
-| `doc` | the per-`DocRuntime` changefeed subscription in `exchange.ts#interpretDoc` (both local + replay, before the echo filter — so auto-resolved docs are covered) |
+| `doc` | the Runtime's changeset subscription on every interpreted document, through the `onDocChangeset` hook (local and replay alike, so auto-resolved docs are covered) |
 | `diagnostic` | the unified `diagnostic` effect (both programs) carrying a structured `Diagnostic` — see below |
 | `wire` | `TransportContext.onFrame` ← each transport's `Pipeline.onFrame`/`FrameTrace` (carries `frameSeq`, a per-(channel,direction) trace id — deliberately *not* the envelope's monotonic `seq`, and not a sound cross-peer key; the cross-peer key is the reserved `Frame.hash`) |
 

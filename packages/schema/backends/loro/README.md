@@ -72,23 +72,26 @@ const jsonBound = json.bind(schema)
 
 ## Bring Your Own LoroDoc
 
-Every `createDoc` document is backed by a real `LoroDoc`. Use `loro.unwrap()` to access it — e.g. for interop with a state bus or another Loro-aware library:
+Every `createDoc` document is backed by a real `LoroDoc`. Use `unwrap()` to reach it, or the Loro container behind a field — e.g. for an editor binding, a state bus or another Loro-aware library:
 
 ```ts
-import { createDoc, subscribe, loro } from "@kyneta/loro-schema"
+import { createDoc, subscribe, unwrap } from "@kyneta/loro-schema"
 
 const doc = createDoc(myBoundSchema)
 
-// Escape hatch — access the underlying LoroDoc
-const loroDoc = loro.unwrap(doc)
+// Escape hatch — the underlying LoroDoc, and the LoroText behind a field
+const loroDoc = unwrap(doc)
+const title = unwrap(doc.title)
 
 // External mutations to the LoroDoc fire kyneta subscribers
-subscribe(doc, () => console.log("Something changed"))
+subscribe(doc, cs => console.log("Something changed", cs.replay))
 
-loroDoc.getText("title").insert(0, "External edit")
+title.insert(0, "External edit")
 loroDoc.commit()
-// → "Something changed"
+// → "Something changed false"
 ```
+
+An external edit is a local write: subscribers receive it with `replay: false`, and under an Exchange it is pushed to peers and persisted like any other.
 
 *Note for raw LoroDoc consumers:* Subscribers attached directly to the underlying `LoroDoc` will newly see `options.origin` faithfully on `batch.origin` (where previously it was overwritten by a kyneta sentinel).
 
@@ -135,7 +138,7 @@ const docB = createDoc(myBoundSchema)
 | Export | Description |
 |--------|-------------|
 | `loro.bind(schema)` | Bind a schema to the Loro CRDT substrate. Enforces `LoroLaws` constraints at compile time — schemas containing unsupported composition laws (e.g. `Schema.set()`) are rejected. Returns a `BoundSchema<S>` for use with `exchange.get()`. The factory builder injects a deterministic numeric Loro PeerID derived from the exchange's string peerId. |
-| `loro.unwrap(ref)` | Escape hatch — returns the `LoroDoc` backing a root document ref. Throws if the ref is not backed by a Loro substrate. Currently supports root refs only; child-level resolution is future work. |
+| `unwrap(ref)` | Escape hatch — returns the `LoroDoc` backing a document ref, or the Loro container backing a field ref. Re-exported from `@kyneta/schema`. |
 
 ### Batteries-Included (most users)
 

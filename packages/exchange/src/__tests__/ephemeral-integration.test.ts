@@ -349,7 +349,7 @@ describe("a peer that misses an update is repaired precisely", () => {
     await bob.removeTransport("bob-2")
     batch(docA, d => d.peers.set("alice", "back"))
     const replica = defined(
-      alice.synchronizer.getDocRuntime("presence"),
+      alice.synchronizer.getDoc("presence"),
       "alice's presence document",
     ).replica
     let entireties = 0

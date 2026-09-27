@@ -6,6 +6,7 @@ export {
   DeliveryFixture,
   type DeliveryTestEnv,
   deliveryConformance,
+  type RemoteWrite,
 } from "./delivery-conformance.js"
 export {
   type PositionTestEnv,

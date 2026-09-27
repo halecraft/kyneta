@@ -47,7 +47,7 @@ export const CHANGEFEED: unique symbol = Symbol.for("kyneta:changefeed")
  *
  * - **Provenance** answers "where did this come from?" — `origin` is the
  *   app-level label, `source` is the originating caller's identity token,
- *   `replay` is the kyneta-internal "from elsewhere" flag.
+ *   `replay` says the ops were not written on this peer.
  * - **Outcome** answers "what happened?" — only kyneta sets it, and only
  *   to signal the abort-compensation case.
  *
@@ -73,11 +73,12 @@ export interface BatchMetadata {
    */
   readonly origin?: string
   /**
-   * Kyneta-internal structural directive — true iff no local writer
-   * authored this batch: a substrate event bridge, a `merge` payload, or
-   * a decay tick. User-facing entry points (`batch`, `applyChanges`)
-   * never set it. Layered consumers (e.g. the exchange's auto-subscribe
-   * filter) read this to discriminate "echo from sync" from "local write."
+   * True iff no writer on this peer made these ops: they came from a
+   * `merge`, a reset, or a decay tick. A write on the native document that
+   * a substrate's event bridge reports (an editor binding's, say) was made
+   * here, so it is not a replay, and neither is a `batch` or
+   * `applyChanges`. It is for readers, such as the exchange's observation
+   * bus; what leaves the process does not depend on it.
    */
   readonly replay?: boolean
   /**

@@ -530,6 +530,7 @@ export {
 // Substrate — state management, versioning, and transfer semantics
 // Tree node allocation — substrate capability for tree.create()
 export type {
+  AnnounceOptions,
   BatchIngress,
   BatchOptions,
   CommitOptions,

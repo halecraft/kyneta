@@ -939,6 +939,88 @@ describe("Storage + replicated doc", () => {
   })
 })
 
+describe("a relay's replica after a lineage reset", () => {
+  // A plain writer restarts without a store and writes before reconnecting,
+  // so it comes back under a new lineage. The relay answers the writer's
+  // entirety by rebuilding its replica from it. Returns the relay once that
+  // has happened.
+  async function relayThroughReset(sharedData: InMemoryStoreData) {
+    const bridge = new Bridge()
+    const relay = createExchange({
+      id: { peerId: "relay", type: "service" },
+      transports: [createBridgeTransport({ transportId: "relay", bridge })],
+      stores: [createInMemoryStore({ sharedData })],
+      resolve: () => Replicate(),
+    })
+
+    const first = createExchange({
+      id: "writer",
+      transports: [createBridgeTransport({ transportId: "first", bridge })],
+    })
+    batch(first.get("doc-1", SequentialDoc), d => {
+      d.title.set("before")
+      d.count.set(1)
+    })
+    await drain(200)
+    await first.shutdown()
+    const before = relay.synchronizer.getDoc("doc-1")?.replica
+
+    const second = createExchange({ id: "writer" })
+    batch(second.get("doc-1", SequentialDoc), d => {
+      d.title.set("after")
+      d.count.set(2)
+    })
+    await second.addTransport(
+      createBridgeTransport({ transportId: "second", bridge }),
+    )
+    await drain(300)
+    await relay.flush()
+
+    // The rebuild ran. Without this, the assertions below could pass on a
+    // relay that merged instead.
+    expect(relay.synchronizer.getDoc("doc-1")?.replica).not.toBe(before)
+    return relay
+  }
+
+  it("persists the rebuilt replica", async () => {
+    const sharedData: InMemoryStoreData = {
+      records: new Map(),
+      metadata: new Map(),
+    }
+    const relay = await relayThroughReset(sharedData)
+    await relay.shutdown()
+
+    const bridge = new Bridge()
+    createExchange({
+      id: { peerId: "relay", type: "service" },
+      transports: [createBridgeTransport({ transportId: "relay", bridge })],
+      stores: [createInMemoryStore({ sharedData })],
+      resolve: () => Replicate(),
+    })
+    const reader = createExchange({
+      id: "reader",
+      transports: [createBridgeTransport({ transportId: "reader", bridge })],
+    })
+    const doc = reader.get("doc-1", SequentialDoc)
+    await drain(300)
+
+    expect(doc.title()).toBe("after")
+    expect(doc.count()).toBe(2)
+  })
+
+  it("promotes the rebuilt replica", async () => {
+    const relay = await relayThroughReset({
+      records: new Map(),
+      metadata: new Map(),
+    })
+
+    const doc = relay.get("doc-1", SequentialDoc)
+
+    expect(doc.title()).toBe("after")
+    expect(doc.count()).toBe(2)
+  })
+})
+
 // ===========================================================================
 // Storage + destroy
 // ===========================================================================

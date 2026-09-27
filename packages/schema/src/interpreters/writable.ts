@@ -54,6 +54,7 @@ import type {
   TreeSchema,
 } from "../schema.js"
 import type {
+  AnnounceOptions,
   BatchOptions,
   CommitOptions,
   PrepareOptions,
@@ -211,10 +212,10 @@ export interface WritableContext extends RefContext {
   /**
    * Report ops the substrate has already applied, with σ already in
    * agreement with λ. The ops never reach `substrate.prepare` or
-   * `afterBatch`; subscribers receive them with `replay: true`. An empty
-   * list announces nothing.
+   * `afterBatch`; subscribers receive them with `replay: !options.local`. An
+   * empty list announces nothing.
    */
-  readonly announce: (ops: readonly Op[], origin?: string) => void
+  readonly announce: (ops: readonly Op[], options: AnnounceOptions) => void
   /** Depth-aware combinator: outside any frame opens an implicit
    *  single-op `runBatch` (auto-commit); inside a frame just calls
    *  `prepare`. Helper methods on refs route through this so multi-helper
@@ -458,7 +459,7 @@ export function buildWritableContext(
     return captured
   }
 
-  const announce: WritableContext["announce"] = (ops, origin) => {
+  const announce: WritableContext["announce"] = (ops, options) => {
     if (ops.length === 0) return
     const trace: TraceEntry[] = []
     traces.push(trace)
@@ -470,7 +471,7 @@ export function buildWritableContext(
       closeTrace(trace)
       throw error
     }
-    sealAndRelease(trace, { ingress: "announce", origin })
+    sealAndRelease(trace, { ingress: "announce", ...options })
   }
 
   // Depth-aware dispatch combinator:

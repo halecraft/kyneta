@@ -1962,7 +1962,10 @@ describe("sync-program", () => {
       ])
     })
 
-    it("emits state-advanced via model.pendingStateAdvancedDocIds", () => {
+    it("does not request persistence", () => {
+      // The Runtime persisted the change before it told us. State-advanced
+      // is the network's report, so a local change must not raise it, or the
+      // change is persisted twice.
       const update = makeUpdate()
       let model = initSync(alice)
       ;[model] = ensureDoc(update, model, "doc-1")
@@ -1973,7 +1976,7 @@ describe("sync-program", () => {
         model,
       )
 
-      expect(m2.pendingStateAdvancedDocIds).toContain("doc-1")
+      expect(m2.pendingStateAdvancedDocIds).not.toContain("doc-1")
     })
   })
 

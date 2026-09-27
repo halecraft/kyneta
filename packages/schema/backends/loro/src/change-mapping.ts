@@ -749,6 +749,10 @@ export function batchToOps(
 
   for (const event of batch.events) {
     const kynetaPath = loroPathToKynetaPath(event.path, schema, binding)
+    // A container the schema does not declare (an application's own root
+    // container, or a key it added natively to a struct's map) has no place
+    // in σ, so there is nothing to announce for it.
+    if (kynetaPath === undefined) continue
     // Resolve the leaf schema to distinguish text vs richtext diffs.
     // Sum-interior paths return the sum schema (foldPath's short-circuit
     // takes over what the old try/catch handled by falling through).
@@ -779,12 +783,15 @@ export function batchToOps(
  * The `_props` prefix at index 0 is stripped because root scalar fields
  * live there in Loro's wire format but appear as direct root children
  * in kyneta paths (see TECHNICAL.md §11).
+ *
+ * Returns `undefined` when the path names a product field the schema does not
+ * declare: the container is not part of the document the schema describes.
  */
 function loroPathToKynetaPath(
   loroPath: (string | number | unknown)[],
   rootSchema: SchemaNode,
   binding?: SchemaBinding,
-): RawPath {
+): RawPath | undefined {
   // Strip _props prefix — root scalars live in _props but their
   // kyneta paths are direct children of the root product.
   const startIndex = loroPath.length > 0 && loroPath[0] === PROPS_KEY ? 1 : 0
@@ -812,8 +819,10 @@ function loroPathToKynetaPath(
       }
       const kind = schema?.[KIND]
       if (kind === "product") {
+        const field: SchemaNode | undefined = schema.fields[leaf]
+        if (field === undefined) return undefined
         path = path.field(leaf)
-        schema = schema.fields[leaf]
+        schema = field
       } else if (schema && (isMapSchema(schema) || isSetSchema(schema))) {
         path = path.entry(leaf)
         schema = schema.item

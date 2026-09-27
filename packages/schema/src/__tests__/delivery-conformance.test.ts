@@ -3,13 +3,12 @@
 //
 // The Loro and Yjs backends run the same suite from their own packages. Between
 // the four, the notification engine's contract is pinned on every substrate
-// that ships, through both entry points: a local `batch()` and an incoming
-// merge.
+// that ships, through every entry point: a local `batch()`, and a peer's
+// write taken in by `merge` or by `resetFromEntirety`.
 //
 // Ephemeral was absent until a downstream report of a merge that delivered
-// nothing. It is the one substrate whose merge cannot be driven by an op
-// delta — `exportSince` returns `null`, so every merge is a whole-snapshot
-// join — which is precisely the path the other three never exercise here.
+// nothing. Its merge is a lattice join of a partial tree rather than a replay
+// of ops, which is the path the other three never exercise here.
 
 import { describe, expect, it } from "vitest"
 import { createRef } from "../create-doc.js"
@@ -35,7 +34,7 @@ function createPlainEnv(): DeliveryTestEnv {
 
   return {
     doc,
-    remoteMerge(fn) {
+    remoteWrite(fn) {
       const substrateB = plainSubstrateFactory.create(DeliveryFixture)
       const docB = createRef(DeliveryFixture, substrateB) as any
       const before = substrateB.version()
@@ -44,7 +43,7 @@ function createPlainEnv(): DeliveryTestEnv {
       // Guards against a vacuous pass: with no delta the merge would be a
       // no-op and every "one changeset" assertion would trivially hold.
       if (delta === null) throw new Error("exportSince produced no delta")
-      substrateA.merge(delta, { origin: "sync" })
+      return { delta, entirety: substrateB.exportEntirety() }
     },
   }
 }
@@ -54,10 +53,9 @@ deliveryConformance(createPlainEnv, { label: "plain" })
 /**
  * Two ephemeral-substrate peers over the same schema.
  *
- * B's whole tree is what crosses here rather than a delta, and A's merge is a
- * lattice join rather than a replay of B's ops. The suite's invariants still
- * have to hold: what A's subscribers hear must name the fields the join
- * actually moved.
+ * A's merge is a lattice join rather than a replay of B's ops. The suite's
+ * invariants still have to hold: what A's subscribers hear must name the
+ * fields the join actually moved.
  */
 function createEphemeralEnv(): DeliveryTestEnv {
   const substrateA = ephemeralSubstrateFactory.create(DeliveryFixture)
@@ -65,14 +63,17 @@ function createEphemeralEnv(): DeliveryTestEnv {
 
   return {
     doc,
-    remoteMerge(fn) {
+    remoteWrite(fn) {
       const substrateB = ephemeralSubstrateFactory.fromEntirety(
         substrateA.exportEntirety(),
         DeliveryFixture,
       )
       const docB = createRef(DeliveryFixture, substrateB)
+      const before = substrateB.version()
       batch(docB, fn)
-      substrateA.merge(substrateB.exportEntirety(), { origin: "sync" })
+      const delta = substrateB.exportSince(before)
+      if (delta === null) throw new Error("exportSince produced no delta")
+      return { delta, entirety: substrateB.exportEntirety() }
     },
   }
 }

@@ -369,7 +369,7 @@ describe("Exchange", () => {
     })
 
     describe("changefeed → synchronizer auto-wiring", () => {
-      it("batch() auto-notifies synchronizer — no manual notifyLocalChange needed", async () => {
+      it("a batch reaches the peer with no call to notify the synchronizer", async () => {
         const bridge = new Bridge()
 
         const exchangeA = new Exchange({
@@ -392,7 +392,6 @@ describe("Exchange", () => {
         await drain()
         expect(docB.title()).toBe("V1")
 
-        // Mutate WITHOUT calling notifyLocalChange — auto-wiring should handle it
         batch(docA, (d: any) => {
           d.title.set("V2")
           d.count.set(2)
@@ -400,7 +399,6 @@ describe("Exchange", () => {
 
         await drain()
 
-        // Bob should see the mutation via auto-wired sync
         expect(docB.title()).toBe("V2")
         expect(docB.count()).toBe(2)
       })

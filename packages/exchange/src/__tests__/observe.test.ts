@@ -6,7 +6,8 @@
 
 import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import { loro } from "@kyneta/loro-schema"
-import { batch, json, Schema } from "@kyneta/schema"
+import { batch, json, Schema, unwrap } from "@kyneta/schema"
+import { defined } from "@kyneta/schema/testing"
 import { yjs } from "@kyneta/yjs-schema"
 import { afterEach, describe, expect, it } from "vitest"
 import {
@@ -488,6 +489,37 @@ describe("observe — integration (two peers, one bridge)", () => {
     expect(syncedOn(b)).toBe(true)
   })
 
+  it("reports a native write as local where it was made, and a replay where it arrived", async () => {
+    // An editor binding writes on the native document, not through `batch`.
+    const NoteDoc = yjs.bind(Schema.struct({ title: Schema.text() }))
+    const bridge = new Bridge()
+    const alice = createExchange({
+      id: "alice",
+      transports: [createBridgeTransport({ transportId: "alice", bridge })],
+    })
+    const bob = createExchange({
+      id: "bob",
+      transports: [createBridgeTransport({ transportId: "bob", bridge })],
+    })
+    const aDoc = alice.get("note", NoteDoc)
+    bob.get("note", NoteDoc)
+    await drain()
+    const a: ObsEvent[] = []
+    const b: ObsEvent[] = []
+    alice.observe(e => a.push(e))
+    bob.observe(e => b.push(e))
+
+    unwrap(aDoc.title).insert(0, "native")
+    await drain()
+
+    const replays = (events: ObsEvent[]) =>
+      events.flatMap(e =>
+        e.layer === "doc" && e.kind === "changeset" ? [e.replay] : [],
+      )
+    expect(replays(a)).toEqual([false])
+    expect(replays(b)).toEqual([true])
+  })
+
   it("covers a doc obtained only via remote auto-resolve", async () => {
     const bridge = new Bridge()
     const alice = createExchange({
@@ -624,11 +656,11 @@ describe("observe — integration (two peers, one bridge)", () => {
 
     const hist = ex.docHistory("h")
     expect(hist).toBeDefined()
-    const s1 = hist?.summary()
-    expect(s1 && s1.opCount).toBeGreaterThan(0)
-    expect(s1 && s1.version.length).toBeGreaterThan(0)
-    expect(Object.keys(s1?.actors ?? {}).length).toBeGreaterThan(0)
-    const pastVersion = s1?.version as string
+    const s1 = defined(hist?.summary(), "the history summary")
+    expect(s1.opCount).toBeGreaterThan(0)
+    expect(s1.version.length).toBeGreaterThan(0)
+    expect(Object.keys(s1.actors ?? {}).length).toBeGreaterThan(0)
+    const pastVersion = s1.version
 
     // A second edit advances the doc; valueAt(pastVersion) reflects the
     // earlier state without disturbing the live doc.

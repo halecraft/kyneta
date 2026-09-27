@@ -168,7 +168,6 @@ describe("settle — the storage term", () => {
         // connection or a corrupt file.
         throw new Error("disk on fire")
       },
-      // biome-ignore lint/correctness/useYield: an empty store lists nothing
       async *listDocIds() {},
       async close() {},
     }
@@ -277,7 +276,6 @@ describe("whenSettled", () => {
       async currentMeta(): Promise<never> {
         throw new Error("disk on fire")
       },
-      // biome-ignore lint/correctness/useYield: an empty store lists nothing
       async *listDocIds() {},
       async close() {},
     }
@@ -297,14 +295,12 @@ describe("whenSettled", () => {
     // into one timeout later.
     const stuck: Store = {
       async append() {},
-      // biome-ignore lint/correctness/useYield: never reached
       async *loadAll() {},
       async replace() {},
       async delete() {},
       currentMeta() {
         return new Promise(() => {}) // never settles
       },
-      // biome-ignore lint/correctness/useYield: an empty store lists nothing
       async *listDocIds() {},
       async close() {},
     }

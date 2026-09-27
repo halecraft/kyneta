@@ -17,9 +17,9 @@
 // - `afterBatch` flushes the json-boundary coalescer.
 // - Persistent observeDeep event bridge for external changes: it
 //   re-materialises σ from λ, then announces the ops.
-// - Per-transaction meta mark (`KYNETA_MARK`) inscribed from inside the
-//   transact body to ignore our own writes; survives Yjs's nested-transact
-//   collapse so external wrapping is handled correctly.
+// - Per-transaction meta mark (`KYNETA_MARK`, one per substrate) inscribed
+//   from inside the transact body to ignore our own writes; survives Yjs's
+//   nested-transact collapse so external wrapping is handled correctly.
 //
 // The event bridge contract: wrapping a Y.Doc in a kyneta substrate
 // means subscribing to the kyneta doc observes ALL mutations to the
@@ -28,8 +28,9 @@
 //
 // `prepare` and `afterBatch` see only Kyneta's own writes. The event bridge
 // handles everything else: the Y.Doc already holds those ops, so it brings σ
-// up to date and announces them via `ctx.announce(ops, origin)`, which never
-// calls back into `prepare`.
+// up to date and announces them via `ctx.announce`, which never calls back
+// into `prepare`. An announcement is `local` iff its transaction is: a native
+// write on this peer is not a replay.
 //
 // Identity-keying: when a SchemaBinding is provided, all Y.Map key
 // lookups and writes use the identity hash instead of the field name.
@@ -82,21 +83,6 @@ import { ensureContainers } from "./populate.js"
 import { toYjsAssoc, YjsPosition } from "./position.js"
 import { YjsVersion } from "./version.js"
 import { resolveYjsType } from "./yjs-resolve.js"
-
-// ---------------------------------------------------------------------------
-// Own-commit discriminator
-// ---------------------------------------------------------------------------
-
-// Own-commit discriminator. We mark `transaction.meta` from inside
-// the transact body — the mark travels with the Transaction object
-// that Yjs hands to observeDeep, regardless of `transaction.origin`.
-// This frees the user-facing `origin` slot for `options.origin`
-// round-trip and correctly handles the case where external code
-// wraps `batch(doc, fn)` in its own `Y.transact` (Yjs's nested-
-// transact collapse delivers the SAME Transaction object to both
-// outer and inner callbacks; verified by probe — see TECHNICAL.md
-// "Why transaction.meta mark").
-const KYNETA_MARK = Symbol("kyneta:own-commit")
 
 // ---------------------------------------------------------------------------
 // The delete clock
@@ -158,10 +144,12 @@ function advancedAnyClock(transaction: Y.Transaction): boolean {
  * versioning, and export/merge through the standard Substrate interface.
  *
  * **Event bridge contract:** A persistent `observeDeep` handler is
- * registered on the root Y.Map at construction time. All non-kyneta
- * mutations to the Y.Doc (merges, external local writes) are bridged
- * to the kyneta changefeed. Subscribing to the kyneta doc observes all
- * mutations regardless of source.
+ * registered on the root Y.Map at construction time. Every mutation under
+ * it that this substrate's `runBatch` did not make (a merge, or a write on
+ * the Y.Doc from an editor binding or another substrate) is announced to
+ * the kyneta changefeed, with `replay: false` iff its transaction is local.
+ * A write to another top-level type is not announced, since the schema has
+ * no place for it, but `subscribeLocalUpdates` still reports it.
  *
  * @param doc - The Y.Doc to wrap. The substrate does NOT own the doc;
  *   the caller is responsible for its lifecycle.
@@ -190,8 +178,16 @@ export function createYjsSubstrate(
     }
   >()
 
-  // Stashed origin from merge for the event bridge to pick up.
-  let pendingMergeOrigin: string | undefined
+  // Own-commit discriminator, one per substrate. `runBatch` marks
+  // `transaction.meta` from inside the transact body; the mark travels with
+  // the Transaction object that Yjs hands to observeDeep, regardless of
+  // `transaction.origin`. That frees the `origin` slot for `options.origin`,
+  // and handles external code that wraps `batch(doc, fn)` in its own
+  // `Y.transact` (Yjs's nested-transact collapse delivers the SAME
+  // Transaction object to both outer and inner callbacks; see TECHNICAL.md
+  // "Why transaction.meta mark"). Per substrate, so a second substrate over
+  // the same `Y.Doc` sees this one's batches as native writes.
+  const KYNETA_MARK = Symbol("kyneta:own-commit")
 
   // Lazy-built WritableContext (same pattern as PlainSubstrate / LoroSubstrate).
   let cachedCtx: WritableContext | undefined
@@ -369,6 +365,21 @@ export function createYjsSubstrate(
       }, options.origin)
     },
 
+    subscribeLocalUpdates(listener: () => void): () => void {
+      // Yjs emits `update` exactly when a transaction changed something, for
+      // every shared type in the doc, not only the schema's root map.
+      const onUpdate = (
+        _update: Uint8Array,
+        _origin: unknown,
+        _doc: Y.Doc,
+        transaction: Y.Transaction,
+      ): void => {
+        if (transaction.local) listener()
+      }
+      doc.on("update", onUpdate)
+      return () => doc.off("update", onUpdate)
+    },
+
     context(): WritableContext {
       if (!cachedCtx) {
         cachedCtx = buildWritableContext(substrate, {
@@ -470,13 +481,10 @@ export function createYjsSubstrate(
             "If you recently switched CRDT backends, stale clients may be sending incompatible data.",
         )
       }
-      // Stash origin for the event bridge to pick up
-      pendingMergeOrigin = options?.origin
-      try {
-        Y.applyUpdate(doc, payload.data, options?.origin ?? "remote")
-      } finally {
-        pendingMergeOrigin = undefined
-      }
+      // The origin rides on the merge's transaction, where the event bridge
+      // reads it. A write an observer makes in reaction is a transaction of
+      // its own, so it keeps its own origin.
+      Y.applyUpdate(doc, payload.data, options?.origin)
       // The observeDeep handler announces the merged ops. Yjs holds back
       // structs whose dependencies are missing; the version stays short of
       // the offer's, which is how a caller sees what is missing.
@@ -510,11 +518,8 @@ export function createYjsSubstrate(
       return
     }
 
-    // Determine origin: prefer stashed kyneta origin (from merge),
-    // fall back to the transaction's origin if it's a string.
     const origin =
-      pendingMergeOrigin ??
-      (typeof transaction.origin === "string" ? transaction.origin : undefined)
+      typeof transaction.origin === "string" ? transaction.origin : undefined
 
     // Lazily ensure the context is built
     const ctx = substrate.context()
@@ -523,10 +528,10 @@ export function createYjsSubstrate(
     // no sequential decomposition, so σ is re-materialised from λ in one Π
     // pass rather than stepped op by op, and only then announced.
     syncShadow(shadow, materializeYjsShadow(doc, schema, binding))
-    ctx.announce(ops, origin)
+    ctx.announce(ops, { origin, local: transaction.local })
   })
 
-  return substrate as Substrate<YjsVersion>
+  return substrate
 }
 
 // ---------------------------------------------------------------------------

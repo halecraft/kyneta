@@ -28,8 +28,9 @@
 //
 // `prepare` and `afterBatch` see only Kyneta's own writes. The event bridge
 // handles everything else: the LoroDoc already holds those ops, so it brings
-// σ up to date and announces them via `ctx.announce(ops, origin)`, which
-// never calls back into `prepare`.
+// σ up to date and announces them via `ctx.announce`, which never calls back
+// into `prepare`. An announcement is `local` iff its batch is: a native write
+// on this peer is not a replay.
 
 import {
   applyChange,
@@ -167,10 +168,12 @@ function isStructuralGroup(
  * versioning, and export/import through the standard Substrate interface.
  *
  * **Event bridge contract:** A persistent `doc.subscribe()` handler is
- * registered at construction time. All non-kyneta mutations to the
- * LoroDoc (imports, external local writes) are bridged to the kyneta
- * changefeed. Subscribing to the kyneta doc observes all mutations
- * regardless of source.
+ * registered at construction time. Every change this substrate's
+ * `runBatch` did not commit (an import, or a commit on the LoroDoc from an
+ * editor binding or another substrate) is announced to the kyneta
+ * changefeed, with `replay: false` iff Loro reports it as local. A root
+ * container the schema does not declare is not announced, but
+ * `subscribeLocalUpdates` still reports writes to it.
  *
  * @param doc - The LoroDoc to wrap. The substrate does NOT own the doc;
  *   the caller is responsible for its lifecycle.
@@ -217,7 +220,8 @@ export function createLoroSubstrate(
   // matches the tail entry of `batch.to` for the corresponding event.
   const ourCommits = new Set<string>()
 
-  // Stashed origin from merge for the subscriber to pick up.
+  // The merge's origin, for the event bridge to put on the import's batch.
+  // `doc.import` takes no origin of its own.
   let pendingImportOrigin: string | undefined
 
   // Lazy-built WritableContext (same pattern as PlainSubstrate).
@@ -463,6 +467,13 @@ export function createLoroSubstrate(
       }
     },
 
+    subscribeLocalUpdates(listener: () => void): () => void {
+      // Fires inside every commit of local ops, explicit or implicit (an
+      // `export`, or an `import` with pending ops), and never for imported
+      // ops.
+      return doc.subscribeLocalUpdates(() => listener())
+    },
+
     context(): WritableContext {
       if (!cachedCtx) {
         cachedCtx = buildWritableContext(substrate, {
@@ -575,7 +586,6 @@ export function createLoroSubstrate(
             "If you recently switched CRDT backends, stale clients may be sending incompatible data.",
         )
       }
-      // Stash origin for the subscriber to pick up
       pendingImportOrigin = options?.origin
       try {
         doc.import(payload.data)
@@ -629,9 +639,12 @@ export function createLoroSubstrate(
       return
     }
 
-    // Determine origin: prefer stashed kyneta origin (from merge),
-    // fall back to Loro's batch origin.
-    const origin = pendingImportOrigin ?? batch.origin
+    // The merge's origin belongs to the import alone. `import` commits pending
+    // native ops first, and that commit is a local batch with its own origin.
+    const origin =
+      batch.by === "import"
+        ? (pendingImportOrigin ?? batch.origin)
+        : batch.origin
 
     // Lazily ensure the context is built
     const ctx = substrate.context()
@@ -641,10 +654,10 @@ export function createLoroSubstrate(
     // composition would double-count, so σ is re-materialised from λ in
     // one Π pass, and only then announced.
     syncShadow(shadow, materializeLoroShadow(doc, schema, binding))
-    ctx.announce(ops, origin)
+    ctx.announce(ops, { origin, local: batch.by === "local" })
   })
 
-  return substrate as Substrate<LoroVersion>
+  return substrate
 }
 
 // ---------------------------------------------------------------------------

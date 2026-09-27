@@ -138,7 +138,7 @@ describe("cohort governance predicate", () => {
 
     await writer.compact("doc-1")
 
-    const replica = writer.synchronizer.getDocRuntime("doc-1")?.replica
+    const replica = writer.synchronizer.getDoc("doc-1")?.replica
     expect(replica?.baseVersion().serialize()).toBe(
       replica?.version().serialize(),
     )

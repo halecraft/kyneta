@@ -66,11 +66,7 @@ import {
 } from "./settle.js"
 import type { Store } from "./store/store.js"
 import { registerSync } from "./sync.js"
-import {
-  type DocRuntime,
-  derivePeerSettled,
-  Synchronizer,
-} from "./synchronizer.js"
+import { derivePeerSettled, Synchronizer } from "./synchronizer.js"
 import type { DocChange, DocInfo, PeerChange } from "./types.js"
 import { validatePeerId } from "./utils.js"
 
@@ -439,6 +435,8 @@ export class Exchange {
       canAccept: this.#governance.canAccept.bind(this.#governance),
       canConnect: this.#governance.canConnect.bind(this.#governance),
       canReset: this.#governance.canReset.bind(this.#governance),
+      rebuildReplica: (docId, payload) =>
+        this.#runtime.rebuildReplica(docId, payload),
       departureTimeout,
       lease: this.#runtime.lease,
 
@@ -549,27 +547,15 @@ export class Exchange {
     // The Runtime fires these when local docs become ready, change, or
     // are dismissed. The Exchange bridges them into the sync graph.
     this.#runtime.setHooks({
-      onDocReady: info => {
-        this.#synchronizer.registerDoc({
-          mode: info.mode,
-          docId: info.docId,
-          replica: info.replica,
-          replicaFactory: info.replicaFactory,
-          syncMode: info.syncMode,
-          schemaHash: info.schemaHash,
-          ...(info.supportedHashes
-            ? { supportedHashes: info.supportedHashes }
-            : {}),
-        } as DocRuntime)
-      },
+      // The Runtime's own record, not a copy: a replica the Runtime rebuilds
+      // is then the one the Synchronizer syncs from.
+      onDocReady: info => this.#synchronizer.registerDoc(info),
       onDocChangeset: (docId, changeset) => {
-        // Observation tee — publish BOTH local and replay changesets
-        // (before the echo filter) so the doc layer sees every change.
+        // Observation only: the changeset feed is for readers. What leaves
+        // the process follows `onDocLocalChange`.
         this.#synchronizer.observeDocChangeset(docId, changeset)
-        // Filter on the structural `replay` flag — not the `origin`
-        // label string — so foreign-origin merges still don't echo
-        // and `batch(doc, fn, { origin: "sync" })` still broadcasts.
-        if (changeset.replay) return
+      },
+      onDocLocalChange: docId => {
         this.#synchronizer.notifyLocalChange(docId)
       },
       onDocDestroyed: docId => {
@@ -584,10 +570,10 @@ export class Exchange {
     })
 
     // ── Wire Synchronizer → Runtime (store delta saves) ──
-    // When the sync graph advances a doc's version (from network import
-    // or local change), the Runtime needs to persist the delta.
-    // Just the docId. The Runtime resolves the document from its own cache —
-    // do not look it up here and pass it in, which is what this used to do.
+    // When the network advances a doc's version, the Runtime persists the
+    // delta. Local changes reach the store from the Runtime's own drain, not
+    // through here. Only the docId crosses: the Runtime resolves the document
+    // from its own cache.
     this.#synchronizer.onStateAdvanced((docId: DocId) => {
       this.#runtime.onStateAdvanced(docId)
     })
@@ -1034,14 +1020,14 @@ export class Exchange {
    * @param docId - The document to compact
    */
   async compact(docId: DocId): Promise<void> {
-    const runtime = this.#synchronizer.getDocRuntime(docId)
-    if (!runtime) return
+    const doc = this.#synchronizer.getDoc(docId)
+    if (!doc) return
 
     const lcv = this.leastCommonVersion(docId)
     // If no peers are synced, advance to current version (full projection).
-    const target = lcv ?? runtime.replica.version()
+    const target = lcv ?? doc.replica.version()
 
-    runtime.replica.advance(target)
+    doc.replica.advance(target)
 
     await this.#runtime.compact(docId)
   }

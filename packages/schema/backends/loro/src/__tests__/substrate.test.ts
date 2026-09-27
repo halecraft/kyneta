@@ -950,3 +950,105 @@ describe("origin-free discriminator", () => {
     expect(kynetaFires).toBe(1)
   })
 })
+
+// ===========================================================================
+// What an announcement says of itself
+// ===========================================================================
+
+describe("announcements: origin and replay", () => {
+  it("pending native ops the import commits are local, with their commit's origin", () => {
+    // `import` commits pending ops before it applies the payload, so one
+    // merge raises two batches: the commit, then the import. The merge's
+    // origin belongs to the import alone.
+    const other = loroSubstrateFactory.create(TestSchema)
+    batch(interpretSubstrate(TestSchema, other), d => d.theme.set("remote"))
+    const doc = new LoroDoc()
+    const substrate = createLoroSubstrate(doc, TestSchema)
+    const seen: { origin?: string; replay?: boolean }[] = []
+    subscribe(interpretSubstrate(TestSchema, substrate), cs =>
+      seen.push({ origin: cs.origin, replay: cs.replay }),
+    )
+
+    doc.setNextCommitOrigin("binding")
+    doc.getText("title").insert(0, "pending")
+    substrate.merge(other.exportEntirety(), { origin: "sync" })
+
+    expect(seen).toEqual([
+      { origin: "binding", replay: false },
+      { origin: "sync", replay: true },
+    ])
+  })
+})
+
+// ===========================================================================
+// subscribeLocalUpdates
+// ===========================================================================
+
+describe("subscribeLocalUpdates", () => {
+  function setup() {
+    const doc = new LoroDoc()
+    const substrate = createLoroSubstrate(doc, TestSchema)
+    const kDoc = interpretSubstrate(TestSchema, substrate)
+    let count = 0
+    const unsubscribe = substrate.subscribeLocalUpdates(() => {
+      count++
+    })
+    return { doc, substrate, kDoc, unsubscribe, count: () => count }
+  }
+
+  function remotePayload(): SubstratePayload {
+    const other = loroSubstrateFactory.create(TestSchema)
+    batch(interpretSubstrate(TestSchema, other), d => d.theme.set("remote"))
+    return other.exportEntirety()
+  }
+
+  it("fires for a native write to the schema's root", () => {
+    const { doc, count } = setup()
+    doc.getText("title").insert(0, "native")
+    doc.commit()
+    expect(count()).toBe(1)
+  })
+
+  it("fires for a native write outside the schema's root", () => {
+    // The container is not part of the schema, so the bridge announces
+    // nothing for it. The signal is what still gets it pushed and persisted.
+    const { doc, kDoc, count } = setup()
+    const heard: unknown[] = []
+    subscribe(kDoc, cs => heard.push(cs))
+    doc.getMap("side").set("k", 1)
+    doc.commit()
+    expect(count()).toBe(1)
+    expect(heard).toHaveLength(0)
+  })
+
+  it("does not fire for an empty commit", () => {
+    const { doc, count } = setup()
+    doc.commit()
+    expect(count()).toBe(0)
+  })
+
+  it("does not fire for a merge", () => {
+    const { substrate, count } = setup()
+    substrate.merge(remotePayload())
+    expect(count()).toBe(0)
+  })
+
+  it("fires, inside the merge, for pending native ops the import commits", () => {
+    const { doc, substrate, count } = setup()
+    const payload = remotePayload()
+    doc.getText("title").insert(0, "pending")
+    let during = 0
+    substrate.subscribeLocalUpdates(() => {
+      during = count()
+    })
+    substrate.merge(payload)
+    expect(during).toBe(1)
+  })
+
+  it("stops after the unsubscribe", () => {
+    const { kDoc, unsubscribe, count } = setup()
+    unsubscribe()
+    batch(kDoc, d => d.theme.set("x"))
+    expect(count()).toBe(0)
+  })
+})

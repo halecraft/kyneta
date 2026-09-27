@@ -77,7 +77,7 @@ describe("Yjs: delivery after the transaction", () => {
     ])
   })
 
-  it("a raw listener's transaction in reaction to ours is announced after ours", () => {
+  it("a raw listener's transaction in reaction to ours is announced after ours, as a local write", () => {
     const { doc, native, seen } = build(Schema.struct({ title: Schema.text() }))
     let fired = false
     native.on("afterTransaction", () => {
@@ -90,7 +90,7 @@ describe("Yjs: delivery after the transaction", () => {
 
     expect(seen).toEqual([
       { replay: false, n: 1 },
-      { replay: true, n: 1 },
+      { replay: false, n: 1 },
     ])
   })
 })

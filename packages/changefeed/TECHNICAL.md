@@ -121,7 +121,7 @@ The metadata fields sit on a two-axis classification:
 | **subscriber-set** | `source`       | (none)   |
 | **kyneta-set**   | `replay`         | `aborted` |
 
-- **Provenance** answers "where did this come from?" — `origin` is the app-level label, `source` is the originating caller's identity token, `replay` is the kyneta-internal "no local writer authored this" flag.
+- **Provenance** answers "where did this come from?" — `origin` is the app-level label, `source` is the originating caller's identity token, `replay` says no writer on this peer made the ops.
 - **Outcome** answers "what happened?" — only kyneta sets it, and only to signal the abort-compensation case.
 
 The fields are **orthogonal**: a tagged local write that throws can simultaneously produce `{ source: T, aborted: true }`. Each field has its own consumer with its own typed read; no string-convention discrimination is required.
@@ -134,7 +134,7 @@ The fields are **orthogonal**: a tagged local write that throws can simultaneous
 
 ### `replay` — structural directive for state-from-elsewhere
 
-`replay` is the **structural directive** set by kyneta-internal layers — true iff no local writer authored this batch (a substrate event bridge, a `merge` payload, an ephemeral decay tick). Layered consumers that need to discriminate "echo from sync" from "local write" (e.g. the exchange's auto-subscribe filter at `packages/exchange/src/exchange.ts`) read `replay` rather than parsing the `origin` string. User-facing entry points (`batch`, `applyChanges`) cannot produce `replay: true`. Context: jj:qpultxsw.
+`replay` is the **structural directive** set by kyneta-internal layers — true iff no writer on this peer made the ops: a `merge` payload, a reset, an ephemeral decay tick. A write on the native document that a CRDT's event bridge reports (an editor binding's, for instance) was made here, so it is **not** a replay. Readers that need to tell state from elsewhere from state written here (e.g. the exchange's observation bus, `packages/exchange/src/observe.ts`) read `replay` rather than parsing the `origin` string; what the exchange sends and stores does not depend on it. User-facing entry points (`batch`, `applyChanges`) cannot produce `replay: true`. Context: jj:qpultxsw.
 
 ### `Changeset.source` — identity-typed echo token
 

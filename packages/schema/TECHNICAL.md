@@ -309,6 +309,7 @@ interface SubstratePrepare {
 
 interface Substrate<V> extends Replica<V>, SubstratePrepare {
   context(): WritableContext
+  subscribeLocalUpdates(listener: () => void): () => void
   tick?(now: number): void
 }
 ```
@@ -328,14 +329,32 @@ Every replica exposes six methods:
 - `exportEntirety()` → full state as an opaque payload.
 - `exportSince(since)` → delta relative to the given version, or `null` when the cursor **cannot be served** (history trimmed past it, or an epoch this replica did not mint). `null` is not "nothing to send": the caller answers it with a whole document, so a peer that is merely current must get an empty delta instead. Conflating the two makes every agreement cost a full resend.
 - `advance(to)` → trim history as far as possible without passing `to`; a `to` the base has already passed, or one the replica cannot place, trims nothing.
-- `merge(payload, options?)` → fold an incoming payload into local state. Whether it was taken in is whether the replica's version now reaches the version the payload was offered at (`reaches(version(), offered)`): a plain delta that does not continue the log is refused and applies nothing, and a CRDT holds back ops whose dependencies are missing, so both leave the version short. A full substrate then brings σ up to date and announces the ops (see [The functional shadow](#the-functional-shadow)); subscribers receive them with `replay: true`, so layered consumers (e.g. the exchange's echo filter) can discriminate the merge from a local write. `options.origin` propagates as an app-level label. `MergeOptions` has no `source`: an echo token names a local caller and never survives a merge.
+- `merge(payload, options?)` → fold an incoming payload into local state. Whether it was taken in is whether the replica's version now reaches the version the payload was offered at (`reaches(version(), offered)`): a plain delta that does not continue the log is refused and applies nothing, and a CRDT holds back ops whose dependencies are missing, so both leave the version short. A full substrate then brings σ up to date and announces the ops (see [The functional shadow](#the-functional-shadow)); it announces them with `local: false`, so subscribers receive them with `replay: true`. `options.origin` propagates as an app-level label. `MergeOptions` has no `source`: an echo token names a local caller and never survives a merge.
 
 A `Substrate` adds interpretation:
 
 - `reader` → plain reads by path, over σ.
 - `prepare` / `afterBatch` / `runBatch` → the mutation primitives the `WritableContext` is built over. They see only local writes and their compensations.
 - `context()` → the `WritableContext` the interpreter stack closes over.
+- `subscribeLocalUpdates(listener)` → the local-update signal, below.
 - `tick(now)` → optional heartbeat for time-based projections (ephemeral decay).
+
+### The local-update signal
+
+`subscribeLocalUpdates(listener)` calls `listener` whenever the replica gains operations authored on this peer: every Kyneta batch, an aborted one included (its compensations are committed with the writes they undo), and every write made directly on the native document, on any part of it. It never fires for what `merge`, `resetFromEntirety` or `tick` bring in. A merge fires it only through a local write it causes: a Loro import commits pending native ops, an observer writes in reaction, or the Yjs delete clock ticks for a delete that arrived without a tick.
+
+It is how `@kyneta/exchange` decides what leaves the process. A changeset cannot: a native write to a Yjs type outside the root map, or to a Loro root container the schema does not declare, produces none.
+
+| Substrate | Fires on |
+|---|---|
+| Yjs | the `Y.Doc`'s `update` event, for a `transaction.local` transaction |
+| Loro | `LoroDoc.subscribeLocalUpdates` |
+| plain | the end of `afterBatch`, when the batch appended ops |
+| ephemeral | the end of `afterBatch`, when the batch wrote the tree |
+
+Plain and ephemeral have only Kyneta writers, so they share `createLocalUpdateSignal` (`src/substrates/local-update-signal.ts`) and differ only in how they know a batch wrote.
+
+The signal fires synchronously, possibly several times for one batch (a Yjs tick taken in by a merge can fire it twice), and possibly from inside another call on the substrate: a merge, an export, a native commit. A listener records and defers; it must not write.
 
 ### The `SubstratePrepare` pipeline
 
@@ -1287,17 +1306,20 @@ type PrepareIngress = BatchIngress | "compensate"
 
 type BatchOptions =                                   // SealedBatch.options
   | (CommitOptions & { ingress: "author"; aborted?: boolean })
-  | { ingress: "announce"; origin?: string }
+  | ({ ingress: "announce" } & AnnounceOptions)
 interface PrepareOptions { ingress: PrepareIngress }  // ctx.prepare
 interface CommitOptions { origin?: string; source?: unknown } // batch, applyChanges, runBatch
 interface MergeOptions { origin?: string }            // merge, resetFromEntirety
+interface AnnounceOptions extends MergeOptions { local: boolean } // ctx.announce
 ```
 
-| ingress | how it arrives | `substrate.prepare` | `batch()` return value | `substrate.afterBatch` | `Changeset.replay` |
-|---|---|---|---|---|---|
-| `author` | `dispatch` (inside `runBatch`, or auto-committing) | `(path, change, recordInverse)` | forward op | at the depth-0 seal | `false` |
-| `compensate` | the undo handler inside `runBatch` | `(path, change, null)` | not returned | (the author seal) | — |
-| `announce` | `ctx.announce(ops, origin)` | not called | not returned | not called | `true` |
+| ingress | how it arrives | `substrate.prepare` | `batch()` return value | `substrate.afterBatch` | `local` | `Changeset.replay` |
+|---|---|---|---|---|---|---|
+| `author` | `dispatch` (inside `runBatch`, or auto-committing) | `(path, change, recordInverse)` | forward op | at the depth-0 seal | — | `false` |
+| `compensate` | the undo handler inside `runBatch` | `(path, change, null)` | not returned | (the author seal) | — | — |
+| `announce` | `ctx.announce(ops, { origin, local })` | not called | not returned | not called | `true` for a native write the event bridge reports; `false` for a merge, a reset or a decay tick | `!local` |
+
+`local` is required on every announcement, as `ingress` is on every batch, so no caller can leave it to a default.
 
 The union encodes two contracts. Only an authored batch carries `source` (an echo token names a local caller and never survives a merge), and only an authored batch can be `aborted`.
 
@@ -1305,7 +1327,7 @@ The union encodes two contracts. Only an authored batch carries `source` (an ech
 
 - **`origin`** — opaque application-level label. Propagates to `Changeset.origin` so subscribers can categorize batches (`"sync"`, `"undo"`, `"migration"` — or anything else). The schema layer and the exchange **never branch on origin's value**. It is *free vocabulary* for app code.
 
-- **`replay`** — `ingress !== "author"`: true iff no local writer authored the batch (a substrate event bridge, a `merge` payload, an ephemeral decay tick). **User-facing APIs (`batch`, `applyChanges`) cannot produce it**: they only ever build `author` batches.
+- **`replay`** — `!(author || local)`: true iff no writer on this peer made the ops (a `merge` payload, a reset, an ephemeral decay tick). A write on the native document that a CRDT's event bridge reports, an editor binding's for instance, was made here, so it is not a replay. **User-facing APIs (`batch`, `applyChanges`) cannot produce it**: they only ever build `author` batches.
 
 - **`source`** — identity-typed echo-suppression token. Compared with `===` by subscribers that issued the change. Unlike `origin` (app vocabulary) and `replay` (kyneta-internal), `source` is a kyneta-managed handshake between writer and reader: the originating `batch()` caller mints a token (`Symbol("...")` or `{}`), passes it via `options.source`, and the same token round-trips to `Changeset.source` so the caller's subscriber can identify and skip its own writes. The schema layer NEVER branches on `source`'s identity. An announcement has no `source`, so any value reaching a subscriber is from a local `batch()` on this peer.
 
@@ -1313,7 +1335,7 @@ The union encodes two contracts. Only an authored batch carries `source` (an ech
 
 These four fields are *orthogonal* — they form a two-axis classification (app-set / subscriber-set / kyneta-set × provenance / outcome). See `BatchMetadata` in `@kyneta/changefeed`'s TECHNICAL.md for the full table.
 
-Layered consumers that need to discriminate "echo from sync" from "local write" — notably `@kyneta/exchange`'s auto-subscribe filter — read `Changeset.replay` rather than parsing the `origin` string. This closes a fragile string-collision surface where `batch(doc, fn, { origin: "sync" })` was accidentally suppressed and `doc.import(payload, "from-some-other-pubsub")` would echo to peers.
+`replay` is for readers: a view that shows where state came from, or the exchange's observation bus. What leaves the process does not depend on it; `@kyneta/exchange` follows the local-update signal (see [The local-update signal](#the-local-update-signal)). Reading `replay` rather than parsing the `origin` string is still what a reader should do: `origin` is free vocabulary, and a `batch(doc, fn, { origin: "sync" })` is as local as any other batch.
 
 The "schema layer and exchange never branch on origin's value" invariant is **structurally true** — a conflation that once crept into `text-adapter` (`origin === "local"` for echo suppression) and `Line` (a dead `origin === "local"` filter) was rectified by introducing the identity-typed `source` channel and removing the dead Line filter.
 
@@ -1321,7 +1343,7 @@ The "schema layer and exchange never branch on origin's value" invariant is **st
 
 Kyneta is a translucent layer over the underlying CRDT, and the user-facing origin slot — `batch.origin` in Loro, `transaction.origin` in Yjs — is reserved for `options.origin` round-trip. Providers and ecosystem libraries (Yjs `UndoManager.addTrackedOrigin`, `y-websocket`, `y-indexeddb`) depend on that slot being app-controlled; a Kyneta sentinel there would force every app to fork those tools or accept Kyneta as opaque to its own ecosystem. So the substrate's "is this commit mine?" discriminator travels through the CRDT's own event machinery instead: Loro's pre-commit hook, Yjs's `transaction.meta`. Each is substrate-shaped and documented in its backend's TECHNICAL.md.
 
-**The limit of commit-level discrimination.** Mixing raw CRDT mutations with Kyneta `batch()` calls inside one atomic unit — a Yjs `transact` body, or Loro pending ops before a Kyneta-issued commit — is unsupported: the raw mutations are absorbed into the own-commit skip and never bridged to the changefeed. Use separate transacts or commits. No origin-free approach can do better without op-level provenance, which neither CRDT exposes.
+**The limit of commit-level discrimination.** Mixing raw CRDT mutations with Kyneta `batch()` calls inside one atomic unit — a Yjs `transact` body, or Loro pending ops before a Kyneta-issued commit — is unsupported: the raw mutations are absorbed into the own-commit skip and never bridged to the changefeed, so σ misses them. They are still pushed and persisted, because the local-update signal covers the whole commit. Use separate transacts or commits. No origin-free approach can do better without op-level provenance, which neither CRDT exposes.
 
 ---
 

@@ -174,6 +174,7 @@ A peer that lacks a delete could not tell from any version that it holds less. C
 - **Holding the tick means holding the delete.** A peer whose state vector reaches the deleter's holds the deleted item (the deleter held it, so its clock is in the deleter's vector) and the tick. Kyneta exports from a state vector, and a Yjs update exported from one always carries the whole delete set, so the tick and the delete arrive together.
 - **Once per document.** A `WeakSet` guards the handler, so two substrates over one `Y.Doc` tick once per delete. A headless replica has none: it takes changes only through the exchange, whose payloads carry every author's tick, and makes none of its own.
 - **Invisible to the schema.** `kyneta.clock` is a top-level type outside the root map, so the event bridge raises no changeset for it. It is visible in `doc.share`, and providers sync it like any other type.
+- **A local write.** The tick is a local transaction, so it fires the local-update signal, and an exchange pushes and persists it like any local write: peers need it so their versions see the delete. A tick taken in by a merge can fire the signal twice: the bridge's read of a `YTextEvent` delta opens an empty transaction during Yjs's cleanup, and that transaction's update also carries the tick.
 - **Parallel providers.** A provider that forwards Kyneta changes transaction by transaction delivers a delete before its tick, so each receiving Kyneta peer ticks once more: one tiny item per receiver per delete-only transaction. Loading stored updates in one transaction (the y-indexeddb shape) ticks nothing, since the stored updates carry their ticks.
 - **Cost.** Each tick is one item and one delete-set entry, kept for the life of the document. With `gc` on, Yjs drops the tick's content, but not the item: it merges items only when their clock values are consecutive and they sit next to each other, so ticks merge into one run only when nothing else takes a clock value between them. Measured, per delete-only transaction: about 0 bytes when deletes run back to back (1000 of them add 11 bytes); about 5 bytes while typing (5000 keystrokes with a backspace every 10: 10973 → 13466 bytes, +23%); and up to about 13 bytes when the ticks also split a run of the client's own inserts, which would otherwise merge into one item (1000 cycles of appending and deleting elsewhere: 8524 → 21520 bytes). Nothing grows with the size of what was deleted, and the state vector does not grow at all. The type the tick writes to does not matter: a `Y.Array` or a `Y.Map` key costs the same, because the cost is the clock value the tick takes.
 
@@ -345,23 +346,24 @@ Source: `materializeValue` (shared, `@kyneta/schema/src/materialize-value.ts` �
 
 Source: `packages/schema/backends/yjs/src/substrate.ts` → `rootMap.observeDeep(...)` handler; `src/change-mapping.ts` → `eventsToOps`.
 
-The persistent `observeDeep` callback on the root `Y.Map` is the enforcement mechanism for the key invariant: every mutation fires the kyneta changefeed, regardless of source. Sources include:
+The persistent `observeDeep` callback on the root `Y.Map` is the enforcement mechanism for the key invariant: every mutation under the root fires the kyneta changefeed, regardless of source. Sources include:
 
 - Local kyneta writes via `batch(doc, fn)` — suppressed by the `transaction.meta` mark.
-- `exchange.merge(payload)` from remote peers — not suppressed; subscribers must see it.
-- `Y.applyUpdate(doc, update)` from application code directly — not suppressed.
-- Raw Yjs API writes (`doc.getMap("root").get(id).insert(0, "x")`) bypassing kyneta — not suppressed.
-- Other Yjs providers (y-websocket, y-webrtc) attached to the same doc — not suppressed.
+- `substrate.merge(payload)` with a peer's update — announced with `local: false`.
+- `Y.applyUpdate(doc, update)` from application code or another Yjs provider (y-websocket, y-webrtc) — announced with `local: false`.
+- Raw Yjs API writes (`doc.getMap("root").get(id).insert(0, "x")`) bypassing kyneta, such as an editor binding's (y-prosemirror, y-codemirror) — announced with `local: true`, so subscribers receive them with `replay: false`.
+
+A write to a top-level type outside `root` raises no changeset, since the schema has no place for it. It is still pushed and persisted, through the substrate's `update` subscription (`subscribeLocalUpdates`).
 
 The handler:
 
-1. If the transaction carries the `KYNETA_MARK` symbol in `transaction.meta` → skip (kyneta already notified during its own `change`).
+1. If the transaction carries this substrate's `KYNETA_MARK` in `transaction.meta` → skip (kyneta already notified during its own `change`).
 2. Call `eventsToOps(events, schema, binding)` → pure translation from Yjs events to kyneta `Op[]`.
-3. Dispatch the ops through the interpreter stack's notification pipeline.
+3. Announce the ops with `{ origin, local: transaction.local }`. `origin` is `transaction.origin` when it is a string: a merge passes its `options.origin` to `Y.applyUpdate`, so its transaction carries it, and a write an observer makes in reaction is a transaction of its own with its own origin. A merge without an origin reports `undefined`.
 
 ### Own-commit discriminator via `transaction.meta`
 
-`Y.transact` accepts an arbitrary `origin` value as its third argument. The substrate passes the user-provided `options?.origin` directly to `Y.transact`, freeing the user-facing `origin` slot for legitimate round-trips. To identify its own transactions, the substrate inscribes a unique per-substrate Symbol (`KYNETA_MARK`) into `transaction.meta` from inside the transact body.
+`Y.transact` accepts an arbitrary `origin` value as its third argument. The substrate passes the user-provided `options?.origin` directly to `Y.transact`, freeing the user-facing `origin` slot for legitimate round-trips. To identify its own transactions, the substrate inscribes a unique per-substrate Symbol (`KYNETA_MARK`, created in `createYjsSubstrate`) into `transaction.meta` from inside the transact body. Per substrate, so a second substrate over the same `Y.Doc` announces this one's batches as native local writes, and each keeps σ ≡ Π(λ).
 
 #### Why the `transaction.meta` mark
 
@@ -386,9 +388,9 @@ Three properties this gives us:
 
 ### Known limitation: mixed mode
 
-Mixing raw CRDT mutations with `batch()` calls inside the same atomic unit (a single Yjs `transact` body) is unsupported. The raw mutations will be silently absorbed into kyneta's own-commit skip and not bridged to the kyneta changefeed. To intermix, use separate transacts for raw mutations. This is a fundamental limit of commit-level discrimination.
+Mixing raw CRDT mutations with `batch()` calls inside the same atomic unit (a single Yjs `transact` body) is unsupported. The raw mutations will be silently absorbed into kyneta's own-commit skip and not bridged to the kyneta changefeed, so σ misses them. They are still pushed and persisted: the local-update signal covers the whole transaction. To intermix, use separate transacts for raw mutations. This is a fundamental limit of commit-level discrimination.
 
-Before announcing (`ctx.announce(ops, origin)`), the bridge re-materializes the `PlainState` shadow from the `Y.Doc` via `materializeYjsShadow`, so `ctx.reader` — which reads through `plainReader(shadow)` — already reflects the merged Yjs state when any subscriber runs. The announcement never reaches `substrate.prepare` or `afterBatch`. See [§The functional shadow](../../TECHNICAL.md#the-functional-shadow).
+Before announcing (`ctx.announce`), the bridge re-materializes the `PlainState` shadow from the `Y.Doc` via `materializeYjsShadow`, so `ctx.reader` — which reads through `plainReader(shadow)` — already reflects the merged Yjs state when any subscriber runs. The announcement never reaches `substrate.prepare` or `afterBatch`. See [§The functional shadow](../../TECHNICAL.md#the-functional-shadow).
 
 `materializeYjsShadow` itself uses the generic `createMaterializeInterpreter` from `@kyneta/schema` core with a Yjs-specific `MaterializeResolver` (created by `createYjsResolver`), rather than defining a bespoke interpreter. The resolver (~50 lines) handles only CRDT-specific value extraction (reading from `Y.Text`, `Y.Map`, `Y.Array`); the structural traversal, zero-default production for missing scalars/sums, and recursive descent are all handled by the shared core interpreter.
 

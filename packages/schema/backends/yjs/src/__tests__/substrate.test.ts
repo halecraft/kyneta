@@ -4,9 +4,11 @@ import {
   createRef,
   exportEntirety,
   exportSince,
+  hasSubstrate,
   merge,
   RawPath,
   Schema,
+  SUBSTRATE,
   subscribe,
   unwrap,
   version,
@@ -716,6 +718,69 @@ describe("YjsSubstrate", () => {
 })
 
 // ===========================================================================
+// What an announcement says of itself
+// ===========================================================================
+
+describe("announcements: origin and replay", () => {
+  function heard(doc: unknown) {
+    const seen: { origin?: string; replay?: boolean }[] = []
+    subscribe(doc, cs => seen.push({ origin: cs.origin, replay: cs.replay }))
+    return seen
+  }
+
+  function remoteTitle(text: string) {
+    const other = createDoc(yjs.bind(SimpleSchema))
+    batch(other, d => d.title.insert(0, text))
+    return exportEntirety(other)
+  }
+
+  it("a merge without an origin announces none", () => {
+    const doc = createDoc(yjs.bind(SimpleSchema))
+    const seen = heard(doc)
+    merge(doc, remoteTitle("remote"))
+    expect(seen).toEqual([{ origin: undefined, replay: true }])
+  })
+
+  it("an observer's write during a merge is local, and does not take the merge's origin", () => {
+    const doc = createDoc(yjs.bind(SimpleSchema))
+    const native = unwrap(doc) as Y.Doc
+    let replied = false
+    native.getMap("root").observeDeep((_events, transaction) => {
+      if (transaction.local || replied) return
+      replied = true
+      unwrap(doc.title).insert(0, "reply")
+    })
+    const seen = heard(doc)
+    merge(doc, remoteTitle("remote"), { origin: "sync" })
+    expect(seen).toEqual([
+      { origin: "sync", replay: true },
+      { origin: undefined, replay: false },
+    ])
+  })
+
+  it("two substrates over one Y.Doc each announce the other's batch as a local write", () => {
+    const bound = yjs.bind(SimpleSchema)
+    const first = createDoc(bound)
+    const native = unwrap(first) as Y.Doc
+    const second: typeof first = createRef(
+      SimpleSchema,
+      createYjsSubstrate(native, SimpleSchema, bound.identityBinding),
+    )
+    const heardByFirst = heard(first)
+    const heardBySecond = heard(second)
+
+    batch(first, d => d.count.set(1))
+    batch(second, d => d.count.set(2))
+
+    expect(heardByFirst).toEqual([
+      { origin: undefined, replay: false },
+      { origin: undefined, replay: false },
+    ])
+    expect(heardBySecond).toEqual(heardByFirst)
+  })
+})
+
+// ===========================================================================
 // The delete clock
 // ===========================================================================
 
@@ -887,5 +952,94 @@ describe("the delete clock", () => {
       data: Y.encodeStateAsUpdate(source, sv),
     })
     expect(replica.version().compare(before)).toBe("equal")
+  })
+})
+
+// ===========================================================================
+// subscribeLocalUpdates
+// ===========================================================================
+
+describe("subscribeLocalUpdates", () => {
+  function setup() {
+    const doc = createDoc(yjs.bind(SimpleSchema))
+    if (!hasSubstrate(doc)) throw new Error("expected a root ref")
+    const native = unwrap(doc) as Y.Doc
+    let count = 0
+    const unsubscribe = doc[SUBSTRATE].subscribeLocalUpdates(() => {
+      count++
+    })
+    return { doc, native, unsubscribe, count: () => count }
+  }
+
+  it("fires for a native write to the schema's root", () => {
+    const { doc, count } = setup()
+    unwrap(doc.title).insert(0, "native")
+    expect(count()).toBe(1)
+  })
+
+  it("fires for a native write outside the schema's root map", () => {
+    // The event bridge observes only the root map, so this write raises no
+    // changeset. The signal is what still gets it pushed and persisted.
+    const { doc, native, count } = setup()
+    const heard: unknown[] = []
+    subscribe(doc, cs => heard.push(cs))
+    native.getArray("side").push([1])
+    expect(count()).toBe(1)
+    expect(heard).toHaveLength(0)
+  })
+
+  it("does not fire for an empty transaction", () => {
+    const { native, count } = setup()
+    native.transact(() => {})
+    expect(count()).toBe(0)
+  })
+
+  it("does not fire for a merge of Kyneta writes", () => {
+    const { doc, count } = setup()
+    const other = createDoc(yjs.bind(SimpleSchema))
+    batch(other, d => d.title.insert(0, "remote"))
+    merge(doc, exportEntirety(other))
+    expect(count()).toBe(0)
+  })
+
+  it("fires for the delete clock's tick when a merge brings a delete without one", () => {
+    // A plain Yjs peer deletes without ticking. The tick this replica writes
+    // for it is a local write, which peers need so their versions see the
+    // delete. It can fire twice: the event bridge's read of the text delta
+    // opens an empty transaction, whose update also carries the tick.
+    const { doc, native, count } = setup()
+    batch(doc, d => d.title.insert(0, "abc"))
+    const plain = new Y.Doc()
+    Y.applyUpdate(plain, Y.encodeStateAsUpdate(native))
+    const before = Y.encodeStateVector(plain)
+    for (const value of plain.getMap("root").values()) {
+      if (value instanceof Y.Text) value.delete(1, 1)
+    }
+    const counted = count()
+    merge(doc, {
+      kind: "since",
+      encoding: "binary",
+      data: Y.encodeStateAsUpdate(plain, before),
+    })
+    expect(doc.title()).toBe("ac")
+    expect(count()).toBeGreaterThan(counted)
+  })
+
+  it("fires, inside the merge, for a write an observer makes in reaction to it", () => {
+    const { doc, native, count } = setup()
+    native.getMap("root").observeDeep((_events, tr) => {
+      if (!tr.local) native.getArray("side").push([1])
+    })
+    const other = createDoc(yjs.bind(SimpleSchema))
+    batch(other, d => d.title.insert(0, "remote"))
+    merge(doc, exportEntirety(other))
+    expect(count()).toBeGreaterThan(0)
+  })
+
+  it("stops after the unsubscribe", () => {
+    const { doc, unsubscribe, count } = setup()
+    unsubscribe()
+    batch(doc, d => d.count.set(1))
+    expect(count()).toBe(0)
   })
 })

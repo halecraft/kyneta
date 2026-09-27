@@ -629,7 +629,9 @@ Multi-transport deduplication: when a peer is connected through multiple transpo
 
 ### Escape Hatches
 
-Access the underlying substrate when you need to:
+Reach the native document or container behind a ref when you need to, for
+instance to attach an editor binding (y-prosemirror, y-codemirror,
+loro-prosemirror):
 
 <!-- ts-docs-setup
 const doc = createDoc(MyDoc)
@@ -637,17 +639,15 @@ const doc = createDoc(MyDoc)
 <!-- Not compiled: assumes a document shape the shared prelude does not declare. -->
 <!-- ts-docs-verifier:ignore -->
 ```ts
-// General — returns the Substrate<any> backing a ref
 import { unwrap } from "@kyneta/schema"
-const substrate = unwrap(doc)
-substrate.version().serialize()
-substrate.exportEntirety()
 
-// Loro-specific — returns the raw LoroDoc
-import { loro } from "@kyneta/loro-schema"
-const loroDoc = loro.unwrap(doc)
-loroDoc.toJSON()
+const ydoc = unwrap(doc)          // the Y.Doc, for a yjs.bind document
+const text = unwrap(doc.title)    // the Y.Text, LoroText, … behind a field
+text.insert(0, "hello")
 ```
+
+A write made this way is a local write like any other: the exchange pushes it
+to peers and persists it, and subscribers receive it with `replay: false`.
 
 ---
 
@@ -917,9 +917,7 @@ Each binding target is a fixed `(substrate, sync-mode, supported-laws)` bundle. 
 
 | Function | Package | Description |
 |----------|---------|-------------|
-| `unwrap(ref)` | `@kyneta/schema` | Returns the `Substrate<any>` backing a ref. |
-| `loro.unwrap(ref)` | `@kyneta/loro-schema` | Returns the `LoroDoc` backing a Loro-backed ref. |
-| `yjs.unwrap(ref)` | `@kyneta/yjs-schema` | Returns the `Y.Doc` backing a Yjs-backed ref. |
+| `unwrap(ref)` | `@kyneta/schema` | Returns the native document or container behind a ref: a `Y.Doc` or `LoroDoc` for a document, a `Y.Text`, `LoroText`, … for a field. Writes made on it sync and persist. |
 
 ### Storage
 

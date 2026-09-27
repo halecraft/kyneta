@@ -57,6 +57,7 @@ import {
   versionVectorMeet,
 } from "../version-vector.js"
 import { Zero } from "../zero.js"
+import { createLocalUpdateSignal } from "./local-update-signal.js"
 
 // ---------------------------------------------------------------------------
 // PlainVersion — monotonic integer version marker
@@ -264,6 +265,10 @@ export function createPlainSubstrate(
   // `afterBatch`.
   const pendingOps: Op[] = []
 
+  // Every op this substrate logs locally is authored here, so a batch that
+  // logged something is exactly a local update.
+  const localUpdates = createLocalUpdateSignal()
+
   // The WritableContext is built lazily and cached — the same context
   // is returned on every call to `context()`.
   let cachedCtx: WritableContext | undefined
@@ -275,7 +280,10 @@ export function createPlainSubstrate(
   const docEffects = (options?: MergeOptions): PlainEffects => ({
     append(batch) {
       applyOps(doc, batch)
-      substrate.context().announce(batch, options?.origin)
+      substrate.context().announce(batch, {
+        origin: options?.origin,
+        local: false,
+      })
     },
     adopt(state) {
       // Every schema-defined top-level field is present in the incoming
@@ -285,7 +293,10 @@ export function createPlainSubstrate(
       for (const key of movedRootKeys(doc, state)) moved[key] = state[key]
       const ops = objectToReplaceOps(moved)
       applyOps(doc, ops)
-      substrate.context().announce(ops, options?.origin)
+      substrate.context().announce(ops, {
+        origin: options?.origin,
+        local: false,
+      })
     },
   })
 
@@ -326,7 +337,10 @@ export function createPlainSubstrate(
       // makes the new version carry the new lineage.
       if (clock.lineage() === DEFAULT_LINEAGE) clock.adopt(randomHex(8))
       core.append(pendingOps.splice(0))
+      localUpdates.notify()
     },
+
+    subscribeLocalUpdates: localUpdates.subscribe,
 
     context(): WritableContext {
       if (!cachedCtx) {

@@ -2,19 +2,21 @@
 //
 // The notification engine lives in @kyneta/schema and every substrate routes
 // through it, so this is not re-testing schema's logic. What it pins is that
-// Yjs's event bridge feeds that engine the same way the plain substrate does
-// — in particular for an incoming merge, which is announced through
-// ctx.announce(ops, origin) with an op list that
+// Yjs's event bridge feeds that engine the same way the plain substrate does,
+// for what it takes in from a peer and for a write made on the Y.Doc
+// directly. Both are announced through ctx.announce, with an op list that
 // expandMapOpsToLeaves may have spread across many paths.
 
-import { batch, createRef } from "@kyneta/schema"
+import { batch, createRef, unwrap } from "@kyneta/schema"
 import {
   type DeliveryDoc,
   DeliveryFixture,
   type DeliveryTestEnv,
   deliveryConformance,
 } from "@kyneta/schema/testing"
+import * as Y from "yjs"
 import { yjs } from "../bind-yjs.js"
+import { createYjsSubstrate } from "../substrate.js"
 
 function createYjsEnv(): DeliveryTestEnv {
   const bound = yjs.bind(DeliveryFixture)
@@ -36,7 +38,7 @@ function createYjsEnv(): DeliveryTestEnv {
 
   return {
     doc,
-    remoteMerge(fn) {
+    remoteWrite(fn) {
       // Seed B from A first so both peers agree on container identity before
       // the remote write. Without it the merge carries container creation as
       // well as the write — a noisier payload that tests something else.
@@ -50,7 +52,20 @@ function createYjsEnv(): DeliveryTestEnv {
       // Guards against a vacuous pass: with no delta the merge is a no-op and
       // every "one changeset" assertion would hold trivially.
       if (delta === null) throw new Error("exportSince produced no delta")
-      substrateA.merge(delta, { origin: "sync" })
+      return { delta, entirety: substrateB.exportEntirety() }
+    },
+    nativeWrite(fn) {
+      // A second substrate over the same native document writes through its
+      // own bracket, so to `doc`'s bridge the transaction is a native local
+      // write it did not make, as an editor binding's is. This reuses the
+      // schema's identity-keyed paths instead of spelling them out natively.
+      const native = unwrap(doc)
+      if (!(native instanceof Y.Doc)) throw new Error("expected a Y.Doc")
+      const other: DeliveryDoc = createRef(
+        DeliveryFixture,
+        createYjsSubstrate(native, DeliveryFixture, bound.identityBinding),
+      )
+      batch(other, fn)
     },
   }
 }

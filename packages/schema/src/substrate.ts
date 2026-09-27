@@ -455,7 +455,8 @@ export interface ReplicaLike {
    * or CRDT ops held back for a missing dependency, leave it short.
    *
    * A full Substrate then brings σ into agreement with λ and announces the
-   * ops, so subscribers receive them with `Changeset.replay: true`. A bare
+   * ops with `local: false`, so subscribers receive them with
+   * `Changeset.replay: true`. A bare
    * Replica has no changefeed and only updates its state and version.
    */
   merge(payload: SubstratePayload, options?: MergeOptions): void
@@ -539,7 +540,8 @@ export interface Replica<V extends Version = Version> extends ReplicaLike {
  *   native event, a decay tick) and has already made λ and σ agree. The batch
  *   only tells the changefeed what happened; the substrate never sees it.
  *
- * `Changeset.replay` is `ingress !== "author"`.
+ * `Changeset.replay` is true iff no writer on this peer made the ops: an
+ * announcement says which with `local` (see {@link AnnounceOptions}).
  */
 export type BatchIngress = "author" | "announce"
 
@@ -590,6 +592,16 @@ export interface MergeOptions {
 }
 
 /**
+ * Options for `ctx.announce`. `local` is required so every caller states it:
+ * true iff this peer authored the ops, which is the case for a write made on
+ * the native document that the substrate's event bridge reports. A merge, a
+ * reset and a decay tick announce with `local: false`.
+ */
+export interface AnnounceOptions extends MergeOptions {
+  readonly local: boolean
+}
+
+/**
  * Batch-level options: what a sealed batch (`SealedBatch.options`) carries
  * to `ctx.deliver`.
  *
@@ -601,7 +613,7 @@ export type BatchOptions =
       readonly ingress: "author"
       readonly aborted?: boolean
     })
-  | { readonly ingress: "announce"; readonly origin?: string }
+  | ({ readonly ingress: "announce" } & AnnounceOptions)
 
 /** Per-op options, taken by `ctx.prepare`. */
 export interface PrepareOptions {
@@ -624,8 +636,7 @@ export type RecordInverseFn = (path: Path, inverse: ChangeBase) => void
  * These see only local writes and their compensations. Every other change
  * (a merge, a native event, a decay tick) is applied by the substrate itself,
  * which then brings σ into agreement with λ and announces the ops through
- * `ctx.announce(ops, origin)`, which never calls back into `prepare` or
- * `afterBatch`.
+ * `ctx.announce`, which never calls back into `prepare` or `afterBatch`.
  *
  * Caching and changefeed layers wrap the context built over these; the
  * substrate never needs to know about those layers.
@@ -714,6 +725,27 @@ export interface Substrate<V extends Version = Version>
 
   /** Build a WritableContext for this substrate. */
   context(): WritableContext
+
+  /**
+   * Call `listener` whenever this replica gains local operations it did not
+   * have before: every authored batch, aborted ones included, and every write
+   * made directly on the native document, on any part of it. Never for what
+   * `merge`, `resetFromEntirety` or `tick` bring in. A merge still fires it
+   * when it causes a local write: a Loro import commits pending native ops,
+   * an observer may write in reaction, and the Yjs delete clock ticks for a
+   * delete that arrived without a tick.
+   *
+   * This, not the changefeed, is what tells the `Runtime` that something must
+   * leave the process: a native write to a type outside the schema produces
+   * no changeset at all.
+   *
+   * Fires synchronously, possibly several times per batch, and possibly from
+   * inside another call on this substrate (a merge, an export, a native
+   * commit). A listener records and defers; it must not write.
+   *
+   * @returns The unsubscribe.
+   */
+  subscribeLocalUpdates(listener: () => void): () => void
 
   /**
    * Heartbeat for time-based projections (ephemeral decay): re-project σ at

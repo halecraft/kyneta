@@ -32,7 +32,6 @@ import type {
   ReplicaFactoryLike,
   ReplicaLike,
   ReplicaType,
-  Substrate,
   SubstratePayload,
   SyncMode,
   Version,
@@ -71,6 +70,7 @@ import {
   observeSyncEffect,
   summarizeChangeset,
 } from "./observe.js"
+import type { DocReadyInfo } from "./runtime.js"
 import {
   createSessionUpdate,
   initSession,
@@ -101,37 +101,8 @@ import type {
 // Types
 // ---------------------------------------------------------------------------
 
-/**
- * Fields shared by both document modes — the uniform surface that
- * `#buildOffer`/`#sendOfferToPeer`, `#executeImportDocData`, `registerDoc`, and
- * `notifyLocalChange` operate on without mode branching.
- */
-type DocRuntimeBase = {
-  docId: DocId
-  replica: ReplicaLike
-  replicaFactory: ReplicaFactoryLike
-  syncMode: SyncMode
-  schemaHash: string
-  /** Optional set of ancestor hashes from the schema's migration chain.
-   *  Forwarded to `sync/doc-ensure` so `present` messages can advertise
-   *  multi-version compatibility. */
-  supportedHashes?: readonly string[]
-}
-
-/**
- * Discriminated by participation mode so the `mode === "interpret"`
- * branch can narrow `replica` to `Substrate<Version>` — the only
- * functional difference between modes. The discriminant carries no
- * other baggage.
- */
-export type DocRuntime =
-  | (DocRuntimeBase & {
-      mode: "interpret"
-      replica: Substrate<Version>
-    })
-  | (DocRuntimeBase & {
-      mode: "replicate"
-    })
+/** A registered document, as the Synchronizer sees it: the Runtime's record, read-only. */
+type RegisteredDoc = Readonly<DocReadyInfo>
 
 /**
  * Fired by the `ensure-doc` effect when a peer announces an unknown doc.
@@ -179,6 +150,12 @@ export type SynchronizerParams = {
   canAccept: (docId: DocId, peer: PeerIdentityDetails) => boolean
   canConnect?: (peer: PeerIdentityDetails) => boolean
   canReset: LineageBoundaryPredicate
+  /**
+   * Replace a replicate-mode document's replica with one built from
+   * `payload`. The Runtime owns the document's record, so it does the
+   * replacing; the Synchronizer holds the same record and sees it.
+   */
+  rebuildReplica: (docId: DocId, payload: SubstratePayload) => void
   onEnsureDoc?: DocCreationCallback
   onEnsureDocDismissed?: DocDismissedCallback
   departureTimeout?: number
@@ -522,7 +499,7 @@ export class Synchronizer {
   #syncHandle: ObservableHandle<SyncInput, SyncModel>
   #outerHandle: DispatcherHandle<OuterMsg>
 
-  readonly #docRuntimes = new Map<DocId, DocRuntime>()
+  readonly #docs = new Map<DocId, RegisteredDoc>()
   readonly #docCreationCallback?: DocCreationCallback
   readonly #docDismissedCallback?: DocDismissedCallback
 
@@ -564,6 +541,7 @@ export class Synchronizer {
   readonly #observationBus: ObservationBus
 
   readonly #canReset: LineageBoundaryPredicate
+  readonly #rebuildReplica: SynchronizerParams["rebuildReplica"]
   readonly #canConnect?: (peer: PeerIdentityDetails) => boolean
   readonly #canShare: (docId: DocId, peer: PeerIdentityDetails) => boolean
   readonly #canAccept: (docId: DocId, peer: PeerIdentityDetails) => boolean
@@ -594,9 +572,8 @@ export class Synchronizer {
 
   /**
    * Publish a document changeset to the observation bus. Called by the
-   * Exchange from the per-doc changefeed subscription for BOTH local and
-   * replay changesets (before the sync echo-filter), so the doc layer
-   * covers every interpreted doc — including remote-auto-resolved ones.
+   * Exchange for every changeset of every interpreted doc, local and replay,
+   * including remote-auto-resolved ones.
    */
   observeDocChangeset(docId: DocId, changeset: Changeset<unknown>): void {
     if (!this.#observationBus.enabled) return
@@ -614,10 +591,10 @@ export class Synchronizer {
    * renderer — not pushed through the bus.
    */
   docHistory(docId: DocId): DevtoolsHistory | undefined {
-    const runtime = this.#docRuntimes.get(docId)
-    if (!runtime) return undefined
-    return hasDevtoolsHistory(runtime.replica)
-      ? runtime.replica[DEVTOOLS_HISTORY]
+    const doc = this.#docs.get(docId)
+    if (!doc) return undefined
+    return hasDevtoolsHistory(doc.replica)
+      ? doc.replica[DEVTOOLS_HISTORY]
       : undefined
   }
 
@@ -628,6 +605,7 @@ export class Synchronizer {
     canAccept,
     canConnect,
     canReset,
+    rebuildReplica,
     onEnsureDoc,
     onEnsureDocDismissed,
     departureTimeout,
@@ -641,6 +619,7 @@ export class Synchronizer {
     this.#departureTimeout = departureTimeout ?? 30_000
     this.#selfFeatures = selfFeatures
     this.#canReset = canReset
+    this.#rebuildReplica = rebuildReplica
     this.#canConnect = canConnect
     this.#canShare = canShare
     this.#canAccept = canAccept
@@ -828,45 +807,43 @@ export class Synchronizer {
   }
 
   /**
-   * Track a doc-runtime and announce the doc to peers via `doc-ensure`.
+   * Track a document and announce it to peers via `doc-ensure`.
    * Called by Exchange.get() / Exchange.replicate() after the
    * substrate/replica is created.
    */
-  registerDoc(runtime: DocRuntime): void {
+  registerDoc(doc: RegisteredDoc): void {
     const sync = this.#syncHandle.getState()
-    const existing = sync.documents.get(runtime.docId)
+    const existing = sync.documents.get(doc.docId)
     // The promoted-vs-created distinction depends on the *pre-dispatch*
-    // model state; capture it before #docRuntimes mutates and the
+    // model state; capture it before #docs mutates and the
     // dispatch updates sync.documents.
     // Any change of mode is a promotion, not just `deferred → X`: a document
     // relayed headlessly and now interpreted has moved tier exactly as a
     // deferred one does.
     //
     // Emitting matters more than it looks. `#emitDocEvents` rebuilds every
-    // `DocInfo` from `#docRuntimes` but returns early on an empty event list,
+    // `DocInfo` from `#docs` but returns early on an empty event list,
     // so a transition with no event is not a missing notification — it is
     // `exchange.documents` reporting the old mode indefinitely.
     let event: DocChange | undefined
-    if (existing && existing.mode !== runtime.mode) {
-      event = { type: "doc-promoted", docId: runtime.docId }
-    } else if (!this.#docRuntimes.has(runtime.docId)) {
-      event = { type: "doc-created", docId: runtime.docId }
+    if (existing && existing.mode !== doc.mode) {
+      event = { type: "doc-promoted", docId: doc.docId }
+    } else if (!this.#docs.has(doc.docId)) {
+      event = { type: "doc-created", docId: doc.docId }
     }
 
-    this.#docRuntimes.set(runtime.docId, runtime)
+    this.#docs.set(doc.docId, doc)
 
     this.#dispatchSync({
       type: "sync/doc-ensure",
-      docId: runtime.docId,
-      mode: runtime.mode,
-      version: runtime.replica.version().serialize(),
-      replicaType: runtime.replicaFactory.replicaType,
-      historyFree: runtime.replicaFactory.historyFree,
-      syncMode: runtime.syncMode,
-      schemaHash: runtime.schemaHash,
-      ...(runtime.supportedHashes
-        ? { supportedHashes: runtime.supportedHashes }
-        : {}),
+      docId: doc.docId,
+      mode: doc.mode,
+      version: doc.replica.version().serialize(),
+      replicaType: doc.replicaFactory.replicaType,
+      historyFree: doc.replicaFactory.historyFree,
+      syncMode: doc.syncMode,
+      schemaHash: doc.schemaHash,
+      ...(doc.supportedHashes ? { supportedHashes: doc.supportedHashes } : {}),
       event,
     })
   }
@@ -908,23 +885,24 @@ export class Synchronizer {
   }
 
   /**
-   * Normally fired automatically by the Exchange's changefeed
-   * subscription after `batch(doc, ...)`. Call directly only when
-   * mutating the substrate outside the changefeed (e.g., via `unwrap`).
+   * Push a document's local changes to peers. The Exchange calls this from
+   * the Runtime's `onDocLocalChange` hook, which fires for every local
+   * write, including writes made directly on the native document, so no
+   * application code needs to call it.
    */
   notifyLocalChange(docId: DocId): void {
-    const runtime = this.#docRuntimes.get(docId)
-    if (!runtime) return
+    const doc = this.#docs.get(docId)
+    if (!doc) return
 
     this.#dispatchSync({
       type: "sync/local-doc-change",
       docId,
-      version: runtime.replica.version().serialize(),
+      version: doc.replica.version().serialize(),
     })
   }
 
-  getDocRuntime(docId: DocId): DocRuntime | undefined {
-    return this.#docRuntimes.get(docId)
+  getDoc(docId: DocId): RegisteredDoc | undefined {
+    return this.#docs.get(docId)
   }
 
   /**
@@ -942,8 +920,8 @@ export class Synchronizer {
     docId: DocId,
     peerFilter?: (peer: PeerIdentityDetails, docId: DocId) => boolean,
   ): Version | null {
-    const runtime = this.#docRuntimes.get(docId)
-    if (!runtime) return null
+    const doc = this.#docs.get(docId)
+    if (!doc) return null
 
     let lcv: Version | null = null
 
@@ -957,7 +935,7 @@ export class Synchronizer {
 
       let peerVersion: Version
       try {
-        peerVersion = runtime.replicaFactory.parseVersion(
+        peerVersion = doc.replicaFactory.parseVersion(
           docSync.ourVersionTheyHold,
         )
       } catch {
@@ -973,19 +951,19 @@ export class Synchronizer {
   }
 
   hasDoc(docId: DocId): boolean {
-    return this.#docRuntimes.has(docId)
+    return this.#docs.has(docId)
   }
 
   async removeDocument(docId: DocId): Promise<void> {
     const sync = this.#syncHandle.getState()
     const event: DocChange | undefined =
-      this.#docRuntimes.has(docId) || sync.documents.has(docId)
+      this.#docs.has(docId) || sync.documents.has(docId)
         ? { type: "doc-removed", docId }
         : undefined
     // Runtime must be deleted before the dispatch: emit-doc-events
-    // rebuilds the doc map from #docRuntimes, so a live entry here
+    // rebuilds the doc map from #docs, so a live entry here
     // would re-introduce the doc the event is meant to remove.
-    this.#docRuntimes.delete(docId)
+    this.#docs.delete(docId)
     this.#dispatchSync({
       type: "sync/doc-delete",
       docId,
@@ -996,11 +974,11 @@ export class Synchronizer {
   dismissDocument(docId: DocId): void {
     const sync = this.#syncHandle.getState()
     const event: DocChange | undefined =
-      this.#docRuntimes.has(docId) || sync.documents.has(docId)
+      this.#docs.has(docId) || sync.documents.has(docId)
         ? { type: "doc-removed", docId }
         : undefined
-    // See removeDocument: runtime delete must precede the dispatch.
-    this.#docRuntimes.delete(docId)
+    // See removeDocument: the local delete must precede the dispatch.
+    this.#docs.delete(docId)
     this.#dispatchSync({
       type: "sync/doc-dismiss",
       docId,
@@ -1011,7 +989,7 @@ export class Synchronizer {
   suspendDocument(docId: DocId): void {
     const sync = this.#syncHandle.getState()
     const event: DocChange | undefined =
-      this.#docRuntimes.has(docId) || sync.documents.has(docId)
+      this.#docs.has(docId) || sync.documents.has(docId)
         ? { type: "doc-suspended", docId }
         : undefined
     // Runtime survives — `resume()` re-registers from it. Emit-doc-events
@@ -1026,28 +1004,28 @@ export class Synchronizer {
   }
 
   /**
-   * Rejoin the sync graph using the surviving runtime's current version.
+   * Rejoin the sync graph using the surviving document's current version.
    * Peers receive `present` + `interest` and delta-sync from the
    * suspended version, so any drift accumulated during suspension is
    * reconciled rather than overwritten.
    */
   resumeDocument(docId: DocId): void {
-    const runtime = this.#docRuntimes.get(docId)
-    if (!runtime) {
+    const doc = this.#docs.get(docId)
+    if (!doc) {
       throw new Error(
-        `Cannot resume document '${docId}': no runtime found. ` +
+        `Cannot resume document '${docId}': it is not registered. ` +
           `The document may have been destroyed.`,
       )
     }
     this.#dispatchSync({
       type: "sync/doc-ensure",
-      docId: runtime.docId,
-      mode: runtime.mode,
-      version: runtime.replica.version().serialize(),
-      replicaType: runtime.replicaFactory.replicaType,
-      historyFree: runtime.replicaFactory.historyFree,
-      syncMode: runtime.syncMode,
-      schemaHash: runtime.schemaHash,
+      docId: doc.docId,
+      mode: doc.mode,
+      version: doc.replica.version().serialize(),
+      replicaType: doc.replicaFactory.replicaType,
+      historyFree: doc.replicaFactory.historyFree,
+      syncMode: doc.syncMode,
+      schemaHash: doc.schemaHash,
       event: { type: "doc-resumed", docId },
     })
   }
@@ -1170,12 +1148,12 @@ export class Synchronizer {
   }
 
   /**
-   * Fires once per docId at quiescence when the document's state has
-   * advanced — from a local mutation (changefeed → notifyLocalChange)
-   * or a network import (handleOffer → import-doc-data → handleDocImported).
-   * Coalescing is intentional: multiple advances within one dispatch
-   * cycle produce a single notification so persistence reads the full
-   * delta once instead of re-exporting per change.
+   * Fires once per docId at quiescence when a network import advanced the
+   * document's state (handleOffer → import-doc-data → handleDocImported).
+   * Local changes don't fire it: the Runtime persists them from its own
+   * drain before it reports them. Coalescing is intentional: multiple
+   * advances within one dispatch cycle produce a single notification so
+   * persistence reads the full delta once instead of re-exporting per change.
    */
   onStateAdvanced(cb: (docId: DocId) => void): () => void {
     this.#stateAdvancedListeners.add(cb)
@@ -1470,7 +1448,7 @@ export class Synchronizer {
    */
   #withDigest(message: SyncMsg): SyncMsg {
     if (message.type !== "interest" && message.type !== "offer") return message
-    const digest = this.#docRuntimes.get(message.docId)?.replica.digest?.()
+    const digest = this.#docs.get(message.docId)?.replica.digest?.()
     return digest === undefined ? message : { ...message, digest }
   }
 
@@ -1505,23 +1483,23 @@ export class Synchronizer {
    * not parse.
    */
   #buildOffer(docId: DocId, sinceVersion?: string): SubstratePayload | null {
-    const runtime = this.#docRuntimes.get(docId)
-    if (!runtime) {
-      console.warn(`[exchange] doc runtime not found, offer not sent: ${docId}`)
+    const doc = this.#docs.get(docId)
+    if (!doc) {
+      console.warn(
+        `[exchange] document not registered, offer not sent: ${docId}`,
+      )
       return null
     }
-    if (sinceVersion === undefined) return runtime.replica.exportEntirety()
+    if (sinceVersion === undefined) return doc.replica.exportEntirety()
 
     let since: Version
     try {
-      since = runtime.replicaFactory.parseVersion(sinceVersion)
+      since = doc.replicaFactory.parseVersion(sinceVersion)
     } catch (error) {
       console.warn(`[exchange] version parse failed for doc '${docId}':`, error)
       return null
     }
-    return (
-      runtime.replica.exportSince(since) ?? runtime.replica.exportEntirety()
-    )
+    return doc.replica.exportSince(since) ?? doc.replica.exportEntirety()
   }
 
   #sendOfferToPeer(
@@ -1532,8 +1510,8 @@ export class Synchronizer {
     const peer = this.#sessionHandle.getState().peers.get(peerId)
     if (!peer || peer.channels.size === 0) return
 
-    const runtime = this.#docRuntimes.get(docId)
-    if (!runtime) return
+    const doc = this.#docs.get(docId)
+    if (!doc) return
 
     this.#outboundQueue.push({
       toChannelIds: Array.from(peer.channels),
@@ -1541,7 +1519,7 @@ export class Synchronizer {
         type: "offer",
         docId,
         payload,
-        version: runtime.replica.version().serialize(),
+        version: doc.replica.version().serialize(),
       }),
     })
   }
@@ -1561,15 +1539,15 @@ export class Synchronizer {
    * version comparison" true by construction rather than by discipline.
    */
   #classifyPeer(
-    runtime: DocRuntime,
+    doc: RegisteredDoc,
     docId: DocId,
     peerId: PeerId,
     version: string | undefined,
     digest?: string,
   ): VersionGapResult {
     const gap = resolveInboundVersionGap(
-      runtime.replica,
-      runtime.replicaFactory,
+      doc.replica,
+      doc.replicaFactory,
       version,
       digest,
     )
@@ -1606,10 +1584,10 @@ export class Synchronizer {
     version: string | undefined
     digest?: string
   }): void {
-    const runtime = this.#docRuntimes.get(effect.docId)
-    if (!runtime) return
+    const doc = this.#docs.get(effect.docId)
+    if (!doc) return
     this.#classifyPeer(
-      runtime,
+      doc,
       effect.docId,
       effect.peerId,
       effect.version,
@@ -1622,11 +1600,11 @@ export class Synchronizer {
    * names, and report what it did.
    */
   #executeImportDocData(effect: ImportDocData): void {
-    const runtime = this.#docRuntimes.get(effect.docId)
-    if (!runtime) return
+    const doc = this.#docs.get(effect.docId)
+    if (!doc) return
 
     const gap = this.#classifyPeer(
-      runtime,
+      doc,
       effect.docId,
       effect.fromPeerId,
       effect.version,
@@ -1637,11 +1615,11 @@ export class Synchronizer {
     const resetTrigger =
       gap.kind === "gap"
         ? classifyResetTrigger(
-            runtime.replica.version().lineage,
+            doc.replica.version().lineage,
             gap.parsed.lineage,
             effect.payload.kind === "entirety",
             peerState?.docSyncStates.get(effect.docId)?.status === "synced",
-            runtime.replicaFactory.historyFree,
+            doc.replicaFactory.historyFree,
           )
         : "none"
     const plan = planImport({
@@ -1654,7 +1632,7 @@ export class Synchronizer {
           (peerState?.identity ?? {
             peerId: effect.fromPeerId,
           }) as PeerIdentityDetails,
-          runtime.syncMode,
+          doc.syncMode,
         ),
       payloadKind: effect.payload.kind,
     })
@@ -1680,11 +1658,11 @@ export class Synchronizer {
       )
     }
 
-    const prior = runtime.replica.version()
+    const prior = doc.replica.version()
     try {
       switch (plan) {
         case "reset":
-          if (runtime.mode === "replicate") {
+          if (doc.mode === "replicate") {
             // Headless replicas rebuild from the payload rather than merging
             // it, for both triggers: the incoming image is not a continuation
             // of what we hold. Under `"compaction"` the sender rewrote its
@@ -1697,20 +1675,19 @@ export class Synchronizer {
             // would be wrong for a field-level LWW substrate, which drops
             // concurrent field writes the sender has not seen; such a
             // document never reaches here (see `classifyResetTrigger`).
-            runtime.replica = runtime.replicaFactory.fromEntirety(
-              effect.payload,
-            )
+            //
+            // The Runtime does the rebuild: it owns the document's record,
+            // and persistence and promotion read the replica from there.
+            this.#rebuildReplica(effect.docId, effect.payload)
           } else {
             // `resetFromEntirety` discards local history and adopts the
             // incoming state and lineage, which the routine merge never does
             // across lineages.
-            runtime.replica.resetFromEntirety(effect.payload, {
-              origin: "sync",
-            })
+            doc.replica.resetFromEntirety(effect.payload, { origin: "sync" })
           }
           break
         case "merge":
-          runtime.replica.merge(effect.payload, { origin: "sync" })
+          doc.replica.merge(effect.payload, { origin: "sync" })
           break
         case "ask-whole":
           break
@@ -1726,7 +1703,7 @@ export class Synchronizer {
       return
     }
 
-    const after = runtime.replica.version()
+    const after = doc.replica.version()
     this.#took(
       effect,
       after.serialize(),
@@ -1735,9 +1712,9 @@ export class Synchronizer {
         prior,
         after,
         offered: gap.parsed,
-        historyFree: runtime.replicaFactory.historyFree,
+        historyFree: doc.replicaFactory.historyFree,
       }),
-      this.#senderWillHold(runtime, effect, gap.parsed, plan),
+      this.#senderWillHold(doc, effect, gap.parsed, plan),
     )
   }
 
@@ -1749,21 +1726,18 @@ export class Synchronizer {
    * whose versions are private counters that do not join across replicas.
    */
   #senderWillHold(
-    runtime: DocRuntime,
+    doc: RegisteredDoc,
     effect: ImportDocData,
     offered: Version,
     plan: ImportPlan,
   ): string | undefined {
-    if (runtime.replicaFactory.historyFree) return undefined
+    if (doc.replicaFactory.historyFree) return undefined
     const baseline = effect.ourVersionTheyWillHold
     if (baseline === undefined || plan === "reset") {
       return offered.serialize()
     }
     try {
-      return runtime.replicaFactory
-        .parseVersion(baseline)
-        .join(offered)
-        .serialize()
+      return doc.replicaFactory.parseVersion(baseline).join(offered).serialize()
     } catch {
       // A baseline that does not parse or join (from another lineage) is
       // no longer what the sender holds; its offer is.
@@ -1847,14 +1821,14 @@ export class Synchronizer {
 
     this.#docHandle.clear()
 
-    // Rebuild from #docRuntimes (interpret + replicate docs)
+    // Rebuild from #docs (interpret + replicate docs)
     const sync = this.#syncHandle.getState()
-    for (const [docId, runtime] of this.#docRuntimes) {
+    for (const [docId, doc] of this.#docs) {
       const suspended = !sync.documents.has(docId)
-      this.#docHandle.set(docId, { mode: runtime.mode, suspended })
+      this.#docHandle.set(docId, { mode: doc.mode, suspended })
     }
 
-    // Merge deferred docs from syncModel (no runtime, only model entry)
+    // Merge deferred docs from syncModel (not registered, only a model entry)
     for (const [docId, entry] of sync.documents) {
       if (entry.mode === "deferred") {
         this.#docHandle.set(docId, { mode: "deferred", suspended: false })
@@ -1870,7 +1844,7 @@ export class Synchronizer {
     if (this.#peerSyncListeners.size === 0 && !observing) return
 
     for (const docId of docIds) {
-      if (!this.#docRuntimes.has(docId)) continue
+      if (!this.#docs.has(docId)) continue
       const peerStates = this.getPeerStates(docId)
       // Observation tee — the authoritative per-peer-doc status, so a devtools
       // fold reconstructs the directory/status view without re-deriving the
@@ -1886,7 +1860,7 @@ export class Synchronizer {
     if (this.#stateAdvancedListeners.size === 0 || docIds.length === 0) return
 
     for (const docId of docIds) {
-      if (!this.#docRuntimes.has(docId)) continue
+      if (!this.#docs.has(docId)) continue
       for (const listener of this.#stateAdvancedListeners) {
         listener(docId)
       }
@@ -1920,9 +1894,9 @@ export class Synchronizer {
    * see doc-removed / peer-departed events before the handles are
    * disposed.
    *
-   * The docIds snapshot must be taken before `#docRuntimes` is cleared;
+   * The docIds snapshot must be taken before `#docs` is cleared;
    * the clear itself must happen before the dispatch, because
-   * `#emitDocEvents` rebuilds the doc map from `#docRuntimes` and a
+   * `#emitDocEvents` rebuilds the doc map from `#docs` and a
    * live entry there would re-introduce the doc the event is meant to
    * remove.
    */
@@ -1930,14 +1904,14 @@ export class Synchronizer {
     const sync = this.#syncHandle.getState()
 
     const docIds: DocId[] = []
-    for (const docId of this.#docRuntimes.keys()) docIds.push(docId)
+    for (const docId of this.#docs.keys()) docIds.push(docId)
     for (const [docId, entry] of sync.documents) {
-      if (entry.mode === "deferred" && !this.#docRuntimes.has(docId)) {
+      if (entry.mode === "deferred" && !this.#docs.has(docId)) {
         docIds.push(docId)
       }
     }
 
-    this.#docRuntimes.clear()
+    this.#docs.clear()
 
     if (docIds.length > 0) {
       this.#dispatchSync({

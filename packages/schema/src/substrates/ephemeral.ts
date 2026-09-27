@@ -51,6 +51,7 @@ import type {
   Version,
 } from "../substrate.js"
 import { BACKING_DOC } from "../substrate.js"
+import { createLocalUpdateSignal } from "./local-update-signal.js"
 import { DEFAULT_LINEAGE, movedRootKeys, objectToReplaceOps } from "./plain.js"
 import {
   applyChangeToStateTree,
@@ -401,6 +402,12 @@ export function createStateSubstrate(
 
   let cachedCtx: WritableContext | undefined
 
+  // Whether the authored batch in progress wrote the tree. Compensations
+  // write it too, so an aborted batch counts. Merges and decay ticks never
+  // reach `prepare` or `afterBatch`.
+  let wrote = false
+  const localUpdates = createLocalUpdateSignal()
+
   /**
    * The tree moved without a local write: re-project σ from it and tell
    * subscribers which root fields changed.
@@ -432,7 +439,10 @@ export function createStateSubstrate(
     }
     // A state image of what changed, turned into ops by the same primitive
     // the plain substrate absorbs an entirety payload with.
-    substrate.context().announce(objectToReplaceOps(moved), origin)
+    substrate.context().announce(objectToReplaceOps(moved), {
+      origin,
+      local: false,
+    })
   }
 
   const substrate = {
@@ -486,6 +496,7 @@ export function createStateSubstrate(
       // Watch out when testing this: `prepare` also updates the shadow above,
       // and local reads come from the shadow. Get the re-aim wrong and reads
       // on this peer still look perfect — only what replicates is damaged.
+      wrote = true
       const boundary = findOpaqueBoundary(schema, path)
       const registerPath =
         boundary === null ? null : path.slice(0, boundary.prefixLength + 1)
@@ -501,9 +512,15 @@ export function createStateSubstrate(
     },
 
     afterBatch(): void {
-      // Nothing to settle. The install counter advances as each leaf lands, so
-      // a batch has no bookkeeping left to reconcile when it ends.
+      // The install counter advances as each leaf lands, so a batch has no
+      // bookkeeping left to reconcile when it ends. What remains is to say
+      // whether it wrote anything.
+      if (!wrote) return
+      wrote = false
+      localUpdates.notify()
     },
+
+    subscribeLocalUpdates: localUpdates.subscribe,
 
     writable(): PositionCapable {
       return {

@@ -352,10 +352,33 @@ describe("state substrate tick() decay sweep", () => {
     unsub()
   })
 
-  it("a decay's changeset is marked replay, so the Exchange does not broadcast it", () => {
+  it("a decay is not a local update, so the Exchange does not broadcast it", () => {
     // Decay is a local projection of state every peer can compute for
     // itself. Broadcasting it would clobber a slower peer's still-valid
-    // value with a synthesized "absent".
+    // value with a synthesized "absent". What leaves the process follows the
+    // local-update signal, so the tick must not raise it, although it does
+    // announce a change.
+    const base = Date.now()
+    const substrate = makeSubstrate(base)
+    const ref = makeRef(substrate)
+
+    let localUpdates = 0
+    substrate.subscribeLocalUpdates(() => {
+      localUpdates++
+    })
+    let captured: Changeset<Op> | undefined
+    const unsub = subscribe(ref, (changeset: Changeset<Op>) => {
+      captured = changeset
+    })
+
+    substrate.tick?.(base + DECAY_MS + 1)
+
+    expect(captured).toBeDefined()
+    expect(localUpdates).toBe(0)
+    unsub()
+  })
+
+  it("a decay's changeset is marked replay: no writer here authored it", () => {
     const base = Date.now()
     const substrate = makeSubstrate(base)
     const ref = makeRef(substrate)

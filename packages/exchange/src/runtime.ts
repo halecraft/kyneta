@@ -22,18 +22,23 @@
 // real I/O. The tick clock (`setInterval`) lives here, not in substrates —
 // substrates expose a pure `tick?(now: number)` that the Runtime calls.
 
+import type { Changeset } from "@kyneta/changefeed"
 import type { Lease, ObservableHandle } from "@kyneta/machine"
 import { createLease, createObservableProgram } from "@kyneta/machine"
 import type {
   BoundSchema,
   DocRef,
   NativeMap,
+  Op,
   ProductSchema,
   Ref,
   ReplicaFactoryLike,
   ReplicaLike,
   Schema as SchemaNode,
+  Substrate,
+  SubstratePayload,
   SyncMode,
+  Version,
 } from "@kyneta/schema"
 import {
   beginHydration,
@@ -41,7 +46,6 @@ import {
   metadataOf,
   reaches,
   replicaTypesCompatible,
-  SUBSTRATE,
   subscribe,
 } from "@kyneta/schema"
 import type { DocId } from "@kyneta/transport"
@@ -61,6 +65,9 @@ import {
 
 /** The obligation a no-store document has: none. */
 const NO_ADOPT = (): void => {}
+
+/** What a document that has not become ready has wired: nothing. */
+const NOTHING_WIRED = (): void => {}
 
 /** What loading found. `#hydrate` gathers it; `#becomeReady` acts on it. */
 export type LoadOutcome =
@@ -120,21 +127,32 @@ type RuntimeGet = <S extends SchemaNode, N extends NativeMap>(
 // ---------------------------------------------------------------------------
 
 /**
- * Information about a ready document, passed to {@link RuntimeHooks.onDocReady}.
+ * The one record of a registered document: its replica and sync metadata.
  *
- * This is the local view of a document — it carries the replica/substrate
- * and sync metadata. The Exchange uses it to construct the network-facing
- * `DocRuntime` for the Synchronizer.
+ * The Runtime creates it and owns it. {@link RuntimeHooks.onDocReady} hands
+ * the same object to the Exchange, which registers it with the Synchronizer
+ * as it is, so the network shell and the local shell never hold two copies
+ * that could disagree. The Synchronizer reads it through `Readonly`; only the
+ * Runtime replaces a replica (see {@link Runtime.rebuildReplica}).
+ *
+ * Discriminated by mode: an interpreted document's replica is its
+ * `Substrate`.
  */
 export type DocReadyInfo = {
-  docId: DocId
-  mode: "interpret" | "replicate"
-  replica: ReplicaLike
-  replicaFactory: ReplicaFactoryLike
-  syncMode: SyncMode
-  schemaHash: string
-  supportedHashes?: readonly string[]
-}
+  readonly docId: DocId
+  readonly replicaFactory: ReplicaFactoryLike
+  readonly syncMode: SyncMode
+  readonly schemaHash: string
+  /** Ancestor hashes from the schema's migration chain, which `present`
+   *  messages advertise for multi-version compatibility. */
+  readonly supportedHashes?: readonly string[]
+} & (
+  | { readonly mode: "interpret"; readonly replica: Substrate<Version> }
+  | { readonly mode: "replicate"; replica: ReplicaLike }
+)
+
+type InterpretReadyInfo = Extract<DocReadyInfo, { mode: "interpret" }>
+type ReplicateReadyInfo = Extract<DocReadyInfo, { mode: "replicate" }>
 
 // ---------------------------------------------------------------------------
 // DocCacheEntry — local document registry entry
@@ -195,14 +213,16 @@ export type DocCacheEntry =
       mode: "interpret"
       ref: any
       bound: BoundSchema
-      readyInfo: DocReadyInfo
+      readyInfo: InterpretReadyInfo
       announced: boolean
       suspended?: boolean
       hydration: HydrationLatch
+      /** Undoes what `#becomeReady` wired; a no-op until then. */
+      unwire: () => void
     }
   | {
       mode: "replicate"
-      readyInfo: DocReadyInfo
+      readyInfo: ReplicateReadyInfo
       announced: boolean
       suspended?: boolean
       hydration: HydrationLatch
@@ -226,15 +246,23 @@ export type RuntimeHooks = {
   onDocReady?: (info: DocReadyInfo) => void
 
   /**
-   * Called when a document's changeset fires (local or replay).
+   * Called when an interpreted document's changeset fires, local or replay.
    *
-   * The Exchange implements this to forward the changeset to the
-   * Synchronizer's observation tee and notify-local-change path.
-   *
-   * Note: the `replay` flag is preserved on the changeset; the Exchange
-   * uses it to decide whether to broadcast.
+   * For observation only: the Exchange forwards it to the Synchronizer's
+   * observation bus. Nothing leaves the process from here; see
+   * {@link RuntimeHooks.onDocLocalChange}.
    */
-  onDocChangeset?: (docId: DocId, changeset: any) => void
+  onDocChangeset?: (docId: DocId, changeset: Changeset<Op>) => void
+
+  /**
+   * Called when an interpreted document gained local operations, however
+   * they were written, from the Runtime's drain and after persistence was
+   * requested for them.
+   *
+   * The Exchange implements this to call `synchronizer.notifyLocalChange`,
+   * which pushes the document to peers.
+   */
+  onDocLocalChange?: (docId: DocId) => void
 
   /**
    * Called when a document is destroyed locally — remove from sync graph
@@ -328,27 +356,17 @@ export class Runtime {
 
   readonly #docCache = new Map<DocId, DocCacheEntry>()
 
-  /** In-flight hydration I/O tracked so flush()/shutdown() can await it. */
-  readonly #pendingHydrations = new Set<Promise<void>>()
+  /** Loads and local-change drains still running, which flush() and
+   *  shutdown() wait for. */
+  readonly #pendingWork = new Set<Promise<void>>()
 
   /**
-   * Doc-ids with a local (non-replay) changeset pending persistence,
-   * coalesced into one `onStateAdvanced` call per doc per microtask
-   * tick — mirrors the Synchronizer's own dirty-set-drained-at-quiescence
-   * pattern (`onStateAdvanced`'s doc comment: "Coalescing is intentional:
-   * multiple advances within one dispatch cycle produce a single
-   * notification").
-   *
-   * This originally existed because a multi-field `batch()` fired one
-   * changeset per touched field, so persisting inline wrote the same
-   * starting delta once per field. Since `@kyneta/schema` 4.0 a batch
-   * delivers one changeset per subscriber, so that particular trigger is
-   * gone — but the coalescing is not redundant. It still collapses
-   * *several separate batches* landing in one microtask, and it collapses
-   * across *several documents* at once, neither of which the schema-layer
-   * change addresses. A tick that issues three batches would otherwise
-   * write twice: the first batch at once, the other two as the write owed
-   * behind it. Context: jj:mrlnmlus.
+   * Documents whose substrate reported local operations that have not yet
+   * been persisted and pushed. Drained once per microtask by
+   * {@link Runtime.#drainLocalChanges}, so several signals, batches and
+   * documents in one tick cost one persist and one push per document, the
+   * same dirty-set-drained-later pattern the Synchronizer uses for its own
+   * notifications. Context: jj:mrlnmlus.
    */
   readonly #dirtyLocalChanges = new Set<DocId>()
   #localChangeDrain: Promise<void> | null = null
@@ -644,7 +662,7 @@ export class Runtime {
       entry.mode === "deferred" ||
       this.#usesStores(entry.readyInfo.syncMode)
 
-    this.#docCache.delete(docId)
+    this.#evict(docId)
     if (touchesStore) this.#storeHandle?.dispatch({ type: "destroy", docId })
     this.#hooks.onDocDestroyed?.(docId)
   }
@@ -715,24 +733,43 @@ export class Runtime {
   // =========================================================================
 
   /**
-   * Called by the Exchange when the Synchronizer reports a doc's state
-   * has advanced (from network sync or local change). Tells the store
-   * program the document may have moved past what the store holds.
+   * Tell the store program a document may have moved past what the store
+   * holds.
    *
-   * A standalone Runtime (no Exchange) calls this from its own
-   * local-changeset subscription too — see {@link Runtime.#wireDocSubscription}.
-   * Calling it redundantly for the same mutation costs nothing: a request
-   * that arrives while a write is in flight collapses into the one write owed
-   * after it, and that write finds nothing new and touches no store.
+   * Two callers, one per cause. The Exchange calls it when the Synchronizer
+   * reports that the network advanced the document, and this Runtime's own
+   * drain calls it for local changes (see {@link Runtime.#drainLocalChanges}).
+   * Calling it redundantly costs nothing: a request that arrives while a
+   * write is in flight collapses into the one write owed after it, and that
+   * write finds nothing new and touches no store.
    *
-   * Carries a `docId` and nothing else. Every hook in {@link RuntimeHooks}
-   * reports outward, from the Runtime to whoever wired it up; this is the one
-   * call that comes back in, and it should not need the network shell to hold
-   * local bookkeeping in order to make it. The Runtime resolves the document
-   * from its own cache, which is where the document lives.
+   * Carries a `docId` and nothing else. The Runtime resolves the document
+   * from its own cache, which is where the document lives, so the network
+   * shell never needs local bookkeeping to make the call.
    */
   onStateAdvanced(docId: DocId): void {
     this.#storeHandle?.dispatch({ type: "state-advanced", docId })
+  }
+
+  /**
+   * Replace a replicate-mode document's replica with one built from an
+   * entirety. Throws what `fromEntirety` throws.
+   *
+   * The Synchronizer calls this when a reset means the incoming image is not
+   * a continuation of what the relay holds (see the replicate arm of its
+   * reset branch). It is the Runtime's to do because the Runtime owns the
+   * document's record: the Synchronizer reads the same object, so it sees
+   * the new replica, and so do persistence and promotion.
+   */
+  rebuildReplica(docId: DocId, payload: SubstratePayload): void {
+    const entry = this.#docCache.get(docId)
+    if (entry?.mode !== "replicate") {
+      throw new Error(
+        `[runtime] cannot rebuild '${docId}': not a replicate-mode document`,
+      )
+    }
+    entry.readyInfo.replica =
+      entry.readyInfo.replicaFactory.fromEntirety(payload)
   }
 
   /**
@@ -857,7 +894,7 @@ export class Runtime {
    * Await all pending store operations.
    */
   async flush(): Promise<void> {
-    await this.#awaitHydrations()
+    await this.#awaitPendingWork()
     if (this.#storeHandle) {
       await this.#storeHandle.waitForState(allDocsSettled)
     }
@@ -868,13 +905,13 @@ export class Runtime {
    * stop the tick clock.
    */
   async shutdown(): Promise<void> {
-    await this.#awaitHydrations()
+    await this.#awaitPendingWork()
     if (this.#storeHandle) {
       await this.#storeHandle.waitForState(allDocsSettled)
       this.#storeHandle.dispose()
     }
     this.#stopTick()
-    this.#docCache.clear()
+    for (const docId of [...this.#docCache.keys()]) this.#evict(docId)
     for (const backend of this.#stores) {
       await backend.close()
     }
@@ -887,7 +924,7 @@ export class Runtime {
   reset(): void {
     this.#stopTick()
     this.#storeHandle?.dispose()
-    this.#docCache.clear()
+    for (const docId of [...this.#docCache.keys()]) this.#evict(docId)
   }
 
   // =========================================================================
@@ -964,7 +1001,7 @@ export class Runtime {
       lease: this.lease,
     })
 
-    const readyInfo: DocReadyInfo = {
+    const readyInfo: InterpretReadyInfo = {
       docId,
       mode: "interpret",
       replica: substrate,
@@ -983,6 +1020,7 @@ export class Runtime {
       readyInfo,
       announced: false,
       hydration,
+      unwire: NOTHING_WIRED,
       // Suspension survives promotion. The two say different things: which
       // tier holds the document, versus whether it is in the sync graph.
       // Dropping the flag here would let a `get()` silently re-announce a
@@ -1039,7 +1077,7 @@ export class Runtime {
 
     const replica = replicaFactory.createEmpty()
 
-    const readyInfo: DocReadyInfo = {
+    const readyInfo: ReplicateReadyInfo = {
       docId,
       mode: "replicate",
       replica,
@@ -1083,7 +1121,7 @@ export class Runtime {
       (error: unknown) =>
         resolveHydration(entry.hydration, { ok: false, error }),
     )
-    this.#trackHydration(loading)
+    this.#track(loading)
   }
 
   /**
@@ -1099,8 +1137,9 @@ export class Runtime {
    *    writes on that signal finds the document writable.
    * 4. The latch resolves `loaded`.
    * 5. `#register` publishes the document to the sync graph, and an
-   *    interpreted document starts forwarding its changesets. Both carry the
-   *    identity claimed in step 3.
+   *    interpreted document is wired: its local updates start leaving the
+   *    process, and its changesets reach the observation hook. Both carry
+   *    the identity claimed in step 3.
    */
   #becomeReady(
     entry: ReadyEntry,
@@ -1120,42 +1159,58 @@ export class Runtime {
     adopt()
     resolveHydration(entry.hydration, { ok: true })
     this.#register(entry)
-    if (entry.mode === "interpret") this.#wireDocSubscription(docId, entry.ref)
+    if (entry.mode === "interpret") entry.unwire = this.#wire(docId, entry)
   }
 
   /**
-   * Wire the changefeed subscription for a document: forwards changesets
-   * to the hooks (Exchange wires these into the Synchronizer), and
-   * self-persists local (non-replay) changesets unconditionally — so a
-   * standalone Runtime (no Exchange) durably persists its own mutations
-   * without depending on the Exchange's `Synchronizer → onStateAdvanced`
-   * wiring. Safe to run alongside that wiring: the store program collapses
-   * the two requests, and the write owed by the second finds nothing new.
+   * Wire an interpreted document, and return what undoes it.
    *
-   * Marks the doc dirty and schedules a microtask-deferred, coalesced
-   * drain rather than persisting inline. A single `batch()` used to fire
-   * one changeset per touched field, so persisting on every changeset
-   * exported the same starting delta once per field; since
-   * `@kyneta/schema` 4.0 a batch delivers one changeset, but the drain
-   * still earns its place by coalescing several batches — and several
-   * documents — within one microtask. See {@link Runtime.#dirtyLocalChanges}.
-   * Context: jj:mrlnmlus.
+   * - The substrate's local-update signal marks the document dirty. It fires
+   *   for every local write, whether through Kyneta or directly on the native
+   *   document, so it decides what leaves the process; a changeset can't,
+   *   because a native write outside the schema produces none.
+   * - Changesets go to the observation hook and nowhere else.
    *
-   * Called by `#becomeReady`, the one place a document becomes ready.
+   * Nothing needs to have been heard before this point: whatever was written
+   * while the document loaded is owed to the store by `hydrated`, and
+   * `#register` has just published the live version to peers.
    */
-  #wireDocSubscription(docId: DocId, ref: any): void {
-    subscribe(ref, changeset => {
-      this.#hooks.onDocChangeset?.(docId, changeset)
-      if (!changeset.replay) {
-        this.#markLocalChangeDirty(docId)
-      }
-    })
+  #wire(
+    docId: DocId,
+    entry: Extract<DocCacheEntry, { mode: "interpret" }>,
+  ): () => void {
+    const stopLocalUpdates = entry.readyInfo.replica.subscribeLocalUpdates(() =>
+      this.#markLocalChangeDirty(docId),
+    )
+    const stopChangesets = subscribe(entry.ref, changeset =>
+      this.#hooks.onDocChangeset?.(docId, changeset),
+    )
+    return () => {
+      stopLocalUpdates()
+      stopChangesets()
+    }
   }
 
   /**
-   * Marks `docId` as having a pending local changeset, and schedules a
-   * microtask to drain the whole dirty set (once per microtask tick,
-   * regardless of how many docs/changesets accumulate before it runs).
+   * Remove a document from the cache, and unwire it first so that a write on
+   * a ref that outlives it cannot reach whatever is created under its id
+   * next.
+   */
+  #evict(docId: DocId): void {
+    const entry = this.#docCache.get(docId)
+    if (entry?.mode === "interpret") entry.unwire()
+    this.#docCache.delete(docId)
+  }
+
+  /**
+   * Mark `docId` as having local operations that have not left the process,
+   * and schedule one microtask to drain the whole dirty set.
+   *
+   * The signal fires synchronously, sometimes inside a native commit or a
+   * merge, and sometimes several times for one batch. Deferring keeps the
+   * store program and the Synchronizer out of those callbacks, and turns any
+   * number of signals, batches and documents in one tick into one persist
+   * and one push per document.
    */
   #markLocalChangeDirty(docId: DocId): void {
     this.#dirtyLocalChanges.add(docId)
@@ -1164,18 +1219,27 @@ export class Runtime {
       this.#localChangeDrain = null
       this.#drainLocalChanges()
     })
-    this.#trackHydration(this.#localChangeDrain)
+    this.#track(this.#localChangeDrain)
   }
 
   /**
-   * Snapshot-then-clear the dirty set (so re-entrant local writes during
-   * the drain schedule a fresh drain rather than being lost), and persist
-   * each doc's current state at most once.
+   * Persist, then push, each dirty document once.
+   *
+   * The set is snapshotted and cleared first, so a local write made during
+   * the drain schedules a fresh one rather than being lost. A document
+   * evicted since it was marked is skipped.
+   *
+   * Persistence is requested before the push. Both leave from here, so this
+   * is the one place their order is decided.
    */
   #drainLocalChanges(): void {
     const docIds = [...this.#dirtyLocalChanges]
     this.#dirtyLocalChanges.clear()
-    for (const docId of docIds) this.onStateAdvanced(docId)
+    for (const docId of docIds) {
+      if (this.#docCache.get(docId)?.mode !== "interpret") continue
+      this.onStateAdvanced(docId)
+      this.#hooks.onDocLocalChange?.(docId)
+    }
   }
 
   /**
@@ -1202,19 +1266,19 @@ export class Runtime {
   }
 
   // =========================================================================
-  // INTERNAL — Hydration tracking
+  // INTERNAL — Pending-work tracking
   // =========================================================================
 
-  #trackHydration(op: Promise<void>): void {
-    this.#pendingHydrations.add(op)
+  #track(op: Promise<void>): void {
+    this.#pendingWork.add(op)
     op.finally(() => {
-      this.#pendingHydrations.delete(op)
+      this.#pendingWork.delete(op)
     })
   }
 
-  async #awaitHydrations(): Promise<void> {
-    while (this.#pendingHydrations.size > 0) {
-      await Promise.all(this.#pendingHydrations)
+  async #awaitPendingWork(): Promise<void> {
+    while (this.#pendingWork.size > 0) {
+      await Promise.all(this.#pendingWork)
     }
   }
 
@@ -1351,13 +1415,10 @@ export class Runtime {
       const now = Date.now()
       for (const [, entry] of this.#docCache) {
         if (entry.mode !== "interpret") continue
-        const substrate = entry.ref?.[SUBSTRATE]
         // `tick` is optional on the Substrate interface, and most substrates
         // have no use for it — only `ephemeral` does, to re-project decayed
         // leaves as their structural zeros. Everything durable skips this.
-        if (substrate && typeof substrate.tick === "function") {
-          substrate.tick(now)
-        }
+        entry.readyInfo.replica.tick?.(now)
       }
     }, this.#tickIntervalMs)
     // Don't keep the Node.js process alive just for the tick.

@@ -367,9 +367,10 @@ function listenIn<C>(
 }
 
 /**
- * The metadata a sealed batch puts on each `Changeset`. `replay` is true for
- * every announcement: no local writer authored those ops. Only an authored
- * batch carries `source` and `aborted`.
+ * The metadata a sealed batch puts on each `Changeset`. `replay` is true iff
+ * no writer on this peer made the ops: false for an authored batch and for a
+ * native local write the bridge announces, true for what a merge, reset or
+ * tick brought in. Only an authored batch carries `source` and `aborted`.
  */
 export function changesetMetadata(options: BatchOptions): BatchMetadata {
   switch (options.ingress) {
@@ -383,7 +384,7 @@ export function changesetMetadata(options: BatchOptions): BatchMetadata {
     case "announce":
       return {
         origin: options.origin,
-        replay: true,
+        replay: !options.local,
         aborted: undefined,
         source: undefined,
       }

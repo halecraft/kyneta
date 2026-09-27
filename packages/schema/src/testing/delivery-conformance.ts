@@ -5,15 +5,16 @@
 // through it, so a bug there is a bug on all of them. Two things make a
 // plain-substrate-only test insufficient:
 //
-//   1. An announcement — an incoming sync merge — is where delivery fans out
-//      hardest. A merge announces its whole payload and flushes once, so a
-//      payload touching N paths is one flush over N ops. That path is driven by
-//      the CRDT event bridges, which is exactly what a plain-only test misses.
+//   1. An announcement (an incoming merge, or a write on the native document)
+//      is where delivery fans out hardest. A merge announces its whole payload
+//      and flushes once, so a payload touching N paths is one flush over N
+//      ops. That path is driven by the CRDT event bridges, which is exactly
+//      what a plain-only test misses.
 //   2. Substrates legitimately disagree about op *shape*. `expandMapOpsToLeaves`
 //      turns a product's MapChange into per-key ops on the CRDT bridges, while
 //      the plain substrate dispatches per field directly.
 //
-// So this suite asserts *invariants*, never literal op lists. Five hold on every
+// So this suite asserts *invariants*, never literal op lists. Six hold on every
 // substrate:
 //
 //   Cardinality   one changeset per subscribed key per flush
@@ -21,6 +22,8 @@
 //   Order         dispatch order within a changeset; deepest-first across them
 //   Metadata      origin/replay/aborted/source identical across one flush
 //   Conservation  what the root sees equals the union of what everyone sees
+//   Signal        the substrate reports a local update iff the ops were
+//                 written here, and then they are not a replay
 //
 // A substrate opts in by supplying a factory that returns two wired peers. See
 // `positionConformance` in this directory for the same pattern applied to the
@@ -31,8 +34,10 @@ import { describe, expect, it } from "vitest"
 import type { Op } from "../changefeed.js"
 import { batch } from "../facade/batch.js"
 import { subscribe } from "../facade/observe.js"
+import { hasSubstrate, SUBSTRATE } from "../native.js"
 import type { Ref } from "../ref.js"
 import { Schema } from "../schema.js"
+import type { Substrate, SubstratePayload, Version } from "../substrate.js"
 
 // ---------------------------------------------------------------------------
 // Fixture
@@ -79,17 +84,48 @@ export interface DeliveryTestEnv {
   readonly doc: DeliveryDoc
 
   /**
-   * Write on a second peer and merge the result into `doc`.
+   * Write on a second peer, and hand back what `doc` would take in from it.
    *
-   * This is the whole reason the factory takes two peers. A merge is
-   * announced with `ctx.announce(ops, origin)` — a different
-   * entry point from a local `batch()`, and the one that carries the largest
-   * payloads in practice.
+   * This is the whole reason the factory takes two peers. What a peer takes
+   * in is announced with `ctx.announce`, a different entry point from a local
+   * `batch()`, and the one that carries the largest payloads in practice. The
+   * suite applies the payloads itself, by `merge` and by `resetFromEntirety`.
    */
-  remoteMerge(fn: (draft: DeliveryDoc) => void): void
+  remoteWrite(fn: (draft: DeliveryDoc) => void): RemoteWrite
+
+  /**
+   * Write on `doc`'s native document without `doc`'s own bracket, as an
+   * editor binding does. CRDT environments only: the suite adds a `native`
+   * driver when this is present.
+   */
+  nativeWrite?(fn: (draft: DeliveryDoc) => void): void
+}
+
+/** What a second peer's write offers `doc`. */
+export interface RemoteWrite {
+  /** What a merge takes: the write, as a delta where the substrate has one. */
+  readonly delta: SubstratePayload
+  /** What a reset takes: the second peer's whole document after the write. */
+  readonly entirety: SubstratePayload
 }
 
 export type DeliveryConformanceFactory = () => DeliveryTestEnv
+
+/**
+ * How a driver's writes reach `env.doc`. `authored` and `native` are written
+ * here; `merge` and `reset` come from another peer.
+ */
+type DriverKind = "authored" | "native" | "merge" | "reset"
+
+/** Whether a driver's writes were made on this peer. */
+const writtenHere = (kind: DriverKind): boolean =>
+  kind === "authored" || kind === "native"
+
+interface Driver {
+  readonly name: string
+  readonly kind: DriverKind
+  readonly write: (env: DeliveryTestEnv, fn: (d: DeliveryDoc) => void) => void
+}
 
 export interface DeliveryConformanceOptions {
   /** Appended to the suite name, so a failure names its substrate. */
@@ -104,6 +140,23 @@ interface Probe {
   readonly changesets: Changeset<Op>[]
   /** Relative path of every op received, flattened across changesets. */
   readonly paths: () => string[]
+}
+
+/** The substrate under `doc`, which must be a root ref. */
+function substrateOf(doc: DeliveryDoc): Substrate<Version> {
+  if (!hasSubstrate(doc)) {
+    throw new Error("delivery conformance: env.doc must be a root ref")
+  }
+  return doc[SUBSTRATE]
+}
+
+/** Count the substrate's local-update signal from here on. */
+function countLocalUpdates(doc: DeliveryDoc): () => number {
+  let count = 0
+  substrateOf(doc).subscribeLocalUpdates(() => {
+    count++
+  })
+  return () => count
 }
 
 function probe(ref: unknown): Probe {
@@ -126,26 +179,51 @@ export function deliveryConformance(
 ): void {
   const suffix = options?.label ? ` (${options.label})` : ""
 
-  // Both entry points into the notification engine. Every invariant below runs
-  // through both: `batch()` opens a runBatch frame and flushes at the depth-0
-  // release, while a merge bypasses the frame and flushes directly. They must
-  // deliver identically.
-  const drivers: ReadonlyArray<{
-    readonly name: string
-    readonly write: (env: DeliveryTestEnv, fn: (d: DeliveryDoc) => void) => void
-    readonly replay: boolean
-  }> = [
+  // Every route into the notification engine. Every invariant below runs
+  // through each: `batch()` opens a runBatch frame and flushes at the depth-0
+  // release, while a native write and what a peer sends (a merge, or a reset)
+  // bypass the frame and are announced by the substrate. They must deliver
+  // identically.
+  //
+  // A driver's `kind` decides the rest. Only an authored batch carries a
+  // write log, so only it has a dispatch order to keep. A write made here,
+  // authored or native, is a local update and not a replay; what a peer
+  // sent is a replay and not a local update.
+  const drivers: Driver[] = [
     {
       name: "local batch",
+      kind: "authored",
       write: (env, fn) => batch(env.doc, fn),
-      replay: false,
     },
     {
       name: "remote merge (replay)",
-      write: (env, fn) => env.remoteMerge(fn),
-      replay: true,
+      kind: "merge",
+      write: (env, fn) =>
+        substrateOf(env.doc).merge(env.remoteWrite(fn).delta, {
+          origin: "sync",
+        }),
+    },
+    {
+      name: "reset from a remote entirety (replay)",
+      kind: "reset",
+      write: (env, fn) =>
+        substrateOf(env.doc).resetFromEntirety(env.remoteWrite(fn).entirety, {
+          origin: "sync",
+        }),
     },
   ]
+  if (factory().nativeWrite !== undefined) {
+    drivers.push({
+      name: "native write",
+      kind: "native",
+      write: (env, fn) => {
+        if (env.nativeWrite === undefined) {
+          throw new Error("delivery conformance: nativeWrite disappeared")
+        }
+        env.nativeWrite(fn)
+      },
+    })
+  }
 
   describe(`delivery conformance${suffix}`, () => {
     for (const driver of drivers) {
@@ -248,7 +326,7 @@ export function deliveryConformance(
           //
           // This is the substrate-independent half of the ordering contract.
           // Where those ops came from in the first place is the driver's
-          // business, and the two drivers differ — see the local-batch-only
+          // business, and the drivers differ: see the local-batch-only
           // dispatch-order test below.
           const rootPaths = atRoot.paths()
           const outerAtRoot = rootPaths.filter(p => p.startsWith("outer"))
@@ -260,7 +338,7 @@ export function deliveryConformance(
           expect(outerAtRoot).toEqual(rebased)
         })
 
-        if (!driver.replay) {
+        if (driver.kind === "authored") {
           it("order: ops keep the order they were dispatched in", () => {
             const env = factory()
             const atOuter = probe(env.doc.outer)
@@ -270,12 +348,13 @@ export function deliveryConformance(
               d.outer.x.set(2)
             })
 
-            // Local writes only. A merge carries a CRDT diff rather than a
-            // write log: the event bridge reconstructs ops by enumerating what
-            // changed, so their order reflects the diff's enumeration and not
-            // the sequence the remote peer wrote them in. The engine preserves
-            // whatever order it is handed either way, which is what the
-            // subsequence test above pins for both drivers.
+            // Authored writes only. An announcement, of a merge or of a native
+            // write, carries a CRDT diff rather than a write log: the event
+            // bridge reconstructs ops by enumerating what changed, so their
+            // order reflects the diff's enumeration and not the sequence they
+            // were written in. The engine preserves whatever order it is
+            // handed either way, which is what the subsequence test above pins
+            // for every driver.
             const paths = atOuter.paths()
             const yAt = paths.indexOf("y")
             const xAt = paths.indexOf("x")
@@ -289,7 +368,7 @@ export function deliveryConformance(
         // Metadata
         // ===================================================================
 
-        it("metadata: replay marks merged state and only merged state", () => {
+        it("metadata: replay marks state from elsewhere, and only that", () => {
           const env = factory()
           const atRoot = probe(env.doc)
 
@@ -298,12 +377,11 @@ export function deliveryConformance(
             d.outer.x.set(2)
           })
 
-          // The exchange's echo suppression turns on exactly this flag. If a
-          // merged changeset lost it, every incoming offer would be re-emitted
-          // to all peers; if a local one gained it, local writes would never
-          // sync at all.
+          // Readers use this flag to tell state that came from elsewhere from
+          // state written here. What leaves the process is decided by the
+          // local-update signal instead (see the signal test below).
           for (const cs of atRoot.changesets) {
-            expect(cs.replay).toBe(driver.replay)
+            expect(cs.replay).toBe(!writtenHere(driver.kind))
           }
         })
 
@@ -399,7 +477,44 @@ export function deliveryConformance(
             atTop.paths().length + atOuter.paths().length,
           )
         })
+
+        // =================================================================
+        // Local-update signal
+        // =================================================================
+
+        it("signal: a local update iff the ops were written here", () => {
+          const env = factory()
+          const localUpdates = countLocalUpdates(env.doc)
+
+          driver.write(env, d => {
+            d.top.set(1)
+            d.outer.x.set(2)
+          })
+
+          // What leaves the process follows this signal, so a merge or a
+          // reset that raised it would be sent straight back to every peer,
+          // and a local write that missed it would never be sent at all.
+          if (writtenHere(driver.kind)) {
+            expect(localUpdates()).toBeGreaterThan(0)
+          } else expect(localUpdates()).toBe(0)
+        })
       })
     }
+
+    it("signal: an aborted batch is a local update", () => {
+      const env = factory()
+      const localUpdates = countLocalUpdates(env.doc)
+
+      // The compensations are committed along with the writes they undo, so
+      // the replica gained ops even though its state did not move.
+      expect(() =>
+        batch(env.doc, d => {
+          d.top.set(1)
+          throw new Error("abort")
+        }),
+      ).toThrow("abort")
+
+      expect(localUpdates()).toBeGreaterThan(0)
+    })
   })
 }

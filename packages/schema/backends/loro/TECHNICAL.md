@@ -351,9 +351,11 @@ Source: `packages/schema/backends/loro/src/substrate.ts` → `doc.subscribe` han
 The persistent `doc.subscribe()` callback is the enforcement mechanism for the key invariant: *every* mutation to the underlying `LoroDoc` fires the kyneta changefeed, regardless of source. Mutation sources include:
 
 - Local kyneta writes via `batch(doc, fn)` — suppressed by the pre-commit-hook discriminator (we already notified).
-- `exchange.merge(payload)` from remote peers — not suppressed; kyneta subscribers must see it.
-- `doc.import(update)` from application code directly — not suppressed; kyneta subscribers must see it.
-- Raw Loro API writes (`doc.getText(key).insert(0, "x")`) bypassing kyneta — not suppressed; kyneta subscribers must see it.
+- `substrate.merge(payload)` with a peer's update — announced with `local: false`.
+- `doc.import(update)` from application code directly — announced with `local: false`.
+- Raw Loro API writes (`doc.getText(key).insert(0, "x")`) bypassing kyneta, such as an editor binding's (loro-prosemirror) — announced with `local: true`, so subscribers receive them with `replay: false`.
+
+A write to a root container the schema does not declare raises no changeset, since the schema has no place for it. It is still pushed and persisted, through `subscribeLocalUpdates`.
 
 The handler:
 
@@ -361,7 +363,7 @@ The handler:
 2. Skip `batch.by === "checkout"` events — version travel, not mutations.
 3. Call `batchToOps(event.diffs, schema, binding)` → pure conversion from Loro `Diff[]` to kyneta `Op[]`.
 4. Re-materialize the shadow from the LoroDoc (`syncShadow(shadow, materializeLoroShadow(...))`), which already holds these changes.
-5. `ctx.announce(ops, origin)`. The announcement never reaches `substrate.prepare` or `afterBatch`; the changefeed layer delivers `Changeset` notifications with `replay: true` (e.g. for the exchange's echo filter).
+5. `ctx.announce(ops, { origin, local: batch.by === "local" })`. The announcement never reaches `substrate.prepare` or `afterBatch`, and subscribers receive it with `replay: !local`. `loro-crdt` has no import-with-origin, so `merge` stashes its `options.origin` while it imports; the stash applies to `import` batches only. `import` implicitly commits pending local ops first, and that commit is a local batch with its own origin, not the merge's.
 
 ### Why the pre-commit hook
 
@@ -382,7 +384,7 @@ Three properties this gives us:
 
 ### Known limitation: mixed mode
 
-Mixing raw CRDT mutations with `batch()` calls inside the same atomic unit (such as Loro pending ops accumulated before a kyneta-issued commit) is unsupported. The raw mutations will be silently absorbed into kyneta's own-commit skip and not bridged to the kyneta changefeed. To intermix, use separate commits for raw mutations. This is a fundamental limit of commit-level discrimination.
+Mixing raw CRDT mutations with `batch()` calls inside the same atomic unit (such as Loro pending ops accumulated before a kyneta-issued commit) is unsupported. The raw mutations will be silently absorbed into kyneta's own-commit skip and not bridged to the kyneta changefeed, so σ misses them. They are still pushed and persisted: the local-update signal covers the whole commit. To intermix, use separate commits for raw mutations. This is a fundamental limit of commit-level discrimination.
 
 The earlier `inEventHandler` flag (which protected substrate-write skipping during event-bridge replay) was retired in favor of a per-batch parameter, now `ingress`: a bridge batch is an announcement and never reaches the substrate's `prepare`/`afterBatch`, while a re-entrant `batch(doc, ...)` from inside a subscriber is an ordinary authored batch and lands in the substrate. An ambient global swallowed that write. Context: jj:qpultxsw.
 

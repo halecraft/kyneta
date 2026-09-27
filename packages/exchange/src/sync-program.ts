@@ -108,7 +108,8 @@ export type SyncModel = {
   pendingPeerSyncDocIds: readonly DocId[]
 
   /**
-   * Doc-ids whose state advanced (local mutation or remote import).
+   * Doc-ids whose state a remote import advanced. Local changes are not
+   * here: the Runtime persists them before it reports them.
    * Dedup-by-presence — `onStateAdvanced` fires at most once per docId
    * per cycle. The persistence layer reads the full delta from the
    * replica on receipt, so duplicate firings would re-export the same
@@ -1151,15 +1152,10 @@ function handleLocalDocChange(
 
   const documents = new Map(model.documents)
   documents.set(msg.docId, { ...docEntry, version: msg.version })
-  const bumped: SyncModel = {
-    ...model,
-    documents,
-    pendingStateAdvancedDocIds: appendUniqueDocId(
-      model.pendingStateAdvancedDocIds,
-      msg.docId,
-    ),
-  }
-  return buildPush(msg.docId, bumped, canShare, msg.version)
+  // No state-advanced: the Runtime requested persistence for this change
+  // before it told us about it. State-advanced reports what the network
+  // moved.
+  return buildPush(msg.docId, { ...model, documents }, canShare, msg.version)
 }
 
 function handleDocDelete(

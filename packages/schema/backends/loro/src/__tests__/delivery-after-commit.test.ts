@@ -83,7 +83,7 @@ describe("Loro: delivery after the commit", () => {
     ])
   })
 
-  it("a raw listener's commit in reaction to ours is announced after ours", () => {
+  it("a raw listener's commit in reaction to ours is announced after ours, as a local write", () => {
     const { doc, native, seen } = build(Schema.struct({ title: Schema.text() }))
     let fired = false
     native.subscribe(() => {
@@ -97,7 +97,7 @@ describe("Loro: delivery after the commit", () => {
 
     expect(seen).toEqual([
       { replay: false, n: 1 },
-      { replay: true, n: 1 },
+      { replay: false, n: 1 },
     ])
   })
 

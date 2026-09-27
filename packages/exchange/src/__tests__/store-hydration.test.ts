@@ -174,11 +174,11 @@ describe("Exchange storage hydration", () => {
     // Wait for hydration
     await exchange.flush()
 
-    // The doc runtime should have the hydrated version
-    const runtime = exchange.synchronizer.getDocRuntime("doc-1")
-    expect(runtime).toBeDefined()
+    // The registered document should have the hydrated version
+    const doc = exchange.synchronizer.getDoc("doc-1")
+    expect(doc).toBeDefined()
     // Version should be > "0" after hydration
-    const version = runtime?.replica.version().serialize()
+    const version = doc?.replica.version().serialize()
     expect(version).not.toBe("0")
 
     await exchange.shutdown()

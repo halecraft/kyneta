@@ -48,7 +48,7 @@ batch(doc, (d) => {
 
 // Observe
 subscribe(doc, (changeset) => {
-  console.log("Changed:", changeset.ops.length, "ops")
+  console.log("Changed:", changeset.changes.length, "ops")
 })
 ```
 
@@ -149,6 +149,10 @@ Because `unwrap(doc)` returns a standard `Y.Doc`, the entire Yjs provider ecosys
 - **Hocuspocus** — Scalable Yjs server
 - **Liveblocks** — Managed collaboration infrastructure
 - **y-prosemirror** / **y-codemirror** — Rich text editor bindings
+
+A binding writes on the `Y.Doc` directly, and those writes are local writes like
+any other: under an Exchange they are pushed to peers and persisted, and Kyneta
+subscribers receive them with `replay: false`.
 
 The substrate writes one top-level type of its own, `kyneta.clock` (`DELETE_CLOCK`): after a change that deleted without inserting, it advances the document's state vector, so every change, a delete included, moves the version. Providers sync it like any other type.
 
