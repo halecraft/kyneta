@@ -6,11 +6,14 @@ import { describe, expect, it } from "vitest"
 import {
   batch,
   createRef,
+  PlainVersion,
   plainReplicaFactory,
   plainSubstrateFactory,
   Schema,
+  type SubstratePayload,
 } from "../index.js"
 import { type Address, AddressedPath, AddressTableRegistry } from "../path.js"
+import { decodePlainPayload } from "../substrates/plain.js"
 
 const Candidate = Schema.struct({
   name: Schema.string(),
@@ -35,23 +38,28 @@ function listDoc() {
   return { substrate, doc: createRef(ListDoc, substrate) as any }
 }
 
-// exportSince, asserting a non-null payload, returning its JSON `data`.
-function sinceData(substrate: any, since: unknown): string {
-  const payload = substrate.exportSince(since)
-  if (payload === null) throw new Error("exportSince returned null")
-  return payload.data as string
+// The start of a substrate's log: offset 0 on its own lineage. Taken after
+// its first write, since a genesis cursor is answered with the whole
+// document rather than the log, and these tests are about the log.
+function logStart(substrate: any): PlainVersion {
+  return new PlainVersion(0, substrate.version().lineage)
 }
 
-// Store snapshot for equality assertions. Unwraps the `{ i, s }` lineage
-// envelope when present (mirrors substrate.test.ts's snapshotOf); typed
-// structurally so one helper serves both a substrate and a replica.
+// The serialized batches of the delta since `since`, as they go on the wire.
+function sinceBatches(substrate: any, since: unknown): any[][] {
+  const payload = substrate.exportSince(since)
+  if (payload === null) throw new Error("exportSince returned null")
+  return JSON.parse(payload.data as string).batches
+}
+
+// Store snapshot for equality assertions; typed structurally so one helper
+// serves both a substrate and a replica.
 function snap(x: {
-  exportEntirety(): { data: unknown }
+  exportEntirety(): SubstratePayload
 }): Record<string, unknown> {
-  const parsed = JSON.parse(x.exportEntirety().data as string)
-  return parsed && typeof parsed === "object" && "s" in parsed
-    ? (parsed.s as Record<string, unknown>)
-    : (parsed as Record<string, unknown>)
+  const decoded = decodePlainPayload(x.exportEntirety(), "snap")
+  if (decoded.kind !== "entirety") throw new Error("expected an entirety")
+  return decoded.state
 }
 
 // Merge a genesis since-delta into a schema-less empty replica. Works only
@@ -68,7 +76,6 @@ function replayInto(substrate: any, since: unknown) {
 describe("plain op-log: history survives deletion and reordering", () => {
   it("exports history after a nested entry is deleted, and a late replica converges", () => {
     const { substrate, doc } = recordDoc()
-    const v0 = substrate.version()
     batch(doc, (d: any) =>
       d.candidates.set(KEY, { name: "Alice", status: "new" }),
     )
@@ -77,7 +84,7 @@ describe("plain op-log: history survives deletion and reordering", () => {
     batch(doc, (d: any) => d.candidates.at(KEY).status.set("active"))
     batch(doc, (d: any) => d.candidates.delete(KEY))
 
-    const payload = substrate.exportSince(v0)
+    const payload = substrate.exportSince(logStart(substrate))
     expect(payload).not.toBeNull()
     const replica = plainReplicaFactory.createEmpty()
     expect(() => {
@@ -90,15 +97,13 @@ describe("plain op-log: history survives deletion and reordering", () => {
     // (no `entry` segment to tombstone), so it was never affected. Kept to
     // document why the nested case above is the one that matters.
     const { substrate, doc } = recordDoc()
-    const v0 = substrate.version()
     batch(doc, (d: any) => d.candidates.set(KEY, { name: "A", status: "n" }))
     batch(doc, (d: any) => d.candidates.delete(KEY))
-    expect(() => substrate.exportSince(v0)).not.toThrow()
+    expect(() => substrate.exportSince(logStart(substrate))).not.toThrow()
   })
 
   it("serializes a nested op at its authored index even when a later insert in the same batch shifts it", () => {
     const { substrate, doc } = listDoc()
-    const v0 = substrate.version()
     // One batch: "a" is at index 0 when its label is written, then the insert
     // shifts "a" to index 1 before the batch flushes. The logged label-write
     // must retain index 0 — freezing at flush (rather than at authoring) would
@@ -109,14 +114,7 @@ describe("plain op-log: history survives deletion and reordering", () => {
       d.items.insert(0, { label: "b" })
     })
 
-    const ops = (
-      JSON.parse(sinceData(substrate, v0)) as Array<
-        Array<{
-          path: Array<{ type: string; field?: string; index?: number }>
-          change: { value?: unknown }
-        }>
-      >
-    ).flat()
+    const ops = sinceBatches(substrate, logStart(substrate)).flat()
     const labelWrite = ops.find(
       o => o.path.at(-1)?.field === "label" && o.change.value === "a-edited",
     )
@@ -125,13 +123,12 @@ describe("plain op-log: history survives deletion and reordering", () => {
 
   it("serialization of earlier ops is unchanged by a later delete", () => {
     const { substrate, doc } = recordDoc()
-    const v0 = substrate.version()
     batch(doc, (d: any) => d.candidates.set(KEY, { name: "A", status: "n" }))
     batch(doc, (d: any) => d.candidates.at(KEY).status.set("active"))
 
-    const before = JSON.parse(sinceData(substrate, v0))
+    const before = sinceBatches(substrate, logStart(substrate))
     batch(doc, (d: any) => d.candidates.delete(KEY)) // tombstones the entry address
-    const after = JSON.parse(sinceData(substrate, v0))
+    const after = sinceBatches(substrate, logStart(substrate))
 
     // The earlier batches must serialize byte-identically — history is immutable.
     expect(after.slice(0, before.length)).toEqual(before)
@@ -139,10 +136,9 @@ describe("plain op-log: history survives deletion and reordering", () => {
 
   it("keeps the entry/index wire segment shape", () => {
     const { substrate, doc } = recordDoc()
-    const v0 = substrate.version()
     batch(doc, (d: any) => d.candidates.set(KEY, { name: "A", status: "n" }))
     batch(doc, (d: any) => d.candidates.at(KEY).status.set("active"))
-    const nested = (JSON.parse(sinceData(substrate, v0)) as any[][])
+    const nested = sinceBatches(substrate, logStart(substrate))
       .flat()
       .find(o => o.path.some((s: any) => s.type === "entry"))
     expect(nested.path).toEqual([
@@ -189,14 +185,13 @@ describe("plain op-log: history survives deletion and reordering", () => {
 describe("plain op-log: a late replica converges (state, not just no-throw)", () => {
   it("record: nested write then delete → replica materializes identically", () => {
     const { substrate, doc } = recordDoc()
-    const v0 = substrate.version()
     batch(doc, (d: any) =>
       d.candidates.set(KEY, { name: "Alice", status: "new" }),
     )
     batch(doc, (d: any) => d.candidates.at(KEY).status.set("active"))
     batch(doc, (d: any) => d.candidates.delete(KEY))
 
-    const replica = replayInto(substrate, v0)
+    const replica = replayInto(substrate, logStart(substrate))
     // A no-throw merge is necessary but not sufficient — assert convergence.
     expect(snap(replica)).toEqual(snap(substrate))
     expect((snap(substrate).candidates as Record<string, unknown>)[KEY]).toBe(
@@ -209,12 +204,11 @@ describe("plain op-log: a late replica converges (state, not just no-throw)", ()
     // is "same OR subsequent batches". Here the shifting insert is in a later
     // flushed batch, after the label-write op was already frozen at index 0.
     const { substrate, doc } = listDoc()
-    const v0 = substrate.version()
     batch(doc, (d: any) => d.items.push({ label: "a" })) // a @ index 0
     batch(doc, (d: any) => d.items.at(0).label.set("a-edited")) // nested write @ 0
     batch(doc, (d: any) => d.items.insert(0, { label: "b" })) // shifts a → index 1
 
-    const replica = replayInto(substrate, v0)
+    const replica = replayInto(substrate, logStart(substrate))
     // Had the label-write drifted to index 1, replay would apply "a-edited" to
     // "b". Convergence proves the op replayed at its frozen index 0.
     expect(snap(replica)).toEqual(snap(substrate))
@@ -250,14 +244,13 @@ describe("plain op-log: set and tree entry deletes survive export", () => {
       substrateA.exportEntirety(),
       TreeDoc,
     )
-    const v0 = substrateA.version()
     let id = ""
     batch(docA, (d: any) => {
       id = d.outline.create({ data: { label: "Root" } })
     })
     batch(docA, (d: any) => d.outline.delete(id))
 
-    const delta = substrateA.exportSince(v0)
+    const delta = substrateA.exportSince(logStart(substrateA))
     // Non-null guards against a vacuous pass: if the delete erased the history
     // and the delta were empty, both snapshots would trivially match. (Also
     // narrows `SubstratePayload | null` for the merge below.)
@@ -272,14 +265,13 @@ describe("plain op-log: set and tree entry deletes survive export", () => {
     // the tree case above; locks in that this stays convergence-clean.
     const substrate = plainSubstrateFactory.create(SetDoc)
     const doc = createRef(SetDoc, substrate) as any
-    const v0 = substrate.version()
     batch(doc, (d: any) => {
       d.tags.add("x")
       d.tags.add("y")
     })
     batch(doc, (d: any) => d.tags.delete("x"))
 
-    const replica = replayInto(substrate, v0)
+    const replica = replayInto(substrate, logStart(substrate))
     expect(snap(replica)).toEqual(snap(substrate))
   })
 })

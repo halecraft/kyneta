@@ -75,6 +75,7 @@ const VALID_MESSAGE_TYPES = new Set<number>([
   MessageType.Offer,
   MessageType.Dismiss,
   MessageType.Vacant,
+  MessageType.Accept,
 ])
 
 const VALID_PEER_TYPES = new Set<string>(["user", "bot", "service"])
@@ -226,8 +227,6 @@ function validateOffer(
   if (!isString(obj.d) && !isUint8Array(obj.d))
     return fail("d must be a string or Uint8Array", ["d"])
   if (!isString(obj.v)) return fail("v must be a string", ["v"])
-  if (obj.r !== undefined && !isBoolean(obj.r))
-    return fail("r must be a boolean", ["r"])
   if (obj.ln !== undefined && !isString(obj.ln))
     return fail("ln must be a string", ["ln"])
   return ok(obj as unknown as WireMessage)
@@ -249,6 +248,15 @@ function validateVacant(
   return ok(obj as unknown as WireMessage)
 }
 
+function validateAccept(
+  obj: Record<string, unknown>,
+): Result<WireMessage, WireValidationError> {
+  const docCheck = validateDocOrDx(obj, "accept")
+  if (!docCheck.ok) return docCheck
+  if (!isString(obj.v)) return fail("v must be a string", ["v"])
+  return ok(obj as unknown as WireMessage)
+}
+
 // ---------------------------------------------------------------------------
 // Dispatch table
 // ---------------------------------------------------------------------------
@@ -264,6 +272,7 @@ const validators: Record<
   [MessageType.Offer]: validateOffer,
   [MessageType.Dismiss]: validateDismiss,
   [MessageType.Vacant]: validateVacant,
+  [MessageType.Accept]: validateAccept,
 }
 
 // ---------------------------------------------------------------------------

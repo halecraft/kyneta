@@ -35,7 +35,11 @@ import {
 } from "../store/in-memory-store.js"
 import type { Store, StoreRecord } from "../store/store.js"
 import { whenSettled } from "../sync.js"
-import { collectAll, makeMetaRecord } from "../testing/store-conformance.js"
+import {
+  collectAll,
+  makeMetaRecord,
+  makePlainEntirety,
+} from "../testing/store-conformance.js"
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -1018,30 +1022,18 @@ describe("Multi-store first-hit reads", () => {
     // Store A has doc with value "from-A"
     const storeA = new InMemoryStore()
     await storeA.append("doc-1", makeMetaRecord())
-    await storeA.append("doc-1", {
-      kind: "entry",
-      payload: {
-        kind: "entirety",
-        encoding: "json",
-        data: '{"title":"from-A","count":1}',
-        lineage: "seed-1",
-      },
-      version: "seed-1:1",
-    })
+    await storeA.append(
+      "doc-1",
+      makePlainEntirety({ title: "from-A", count: 1 }, "seed-1"),
+    )
 
     // Store B has doc with DIFFERENT value "from-B"
     const storeB = new InMemoryStore()
     await storeB.append("doc-1", makeMetaRecord())
-    await storeB.append("doc-1", {
-      kind: "entry",
-      payload: {
-        kind: "entirety",
-        encoding: "json",
-        data: '{"title":"from-B","count":2}',
-        lineage: "seed-2",
-      },
-      version: "seed-2:1",
-    })
+    await storeB.append(
+      "doc-1",
+      makePlainEntirety({ title: "from-B", count: 2 }, "seed-2"),
+    )
 
     const exchange = createExchange({
       id: "server",

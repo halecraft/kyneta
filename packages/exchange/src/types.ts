@@ -113,15 +113,31 @@ export type Diagnostic =
 // ---------------------------------------------------------------------------
 
 /**
- * Discriminated union for peer document awareness.
- * - "vacant": Peer confirmed it doesn't have — and won't serve — this doc
- * - "pending": Peer has this document but we haven't synced yet
- * - "synced": Peer has this document with a known version
+ * What we know about one peer and one document.
+ *
+ * `status` says whether we still have anything to receive from the peer:
+ * - "pending": it may hold something we lack;
+ * - "synced": nothing left to receive from it;
+ * - "vacant": it confirmed it doesn't have, and won't serve, this document.
+ *
+ * The two versions are facts in opposite directions, independent of the
+ * status, so they survive it changing.
  */
-export type PeerDocSyncState =
-  | { status: "vacant"; lastUpdated: Date }
-  | { status: "pending"; lastUpdated: Date }
-  | { status: "synced"; lastKnownVersion: string; lastUpdated: Date }
+export type PeerDocSyncState = {
+  readonly status: "pending" | "synced" | "vacant"
+  /**
+   * The latest of our versions this peer holds: from its `accept`, or the
+   * version its interest stated. Compaction never trims past it.
+   */
+  readonly ourVersionTheyHold?: string
+  /**
+   * The latest of this peer's versions we have applied: the version of the
+   * last offer we imported from it, or the version it stated when we already
+   * held it. Quoted back to it as an interest's `since`.
+   */
+  readonly theirVersionWeHold?: string
+  readonly lastUpdated: Date
+}
 
 /**
  * Tracked state for a single peer.

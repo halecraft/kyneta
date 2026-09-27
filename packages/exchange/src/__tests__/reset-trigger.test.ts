@@ -11,28 +11,27 @@
 //   1. The lineage trigger fires independent of payload shape. It reads only
 //      the two lineage strings, so it fires on a `kind: "since"` offer just as
 //      readily as on an entirety.
-//   2. A transient CvRDT document reaches NEITHER trigger. That is
+//   2. A history-free document reaches NEITHER trigger. That is
 //      what makes it safe for the reset path to rebuild the replica rather
 //      than merge into it — see the replicate arm of `#executeImportDocData`.
 
-import type { Durability } from "@kyneta/schema"
 import { DEFAULT_LINEAGE } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import { classifyResetTrigger } from "../synchronizer.js"
 
 // The compaction trigger needs three facts beyond lineage. Default them to the
 // combination that does NOT fire, so each test below varies only what it is
-// about. `persistent` is the durable case (json / loro / yjs).
+// about. A format with history is the json / loro / yjs case.
 type CompactionFacts = {
   isEntirety: boolean
   senderAlreadySynced: boolean
-  durability: Durability
+  historyFree: boolean
 }
 
 const noCompaction: CompactionFacts = {
   isEntirety: false,
   senderAlreadySynced: false,
-  durability: "persistent",
+  historyFree: false,
 }
 
 const classify = (
@@ -46,7 +45,7 @@ const classify = (
     remote,
     o.isEntirety,
     o.senderAlreadySynced,
-    o.durability,
+    o.historyFree,
   )
 }
 
@@ -107,11 +106,11 @@ describe("classifyResetTrigger — compaction", () => {
   })
 })
 
-describe("classifyResetTrigger — transient documents reach no trigger", () => {
+describe("classifyResetTrigger — history-free documents reach no trigger", () => {
   // The invariant the `ephemeral` target depends on. It holds for two
   // independent reasons living in two packages:
   //
-  //   - durability excludes the compaction trigger — pinned below;
+  //   - `historyFree` excludes the compaction trigger — pinned below;
   //   - StateVersion reports DEFAULT_LINEAGE, which excludes the lineage
   //     trigger — pinned in @kyneta/schema's ephemeral-lattice suite.
   //
@@ -122,16 +121,10 @@ describe("classifyResetTrigger — transient documents reach no trigger", () => 
 
   it("a steady-state presence push does not classify as a reset", () => {
     // The realistic shape: every ephemeral push is an entirety, and peers are
-    // synced within milliseconds. Without the durability exclusion this would
+    // synced within milliseconds. Without the history-free exclusion this would
     // classify as a compaction reset on every single message after the first.
     expect(
-      classifyResetTrigger(
-        DEFAULT_LINEAGE,
-        DEFAULT_LINEAGE,
-        true,
-        true,
-        "transient",
-      ),
+      classifyResetTrigger(DEFAULT_LINEAGE, DEFAULT_LINEAGE, true, true, true),
     ).toBe("none")
   })
 })

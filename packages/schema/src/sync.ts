@@ -8,6 +8,7 @@
 import { hasSubstrate, SUBSTRATE } from "./native.js"
 import type {
   MergeOptions,
+  MergeOutcome,
   Substrate,
   SubstratePayload,
   Version,
@@ -104,12 +105,14 @@ export function exportSince(
  * @param payload - The delta or snapshot payload to import
  * @param options - `origin` is the app-level label propagated to
  *   subscribers.
+ * @returns `"gap"` when the payload does not continue what the document
+ *   holds, so nothing was applied (see `MergeOutcome`).
  * @throws If the ref has no `[SUBSTRATE]`
  */
 export function merge(
   ref: object,
   payload: SubstratePayload,
   options?: MergeOptions,
-): void {
-  getSubstrate(ref).merge(payload, options)
+): MergeOutcome {
+  return getSubstrate(ref).merge(payload, options)
 }

@@ -6,7 +6,7 @@ import {
   BridgeTransport,
   createBridgeTransport,
 } from "@kyneta/bridge-transport"
-import { Schema } from "@kyneta/schema"
+import { batch, json, Schema } from "@kyneta/schema"
 import type { DocId } from "@kyneta/transport"
 import { afterEach, describe, expect, it } from "vitest"
 import {
@@ -596,6 +596,50 @@ describe("durable Line: writer restart with no persisted store", () => {
 
     alice2Sender.close()
     bobReceiver2.close()
+  })
+
+  it("a reader that restarts without its state converges, even when a push reaches it before its catch-up", async () => {
+    // The writer still counts the returning reader as synced, so the write
+    // below is pushed as a delta from the writer's previous version. The
+    // restarted reader holds nothing, so that delta does not continue what
+    // it holds: applying it anyway appended it to an empty log, and the
+    // catch-up then landed on top, duplicating entries for good.
+    const ListDoc = json.bind(
+      Schema.struct({ items: Schema.list(Schema.number()) }),
+    )
+    const bridge = new Bridge()
+    const writer = createExchange({
+      id: "writer",
+      transports: [createBridgeTransport({ transportId: "writer", bridge })],
+    })
+    const reader1 = createExchange({
+      id: "reader",
+      transports: [createBridgeTransport({ transportId: "reader-1", bridge })],
+    })
+    const doc = writer.get("list", ListDoc)
+    reader1.get("list", ListDoc)
+    batch(doc, d => {
+      d.items.push(1)
+      d.items.push(2)
+    })
+    await drain()
+    batch(doc, d => d.items.delete(0, 2))
+    await drain()
+
+    await reader1.removeTransport("reader-1")
+    await drain()
+    const reader2 = createExchange({
+      id: "reader",
+      transports: [createBridgeTransport({ transportId: "reader-2", bridge })],
+    })
+    await drain()
+
+    const restarted = reader2.get("list", ListDoc)
+    batch(doc, d => d.items.push(3))
+    await drain()
+
+    expect(restarted.items()).toEqual(doc.items())
+    expect(doc.items()).toEqual([3])
   })
 
   it("sender-side fix: bob restarts → alice's post-restart messages are not pruned on bob's stale ack", async () => {

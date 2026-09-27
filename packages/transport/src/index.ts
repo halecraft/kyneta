@@ -15,13 +15,14 @@ export type {
   ProtocolVersion,
   TransportType,
 } from "./types.js"
-export { PROTOCOL_VERSION } from "./types.js"
+export { BASELINE_PROTOCOL_VERSION, PROTOCOL_VERSION } from "./types.js"
 
 // ---------------------------------------------------------------------------
 // Message types — the protocol vocabulary
 // ---------------------------------------------------------------------------
 
 export type {
+  AcceptMsg,
   AddressedEnvelope,
   ChannelMsg,
   DepartMsg,

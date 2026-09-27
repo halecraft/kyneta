@@ -97,7 +97,7 @@ describe("json.replica()", () => {
     const replica = json.replica()
     expect(replica.syncMode).toBe(SYNC_AUTHORITATIVE)
     expect(replica.factory).toBe(plainReplicaFactory)
-    expect(replica.factory.replicaType).toEqual(["plain", 1, 0])
+    expect(replica.factory.replicaType).toEqual(["plain", 2, 0])
   })
 })
 

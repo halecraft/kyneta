@@ -956,18 +956,17 @@ describe("session-program", () => {
     const hasSyncEvent = (fx: SessionEffect[]) =>
       fx.some(e => e.type === "sync-event")
 
-    it("no diagnostic and peer enters sync graph when version absent (default)", () => {
+    it("no diagnostic and peer enters sync graph at our own revision", () => {
       const update = makeUpdate()
       const [, fx] = establishChannel(update, initSession(alice), 1, bob)
       expect(diagnostics(fx)).toHaveLength(0)
       expect(hasSyncEvent(fx)).toBe(true)
     })
 
-    it("no diagnostic when peer is explicit (1,0)", () => {
+    it("no diagnostic when peer is explicit at our revision", () => {
       const update = makeUpdate()
       const [, fx] = establishChannel(update, initSession(alice), 1, bob, {
-        major: 1,
-        minor: 0,
+        ...PROTOCOL_VERSION,
       })
       expect(diagnostics(fx)).toHaveLength(0)
     })
@@ -975,8 +974,8 @@ describe("session-program", () => {
     it("minor skew emits exactly one warning diagnostic, peer still syncs", () => {
       const update = makeUpdate()
       const [, fx] = establishChannel(update, initSession(alice), 1, bob, {
-        major: 1,
-        minor: 2,
+        major: PROTOCOL_VERSION.major,
+        minor: PROTOCOL_VERSION.minor + 1,
       })
       const ds = diagnostics(fx)
       expect(ds).toHaveLength(1)
@@ -988,9 +987,11 @@ describe("session-program", () => {
     })
 
     it("major mismatch emits one error diagnostic but does NOT gate (sync-event still emitted)", () => {
+      // A 1.x peer: from before `accept`, and what an `establish` without
+      // `pv` decodes to.
       const update = makeUpdate()
       const [, fx] = establishChannel(update, initSession(alice), 1, bob, {
-        major: 2,
+        major: 1,
         minor: 0,
       })
       const ds = diagnostics(fx)

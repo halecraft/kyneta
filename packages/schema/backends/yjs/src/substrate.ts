@@ -39,6 +39,7 @@ import type {
   ChangeBase,
   CommitOptions,
   MergeOptions,
+  MergeOutcome,
   Path,
   PlainState,
   PositionCapable,
@@ -406,7 +407,7 @@ export function createYjsSubstrate(
       }
     },
 
-    merge(payload: SubstratePayload, options?: MergeOptions): void {
+    merge(payload: SubstratePayload, options?: MergeOptions): MergeOutcome {
       if (
         payload.encoding !== "binary" ||
         !(payload.data instanceof Uint8Array)
@@ -423,14 +424,12 @@ export function createYjsSubstrate(
       } finally {
         pendingMergeOrigin = undefined
       }
-      // The observeDeep handler announces the merged ops.
+      // The observeDeep handler announces the merged ops. Yjs holds back
+      // structs whose dependencies are missing, so there is no gap.
+      return "merged"
     },
 
-    resetFromEntirety(
-      payload: SubstratePayload,
-      _remoteVersion: Version,
-      options?: MergeOptions,
-    ): void {
+    resetFromEntirety(payload: SubstratePayload, options?: MergeOptions): void {
       // Yjs never mints a new lineage automatically (see YjsVersion.lineage),
       // so an lineage boundary never arises for this substrate today — this
       // exists to satisfy the Substrate contract. CRDT merge (Y.applyUpdate)
@@ -612,7 +611,7 @@ export function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
       }
     },
 
-    merge(payload: SubstratePayload, _options?: MergeOptions): void {
+    merge(payload: SubstratePayload, _options?: MergeOptions): MergeOutcome {
       if (
         payload.encoding !== "binary" ||
         !(payload.data instanceof Uint8Array)
@@ -623,13 +622,10 @@ export function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
         )
       }
       Y.applyUpdate(currentDoc, payload.data)
+      return "merged"
     },
 
-    resetFromEntirety(
-      payload: SubstratePayload,
-      _remoteVersion: Version,
-      options?: MergeOptions,
-    ): void {
+    resetFromEntirety(payload: SubstratePayload, options?: MergeOptions): void {
       // See createYjsSubstrate's resetFromEntirety — CRDT merge (set union
       // via Y.applyUpdate) is always the correct absorption, lineage boundary
       // or not, so this delegates to the routine merge path.
@@ -640,6 +636,7 @@ export function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
 
 export const yjsReplicaFactory: ReplicaFactory<YjsVersion> = {
   replicaType: ["yjs", 1, 0] as const,
+  historyFree: false,
 
   createEmpty(): Replica<YjsVersion> {
     return createYjsReplica(new Y.Doc())

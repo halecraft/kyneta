@@ -14,7 +14,7 @@ import {
 } from "../index.js"
 import type { Path } from "../interpret.js"
 import { withDecay } from "../interpreters/with-decay.js"
-import { movedRootKeys } from "../substrates/state-tree.js"
+import { movedRootKeys } from "../substrates/plain.js"
 
 describe("withDecay", () => {
   // A resolver that records every path it is asked about.

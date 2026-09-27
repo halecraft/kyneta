@@ -23,6 +23,7 @@ import {
   WireValidationFailure,
 } from "../index.js"
 import type {
+  WireAcceptMsg,
   WireEstablishMsg,
   WireInterestMsg,
   WireMessage,
@@ -36,6 +37,7 @@ import {
   syncModeToWire,
 } from "../wire-types.js"
 import {
+  acceptWire,
   departWire,
   dismissWire,
   establishWire,
@@ -187,14 +189,12 @@ describe("CBOR codec — offer", () => {
       encoding: "binary",
       data: binaryData,
       version: "AQ==:3",
-      reciprocate: true,
     })
     const decoded = roundTrip(wire) as WireOfferMsg
     expect(decoded.t).toBe(MessageType.Offer)
     expect(decoded.doc).toBe("doc-crdt")
     expect(decoded.pe).toBe(PayloadEncoding.Binary)
     expect(decoded.v).toBe("AQ==:3")
-    expect(decoded.r).toBe(true)
 
     // Uint8Array should survive wire round-trip natively
     expect(decoded.d).toBeInstanceOf(Uint8Array)
@@ -220,16 +220,11 @@ describe("CBOR codec — offer", () => {
     expect(decoded.d).toEqual(largeData)
   })
 
-  it("round-trips offer without optional reciprocate", () => {
-    const wire = offerWire({
-      docId: "doc-1",
-      kind: "entirety",
-      encoding: "json",
-      data: "{}",
-      version: "1",
-    })
-    const decoded = roundTrip(wire) as WireOfferMsg
-    expect(decoded.r).toBeUndefined()
+  it("round-trips accept", () => {
+    const decoded = roundTrip(acceptWire("doc-1", "AQ==:3")) as WireAcceptMsg
+    expect(decoded.t).toBe(MessageType.Accept)
+    expect(decoded.doc).toBe("doc-1")
+    expect(decoded.v).toBe("AQ==:3")
   })
 
   it("round-trips offer with lineage set", () => {
@@ -313,7 +308,6 @@ describe("CBOR codec — batch", () => {
         encoding: "binary",
         data: new Uint8Array([1, 2, 3]),
         version: "2",
-        reciprocate: false,
       }),
       dismissWire("d1"),
       departWire(),

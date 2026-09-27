@@ -11,6 +11,7 @@ import {
   StringToPayloadEncoding,
   StringToPayloadKind,
   syncModeToWire,
+  type WireAcceptMsg,
   type WireDismissMsg,
   type WireEstablishMsg,
   type WireInterestMsg,
@@ -113,7 +114,6 @@ export function offerWire(opts: {
   encoding: "json" | "binary"
   data: string | Uint8Array
   version: string
-  reciprocate?: boolean
   lineage?: string
 }): WireOfferMsg {
   const pk = StringToPayloadKind[opts.kind]
@@ -129,9 +129,16 @@ export function offerWire(opts: {
     d: opts.data,
     v: opts.version,
   }
-  if (opts.reciprocate !== undefined) wire.r = opts.reciprocate
   if (opts.lineage !== undefined) wire.ln = opts.lineage
   return wire
+}
+
+// ---------------------------------------------------------------------------
+// Accept
+// ---------------------------------------------------------------------------
+
+export function acceptWire(docId: string, version: string): WireAcceptMsg {
+  return { t: MessageType.Accept, doc: docId, v: version }
 }
 
 // ---------------------------------------------------------------------------

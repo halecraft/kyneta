@@ -113,6 +113,37 @@ describe("cohort governance predicate", () => {
     expect(docClient.count()).toBe(2)
   })
 
+  it("compacts a document the peer only reads, up to what it accepted", async () => {
+    // A reader never writes, so it never offers anything back. Only its
+    // acceptance of the writer's offers can tell the writer what it holds;
+    // without it the writer's record of the reader stays at genesis and
+    // compaction trims nothing.
+    const bridge = new Bridge()
+    const writer = createExchange({
+      id: "writer",
+      transports: [createBridgeTransport({ transportId: "writer", bridge })],
+    })
+    const reader = createExchange({
+      id: "reader",
+      transports: [createBridgeTransport({ transportId: "reader", bridge })],
+    })
+    const doc = writer.get("doc-1", TestDoc)
+    const read = reader.get("doc-1", TestDoc)
+
+    batch(doc, (d: any) => d.title.set("V1"))
+    await drain(40)
+    batch(doc, (d: any) => d.title.set("V2"))
+    await drain(40)
+    expect(read.title()).toBe("V2")
+
+    await writer.compact("doc-1")
+
+    const replica = writer.synchronizer.getDocRuntime("doc-1")?.replica
+    expect(replica?.baseVersion().serialize()).toBe(
+      replica?.version().serialize(),
+    )
+  })
+
   it("LCV excludes non-cohort peers; compact preserves cohort member", async () => {
     const bridgeSR = new Bridge()
     const bridgeSB = new Bridge()

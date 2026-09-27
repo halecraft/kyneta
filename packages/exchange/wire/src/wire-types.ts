@@ -6,11 +6,11 @@
 //
 // Wire type ranges:
 //   0x01–0x0F: Lifecycle messages (establish, depart)
-//   0x10–0x1F: Sync messages (present, interest, offer, dismiss, vacant)
+//   0x10–0x1F: Sync messages (present, interest, offer, dismiss, vacant, accept)
 //
 // Discriminators are allocated sequentially from the next free value and
 // classified by exact-value set-membership — numbering carries no
-// semantics (no range/mask dispatch anywhere). 0x14 = vacant.
+// semantics (no range/mask dispatch anywhere). 0x14 = vacant, 0x15 = accept.
 
 import type { SyncMode } from "@kyneta/schema"
 import {
@@ -36,6 +36,7 @@ export const MessageType = {
   Offer: 0x12,
   Dismiss: 0x13,
   Vacant: 0x14,
+  Accept: 0x15,
 } as const
 
 export type MessageTypeValue = (typeof MessageType)[keyof typeof MessageType]
@@ -51,6 +52,7 @@ export const MessageTypeToString: Record<MessageTypeValue, string> = {
   [MessageType.Offer]: "offer",
   [MessageType.Dismiss]: "dismiss",
   [MessageType.Vacant]: "vacant",
+  [MessageType.Accept]: "accept",
 }
 
 /**
@@ -64,6 +66,7 @@ export const StringToMessageType: Record<string, MessageTypeValue> = {
   offer: MessageType.Offer,
   dismiss: MessageType.Dismiss,
   vacant: MessageType.Vacant,
+  accept: MessageType.Accept,
 }
 
 // ---------------------------------------------------------------------------
@@ -181,7 +184,7 @@ export function syncModeToWire(mode: SyncMode): SyncModeWireValue {
  *   rt  — replicaType tuple [string, number, number]
  *   ms  — syncMode (SyncModeWireValue)
  *   v   — version (string, serialized)
- *   r   — reciprocate (boolean, optional)
+ *   r   — reciprocate (interest only; boolean, optional)
  *   sh  — schemaHash (string, 34-char hex, required in present doc entries)
  *   pk  — payload kind (PayloadKindValue)
  *   pe  — payload encoding (PayloadEncodingValue)
@@ -293,7 +296,6 @@ export type WireOfferMsg = {
   pe: PayloadEncodingValue
   d: string | Uint8Array
   v: string
-  r?: boolean
   /** SubstratePayload.lineage, optional — absent for legacy peers/payloads. */
   ln?: string
   /** `Replica.digest()` of the sender's state — see `WireInterestMsg.g`. */
@@ -322,6 +324,18 @@ export type WireVacantMsg = {
   dx?: number
 }
 
+/**
+ * Compact wire format for accept: the offer's `v`, quoted back.
+ *
+ * Decoder invariant: exactly one of `{doc, dx}` must be present.
+ */
+export type WireAcceptMsg = {
+  t: typeof MessageType.Accept
+  doc?: string
+  dx?: number
+  v: string
+}
+
 /** Union of all compact wire message types. */
 export type WireMessage =
   | WireEstablishMsg
@@ -331,3 +345,4 @@ export type WireMessage =
   | WireOfferMsg
   | WireDismissMsg
   | WireVacantMsg
+  | WireAcceptMsg

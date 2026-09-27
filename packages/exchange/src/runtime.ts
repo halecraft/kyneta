@@ -39,6 +39,7 @@ import {
   beginHydration,
   createRef,
   metadataOf,
+  replicaTypesCompatible,
   SUBSTRATE,
   subscribe,
 } from "@kyneta/schema"
@@ -1252,6 +1253,20 @@ export class Runtime {
     for (const backend of this.#stores) {
       try {
         const existing = await backend.currentMeta(docId)
+        if (
+          existing &&
+          !replicaTypesCompatible(
+            existing.replicaType,
+            replicaFactory.replicaType,
+          )
+        ) {
+          // Records in a format this replica cannot read are not an empty
+          // document: reading them anyway would misparse them. The store
+          // could not answer, the same as a store that threw.
+          throw new Error(
+            `stored replica type [${existing.replicaType}] cannot be read by [${replicaFactory.replicaType}]`,
+          )
+        }
         anyStoreAnswered = true
         if (existing) {
           for await (const record of backend.loadAll(docId)) {
@@ -1260,18 +1275,20 @@ export class Runtime {
               // it counts toward the store's version either way.
               storedVersion = record.version
               try {
-                // A whole-document entry is the state at its recorded
-                // version, not one more batch on top of what came before.
-                // Plain would otherwise count it as a new flush, and its
-                // version would run ahead of the store's.
+                // A whole-document entry is the state at its version, whatever
+                // came before it: after a lineage reset, the store's next
+                // write is the new lineage's whole document, which a merge
+                // would refuse as not continuing the old one. A delta must
+                // continue what loaded before it; one that does not is a
+                // failed read of that entry, not something to apply anyway.
                 if (record.payload.kind === "entirety") {
-                  replica.resetFromEntirety(
-                    record.payload,
-                    replicaFactory.parseVersion(record.version),
-                    { origin: "sync" },
+                  replica.resetFromEntirety(record.payload, { origin: "sync" })
+                } else if (
+                  replica.merge(record.payload, { origin: "sync" }) === "gap"
+                ) {
+                  throw new Error(
+                    `stored entry at ${record.version} does not continue the entries loaded before it`,
                   )
-                } else {
-                  replica.merge(record.payload, { origin: "sync" })
                 }
               } catch (err) {
                 console.warn(

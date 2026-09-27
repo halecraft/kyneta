@@ -7,6 +7,10 @@
 
 ## Changed
 
+- **New sync message `accept`, and `offer` loses `reciprocate`** (`@kyneta/transport`, `@kyneta/wire`, `@kyneta/exchange`) (breaking). The protocol version is `2.0`, and a peer that omits it is read as `1.0`. Mixed-version meshes are not supported.
+- **Plain payloads carry their log position, and the plain replica type is `["plain", 2, 0]`** (`@kyneta/schema`) (breaking). Stored `json` documents from earlier versions are refused on load.
+- **`Replica.merge` returns `"merged" | "gap"`, `resetFromEntirety` takes only the payload, and `ReplicaFactory` declares `historyFree`** (`@kyneta/schema`) (breaking, custom substrates).
+- **`PeerDocSyncState` replaces `lastKnownVersion` with `ourVersionTheyHold` and `theirVersionWeHold`, beside `status`** (`@kyneta/exchange`) (breaking).
 - **Replacing or clearing a whole `ephemeral` record removes older keys the writer had not seen** (`@kyneta/schema`) (breaking). Writing a record whole, or `record.clear()`, is now last-writer-wins on the record: every key written before it goes, including ones still on their way to this peer. Previously only the keys the writer held were removed. The per-key calls, `.set(k, v)` and `.delete(k)`, touch nothing else. Presence code that means "this peer's entry" should use them.
 - **`MapChange` gains `clear`, and `record.clear()` sends it** (`@kyneta/schema`) (breaking, custom substrates). `clear()` used to list the keys the local peer held and delete each one. It now dispatches `mapClearChange()`, an intent that each substrate's merge law resolves: Loro, Yjs and plain remove the keys they hold, exactly as before, and `ephemeral` also removes older entries still in flight. It is sent even when the record looks empty, which is what lets `ephemeral` clear entries that have not arrived yet. A custom substrate must honour `clear`; `mapChangeEffects(change, heldKeys)` does the work, and `tests/conformance` now declares each substrate's reach as `clearReach`.
 - **`lastUpdated` returns `null` for an `ephemeral` field nobody has written** (`@kyneta/schema`) (breaking). It returned `0`, because the substrate stored a zero at timestamp 0 for every declared field. The tree now holds only what was written, and the zeros a read returns come from the projection, so there is no timestamp to report.
@@ -60,6 +64,11 @@
 
 ## Fixed
 
+- **A plain peer that restarts without a store no longer ends up with a corrupted copy** (`@kyneta/schema`, `@kyneta/exchange`). A push could reach it before its catch-up and was appended to an empty log, duplicating entries permanently. A plain delta now says where it starts, and a replica that doesn't hold that point asks for a catch-up instead of applying it.
+- **One-way documents are compacted** (`@kyneta/exchange`). A sender never learned what a read-only peer held, so `compact` trimmed nothing and a `Line` outbox's log grew for the life of the Line. Receivers now `accept` each offer.
+- **A plain peer that takes a whole document is at the sender's version** (`@kyneta/schema`). Merging one appended a batch, so the receiver's count disagreed with the sender's; relays rebuilt by `fromEntirety` started at count 1. A restarted `Line` receiver no longer sees messages already acknowledged, because the outbox is now compacted.
+- **Compacting past a peer that is behind no longer throws** (`@kyneta/schema`). Plain `advance` threw for a target below its trimmed base, although the contract is to trim as far as possible. It now trims nothing.
+- **Ephemeral peers catch up on reconnect with a delta** (`@kyneta/exchange`). They quoted their own version as `since`, which the other side could not serve, so it resent the whole document.
 - **Writes made while a document loads are persisted** (`@kyneta/exchange`). The store's confirmed version was taken from the in-memory document, so it claimed the loading-time write and every later write skipped it.
 - **A reloaded plain document's version matches the store's** (`@kyneta/exchange`). A stored whole-document entry is loaded as the state at its recorded version, rather than as one more batch on top of the log.
 - **A document destroyed while loading stays destroyed** (`@kyneta/exchange`). It was re-registered with the Synchronizer once its load finished. `whenHydrated` now rejects for it.

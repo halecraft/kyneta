@@ -6,15 +6,16 @@
 // answers are deliberately different.
 
 import { describe, expect, it } from "vitest"
-import type { DocMetadata, ReadCapability, ReplicaType } from "../index.js"
+import type { DocMetadata, ReadCapability } from "../index.js"
 import {
   mismatchForInterpretation,
   mismatchForSync,
+  plainReplicaFactory,
   SYNC_AUTHORITATIVE,
   SYNC_COLLABORATIVE,
 } from "../index.js"
 
-const PLAIN: ReplicaType = ["plain", 1, 0]
+const PLAIN = plainReplicaFactory.replicaType
 
 /** A document written at `schemaHash`, in the plain format, authoritative. */
 function doc(schemaHash: string, over: Partial<DocMetadata> = {}): DocMetadata {
@@ -46,17 +47,18 @@ describe("the shared axes — same law for both questions", () => {
   })
 
   it("tolerates a minor-version drift, rejects a major one", () => {
-    const minor = mismatchForInterpretation(
+    const [name, major, minor] = PLAIN
+    const drifted = mismatchForInterpretation(
       reader(["h1"]),
-      doc("h1", { replicaType: ["plain", 1, 7] }),
+      doc("h1", { replicaType: [name, major, minor + 7] }),
     )
-    expect(minor).toBeUndefined()
+    expect(drifted).toBeUndefined()
 
-    const major = mismatchForInterpretation(
+    const incompatible = mismatchForInterpretation(
       reader(["h1"]),
-      doc("h1", { replicaType: ["plain", 2, 0] }),
+      doc("h1", { replicaType: [name, major + 1, 0] }),
     )
-    expect(major?.axis).toBe("replicaType")
+    expect(incompatible?.axis).toBe("replicaType")
   })
 
   it("compares all three syncMode fields, not just writerModel", () => {

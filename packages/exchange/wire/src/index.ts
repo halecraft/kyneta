@@ -37,6 +37,7 @@ export {
   SyncModeWireToMode,
   type SyncModeWireValue,
   syncModeToWire,
+  type WireAcceptMsg,
   type WireDepartMsg,
   type WireDismissMsg,
   type WireEstablishMsg,

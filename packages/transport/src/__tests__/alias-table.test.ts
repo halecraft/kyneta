@@ -115,13 +115,17 @@ describe("alias-table — establish snapshots features", () => {
 })
 
 describe("alias-table — establish protocolVersion (pv)", () => {
-  it("omits pv on the wire when absent (default peer)", () => {
+  it("emits pv for this build's revision, which is past the baseline", () => {
     const { result } = applyOutboundAliasing(emptyAliasState(), alice)
     expect(result.ok).toBe(true)
-    if (result.ok) expect((result.value as { pv?: unknown }).pv).toBeUndefined()
+    if (result.ok)
+      expect((result.value as { pv?: unknown }).pv).toEqual([
+        PROTOCOL_VERSION.major,
+        PROTOCOL_VERSION.minor,
+      ])
   })
 
-  it("omits pv when explicitly the default (1,0)", () => {
+  it("omits pv at the baseline (1,0), which is what its absence means", () => {
     const msg: EstablishMsg = {
       ...alice,
       protocolVersion: { major: 1, minor: 0 },
@@ -141,7 +145,7 @@ describe("alias-table — establish protocolVersion (pv)", () => {
     if (result.ok) expect((result.value as { pv?: unknown }).pv).toEqual([1, 2])
   })
 
-  it("inbound surfaces protocolVersion when pv present, defaults to (1,0) otherwise", () => {
+  it("inbound surfaces protocolVersion when pv present, and the baseline (1,0) otherwise", () => {
     const withPv = applyInboundAliasing(emptyAliasState(), {
       t: 0x01,
       id: "bob",
@@ -156,7 +160,8 @@ describe("alias-table — establish protocolVersion (pv)", () => {
       })
 
     // Absent pv is defaulted at the wire boundary so the parsed message
-    // always carries a concrete version.
+    // always carries a concrete version: the baseline, never the current
+    // revision, so an older peer that omits it is not read as current.
     const without = applyInboundAliasing(emptyAliasState(), {
       t: 0x01,
       id: "bob",
@@ -164,9 +169,10 @@ describe("alias-table — establish protocolVersion (pv)", () => {
     } as any)
     expect(without.result.ok).toBe(true)
     if (without.result.ok)
-      expect((without.result.value as EstablishMsg).protocolVersion).toEqual(
-        PROTOCOL_VERSION,
-      )
+      expect((without.result.value as EstablishMsg).protocolVersion).toEqual({
+        major: 1,
+        minor: 0,
+      })
   })
 })
 

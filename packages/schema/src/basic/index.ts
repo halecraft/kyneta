@@ -53,11 +53,15 @@ import type { Op } from "../changefeed.js"
 import { createRef } from "../create-doc.js"
 import type { PlainNativeMap } from "../native.js"
 import { hasSubstrate, SUBSTRATE } from "../native.js"
-import { RawPath } from "../path.js"
 import type { DocRef } from "../ref.js"
 import type { ProductSchema } from "../schema.js"
 import type { SubstratePayload } from "../substrate.js"
-import { PlainVersion, plainSubstrateFactory } from "../substrates/plain.js"
+import {
+  decodePlainPayload,
+  objectToReplaceOps,
+  PlainVersion,
+  plainSubstrateFactory,
+} from "../substrates/plain.js"
 
 // Interface call signature avoids TS2589 on the deep ref type when S is
 // generic (the `as CreateDoc` cast defers evaluation to concrete call sites).
@@ -151,33 +155,11 @@ export function delta(doc: object, fromVersion: number): Op[] {
   const since = new PlainVersion(fromVersion, currentLineage)
   const payload = substrate.exportSince(since)
   if (!payload) return []
-  // Wire format is batched: SerializedOp[][] — one inner array per flush cycle.
-  // Flatten to a single Op[] for the basic API consumer.
-  const parsed = JSON.parse(payload.data as string)
-  const batches = (
-    parsed && typeof parsed === "object" && "b" in parsed ? parsed.b : parsed
-  ) as Array<
-    Array<{
-      path: Array<{
-        type: string
-        field?: string
-        entry?: string
-        index?: number
-      }>
-      change: Op["change"]
-    }>
-  >
-  const raw = batches.flat()
-  return raw.map((op: (typeof raw)[number]) => ({
-    path: op.path.reduce(
-      (p: RawPath, seg) =>
-        seg.type === "field"
-          ? p.field(seg.field as string)
-          : seg.type === "entry"
-            ? p.entry(seg.entry as string)
-            : p.item(seg.index as number),
-      RawPath.empty,
-    ),
-    change: op.change,
-  }))
+  const decoded = decodePlainPayload(payload, "delta")
+  // The payload is batched, one batch per flush cycle; the basic API hands
+  // back one flat list. A cursor the log cannot continue from is answered
+  // with the whole document, which as ops is one replace per field.
+  return decoded.kind === "since"
+    ? decoded.batches.flat()
+    : objectToReplaceOps(decoded.state)
 }

@@ -1086,11 +1086,15 @@ describe("writable: the batch lifecycle", () => {
     const S = Schema.struct({ a: Schema.string(), b: Schema.string() })
     const peer = plainSubstrateFactory.create(S)
     const peerDoc = createRef(S, peer)
+    batch(peerDoc, d => d.a.set("seed"))
+    // The local document starts where the peer is, so what arrives in the
+    // batch body below is a delta, not the whole document.
+    const local = plainSubstrateFactory.fromEntirety(peer.exportEntirety(), S)
     const v0 = peer.version()
     batch(peerDoc, d => d.b.set("remote"))
     const delta = exportSince(peerDoc, v0) as SubstratePayload
 
-    const doc = createRef(S, plainSubstrateFactory.create(S))
+    const doc = createRef(S, local)
     const seen: { replay: boolean | undefined; paths: string[] }[] = []
     subscribe(doc, cs =>
       seen.push({

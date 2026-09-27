@@ -58,6 +58,7 @@ import {
   type MapChange,
   type MarkConfig,
   type MergeOptions,
+  type MergeOutcome,
   ownedForStore,
   type Path,
   type PlainState,
@@ -565,7 +566,7 @@ export function createLoroSubstrate(
       }
     },
 
-    merge(payload: SubstratePayload, options?: MergeOptions): void {
+    merge(payload: SubstratePayload, options?: MergeOptions): MergeOutcome {
       if (
         payload.encoding !== "binary" ||
         !(payload.data instanceof Uint8Array)
@@ -582,14 +583,12 @@ export function createLoroSubstrate(
       } finally {
         pendingImportOrigin = undefined
       }
-      // The doc.subscribe() handler announces the merged ops.
+      // The doc.subscribe() handler announces the merged ops. Loro holds back
+      // imported ops whose dependencies are missing, so there is no gap.
+      return "merged"
     },
 
-    resetFromEntirety(
-      payload: SubstratePayload,
-      _remoteVersion: Version,
-      options?: MergeOptions,
-    ): void {
+    resetFromEntirety(payload: SubstratePayload, options?: MergeOptions): void {
       // Loro never mints a new lineage automatically (see LoroVersion.lineage),
       // so an lineage boundary never arises for this substrate today — this
       // exists to satisfy the Substrate contract. CRDT merge (doc.import)
@@ -761,7 +760,7 @@ export function createLoroReplica(doc: LoroDocType): Replica<LoroVersion> {
       }
     },
 
-    merge(payload: SubstratePayload, _options?: MergeOptions): void {
+    merge(payload: SubstratePayload, _options?: MergeOptions): MergeOutcome {
       if (
         payload.encoding !== "binary" ||
         !(payload.data instanceof Uint8Array)
@@ -772,13 +771,10 @@ export function createLoroReplica(doc: LoroDocType): Replica<LoroVersion> {
         )
       }
       currentDoc.import(payload.data)
+      return "merged"
     },
 
-    resetFromEntirety(
-      payload: SubstratePayload,
-      _remoteVersion: Version,
-      options?: MergeOptions,
-    ): void {
+    resetFromEntirety(payload: SubstratePayload, options?: MergeOptions): void {
       // See createLoroSubstrate's resetFromEntirety — CRDT merge (set
       // union via doc.import) is always the correct absorption, lineage
       // boundary or not, so this delegates to the routine merge path.
@@ -789,6 +785,7 @@ export function createLoroReplica(doc: LoroDocType): Replica<LoroVersion> {
 
 export const loroReplicaFactory: ReplicaFactory<LoroVersion> = {
   replicaType: ["loro", 1, 0] as const,
+  historyFree: false,
 
   createEmpty(): Replica<LoroVersion> {
     return createLoroReplica(new LoroDoc())

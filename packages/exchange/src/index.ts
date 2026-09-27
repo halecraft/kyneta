@@ -1,9 +1,9 @@
 // @kyneta/exchange — substrate-agnostic state exchange.
 //
 // Provides sync infrastructure for any @kyneta/schema substrate.
-// Three sync protocols (authoritative, collaborative, ephemeral) are
-// dispatched by factory declaration over a uniform five-message protocol
-// (present, interest, offer, dismiss, vacant).
+// How a document syncs is declared by its factory's `SyncMode`, over one
+// six-message sync protocol (present, interest, offer, accept, dismiss,
+// vacant).
 
 // ---------------------------------------------------------------------------
 // Core types — sync-specific (defined here)
@@ -47,7 +47,10 @@ export type {
   ProtocolVersion,
   TransportType,
 } from "@kyneta/transport"
-export { PROTOCOL_VERSION } from "@kyneta/transport"
+export {
+  BASELINE_PROTOCOL_VERSION,
+  PROTOCOL_VERSION,
+} from "@kyneta/transport"
 
 // ---------------------------------------------------------------------------
 // Schema binding — re-exported from @kyneta/schema for convenience
@@ -76,6 +79,7 @@ export { unwrap } from "@kyneta/schema"
 // ---------------------------------------------------------------------------
 
 export type {
+  AcceptMsg,
   AddressedEnvelope,
   ChannelMsg,
   DepartMsg,

@@ -55,6 +55,22 @@ export type PeerIdentityDetails = {
  */
 export type ProtocolVersion = { major: number; minor: number }
 
-/** The baseline sync wire-contract revision this build implements. An
- *  absent `pv` on `establish` decodes to this value (ratified). */
-export const PROTOCOL_VERSION: ProtocolVersion = { major: 1, minor: 0 }
+/**
+ * The sync wire-contract revision this build implements.
+ *
+ * 2.0 added `accept` and removed `offer.reciprocate`. A peer on 1.x neither
+ * acknowledges what it applies nor understands being told, so the two cannot
+ * converge; the major says so at `establish`.
+ */
+export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 0 }
+
+/**
+ * What an `establish` without `pv` means: the revision before the field
+ * existed. Fixed forever, as part of the negotiation-core invariant: were it
+ * "the current revision", every older peer that omits the field would be
+ * read as current, and a major mismatch would go unreported.
+ */
+export const BASELINE_PROTOCOL_VERSION: ProtocolVersion = {
+  major: 1,
+  minor: 0,
+}

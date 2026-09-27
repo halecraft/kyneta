@@ -1,9 +1,10 @@
 // messages — substrate-agnostic message types for the sync protocol.
 //
-// Five sync messages form the document-exchange vocabulary:
+// Six sync messages form the document-exchange vocabulary:
 // - `present` — "I have these documents, here are their properties."
 // - `interest` — "I want document X. Here's my version."
 // - `offer` — "Here is state for document X."
+// - `accept` — "I now hold your version V of document X."
 // - `dismiss` — "I'm leaving the sync graph for this document."
 // - `vacant` — "You want document X, but I don't have it and won't serve it."
 //
@@ -76,7 +77,7 @@ export type DepartMsg = {
 }
 
 // ---------------------------------------------------------------------------
-// Sync messages — the five-message document-exchange vocabulary
+// Sync messages — the six-message document-exchange vocabulary
 // ---------------------------------------------------------------------------
 
 /**
@@ -126,17 +127,19 @@ export type InterestMsg = {
   reciprocate?: boolean
   /**
    * The last version *of the receiver's* that this sender applied — quoted
-   * back so the receiver can answer "what have you missed?".
+   * back so the receiver can answer "what have you missed?", and record it
+   * as what the sender holds of its versions. Absent until the sender has
+   * applied an offer from the receiver.
    *
    * `version` above says where the sender is, in the sender's own terms. For
-   * a substrate whose version is comparable across peers those are the same
-   * question, and this is absent. For one whose version is a private counter
-   * they are not: the sender's own position tells the receiver nothing about
-   * what to send, and only a cursor the receiver itself minted will do.
+   * a substrate whose version is comparable across peers either will do. For
+   * one whose version is a private counter only this will: the sender's own
+   * position tells the receiver nothing about what to send, and only a cursor
+   * the receiver itself minted will do.
    *
    * It may be stale, which costs a few extra leaves, or from an incarnation the
    * receiver no longer recognises, which costs one entirety. Neither costs
-   * correctness, so it is never worth keeping accurate.
+   * correctness.
    */
   since?: string
   /**
@@ -163,9 +166,8 @@ export type InterestMsg = {
  * tells the receiver how it was produced — the receiver calls
  * `replica.merge(payload)` which dispatches internally.
  *
- * `reciprocate` asks the receiver to send an `interest` back so that
- * the offerer can receive the receiver's state in turn. Used by causal
- * merge for bidirectional exchange.
+ * An offer only carries data. Asking for the receiver's state is an
+ * `interest`'s job, and saying what was applied is an `accept`'s.
  */
 export type OfferMsg = {
   type: "offer"
@@ -174,8 +176,6 @@ export type OfferMsg = {
   payload: SubstratePayload
   /** Serialized Version string of the sender's state. */
   version: string
-  /** Whether the receiver should send an interest back. */
-  reciprocate?: boolean
   /**
    * `Replica.digest()` — a fingerprint of the sender's replicated state.
    *
@@ -189,6 +189,24 @@ export type OfferMsg = {
    * forever without something that compares the state itself.
    */
   digest?: string
+}
+
+/**
+ * Acceptance of an offer — "I now hold your version `version` of document X."
+ *
+ * Nothing else tells an offer's sender which of its versions a receiver
+ * holds: a peer that only reads never offers anything back. The sender keeps
+ * the latest as what that peer holds of it, and compaction never trims past
+ * it. Sent once for each offer imported, on documents whose format keeps
+ * history; a history-free document is never compacted, so it needs none.
+ *
+ * `version` quotes the offer's `version` unchanged: a version the offerer
+ * minted, so it means the same thing to the offerer on every substrate.
+ */
+export type AcceptMsg = {
+  type: "accept"
+  docId: DocId
+  version: string
 }
 
 /**
@@ -232,6 +250,7 @@ export type SyncMsg =
   | PresentMsg
   | InterestMsg
   | OfferMsg
+  | AcceptMsg
   | DismissMsg
   | VacantMsg
 

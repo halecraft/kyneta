@@ -73,6 +73,7 @@ function ensureDoc(
     version?: string
     schemaHash?: string
     supportedHashes?: readonly string[]
+    historyFree?: boolean
   },
 ): [SyncModel, SyncEffect[]] {
   return applyUpdate(
@@ -83,6 +84,7 @@ function ensureDoc(
       mode: opts?.mode ?? "interpret",
       version: opts?.version ?? "v1",
       replicaType: ["test", 0, 0],
+      historyFree: opts?.historyFree ?? false,
       syncMode: opts?.syncMode ?? SYNC_COLLABORATIVE,
       schemaHash: opts?.schemaHash ?? "abc123",
       supportedHashes: opts?.supportedHashes,
@@ -216,6 +218,7 @@ describe("sync-program", () => {
           type: "sync/doc-imported",
           docId: "doc-1",
           version: "v2",
+          offered: "v2",
           fromPeerId: "bob",
           changed: true,
         },
@@ -260,6 +263,7 @@ describe("sync-program", () => {
           type: "sync/doc-imported",
           docId: "doc-1",
           version: "v2",
+          offered: "v2",
           fromPeerId: "bob",
           changed: true,
         },
@@ -289,6 +293,7 @@ describe("sync-program", () => {
           type: "sync/doc-imported",
           docId: "doc-1",
           version: "v2",
+          offered: "v2",
           fromPeerId: "bob",
           changed: true,
         },
@@ -343,6 +348,7 @@ describe("sync-program", () => {
           type: "sync/doc-imported",
           docId: "doc-1",
           version: "v2",
+          offered: "v2",
           fromPeerId: "bob",
           changed: true,
         },
@@ -416,15 +422,50 @@ describe("sync-program", () => {
       const [, effects] = ensureDoc(update, model, "doc-1", {
         syncMode: SYNC_COLLABORATIVE,
       })
-      const interests = effectsOfType(effects, "send-to-peers")
-      const interestEffect = interests.find(
-        e => (e.message as any).type === "interest",
+      expect(effectsOfType(effects, "send-to-peer")).toEqual([
+        {
+          type: "send-to-peer",
+          to: "bob",
+          message: {
+            type: "interest",
+            docId: "doc-1",
+            version: "v1",
+            reciprocate: true, // collaborative → bidirectional
+            since: undefined,
+          },
+        },
+      ])
+    })
+
+    it("quotes the cursor of theirs we hold when a document is promoted", () => {
+      // A replicated document that took bob's offer, then promoted to
+      // interpret: the interest it re-sends asks bob only for what came after.
+      const update = makeUpdate()
+      let model = initSync(alice)
+      ;[model] = addPeer(update, model, "bob", bob)
+      ;[model] = ensureDoc(update, model, "doc-1", { mode: "replicate" })
+      ;[model] = update(
+        {
+          type: "sync/doc-imported",
+          docId: "doc-1",
+          version: "v2",
+          offered: "b:3",
+          fromPeerId: "bob",
+          changed: true,
+        },
+        model,
       )
-      expect(interestEffect).toBeDefined()
-      const msg = defined(interestEffect, "interestEffect").message as any
-      expect(msg.type).toBe("interest")
-      expect(msg.docId).toBe("doc-1")
-      expect(msg.reciprocate).toBe(true) // collaborative → bidirectional
+
+      const [, effects] = ensureDoc(update, model, "doc-1", {
+        mode: "interpret",
+        version: "v2",
+      })
+      const interests = effectsOfType(effects, "send-to-peer").filter(
+        e => e.message.type === "interest",
+      )
+      expect(interests).toMatchObject([
+        { to: "bob", message: { version: "v2", since: "b:3" } },
+      ])
     })
 
     it("idempotent — second ensure for same doc returns model unchanged", () => {
@@ -909,6 +950,152 @@ describe("sync-program", () => {
   // -----------------------------------------------------------------------
   // sync/message-received — interest
   // -----------------------------------------------------------------------
+  describe("what each side knows about the other", () => {
+    const docState = (model: SyncModel, peer: string) =>
+      model.peers.get(peer)?.docSyncStates.get("doc-1")
+
+    function importedFromBob() {
+      const update = makeUpdate()
+      let model = initSync(alice)
+      ;[model] = addPeer(update, model, "bob", bob)
+      ;[model] = ensureDoc(update, model, "doc-1")
+      ;[model] = applyUpdate(
+        update,
+        {
+          type: "sync/doc-imported",
+          docId: "doc-1",
+          version: "v2",
+          offered: "bob-v7",
+          fromPeerId: "bob",
+          changed: true,
+        },
+        model,
+      )
+      return { update, model }
+    }
+
+    it("an interest records the cursor it quotes as what the peer holds of ours, and keeps what we hold of theirs", () => {
+      const { update, model: before } = importedFromBob()
+
+      const [model] = receiveMessage(update, before, "bob", {
+        type: "interest",
+        docId: "doc-1",
+        version: "bob-v8",
+        since: "v2",
+      })
+
+      expect(docState(model, "bob")?.status).toBe("pending")
+      expect(docState(model, "bob")?.ourVersionTheyHold).toBe("v2")
+      expect(docState(model, "bob")?.theirVersionWeHold).toBe("bob-v7")
+    })
+
+    it("an interest without a cursor records the peer's own version", () => {
+      const { update, model: before } = importedFromBob()
+
+      const [model] = receiveMessage(update, before, "bob", {
+        type: "interest",
+        docId: "doc-1",
+        version: "v1",
+      })
+
+      expect(docState(model, "bob")?.ourVersionTheyHold).toBe("v1")
+    })
+
+    it("an offer is imported owing an accept, unless the document is history-free", () => {
+      const acceptOwed = (historyFree: boolean) => {
+        const update = makeUpdate()
+        let model = initSync(alice)
+        ;[model] = addPeer(update, model, "bob", bob)
+        ;[model] = ensureDoc(update, model, "doc-1", { historyFree })
+        const [, effects] = receiveMessage(update, model, "bob", {
+          type: "offer",
+          docId: "doc-1",
+          payload: { kind: "since", encoding: "json", data: "{}" },
+          version: "bob-v7",
+        })
+        return effectsOfType(effects, "import-doc-data").map(e => e.accept)
+      }
+
+      expect(acceptOwed(false)).toEqual([true])
+      expect(acceptOwed(true)).toEqual([false])
+    })
+
+    it("a peer canShare vetoes is owed no accept, though canAccept lets its offer in", () => {
+      // `accept` names the document, so it leaves by the same gate as
+      // everything else that does.
+      const update = makeUpdate({ canShare: () => false })
+      let model = initSync(alice)
+      ;[model] = addPeer(update, model, "bob", bob)
+      ;[model] = ensureDoc(update, model, "doc-1")
+      const [, effects] = receiveMessage(update, model, "bob", {
+        type: "offer",
+        docId: "doc-1",
+        payload: { kind: "since", encoding: "json", data: "{}" },
+        version: "bob-v7",
+      })
+      expect(
+        effectsOfType(effects, "import-doc-data").map(e => e.accept),
+      ).toEqual([false])
+    })
+
+    it("an accept records what the peer holds of ours, and nothing else", () => {
+      const { update, model: before } = importedFromBob()
+
+      const [model, effects] = receiveMessage(update, before, "bob", {
+        type: "accept",
+        docId: "doc-1",
+        version: "v2",
+      })
+
+      expect(effects).toEqual([])
+      expect(docState(model, "bob")?.ourVersionTheyHold).toBe("v2")
+      expect(docState(model, "bob")?.status).toBe("synced")
+      expect(model.pendingPeerSyncDocIds).toEqual(before.pendingPeerSyncDocIds)
+    })
+
+    it("a gap asks the offering peer for what we lack", () => {
+      const { update, model } = importedFromBob()
+
+      const [, effects] = applyUpdate(
+        update,
+        { type: "sync/doc-gap", docId: "doc-1", fromPeerId: "bob" },
+        model,
+      )
+
+      expect(effects).toEqual([
+        {
+          type: "send-to-peer",
+          to: "bob",
+          message: {
+            type: "interest",
+            docId: "doc-1",
+            version: "v2",
+            reciprocate: false,
+            since: "bob-v7",
+          },
+        },
+      ])
+    })
+
+    it("a returning peer's holding of ours is forgotten, and ours of theirs kept", () => {
+      const { update, model: imported } = importedFromBob()
+      const [before] = receiveMessage(update, imported, "bob", {
+        type: "interest",
+        docId: "doc-1",
+        version: "v2",
+      })
+
+      const [model] = applyUpdate(
+        update,
+        { type: "sync/peer-available", peerId: "bob", identity: bob },
+        before,
+      )
+
+      expect(docState(model, "bob")?.ourVersionTheyHold).toBeUndefined()
+      expect(docState(model, "bob")?.theirVersionWeHold).toBe("bob-v7")
+    })
+  })
+
   describe("sync/message-received — interest", () => {
     it("collaborative doc: sends offer with sinceVersion", () => {
       const update = makeUpdate()
@@ -1139,6 +1326,7 @@ describe("sync-program", () => {
           type: "sync/doc-imported",
           docId: "doc-1",
           version: "bob:54",
+          offered: "bob:54",
           fromPeerId: "bob",
           changed: true,
         },
@@ -1170,6 +1358,7 @@ describe("sync-program", () => {
           type: "sync/doc-imported",
           docId: "doc-1",
           version: "v1",
+          offered: "v1",
           fromPeerId: "bob",
           changed: true,
         },
@@ -1380,37 +1569,21 @@ describe("sync-program", () => {
       expect(imports.length).toBe(0)
     })
 
-    it("with reciprocate: sends interest back", () => {
+    it("only imports: an offer is answered by an accept once imported, never by an interest", () => {
       const update = makeUpdate()
       let model = initSync(alice)
       ;[model] = addPeer(update, model, "bob", bob)
       ;[model] = ensureDoc(update, model, "doc-1")
 
-      const payload = {
-        kind: "entirety" as const,
-        encoding: "json" as const,
-        data: "{}",
-      }
       const [, effects] = receiveMessage(update, model, "bob", {
         type: "offer",
         docId: "doc-1",
-        payload,
+        payload: { kind: "entirety", encoding: "json", data: "{}" },
         version: "v2",
-        reciprocate: true,
       })
 
-      const sends = effectsOfType(effects, "send-to-peer")
-      const interestSend = sends.find(
-        e => (e.message as any).type === "interest",
-      )
-      expect(interestSend).toBeDefined()
-      expect(defined(interestSend, "interestSend").to).toBe("bob")
-      expect((defined(interestSend, "interestSend").message as any).docId).toBe(
-        "doc-1",
-      )
-      expect(
-        (defined(interestSend, "interestSend").message as any).reciprocate,
-      ).toBe(false)
+      expect(effectsOfType(effects, "import-doc-data")).toHaveLength(1)
+      expect(effectsOfType(effects, "send-to-peer")).toHaveLength(0)
     })
 
     it("unknown doc: no-op", () => {
@@ -1560,6 +1733,7 @@ describe("sync-program", () => {
           type: "sync/doc-imported",
           docId: "doc-1",
           version: "v2",
+          offered: "v2",
           fromPeerId: "bob",
           changed: true,
         },
@@ -1594,6 +1768,7 @@ describe("sync-program", () => {
           type: "sync/doc-imported",
           docId: "doc-1",
           version: "v2",
+          offered: "v2",
           fromPeerId: "bob",
           changed: true,
         },
@@ -1691,6 +1866,7 @@ describe("sync-program", () => {
           type: "sync/doc-imported",
           docId: "doc-1",
           version: "v2",
+          offered: "bob-v7",
           fromPeerId: "bob",
           changed: true,
         },
@@ -1707,7 +1883,9 @@ describe("sync-program", () => {
       ).docSyncStates.get("doc-1")
       expect(peerSync).toBeDefined()
       expect(defined(peerSync, "peerSync").status).toBe("synced")
-      expect((peerSync as any).lastKnownVersion).toBe("v2")
+      // What we hold of bob's is the version he offered, in his terms, not
+      // our own version after the import.
+      expect(peerSync?.theirVersionWeHold).toBe("bob-v7")
     })
 
     it("relays to other peers (multi-hop)", () => {
@@ -1725,6 +1903,7 @@ describe("sync-program", () => {
           type: "sync/doc-imported",
           docId: "doc-1",
           version: "v2",
+          offered: "v2",
           fromPeerId: "bob",
           changed: true,
         },
@@ -1735,6 +1914,7 @@ describe("sync-program", () => {
           type: "sync/doc-imported",
           docId: "doc-1",
           version: "v3",
+          offered: "v3",
           fromPeerId: "carol",
           changed: true,
         },
@@ -1748,6 +1928,7 @@ describe("sync-program", () => {
           type: "sync/doc-imported",
           docId: "doc-1",
           version: "v4",
+          offered: "v4",
           fromPeerId: "bob",
           changed: true,
         },
@@ -1772,6 +1953,7 @@ describe("sync-program", () => {
           type: "sync/doc-imported",
           docId: "doc-1",
           version: "v2",
+          offered: "v2",
           fromPeerId: "bob",
           changed: true,
         },
@@ -1912,6 +2094,7 @@ describe("sync-program", () => {
         mode: "interpret",
         version: "v1",
         replicaType: ["test", 0, 0],
+        historyFree: false,
         syncMode: SYNC_COLLABORATIVE,
         schemaHash: "abc123",
       })
@@ -1927,6 +2110,7 @@ describe("sync-program", () => {
         type: "sync/doc-imported",
         docId: VETOED_DOC,
         version: "v3",
+        offered: "v3",
         fromPeerId: "bob",
         changed: true,
       })
@@ -2077,7 +2261,12 @@ describe("vacant + reconciliation latch", () => {
   ): SyncModel {
     const [m] = applyUpdate(
       update,
-      { type: "sync/peer-synced", docId: "doc-1", version, peerId },
+      {
+        type: "sync/peer-synced",
+        docId: "doc-1",
+        version,
+        peerId,
+      },
       model,
     )
     return m

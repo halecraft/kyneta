@@ -999,16 +999,16 @@ export class Exchange {
   }
 
   /**
-   * Compute the least common version (LCV) for a document across all
-   * synced cohort members. The LCV is the greatest version that is ≤
-   * every synced cohort peer's last known version — the safe trim
-   * point for `advance()`.
+   * Compute the least common version (LCV) for a document across the
+   * cohort members we push it to. The LCV is the greatest version that is
+   * ≤ what each of them holds of ours (from its `accept`s and interests):
+   * the safe trim point for `advance()`.
    *
    * Cohort membership is determined by the governance `cohort` gate;
    * the default cohort includes all peers (open gate).
    *
-   * Returns `null` if no peers are synced for this doc, or if the
-   * doc doesn't exist.
+   * Returns `null` if no such peer's holding is known, or if the doc
+   * doesn't exist.
    *
    * @param docId - The document to compute the LCV for
    */
@@ -1026,9 +1026,10 @@ export class Exchange {
    * `replica.advance()` → store-program `compact`, whose write exports the
    * trimmed entirety when it starts.
    *
-   * If no peers are synced, the full document is projected (all
-   * history discarded). The undershoot contract ensures the base
-   * never exceeds the LCV, so no peer is stranded.
+   * If no peer's holding is known, the full document is projected (all
+   * history discarded). The base never passes the LCV, so no peer whose
+   * holding is known is stranded; one whose holding is not known catches
+   * up with the whole document.
    *
    * @param docId - The document to compact
    */

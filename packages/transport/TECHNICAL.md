@@ -5,7 +5,7 @@
 > **Depends on**: `@kyneta/wire` (workspace), `@kyneta/machine`, `@kyneta/schema`
 > **Depended on by**: `@kyneta/exchange`, `@kyneta/websocket-transport`, `@kyneta/sse-transport`, `@kyneta/unix-socket-transport`, `@kyneta/webrtc-transport`, `@kyneta/bridge-transport`
 > **Canonical symbols**: `Transport<G>`, `TransportFactory`, `TransportContext`, `Channel`, `ConnectedChannel`, `EstablishedChannel`, `GeneratedChannel`, `ChannelDirectory<G>`, `ChannelMsg`, `LifecycleMsg`, `SyncMsg`, `EstablishMsg`, `DepartMsg`, `PresentMsg`, `InterestMsg`, `OfferMsg`, `DismissMsg`, `AddressedEnvelope`, `ReturnEnvelope`, `PeerIdentityDetails`, `WireFeatures`, `Pipeline`, `Encoding`, `PayloadOf`, `WireOpts`, `FrameTrace`, `FrameStreamParser`, `computeBackoffDelay`, `DEFAULT_RECONNECT`. Re-exports: `Result`, `Ok`, `Err`, `ok`, `err`, `WireError`.
-> **Key invariant(s)**: The protocol is exactly seven messages. Two lifecycle (`establish`, `depart`) for channel presence, five sync (`present`, `interest`, `offer`, `dismiss`, `vacant`) for document exchange. The `Pipeline` is the single wire orchestrator — all concrete transports use it rather than calling `@kyneta/wire` directly.
+> **Key invariant(s)**: The protocol is exactly eight messages. Two lifecycle (`establish`, `depart`) for channel presence, six sync (`present`, `interest`, `offer`, `accept`, `dismiss`, `vacant`) for document exchange. The `Pipeline` is the single wire orchestrator — all concrete transports use it rather than calling `@kyneta/wire` directly.
 
 A small kit of shared types, one abstract base class, and one wire pipeline that every concrete transport extends and uses. It fixes the shape of a channel, the vocabulary of messages, the split between "channel created" / "channel connected" / "channel established", and the `ChannelMsg ↔ wire` transformation — so that the runtime in `@kyneta/exchange` can drive any transport without caring whether bytes flow over a WebSocket, an SSE stream, a Unix socket, or an in-process bridge.
 
@@ -15,7 +15,7 @@ Imported by `@kyneta/exchange` (which owns the sync runtime) and by every concre
 
 ## Questions this document answers
 
-- What are the six messages and why exactly six? → [Message vocabulary](#message-vocabulary)
+- What are the eight messages and why exactly eight? → [Message vocabulary](#message-vocabulary)
 - What does a channel's lifecycle look like? → [Channel lifecycle](#channel-lifecycle)
 - How do I write a new transport? → [Writing a transport](#writing-a-transport)
 - Why a `TransportFactory` instead of a `Transport` instance? → [Factories, not instances](#factories-not-instances)
@@ -80,15 +80,16 @@ The generic parameter `G` is the transport's own per-channel context (e.g. the b
 
 ## Message vocabulary
 
-Exactly six messages (source: `packages/transport/src/messages.ts`). Two groups:
+Exactly eight messages (source: `packages/transport/src/messages.ts`). Two groups:
 
 | Message | Group | Sender | Payload | Purpose |
 |---------|-------|--------|---------|---------|
 | `establish` | Lifecycle | Both peers, on connect | `{ identity, features?, protocolVersion? }` | Symmetric handshake — no request/response, both peers send |
 | `depart` | Lifecycle | Departing peer | `{}` | Intentional, explicit departure — the receiver skips any disconnect-grace timer |
 | `present` | Sync | Either peer | `{ docs: Array<{ docId, replicaType, syncMode, schemaHash, supportedHashes? }> }` | "I hold these documents" |
-| `interest` | Sync | Either peer | `{ docId, version?, reciprocate? }` | "I want this document; here is my version" |
-| `offer` | Sync | Either peer | `{ docId, payload: SubstratePayload, version, reciprocate? }` | "Here is state for this document" |
+| `interest` | Sync | Either peer | `{ docId, version?, reciprocate?, since?, digest? }` | "I want this document; here is my version" |
+| `offer` | Sync | Either peer | `{ docId, payload: SubstratePayload, version, digest? }` | "Here is state for this document" |
+| `accept` | Sync | Offer's receiver | `{ docId, version }` | "I now hold your version `version`" — quotes the offer's version, so an offerer learns what each receiver holds. Absent in protocol 1.x |
 | `dismiss` | Sync | Leaving peer | `{ docId }` | "I am leaving the sync graph for this document" — dual of `present` |
 | `vacant` | Sync | Serving peer | `{ docId }` | "You expressed interest, but I will not serve you this document" — either because I don't have it or because policy says you may not have it, deliberately indistinguishable. Terminal negative ack; receiver records the sender `vacant` without tearing down its own replica |
 
@@ -105,7 +106,7 @@ Exactly six messages (source: `packages/transport/src/messages.ts`). Two groups:
 
 ### `EstablishMsg.protocolVersion` and the three-tier model
 
-`EstablishMsg` carries a **required** `protocolVersion: ProtocolVersion` (`{ major, minor }`), the **sync wire-contract revision** a peer implements. `ProtocolVersion` and the `PROTOCOL_VERSION = { major: 1, minor: 0 }` constant live in `src/types.ts` — distinct from `@kyneta/wire`'s `WIRE_VERSION` (frame encoding) and `@kyneta/schema`'s `SyncMode` (per-doc policy). The field is *required in the logical domain* (every peer is some revision) but *sparse on the wire*: the alias transformer emits `pv` only when non-default, and the inbound transform defaults an absent `pv` back to `(1, 0)`. So a 2.0 peer's `establish` is byte-identical to one without the field, yet every parsed `EstablishMsg` carries a concrete version (proto3-style "complete in memory, sparse on the wire").
+`EstablishMsg` carries a **required** `protocolVersion: ProtocolVersion` (`{ major, minor }`), the **sync wire-contract revision** a peer implements. `ProtocolVersion`, `PROTOCOL_VERSION = { major: 2, minor: 0 }` and `BASELINE_PROTOCOL_VERSION = { major: 1, minor: 0 }` live in `src/types.ts` — distinct from `@kyneta/wire`'s `WIRE_VERSION` (frame encoding) and `@kyneta/schema`'s `SyncMode` (per-doc policy). The field is *required in the logical domain* (every peer is some revision) but *sparse on the wire*: the alias transformer omits `pv` only at the baseline `(1, 0)`, and the inbound transform decodes an absent `pv` as the baseline. Every parsed `EstablishMsg` carries a concrete version (proto3-style "complete in memory, sparse on the wire"). Absence means the baseline forever, never "the current revision": if it meant the current one, every peer from before the field existed would be read as current, and the first real major bump — 2.0, which added `accept` and removed `offer.reciprocate` — would go unreported.
 
 Wire evolution is split across three mechanisms by how a peer must react to a difference:
 

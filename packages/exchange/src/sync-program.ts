@@ -19,6 +19,7 @@ import type {
 } from "@kyneta/schema"
 import { mismatchForSync, requiresBidirectionalSync } from "@kyneta/schema"
 import type {
+  AcceptMsg,
   DismissMsg,
   DocId,
   InterestMsg,
@@ -64,6 +65,14 @@ export type DocEntry = {
 
   /** All schema hashes this peer supports for this doc (enables heterogeneous-version sync). */
   supportedHashes?: readonly string[]
+
+  /**
+   * Whether the document's format keeps no history to trim
+   * (`ReplicaFactoryLike.historyFree`), which decides whether an imported
+   * offer is answered with `accept`. Absent for a deferred document, which
+   * holds no replica and imports nothing.
+   */
+  historyFree?: boolean
 }
 
 export type SyncPeerState = {
@@ -146,6 +155,8 @@ export type SyncInput =
       mode: "interpret" | "replicate"
       version: string
       replicaType: ReplicaType
+      /** From the replica factory: see {@link DocEntry.historyFree}. */
+      historyFree: boolean
       syncMode: SyncMode
       schemaHash: string
       supportedHashes?: readonly string[]
@@ -172,7 +183,10 @@ export type SyncInput =
   | {
       type: "sync/doc-imported"
       docId: DocId
+      /** Our version after the import: the document's new version. */
       version: string
+      /** The offer's version, in the offering peer's terms: what we now hold of theirs. */
+      offered: string
       fromPeerId: PeerId
       /**
        * Whether the import moved this replica's state. A payload a peer
@@ -185,8 +199,15 @@ export type SyncInput =
   | {
       type: "sync/peer-synced"
       docId: DocId
+      /** The version the peer stated, which the check found we already hold. */
       version: string
       peerId: PeerId
+    }
+  | {
+      /** An offer did not continue what we hold, so nothing was applied. */
+      type: "sync/doc-gap"
+      docId: DocId
+      fromPeerId: PeerId
     }
   | { type: "sync/declare-vacant"; docId: DocId; to: PeerId }
   | { type: "sync/queue-doc-event"; event: DocChange }
@@ -250,14 +271,12 @@ export type SyncEffect =
       to: PeerId
       docId: DocId
       sinceVersion?: string
-      reciprocate?: boolean
     }
   | {
       type: "send-offers"
       to: PeerId[]
       docId: DocId
       sinceVersion?: string
-      reciprocate?: boolean
     }
   | {
       type: "import-doc-data"
@@ -265,6 +284,15 @@ export type SyncEffect =
       payload: SubstratePayload
       version: string
       fromPeerId: PeerId
+      /**
+       * Whether the sender is owed an `accept` once the offer is held
+       * (imported, already held, or taken by a reset). Decided here: a
+       * history-free document is never compacted, so its sender has no use
+       * for one, and a peer `canShare` vetoes is sent nothing about the
+       * document at all. Sent by the shell as soon as the offer is held,
+       * ahead of anything the import makes this peer send.
+       */
+      accept: boolean
       /**
        * The sender's `Replica.digest()`, when its version cannot answer
        * equality on its own. Compared *after* the merge: the question is
@@ -360,9 +388,14 @@ function appendUniqueDocIds(
  * doc for a peer-sync change notification at quiescence.
  *
  * This is the **single fold point** for the volatile `docSyncStates` map:
- * `handlePeerSynced`, `handleInterestForKnownDoc`, `handleDocImported`, and
- * `handleVacant` all route through it, so "a peer's state changed" is
- * recorded in exactly one place.
+ * `handlePeerSynced`, `handleInterestForKnownDoc`, `handleDocImported`,
+ * `handleAccept` and `handleVacant` all route through it, so "a peer's state
+ * changed" is recorded in exactly one place.
+ *
+ * `patch` updates only the fields it names, so a new status keeps what we
+ * know of the peer's versions, and a new version keeps the status. A patch
+ * without a `status` for a document we hold no state for is dropped: there
+ * is nothing to attach the version to.
  *
  * No-op (returns `model` unchanged) when we don't track the peer.
  */
@@ -370,15 +403,28 @@ function setPeerDocState(
   model: SyncModel,
   peerId: PeerId,
   docId: DocId,
-  next: PeerDocSyncState,
+  patch: PeerDocSyncPatch,
 ): SyncModel {
   const peerState = model.peers.get(peerId)
   if (!peerState) return model
+  const current = peerState.docSyncStates.get(docId)
+  const status = patch.status ?? current?.status
+  if (status === undefined) return model
+  const next: PeerDocSyncState = {
+    ...current,
+    ...patch,
+    status,
+    lastUpdated: new Date(),
+  }
 
   const peers = new Map(model.peers)
   const docSyncStates = new Map(peerState.docSyncStates)
   docSyncStates.set(docId, next)
   peers.set(peerId, { ...peerState, docSyncStates })
+
+  // A version alone is bookkeeping: nobody observing peer sync state needs
+  // to hear about it.
+  if (patch.status === undefined) return { ...model, peers }
 
   // Second fold: when this transition reaches a terminal reconciled state
   // (`synced` or `vacant`), record the peer's identity in the monotonic
@@ -403,6 +449,13 @@ function setPeerDocState(
     ),
     reconciledIdentities,
   }
+}
+
+/** The fields of a {@link PeerDocSyncState} a transition sets. */
+type PeerDocSyncPatch = {
+  readonly status?: PeerDocSyncState["status"]
+  readonly ourVersionTheyHold?: string
+  readonly theirVersionWeHold?: string
 }
 
 /**
@@ -533,13 +586,6 @@ function getSyncedPeers(
 }
 
 /**
- * Build a push effect for document changes — used for both local changes
- * and relay (imported changes forwarded to other peers).
- *
- * When `excludePeerId` is provided, that peer is excluded from the push
- * (relay case: don't echo back to the sender).
- */
-/**
  * The last version we applied *from* this peer for this document.
  *
  * Quoted back in an interest so the peer can answer "what have you missed?"
@@ -551,12 +597,27 @@ function cursorFor(
   peerId: PeerId,
   docId: DocId,
 ): string | undefined {
-  const state = model.peers.get(peerId)?.docSyncStates.get(docId)
-  return state && "lastKnownVersion" in state
-    ? state.lastKnownVersion
-    : undefined
+  return model.peers.get(peerId)?.docSyncStates.get(docId)?.theirVersionWeHold
 }
 
+/**
+ * Which of our versions a peer holds, from an interest it sent: the cursor it
+ * quoted back when there is one, which names a version we minted, else its
+ * own stated version. Its own version is stated in its terms, which for a
+ * private counter we cannot interpret at all. Both what we record of the
+ * peer and what we send it in answer start from this.
+ */
+function versionTheyHold(message: InterestMsg): string | undefined {
+  return message.since ?? message.version
+}
+
+/**
+ * Build a push effect for document changes — used for both local changes
+ * and relay (imported changes forwarded to other peers).
+ *
+ * When `excludePeerId` is provided, that peer is excluded from the push
+ * (relay case: don't echo back to the sender).
+ */
 function buildPush(
   docId: DocId,
   docEntry: DocEntry,
@@ -570,20 +631,14 @@ function buildPush(
   const peerIds = filterPeersByShare(model, raw, docId, canShare)
   if (peerIds.length === 0) return undefined
 
-  // Every substrate can compute a delta now, so every push carries the
-  // baseline to compute it from.
-  //
   // sinceVersion is the doc's own pre-change baseline (docEntry.version),
-  // deliberately shared across all target peers rather than resolved per
-  // peer from PeerDocSyncState.lastKnownVersion. For a push-based,
-  // reliably-ordered protocol, this is the correct invariant: only
-  // already-synced/pending peers receive pushes (getSyncedPeers), and
-  // each push's baseline is exactly the version established by the
-  // previous push — no per-peer freshness tracking is needed. (Per-peer
-  // lastKnownVersion was tried and reverted: it is frozen at the initial
-  // handshake for one-way writer→reader docs and goes stale immediately,
-  // causing exportSince to recompute deltas against the wrong baseline
-  // and corrupt op replay — see jj:5e9e318542ee2006ccb720fd4ec9f819.)
+  // shared by every target peer: on a reliable, ordered channel each push
+  // starts where the previous one ended. A per-peer baseline would have to
+  // be what the peer is known to hold (`ourVersionTheyHold`), which lags
+  // every push still in flight, so each push would resend them; an earlier
+  // per-peer attempt corrupted op replay for this reason (jj:5e9e3185). A
+  // peer that no longer holds the baseline, one that restarted without its
+  // state, reports a gap on merge and asks for a catch-up (`sync/doc-gap`).
   return {
     type: "send-offers",
     to: peerIds,
@@ -679,31 +734,40 @@ function buildInterestResponse(
     type: "send-offer",
     to: fromPeerId,
     docId: message.docId,
-    // Prefer the cursor the peer quoted back to us over its own version. They
-    // answer different questions, and only the first is one we can serve: a
-    // peer's own version is stated in its terms, which for a private counter
-    // we cannot interpret at all.
-    sinceVersion: message.since ?? message.version,
-    reciprocate: false,
+    sinceVersion: versionTheyHold(message),
   })
 
   // Concurrent writers need to hear each other, so ask for the peer's state
   // in turn. `reciprocate: false` on the way back stops the loop.
   if (requiresBidirectionalSync(docEntry.syncMode) && message.reciprocate) {
-    effects.push({
-      type: "send-to-peer",
-      to: fromPeerId,
-      message: {
-        type: "interest",
-        docId: message.docId,
-        version: docEntry.version,
-        reciprocate: false,
-        since: cursorFor(model, fromPeerId, message.docId),
-      },
-    })
+    effects.push(interestTo(model, fromPeerId, message.docId, docEntry, false))
   }
 
   return effects
+}
+
+/**
+ * The interest this peer sends `peerId` for a document: our version, and the
+ * cursor of theirs we hold, so they can answer with exactly what we lack.
+ */
+function interestTo(
+  model: SyncModel,
+  peerId: PeerId,
+  docId: DocId,
+  docEntry: DocEntry,
+  reciprocate: boolean,
+): SyncEffect {
+  return {
+    type: "send-to-peer",
+    to: peerId,
+    message: {
+      type: "interest",
+      docId,
+      version: docEntry.version,
+      reciprocate,
+      since: cursorFor(model, peerId, docId),
+    },
+  }
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -794,6 +858,8 @@ export function createSyncUpdate(
         return handleDocImported(input, model, canShare)
       case "sync/peer-synced":
         return handlePeerSynced(input, model)
+      case "sync/doc-gap":
+        return handleDocGap(input, model)
       case "sync/declare-vacant":
         return handleDeclareVacant(input, model)
       case "sync/queue-doc-event":
@@ -828,7 +894,9 @@ function handleMessageReceived(
     case "interest":
       return handleInterest(from, message, model, canShare)
     case "offer":
-      return handleOffer(from, message, model, canAccept)
+      return handleOffer(from, message, model, canShare, canAccept)
+    case "accept":
+      return handleAccept(from, message, model)
     case "dismiss":
       return handleDismiss(from, message, model)
     case "vacant":
@@ -854,10 +922,12 @@ function handlePeerAvailable(
   const peers = new Map(model.peers)
   const existingPeer = peers.get(peerId)
 
-  // Preserve existing docSyncStates for reconnecting peers
+  // Preserve existing docSyncStates for reconnecting peers, except what we
+  // knew of their holding: a peer that comes back may have lost its state,
+  // and its interest will say what it holds now.
   peers.set(peerId, {
     identity,
-    docSyncStates: existingPeer?.docSyncStates ?? new Map(),
+    docSyncStates: forgetWhatTheyHold(existingPeer?.docSyncStates),
   })
 
   const updatedModel: SyncModel = { ...model, peers }
@@ -870,6 +940,17 @@ function handlePeerAvailable(
   const present = buildPresent(docIds, peerId, updatedModel)
 
   return present ? [updatedModel, present] : [updatedModel]
+}
+
+/** The same sync states, with no record of which of our versions the peer holds. */
+function forgetWhatTheyHold(
+  states: ReadonlyMap<DocId, PeerDocSyncState> | undefined,
+): Map<DocId, PeerDocSyncState> {
+  const forgotten = new Map<DocId, PeerDocSyncState>()
+  for (const [docId, { ourVersionTheyHold: _, ...rest }] of states ?? []) {
+    forgotten.set(docId, rest)
+  }
+  return forgotten
 }
 
 /**
@@ -957,6 +1038,7 @@ function handleDocEnsure(
     mode: msg.mode,
     version: msg.version,
     replicaType: msg.replicaType,
+    historyFree: msg.historyFree,
     syncMode: msg.syncMode,
     schemaHash: msg.schemaHash,
   }
@@ -989,20 +1071,13 @@ function handleDocEnsure(
     return [updatedModel]
   }
 
-  const isCausal = requiresBidirectionalSync(msg.syncMode)
-  const interest: SyncEffect = {
-    type: "send-to-peers",
-    to: peerIds,
-    message: {
-      type: "interest",
-      docId: msg.docId,
-      version: msg.version,
-      reciprocate: isCausal,
-    },
-  }
+  const reciprocate = requiresBidirectionalSync(msg.syncMode)
+  const interests = peerIds.map(peerId =>
+    interestTo(updatedModel, peerId, msg.docId, entry, reciprocate),
+  )
 
-  if (present) return [updatedModel, present, interest]
-  return [updatedModel, interest]
+  if (present) return [updatedModel, present, ...interests]
+  return [updatedModel, ...interests]
 }
 
 function handleDocDefer(
@@ -1167,13 +1242,27 @@ function handleDocImported(
       : model.pendingStateAdvancedDocIds,
   }
 
-  // Fold the peer's sync transition through the single fold point.
+  // Fold the peer's sync transition through the single fold point. What we
+  // now hold of theirs is the version they offered, in their terms.
   const nextModel = setPeerDocState(bumped, msg.fromPeerId, msg.docId, {
     status: "synced",
-    lastKnownVersion: msg.version,
-    lastUpdated: new Date(),
+    theirVersionWeHold: msg.offered,
   })
   return effect ? [nextModel, effect] : [nextModel]
+}
+
+/**
+ * An offer did not continue what we hold (`MergeOutcome` `"gap"`), so nothing
+ * was applied. Ask its sender for what we lack: an interest quoting our
+ * version and the cursor of theirs we hold.
+ */
+function handleDocGap(
+  msg: Extract<SyncInput, { type: "sync/doc-gap" }>,
+  model: SyncModel,
+): [SyncModel, ...SyncEffect[]] {
+  const docEntry = model.documents.get(msg.docId)
+  if (!docEntry) return [model]
+  return [model, interestTo(model, msg.fromPeerId, msg.docId, docEntry, false)]
 }
 
 function handlePeerSynced(
@@ -1186,8 +1275,8 @@ function handlePeerSynced(
   return [
     setPeerDocState(model, msg.peerId, msg.docId, {
       status: "synced",
-      lastKnownVersion: msg.version,
-      lastUpdated: new Date(),
+      // No gap: we already hold the version the peer stated.
+      theirVersionWeHold: msg.version,
     }),
   ]
 }
@@ -1321,20 +1410,17 @@ function handlePresent(
       // Deferred docs participate in routing but don't request data
       if (docEntry.mode === "deferred") continue
 
-      // Compatible — send interest with our version
-      const isCausal = requiresBidirectionalSync(docEntry.syncMode)
-      effects.push({
-        type: "send-to-peer",
-        to: from,
-        message: {
-          type: "interest",
+      // Compatible — send interest with our version. Concurrent writers
+      // need to hear each other, so ask for the reciprocal interest.
+      effects.push(
+        interestTo(
+          model,
+          from,
           docId,
-          version: docEntry.version,
-          // Causal merge needs bidirectional exchange
-          reciprocate: isCausal,
-          since: cursorFor(model, from, docId),
-        },
-      })
+          docEntry,
+          requiresBidirectionalSync(docEntry.syncMode),
+        ),
+      )
     } else {
       // Unknown doc — check canShare before requesting creation
       if (!canShare(docId, peerState.identity)) continue
@@ -1411,10 +1497,11 @@ function handleInterestForKnownDoc(
 
   const effects = buildInterestResponse(fromPeerId, message, docEntry, model)
 
-  // An interest tells us the sender *wants our state*. It says nothing about
-  // whether we want theirs — that depends on their version, which only the
-  // shell can read. So the peer is `pending` here, and `synced` follows from
-  // the classification below or from the offer they send us.
+  // An interest tells us the sender *wants our state*, and which of ours it
+  // holds. It says nothing about whether we want theirs — that depends on
+  // their version, which only the shell can read. So the peer is `pending`
+  // here, and `synced` follows from the classification below or from the
+  // offer they send us.
   //
   // `synced` means "nothing left to receive from this peer". It used to be
   // inferred from `reciprocate: false`, a flag that exists to stop two peers
@@ -1424,10 +1511,11 @@ function handleInterestForKnownDoc(
   // authority `synced` on receiving the authority's *request*, the
   // reconciliation latch recorded it, and `whenSettled` resolved before the
   // authority's state had arrived.
-  const next: PeerDocSyncState = { status: "pending", lastUpdated: new Date() }
-
   return [
-    setPeerDocState(model, fromPeerId, message.docId, next),
+    setPeerDocState(model, fromPeerId, message.docId, {
+      status: "pending",
+      ourVersionTheyHold: versionTheyHold(message),
+    }),
     ...effects,
     {
       type: "classify-peer-version",
@@ -1447,6 +1535,7 @@ function handleOffer(
   from: PeerId,
   message: OfferMsg,
   model: SyncModel,
+  canShare: SyncPredicate,
   canAccept: SyncPredicate,
 ): [SyncModel, ...SyncEffect[]] {
   const peerState = model.peers.get(from)
@@ -1456,42 +1545,48 @@ function handleOffer(
   if (!docEntry) return [model]
   if (docEntry.mode === "deferred") return [model]
 
-  const effects: SyncEffect[] = []
+  // Check canAccept — reject silently if the peer isn't allowed. A refused
+  // offer is not imported, so it is not accepted either: the sender's record
+  // of what we hold stays where it was.
+  if (!canAccept(message.docId, peerState.identity)) return [model]
 
-  // Check canAccept — reject silently if the peer isn't allowed.
-  // Even when rejected, we still process reciprocation and update peer
-  // state so we don't re-request from this peer.
-  const authorized = canAccept(message.docId, peerState.identity)
-
-  if (authorized) {
-    // Import the payload — the runtime calls replica.merge(payload)
-    // which dispatches internally based on payload.kind.
-    effects.push({
+  // Import the payload — the shell calls replica.merge(payload) and reports
+  // back with `sync/doc-imported`, `sync/peer-synced` or `sync/doc-gap`.
+  return [
+    model,
+    {
       type: "import-doc-data",
       docId: message.docId,
       payload: message.payload,
       version: message.version,
       fromPeerId: from,
       digest: message.digest,
-    })
-  }
+      accept:
+        docEntry.historyFree === false &&
+        canShare(message.docId, peerState.identity),
+    },
+  ]
+}
 
-  // If the offerer asked for reciprocation, send an interest back
-  if (message.reciprocate) {
-    effects.push({
-      type: "send-to-peer",
-      to: from,
-      message: {
-        type: "interest",
-        docId: message.docId,
-        version: docEntry.version,
-        reciprocate: false,
-        since: cursorFor(model, from, message.docId),
-      },
-    })
-  }
+// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+// HANDLER: Accept
+// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
-  return [model, ...effects]
+/**
+ * A peer applied one of our offers. Record the version it now holds, which
+ * compaction never trims past. Nothing else changes: no reply, and no status
+ * change, since the status says what we still have to receive from it.
+ */
+function handleAccept(
+  from: PeerId,
+  message: AcceptMsg,
+  model: SyncModel,
+): [SyncModel, ...SyncEffect[]] {
+  return [
+    setPeerDocState(model, from, message.docId, {
+      ourVersionTheyHold: message.version,
+    }),
+  ]
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -1557,7 +1652,6 @@ function handleVacant(
   return [
     setPeerDocState(model, from, message.docId, {
       status: "vacant",
-      lastUpdated: new Date(),
     }),
   ]
 }

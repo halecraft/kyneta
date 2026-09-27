@@ -18,6 +18,7 @@ import {
   Schema,
   subscribe,
 } from "@kyneta/schema"
+import { defined } from "@kyneta/schema/testing"
 import { describe, expect, it } from "vitest"
 import { Exchange } from "../exchange.js"
 
@@ -310,6 +311,60 @@ describe("a peer that misses an update is repaired precisely", () => {
     // changed, so this stays far below it.
     console.log(`repair bytes: ${counter.bytes}`)
     expect(counter.bytes).toBeLessThan(1500)
+  }, 30_000)
+
+  it("catches a reconnecting peer up with a delta after it has imported from us", async () => {
+    // The cursor a peer quotes back as `since` must be one we minted. Here
+    // bob's last import from alice happens while bob's own install counter is
+    // far ahead of hers; if bob recorded his own version as his cursor for
+    // alice, she could not read it and would resend the whole document.
+    const bridge = new Bridge()
+    const alice = new Exchange({
+      id: "alice",
+      transports: [createBridgeTransport({ transportId: "alice", bridge })],
+      schemas: [Roster],
+    })
+    const bob = new Exchange({
+      id: "bob",
+      transports: [createBridgeTransport({ transportId: "bob-1", bridge })],
+      schemas: [Roster],
+    })
+    const docA = alice.get("presence", Roster)
+    const docB = bob.get("presence", Roster)
+    batch(docA, d => d.peers.set("alice", "here"))
+    await drain(30)
+
+    // Offline, bob's install counter runs far ahead of alice's.
+    await bob.removeTransport("bob-1")
+    for (let i = 0; i < 100; i++) batch(docB, d => d.peers.set("bob", `${i}`))
+    await bob.addTransport(
+      createBridgeTransport({ transportId: "bob-2", bridge }),
+    )
+    await drain(30)
+
+    // Bob's last import from alice, made while his counter is high.
+    batch(docA, d => d.peers.set("alice", "still here"))
+    await drain(30)
+
+    await bob.removeTransport("bob-2")
+    batch(docA, d => d.peers.set("alice", "back"))
+    const replica = defined(
+      alice.synchronizer.getDocRuntime("presence"),
+      "alice's presence document",
+    ).replica
+    let entireties = 0
+    const exportEntirety = replica.exportEntirety.bind(replica)
+    replica.exportEntirety = () => {
+      entireties++
+      return exportEntirety()
+    }
+    await bob.addTransport(
+      createBridgeTransport({ transportId: "bob-3", bridge }),
+    )
+    await drain(40)
+
+    expect(docB.peers()?.alice).toBe("back")
+    expect(entireties).toBe(0)
   }, 30_000)
 })
 

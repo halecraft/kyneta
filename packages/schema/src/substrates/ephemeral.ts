@@ -42,6 +42,7 @@ import {
 import type { Schema as SchemaNode } from "../schema.js"
 import type {
   MergeOptions,
+  MergeOutcome,
   RecordInverseFn,
   Replica,
   ReplicaFactory,
@@ -51,7 +52,7 @@ import type {
   Version,
 } from "../substrate.js"
 import { BACKING_DOC } from "../substrate.js"
-import { DEFAULT_LINEAGE, objectToReplaceOps } from "./plain.js"
+import { DEFAULT_LINEAGE, movedRootKeys, objectToReplaceOps } from "./plain.js"
 import {
   applyChangeToStateTree,
   type Container,
@@ -60,7 +61,6 @@ import {
   formatStateTreeViolation,
   installedAfter,
   mergeStateTree,
-  movedRootKeys,
   projectStateTree,
   stateTreeDigest,
   stateTreeViolation,
@@ -307,7 +307,7 @@ function createStateReplicaCore(
       }
     },
 
-    merge(payload: SubstratePayload): void {
+    merge(payload: SubstratePayload): MergeOutcome {
       if (payload.encoding !== "json" || typeof payload.data !== "string") {
         throw new Error("StateReplica expects JSON-encoded StateTree payloads.")
       }
@@ -333,12 +333,10 @@ function createStateReplicaCore(
       // two peers, where the sender is excluded from the relay and the cycle
       // closes, and an endless loop among three, where it never does.
       if (!changed) installSeq -= 1
+      return "merged"
     },
 
-    resetFromEntirety(
-      payload: SubstratePayload,
-      _remoteVersion: Version,
-    ): void {
+    resetFromEntirety(payload: SubstratePayload): void {
       // This substrate carries a single constant lineage (DEFAULT_LINEAGE) for
       // its entire lifetime, so a true lineage boundary never arises here —
       // `classifyResetTrigger` in the Synchronizer excludes it on both counts.
@@ -543,19 +541,16 @@ export function createStateSubstrate(
       return core.exportSince(since)
     },
 
-    merge(payload: SubstratePayload, options?: MergeOptions): void {
+    merge(payload: SubstratePayload, options?: MergeOptions): MergeOutcome {
       // Both kinds join the same way. A delta is a partial tree and the merge
       // unions keys, so a key it omits is one it makes no claim about — the
       // same rule that makes an entirety safe to join rather than adopt.
       core.merge(payload)
       announceReprojection(Date.now(), options?.origin)
+      return "merged"
     },
 
-    resetFromEntirety(
-      payload: SubstratePayload,
-      _remoteVersion: Version,
-      options?: MergeOptions,
-    ): void {
+    resetFromEntirety(payload: SubstratePayload, options?: MergeOptions): void {
       // This substrate is a CvRDT with a single constant lineage for its entire
       // lifetime — a true lineage boundary never arises here. Field-level
       // LWW merge is the correct and safe fallback: discarding local
@@ -603,10 +598,10 @@ export function createStateReplica(): Replica<StateVersion> {
     advance: core.advance,
     exportEntirety: core.exportEntirety,
     exportSince: core.exportSince,
-    merge(payload: SubstratePayload) {
-      core.merge(payload)
+    merge(payload: SubstratePayload): MergeOutcome {
+      return core.merge(payload)
     },
-    resetFromEntirety(payload: SubstratePayload, _remoteVersion: Version) {
+    resetFromEntirety(payload: SubstratePayload) {
       // See createStateSubstrate's resetFromEntirety — same rationale:
       // this substrate has no true lineage boundary, so field-level merge is
       // the correct fallback.
@@ -622,6 +617,7 @@ export function createStateReplica(): Replica<StateVersion> {
 
 export const ephemeralReplicaFactory: ReplicaFactory<StateVersion> = {
   replicaType: ["ephemeral", 1, 0] as const,
+  historyFree: true,
 
   createEmpty(): Replica<StateVersion> {
     return createStateReplica()

@@ -19,11 +19,10 @@ import {
   settled,
   settledFeed,
 } from "../settle.js"
-import type { InMemoryStoreData } from "../store/in-memory-store.js"
-import { createInMemoryStore, InMemoryStore } from "../store/in-memory-store.js"
+import { createInMemoryStore } from "../store/in-memory-store.js"
 import type { Store } from "../store/store.js"
 import { sync, whenSettled } from "../sync.js"
-import { makeMetaRecord } from "../testing/store-conformance.js"
+import { seedStoredDoc } from "./stored-doc.js"
 
 const TestDoc = json.bind(
   Schema.struct({ title: Schema.string(), count: Schema.number() }),
@@ -51,29 +50,6 @@ function controllableTerm() {
       for (const l of listeners) l()
     },
   }
-}
-
-/** Append a meta record + a JSON entirety entry for `doc-1`. */
-async function seedStoredDoc(data: string): Promise<InMemoryStoreData> {
-  const sharedData: InMemoryStoreData = {
-    records: new Map(),
-    metadata: new Map(),
-  }
-  const backend = new InMemoryStore(sharedData)
-  await backend.append("doc-1", makeMetaRecord())
-  await backend.append("doc-1", {
-    kind: "entry",
-    // A plain version is `lineage:count`, and the payload names the same
-    // lineage: what a store written by a plain document holds.
-    payload: {
-      kind: "entirety" as const,
-      encoding: "json" as const,
-      data,
-      lineage: "seed",
-    },
-    version: "seed:1",
-  })
-  return sharedData
 }
 
 // ===========================================================================
@@ -146,7 +122,7 @@ describe("settle — the storage term", () => {
   })
 
   it("is false until hydration completes, then true", async () => {
-    const sharedData = await seedStoredDoc('{"title":"stored","count":42}')
+    const sharedData = await seedStoredDoc({ title: "stored", count: 42 })
     const exchange = createExchange({
       stores: [createInMemoryStore({ sharedData })],
     })
@@ -211,7 +187,7 @@ describe("settle — the storage term", () => {
     // The sync latch deliberately survives suspend; the storage term must
     // match. If it regressed to "loading", a resumed document would look
     // un-settled and a naive initializer could seed over it.
-    const sharedData = await seedStoredDoc('{"title":"stored","count":1}')
+    const sharedData = await seedStoredDoc({ title: "stored", count: 1 })
     const exchange = createExchange({
       stores: [createInMemoryStore({ sharedData })],
     })
@@ -264,7 +240,7 @@ describe("whenSettled", () => {
   })
 
   it("waits for hydration before reporting settled", async () => {
-    const sharedData = await seedStoredDoc('{"title":"stored","count":7}')
+    const sharedData = await seedStoredDoc({ title: "stored", count: 7 })
     const exchange = createExchange({
       stores: [createInMemoryStore({ sharedData })],
     })
@@ -353,7 +329,7 @@ describe("whenSettled", () => {
 
 describe("readiness from a child ref", () => {
   it("matches the root while loading and after", async () => {
-    const sharedData = await seedStoredDoc('{"title":"stored","count":42}')
+    const sharedData = await seedStoredDoc({ title: "stored", count: 42 })
     const exchange = createExchange({
       stores: [createInMemoryStore({ sharedData })],
     })
@@ -372,7 +348,7 @@ describe("readiness from a child ref", () => {
   })
 
   it("waits in whenSettled with an authority, and finds the sync handle", async () => {
-    const sharedData = await seedStoredDoc('{"title":"stored","count":42}')
+    const sharedData = await seedStoredDoc({ title: "stored", count: 42 })
     const exchange = createExchange({
       stores: [createInMemoryStore({ sharedData })],
     })

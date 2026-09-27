@@ -29,7 +29,7 @@ import {
 import type {
   DevtoolsHistory,
   DocMetadata,
-  Durability,
+  MergeOutcome,
   ReplicaFactoryLike,
   ReplicaLike,
   ReplicaType,
@@ -197,6 +197,9 @@ export type SynchronizerParams = {
 // ---------------------------------------------------------------------------
 // Version-gap planning helpers
 // ---------------------------------------------------------------------------
+
+/** The `import-doc-data` effect the shell executes. */
+type ImportDocData = Extract<SyncEffect, { type: "import-doc-data" }>
 
 /** What comparing a *stated* version against ours can yield. */
 type StatedVersionGap =
@@ -369,14 +372,14 @@ export type ResetTrigger = "none" | "lineage" | "compaction"
  * available for a same-lineage history gap, since there is no lineage
  * mismatch to find.
  *
- * Transient documents are excluded from compaction outright. The heuristic
- * presumes a sender that can trim history, and a CvRDT keeps no trimmable log
- * — it carries its whole meaning in the tree, so every cursor stays
- * serviceable and there is no compaction to detect.
+ * A history-free format (`ReplicaFactoryLike.historyFree`) is excluded from
+ * compaction outright. The heuristic presumes a sender that can trim history,
+ * and such a format keeps none: its state carries its whole meaning, so every
+ * cursor stays serviceable and there is no compaction to detect.
  *
  * One consequence is worth stating, because it depends on two facts that live
- * in different files: **a transient CvRDT document reaches neither trigger.**
- * Durability excludes it from compaction here, and `StateVersion` reporting
+ * in different files: **a history-free document reaches neither trigger.**
+ * `historyFree` excludes it from compaction here, and `StateVersion` reporting
  * `DEFAULT_LINEAGE` excludes it from lineage. That is what lets the reset path
  * rebuild a replica rather than merge into it — see `#executeImportDocData`.
  * `reset-trigger.test.ts` pins both halves.
@@ -386,13 +389,13 @@ export function classifyResetTrigger(
   remoteLineage: string,
   isEntirety: boolean,
   senderAlreadySynced: boolean,
-  durability: Durability,
+  historyFree: boolean,
 ): ResetTrigger {
   const lineagesComparable =
     remoteLineage !== DEFAULT_LINEAGE && localLineage !== DEFAULT_LINEAGE
   if (lineagesComparable && remoteLineage !== localLineage) return "lineage"
 
-  if (isEntirety && senderAlreadySynced && durability !== "transient") {
+  if (isEntirety && senderAlreadySynced && !historyFree) {
     return "compaction"
   }
 
@@ -826,6 +829,7 @@ export class Synchronizer {
       mode: runtime.mode,
       version: runtime.replica.version().serialize(),
       replicaType: runtime.replicaFactory.replicaType,
+      historyFree: runtime.replicaFactory.historyFree,
       syncMode: runtime.syncMode,
       schemaHash: runtime.schemaHash,
       ...(runtime.supportedHashes
@@ -892,14 +896,15 @@ export class Synchronizer {
   }
 
   /**
-   * Greatest version that is ≤ every synced peer's last-known version —
-   * the safe trim point for `advance()`. The local version is excluded
-   * deliberately: the LCV represents "what every remote has," so
-   * including local state would raise it past what peers actually have
-   * and strand them on subsequent syncs.
+   * Greatest version that is ≤ what every peer we keep up to date holds of
+   * ours (`ourVersionTheyHold`, from its `accept`s and interests): the safe
+   * trim point for `advance()`. The local version is excluded deliberately:
+   * the LCV represents "what every remote has," so including local state
+   * would raise it past what peers actually have and strand them on
+   * subsequent syncs.
    *
-   * Returns `null` when no peers are synced (nothing to bound against)
-   * or the doc is unknown.
+   * Returns `null` when no peer's holding is known (nothing to bound
+   * against) or the doc is unknown.
    */
   leastCommonVersion(
     docId: DocId,
@@ -912,13 +917,16 @@ export class Synchronizer {
 
     for (const [, peerState] of this.#syncHandle.getState().peers) {
       const docSync = peerState.docSyncStates.get(docId)
-      if (!docSync || docSync.status !== "synced") continue
+      // Every peer we keep up to date counts, `pending` ones included:
+      // leaving one out could trim past what it holds.
+      if (!docSync || docSync.status === "vacant") continue
+      if (docSync.ourVersionTheyHold === undefined) continue
       if (peerFilter && !peerFilter(peerState.identity, docId)) continue
 
       let peerVersion: Version
       try {
         peerVersion = runtime.replicaFactory.parseVersion(
-          docSync.lastKnownVersion,
+          docSync.ourVersionTheyHold,
         )
       } catch {
         // Unparseable peer versions are excluded so a single corrupted
@@ -1005,6 +1013,7 @@ export class Synchronizer {
       mode: runtime.mode,
       version: runtime.replica.version().serialize(),
       replicaType: runtime.replicaFactory.replicaType,
+      historyFree: runtime.replicaFactory.historyFree,
       syncMode: runtime.syncMode,
       schemaHash: runtime.schemaHash,
       event: { type: "doc-resumed", docId },
@@ -1361,12 +1370,7 @@ export class Synchronizer {
       case "send-offer": {
         const offer = this.#buildOffer(effect.docId, effect.sinceVersion)
         if (offer) {
-          this.#sendOfferToPeer(
-            effect.to,
-            effect.docId,
-            offer,
-            effect.reciprocate,
-          )
+          this.#sendOfferToPeer(effect.to, effect.docId, offer)
         }
         break
       }
@@ -1380,7 +1384,7 @@ export class Synchronizer {
         const offer = this.#buildOffer(effect.docId, effect.sinceVersion)
         if (!offer) break
         for (const peerId of effect.to) {
-          this.#sendOfferToPeer(peerId, effect.docId, offer, effect.reciprocate)
+          this.#sendOfferToPeer(peerId, effect.docId, offer)
         }
         break
       }
@@ -1517,7 +1521,6 @@ export class Synchronizer {
     peerId: PeerId,
     docId: DocId,
     payload: SubstratePayload,
-    reciprocate?: boolean,
   ): void {
     const peer = this.#sessionHandle.getState().peers.get(peerId)
     if (!peer || peer.channels.size === 0) return
@@ -1532,7 +1535,6 @@ export class Synchronizer {
         docId,
         payload,
         version: runtime.replica.version().serialize(),
-        reciprocate,
       }),
     })
   }
@@ -1543,7 +1545,7 @@ export class Synchronizer {
 
   /**
    * Compare a peer's version against ours, mark it `synced` if there is
-   * nothing left to receive, and hand back the gap only when there is one.
+   * nothing left to receive, and hand back what the comparison found.
    *
    * This is the single place a version comparison becomes a `synced`
    * transition: the offer path continues into a merge when a gap comes back,
@@ -1557,7 +1559,7 @@ export class Synchronizer {
     peerId: PeerId,
     version: string | undefined,
     digest?: string,
-  ): Extract<VersionGapResult, { kind: "gap" }> | null {
+  ): VersionGapResult {
     const gap = resolveInboundVersionGap(
       runtime.replica,
       runtime.replicaFactory,
@@ -1571,12 +1573,12 @@ export class Synchronizer {
           `[exchange] version parse failed for doc '${docId}':`,
           gap.error,
         )
-        return null
+        return gap
       case "absent":
       case "no-gap": {
         const transition = transitionForPeerVersion(gap, docId, peerId, version)
         if (transition) this.#dispatchSync(transition)
-        return null
+        return gap
       }
       case "gap":
         return gap
@@ -1608,14 +1610,7 @@ export class Synchronizer {
     )
   }
 
-  #executeImportDocData(effect: {
-    type: "import-doc-data"
-    docId: DocId
-    payload: SubstratePayload
-    version: string
-    fromPeerId: PeerId
-    digest?: string
-  }): void {
+  #executeImportDocData(effect: ImportDocData): void {
     const runtime = this.#docRuntimes.get(effect.docId)
     if (!runtime) return
 
@@ -1626,7 +1621,13 @@ export class Synchronizer {
       effect.version,
       effect.digest,
     )
-    if (!gap) return
+    // Nothing to take in: we already hold what was offered.
+    if (gap.kind === "no-gap") {
+      this.#acceptIfOwed(effect)
+      return
+    }
+    // A version we cannot read is not one we can say we hold.
+    if (gap.kind !== "gap") return
 
     // Does this offer mean "reconcile with me" or "take my word for it"?
     // `classifyResetTrigger` holds that entire decision — see its doc comment
@@ -1640,7 +1641,7 @@ export class Synchronizer {
       gap.parsed.lineage,
       effect.payload.kind === "entirety",
       senderAlreadySynced,
-      runtime.syncMode.durability,
+      runtime.replicaFactory.historyFree,
     )
 
     if (resetTrigger !== "none") {
@@ -1680,88 +1681,58 @@ export class Synchronizer {
           `[exchange] lineage boundary detected for doc '${effect.docId}' ` +
             `with a non-entirety payload — re-requesting the sender's full state.`,
         )
-        this.#sendToPeer(effect.fromPeerId, {
-          type: "interest",
+        this.#dispatchSync({
+          type: "sync/doc-gap",
           docId: effect.docId,
-          version: runtime.replica.version().serialize(),
-          reciprocate: false,
+          fromPeerId: effect.fromPeerId,
         })
         return
       }
 
-      if (runtime.mode === "replicate") {
-        // Headless replicas rebuild from the payload rather than merging it.
-        //
-        // Merging would be wrong for both triggers, for the same underlying
-        // reason: the incoming image is not a continuation of what we hold.
-        // Under `"compaction"` the sender genuinely rewrote its history —
-        // `LoroReplica.advance()` exports a shallow snapshot and rebuilds the
-        // doc from it, and `YjsReplica.advance()` re-projects into a fresh
-        // `Y.Doc`, because Yjs has no trim primitive at all. Merging such an
-        // image keeps local ops whose causal anchors it no longer carries.
-        // Under `"lineage"` the sender's history is a different identity
-        // altogether, so there is nothing to reconcile against.
-        //
-        // Rebuilding would be wrong for a field-level LWW substrate — it drops
-        // concurrent field writes the sender has not seen. That is safe here
-        // only because such a document never reaches this branch; see
-        // `classifyResetTrigger` for why.
-        try {
+      try {
+        if (runtime.mode === "replicate") {
+          // Headless replicas rebuild from the payload rather than merging it.
+          //
+          // Merging would be wrong for both triggers, for the same underlying
+          // reason: the incoming image is not a continuation of what we hold.
+          // Under `"compaction"` the sender genuinely rewrote its history —
+          // `LoroReplica.advance()` exports a shallow snapshot and rebuilds
+          // the doc from it, and `YjsReplica.advance()` re-projects into a
+          // fresh `Y.Doc`, because Yjs has no trim primitive at all. Merging
+          // such an image keeps local ops whose causal anchors it no longer
+          // carries. Under `"lineage"` the sender's history is a different
+          // identity altogether, so there is nothing to reconcile against.
+          //
+          // Rebuilding would be wrong for a field-level LWW substrate — it
+          // drops concurrent field writes the sender has not seen. That is
+          // safe here only because such a document never reaches this
+          // branch; see `classifyResetTrigger` for why.
           runtime.replica = runtime.replicaFactory.fromEntirety(effect.payload)
-        } catch (err) {
-          console.warn(
-            `[exchange] ${resetTrigger} reset failed for doc '${effect.docId}'.`,
-            err,
-          )
-          return
-        }
-
-        const newVersion = runtime.replica.version().serialize()
-        this.#dispatchSync({
-          type: "sync/doc-imported",
-          docId: effect.docId,
-          version: newVersion,
-          fromPeerId: effect.fromPeerId,
-          // A reset rebuilds the replica from the payload rather than joining
-          // it, so the state moved by construction.
-          changed: true,
-        })
-        return
-      } else {
-        // Interpret-mode substrates: `resetFromEntirety` discards local
-        // history and adopts the incoming state and lineage explicitly,
-        // decoupled from the routine `merge()` path (which now assumes
-        // shared causal ancestry and never adopts across lineages).
-        try {
+        } else {
+          // Interpret-mode substrates: `resetFromEntirety` discards local
+          // history and adopts the incoming state and lineage explicitly,
+          // decoupled from the routine `merge()` path, which assumes shared
+          // causal ancestry and never adopts across lineages.
           const substrate = runtime.replica as Substrate<Version>
-          substrate.resetFromEntirety(effect.payload, gap.parsed, {
-            origin: "sync",
-          })
-        } catch (err) {
-          console.warn(
-            `[exchange] lineage boundary reset failed for doc '${effect.docId}'.`,
-            err,
-          )
-          return
+          substrate.resetFromEntirety(effect.payload, { origin: "sync" })
         }
-
-        const newVersion = runtime.replica.version().serialize()
-        this.#dispatchSync({
-          type: "sync/doc-imported",
-          docId: effect.docId,
-          version: newVersion,
-          fromPeerId: effect.fromPeerId,
-          // A reset rebuilds the replica from the payload rather than joining
-          // it, so the state moved by construction.
-          changed: true,
-        })
+      } catch (err) {
+        console.warn(
+          `[exchange] ${resetTrigger} reset failed for doc '${effect.docId}'.`,
+          err,
+        )
         return
       }
+      // A reset replaces the state rather than joining it, so the state
+      // moved by construction.
+      this.#held(effect, runtime.replica.version().serialize(), true)
+      return
     }
 
     const priorVersion = runtime.replica.version().serialize()
+    let outcome: MergeOutcome
     try {
-      runtime.replica.merge(effect.payload, { origin: "sync" })
+      outcome = runtime.replica.merge(effect.payload, { origin: "sync" })
     } catch (err) {
       console.warn(
         `[exchange] import failed for doc '${effect.docId}'. ` +
@@ -1770,13 +1741,49 @@ export class Synchronizer {
       )
       return
     }
+    // The payload continues from a point we do not hold, so nothing was
+    // applied. Applying it anyway is how a restarted peer's copy used to be
+    // corrupted; asking for what we lack is how it catches up.
+    if (outcome === "gap") {
+      this.#dispatchSync({
+        type: "sync/doc-gap",
+        docId: effect.docId,
+        fromPeerId: effect.fromPeerId,
+      })
+      return
+    }
     const newVersion = runtime.replica.version().serialize()
+    this.#held(effect, newVersion, newVersion !== priorVersion)
+  }
+
+  /** The offer is held at `version`: accept it if owed, then tell the program. */
+  #held(effect: ImportDocData, version: string, changed: boolean): void {
+    this.#acceptIfOwed(effect)
     this.#dispatchSync({
       type: "sync/doc-imported",
       docId: effect.docId,
-      version: newVersion,
+      version,
+      offered: effect.version,
       fromPeerId: effect.fromPeerId,
-      changed: newVersion !== priorVersion,
+      changed,
+    })
+  }
+
+  /**
+   * Tell the offerer we now hold its version, if the program said it is owed.
+   *
+   * Sent here, as soon as the offer is held, rather than from the program's
+   * handling of the import that follows: anything the import makes this peer
+   * send (a subscriber that answers what arrived, say) is queued behind the
+   * import, and an offerer that hears that answer first could compact before
+   * it knows what we hold.
+   */
+  #acceptIfOwed(effect: ImportDocData): void {
+    if (!effect.accept) return
+    this.#sendToPeer(effect.fromPeerId, {
+      type: "accept",
+      docId: effect.docId,
+      version: effect.version,
     })
   }
 

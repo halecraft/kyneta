@@ -11,6 +11,7 @@ import {
   batch,
   bind,
   Defer,
+  decodePlainPayload,
   json,
   Migration,
   type PlainState,
@@ -323,10 +324,8 @@ describe("Exchange", () => {
 
         const snapshot = substrate.exportEntirety()
         expect(snapshot.encoding).toBe("json")
-        expect(
-          (JSON.parse(snapshot.data as string) as any).s ||
-            JSON.parse(snapshot.data as string),
-        ).toEqual({
+        const decoded = decodePlainPayload(snapshot, "test")
+        expect(decoded.kind === "entirety" && decoded.state).toEqual({
           title: "Hi",
           count: 1,
         })
@@ -1479,12 +1478,12 @@ describe("Exchange", () => {
       expect(received).toContain(100)
       expect(received).toContain(200)
 
-      // The crash symptom never occurs: no "lineage boundary reset failed"
+      // The crash symptom never occurs: no "reset failed"
       // warning, and no offer silently dropped via that path.
       const allWarnings = [...warnSpy.mock.calls, ...errorSpy.mock.calls]
         .map(args => String(args[0]))
         .join("\n")
-      expect(allWarnings).not.toContain("lineage boundary reset failed")
+      expect(allWarnings).not.toContain("reset failed")
 
       warnSpy.mockRestore()
       errorSpy.mockRestore()
@@ -1565,7 +1564,7 @@ describe("Exchange", () => {
       const allWarnings = [...warnSpy.mock.calls, ...errorSpy.mock.calls]
         .map(args => String(args[0]))
         .join("\n")
-      expect(allWarnings).not.toContain("lineage boundary reset failed")
+      expect(allWarnings).not.toContain("reset failed")
 
       warnSpy.mockRestore()
       errorSpy.mockRestore()

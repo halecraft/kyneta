@@ -361,18 +361,20 @@ Each BoundSchema carries a `SyncMode` — a structured record with two orthogona
 | `SYNC_AUTHORITATIVE` | serialized + persistent | Request/response | Total (no concurrency) | Plain substrates |
 | `SYNC_EPHEMERAL` | concurrent + transient | Bidirectional exchange | Unordered (digest decides equality) | Ephemeral/presence |
 
-All three run over the same five-message sync protocol:
+All three run over the same six-message sync protocol:
 
 - **`present`** — "I have these documents." Carries `docId`, `replicaType`, `syncMode`, and `schemaHash` so the receiver can validate compatibility before any data exchange.
 - **`interest`** — "I want document X. Here's my version." Carries `reciprocate` for collaborative bidirectional exchange.
 - **`offer`** — "Here is state for document X." Carries an opaque `SubstratePayload` — the exchange never inspects the bytes.
+- **`accept`** — "I now hold your version of document X." Lets a writer compact its history down to what every reader holds.
 - **`dismiss`** — "I'm leaving document X."
+- **`vacant`** — "You asked for document X, and I won't serve it."
 
-Two additional messages (`establish-request`, `establish-response`) handle channel handshake. The sync mode's field values determine *when* and *how* these messages are sent, not their shape.
+Two lifecycle messages (`establish`, `depart`) handle the channel handshake and departure. The sync mode's field values determine *when* and *how* these messages are sent, not their shape. Peers must speak the same protocol major; this release is protocol 2.0, and a 1.x peer is reported as a `protocol-mismatch` diagnostic.
 
 ### The exchange never inspects your data
 
-This is the architectural decision that makes substrate agnosticism real. The exchange dispatches on `SyncMode` fields (`delivery`, `writerModel`) to decide protocol behavior, but actual document payloads are opaque `SubstratePayload` values. The exchange moves bytes; the substrate interprets them. This means:
+This is the architectural decision that makes substrate agnosticism real. The exchange dispatches on `SyncMode` fields (`writerModel`, `durability`) to decide protocol behavior, but actual document payloads are opaque `SubstratePayload` values. The exchange moves bytes; the substrate interprets them. This means:
 
 - A Loro document, a Yjs document, a plain JS object, and an ephemeral value all flow through the same protocol.
 - A relay can forward documents without knowing what CRDT library produced them.
@@ -531,7 +533,7 @@ const doc = exchange.get("my-doc", TodoDoc)
 
 **Ephemeral documents are never stored.** Anything bound through `ephemeral` declares `durability: "transient"`, and the exchange keeps it out of stores in both directions — no hydrate on open, no write on mutation, no delete on destroy. That is the point of the tier: presence, cursors and live input describe who is here *now*, and a restarted server resurrecting yesterday's cursor positions would be worse than having none. Configuring stores does not change this, and there is no way to opt a transient document into persistence — use a durable binding target instead.
 
-**Store format gate.** On open, every persistent backend stamps a `{ major, minor }` on-disk format version into a dedicated store-metadata namespace (a `kyneta_store_meta` table, an IndexedDB `store_meta` object store, or a `store-meta\x00` key prefix — separate from the per-document `doc_meta` namespace). On a later open it refuses — throwing `StoreFormatVersionError` — a store whose stamped major is incompatible with the running build, or an unversioned store that already holds documents. The gate is a compatibility check only; it performs no automatic migration.
+**Store format gate.** On open, every persistent backend stamps a `{ major, minor }` on-disk format version into a dedicated store-metadata namespace (a `kyneta_store_meta` table, an IndexedDB `store_meta` object store, or a `store-meta\x00` key prefix — separate from the per-document `doc_meta` namespace). On a later open it refuses — throwing `StoreFormatVersionError` — a store whose stamped major is incompatible with the running build, or an unversioned store that already holds documents. The gate is a compatibility check only; it performs no automatic migration. Separately, a document whose stored records were written in a replica format the running build cannot read (a different `replicaType` major) fails to load: `whenHydrated` rejects rather than presenting an empty document.
 
 For testing, use `createInMemoryStore()` with shared state to simulate persist → restart → hydrate flows:
 

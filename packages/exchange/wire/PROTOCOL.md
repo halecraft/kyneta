@@ -1,6 +1,6 @@
 # Kyneta Wire Protocol Specification
 
-Wire protocol for `@kyneta/transport` message transport. Defines the universal `Frame<T>` abstraction, two encoding pipelines (binary and text), framing, fragmentation, and reassembly for the exchange's seven-message protocol.
+Wire protocol for `@kyneta/transport` message transport. Defines the universal `Frame<T>` abstraction, two encoding pipelines (binary and text), framing, fragmentation, and reassembly for the exchange's eight-message protocol.
 
 ## Overview
 
@@ -17,7 +17,7 @@ Batching is **orthogonal to framing**. The frame layer does not distinguish sing
 
 ## Message Types
 
-Seven message types form the exchange protocol:
+Eight message types form the exchange protocol:
 
 | Discriminator (CBOR) | Type | Direction | Purpose |
 |----------------------|------|-----------|---------|
@@ -28,12 +28,13 @@ Seven message types form the exchange protocol:
 | `0x12` | `offer` | Bidirectional | Deliver document state (snapshot or delta) |
 | `0x13` | `dismiss` | Bidirectional | Retract interest in a document |
 | `0x14` | `vacant` | Point-to-point | Negative ack to interest: "I don't have this doc and won't serve it" |
+| `0x15` | `accept` | Point-to-point | Acknowledges an offer: "I now hold your version `v`". Protocol 2.0 and later |
 
 Discriminator ranges:
 - `0x01–0x0F` — Lifecycle messages (establish, depart)
-- `0x10–0x1F` — Sync messages (present, interest, offer, dismiss, vacant)
+- `0x10–0x1F` — Sync messages (present, interest, offer, dismiss, vacant, accept)
 
-Discriminators are allocated **sequentially from the next free value** and classified by exact-value set-membership — numbering carries no semantics (there is no range/mask dispatch anywhere; classification is `Set` membership in `validate-wire-message.ts` and an exact-value decode `switch`). A future datagram-only message type takes the next free value (`0x15+`). Introduce a reserved *range* only alongside range *dispatch*.
+Discriminators are allocated **sequentially from the next free value** and classified by exact-value set-membership — numbering carries no semantics (there is no range/mask dispatch anywhere; classification is `Set` membership in `validate-wire-message.ts` and an exact-value decode `switch`). A future datagram-only message type takes the next free value (`0x16+`). Introduce a reserved *range* only alongside range *dispatch*.
 
 The text pipeline uses human-readable type strings (`"establish"`, `"present"`, etc.) instead of integer discriminators.
 
@@ -142,10 +143,10 @@ v1 has no transport-prefix layer. The frame type byte (offset 1 of the 6-byte he
 | `n` | name | `string` (optional) | establish |
 | `y` | type | `"user" \| "bot" \| "service"` | establish |
 | `f` | features | `WireFeatures` (compact map) | establish (optional) |
-| `pv` | protocolVersion | `[major, minor]` (two integers) | establish (optional; absent ⇒ `[1,0]`; emitted only when non-default) |
+| `pv` | protocolVersion | `[major, minor]` (two integers) | establish (optional; absent ⇒ `[1,0]`, the baseline; omitted only at the baseline) |
 | `docs` | docs | `Array<{d, a?, rt, ms, sh?, sa?, shx?, shs?}>` | present |
-| `doc` | docId | `string` (one of doc/dx required) | interest, offer, dismiss, vacant |
-| `dx` | docId alias | non-negative integer | interest, offer, dismiss, vacant (one of doc/dx required) |
+| `doc` | docId | `string` (one of doc/dx required) | interest, offer, accept, dismiss, vacant |
+| `dx` | docId alias | non-negative integer | interest, offer, accept, dismiss, vacant (one of doc/dx required) |
 | `sh` | schemaHash | `string` (one of sh/shx required on present-doc) | present (doc entry) |
 | `sa` | schemaHash alias | non-negative integer (alias assignment) | present (doc entry, optional) |
 | `shx` | schemaHash alias | non-negative integer (alias reference) | present (doc entry, alternative to sh) |
@@ -153,13 +154,13 @@ v1 has no transport-prefix layer. The frame type byte (offset 1 of the 6-byte he
 | `d` | docId / data | `string` (present doc entry) or `string \| Uint8Array` (offer) | present, offer |
 | `rt` | replicaType | `[string, number, number]` | present (doc entry) |
 | `ms` | syncMode | `SyncModeWireValue` (`0x00` collaborative, `0x01` authoritative, `0x02` ephemeral) | present (doc entry) |
-| `v` | version | `string` | interest (optional), offer |
-| `r` | reciprocate | `boolean` (optional) | interest, offer |
+| `v` | version | `string` | interest (optional), offer, accept (the offer's `v`, quoted back) |
+| `r` | reciprocate | `boolean` (optional) | interest |
 | `pk` | payload kind | `0x00` (entirety) or `0x01` (since) | offer |
 | `pe` | payload encoding | `0x00` (json) or `0x01` (binary) | offer |
 
 **Decoder invariants** (Phase 3):
-- Interest, offer, dismiss, vacant: exactly one of `{doc, dx}` must be present. Both → `doc-id-form-conflict`. Neither → same code.
+- Interest, offer, accept, dismiss, vacant: exactly one of `{doc, dx}` must be present. Both → `doc-id-form-conflict`. Neither → same code.
 - Present doc entries: exactly one of `{sh, shx}` must be present. Both → `schema-hash-form-conflict`.
 
 ### Default values for optional fields
@@ -168,7 +169,7 @@ Decoders MUST tolerate absent optional fields by applying these defaults:
 
 | Field | Default | Notes |
 |-------|---------|-------|
-| `r` (reciprocate) | `false` | Most messages don't reciprocate |
+| `r` (reciprocate) | `false` | Interests only; most don't reciprocate |
 | `pe` (payload encoding) | `0` (json) | When omitted on `offer` |
 | `v` (version) | `undefined` | Absent means LWW initial-sync |
 | `n` (name) | `undefined` | Optional display name |
@@ -388,7 +389,7 @@ The current default for v1 is `{ alias: true }` (set in `SessionModel.selfFeatur
 
 ## Protocol Version Compatibility
 
-`establish` carries an optional `pv: [major, minor]` naming the **sync wire-contract revision** the peer implements — the revision of the message vocabulary, handshake choreography, and negotiation rules themselves. Distinct from `WIRE_VERSION` (frame encoding) and `SyncMode` (per-doc sync policy). Absent ⇒ `[1, 0]` (ratified); emitted only when non-default, so a 2.0 peer's `establish` is byte-identical to one without the field.
+`establish` carries an optional `pv: [major, minor]` naming the **sync wire-contract revision** the peer implements — the revision of the message vocabulary, handshake choreography, and negotiation rules themselves. Distinct from `WIRE_VERSION` (frame encoding) and `SyncMode` (per-doc sync policy). Absent ⇒ `[1, 0]`, the baseline, forever: never "the current revision", or every peer from before the field would be read as current and a major mismatch would go unreported. Omitted only at the baseline.
 
 ### Three-tier compatibility model
 
@@ -410,7 +411,7 @@ Computed identically on both peers (no extra round-trip), once per channel-estab
 - same major, peer `minor !== self.minor` → backward-compatible refinement (warning).
 - equal (or absent) → silent.
 
-At 2.0 a peer's self version is permanently `[1, 0]`, so among 2.0 peers only the silent branch fires; the warning/error branches are reachable only against a future non-`[1,0]` peer. Detection is **warn/error-only — it never gates**: an incompatible peer remains observable and enters the sync graph (data simply will not converge). Actually refusing to sync is deferred to the release that ships a real major-2 peer.
+The current revision is `[2, 0]`, the first real major: it added `accept` and removed `offer`'s `r`, so a `[1, x]` peer neither acknowledges what it applies nor understands being told, and gets the error branch. Detection is **warn/error-only — it never gates**: an incompatible peer remains observable and enters the sync graph (data simply will not converge). Refusing to sync with it is a separate decision.
 
 ### Establish negotiation-core invariant
 
@@ -426,7 +427,7 @@ Variable-length string identifiers (`doc`, `sh`) repeat heavily in steady-state 
   - `a?: number` — alias assignment for the docId. Always emitted (announcement is forward-compatible).
   - `sa?: number` — alias assignment for the schema hash. Emitted on first reference.
   - `shx?: number` — alias reference; replaces `sh` on subsequent references when `mutualAlias` is on.
-- `interest` / `offer` / `dismiss`:
+- `interest` / `offer` / `accept` / `dismiss` / `vacant`:
   - `dx?: number` — alias reference; replaces `doc` when `mutualAlias` is on.
 
 Aliases are non-negative integers (CBOR major type 0). They have no fixed width: CBOR encodes the smallest fitting form (1 byte for 0–23, 2 bytes for 24–255, 3 bytes for 256–65,535, 5 bytes above). Practical upper bound is `Number.MAX_SAFE_INTEGER`; unreachable in any realistic channel lifetime.

@@ -9,11 +9,13 @@ import { loro } from "@kyneta/loro-schema"
 import {
   type BoundSchema,
   batch,
+  decodePlainPayload,
   json,
   plainReplicaFactory,
   populated,
   Replicate,
   Schema,
+  type SubstratePayload,
   SYNC_AUTHORITATIVE,
 } from "@kyneta/schema"
 import { yjs } from "@kyneta/yjs-schema"
@@ -31,11 +33,23 @@ import {
   type InMemoryStoreData,
 } from "../store/in-memory-store.js"
 import type { Store, StoreRecord } from "../store/store.js"
-import { collectAll, makeMetaRecord } from "../testing/store-conformance.js"
+import {
+  collectAll,
+  makeMetaRecord,
+  makePlainEntirety,
+} from "../testing/store-conformance.js"
+import { seedStoredDoc } from "./stored-doc.js"
 
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
+
+/** The document a plain whole-document payload carries. */
+function plainState(payload: SubstratePayload): Record<string, unknown> {
+  const decoded = decodePlainPayload(payload, "test")
+  if (decoded.kind !== "entirety") throw new Error("expected an entirety")
+  return decoded.state
+}
 
 const TestDoc = json.bind(
   Schema.struct({
@@ -62,6 +76,31 @@ function createExchange(options: Partial<ExchangeParams> = {}): Exchange {
 // ===========================================================================
 
 describe("Exchange storage hydration", () => {
+  it("refuses to load records written in an incompatible replica format", async () => {
+    // A plain store from before payloads carried their log position holds
+    // `["plain", 1, 0]` records. Reading them as today's format would
+    // misparse them, so the load fails rather than presenting an empty doc.
+    const sharedData: InMemoryStoreData = {
+      records: new Map(),
+      metadata: new Map(),
+    }
+    const seedBackend = new InMemoryStore(sharedData)
+    await seedBackend.append(
+      "doc-1",
+      makeMetaRecord({ replicaType: ["plain", 1, 0] }),
+    )
+    await seedBackend.append("doc-1", makePlainEntirety({ title: "old" }))
+
+    const exchange = createExchange({
+      id: "peer-1",
+      stores: [createInMemoryStore({ sharedData })],
+    })
+    const doc = exchange.get("doc-1", TestDoc)
+
+    await expect(whenHydrated(doc)).rejects.toThrow("cannot be read")
+    await exchange.shutdown()
+  })
+
   it("exchange.get() hydrates from storage", async () => {
     // Pre-populate storage with a document (meta + entry)
     const sharedData: InMemoryStoreData = {
@@ -70,16 +109,10 @@ describe("Exchange storage hydration", () => {
     }
     const seedBackend = new InMemoryStore(sharedData)
     await seedBackend.append("doc-1", makeMetaRecord())
-    await seedBackend.append("doc-1", {
-      kind: "entry",
-      payload: {
-        kind: "entirety" as const,
-        encoding: "json" as const,
-        data: '{"title":"stored","count":42}',
-        lineage: "seed",
-      },
-      version: "seed:1",
-    })
+    await seedBackend.append(
+      "doc-1",
+      makePlainEntirety({ title: "stored", count: 42 }),
+    )
 
     const exchange = createExchange({
       id: "peer-1",
@@ -121,16 +154,10 @@ describe("Exchange storage hydration", () => {
     }
     const seedBackend = new InMemoryStore(sharedData)
     await seedBackend.append("doc-1", makeMetaRecord())
-    await seedBackend.append("doc-1", {
-      kind: "entry",
-      payload: {
-        kind: "entirety" as const,
-        encoding: "json" as const,
-        data: '{"title":"replicated","count":7}',
-        lineage: "seed",
-      },
-      version: "seed:1",
-    })
+    await seedBackend.append(
+      "doc-1",
+      makePlainEntirety({ title: "replicated", count: 7 }),
+    )
 
     const exchange = createExchange({
       id: "peer-1",
@@ -213,11 +240,7 @@ describe("Exchange storage persistence", () => {
     for (const entry of entries) {
       replica.merge(entry.payload)
     }
-    const state = ((JSON.parse(replica.exportEntirety().data as string) as any)
-      .s || JSON.parse(replica.exportEntirety().data as string)) as Record<
-      string,
-      unknown
-    >
+    const state = plainState(replica.exportEntirety())
     expect(state.title).toBe("hello world")
     expect(state.count).toBe(99)
 
@@ -265,7 +288,7 @@ describe("Exchange storage persistence", () => {
 
     const replica = plainReplicaFactory.createEmpty()
     for (const entry of entries) replica.merge(entry.payload)
-    expect(JSON.parse(replica.exportEntirety().data as string)).toEqual({
+    expect(plainState(replica.exportEntirety())).toEqual({
       title: "from A",
       count: 1,
     })
@@ -315,7 +338,7 @@ describe("Exchange storage persistence", () => {
 
     // After flush, a meta record should have been appended
     expect(await backend.currentMeta("doc-1")).toEqual({
-      replicaType: ["plain", 1, 0],
+      replicaType: ["plain", 2, 0],
       syncMode: SYNC_AUTHORITATIVE,
       schemaHash: TestDoc.schemaHash,
     })
@@ -488,30 +511,9 @@ describe("Yjs storage round-trip", () => {
 // therefore only meaningful *behind a settle gate*, never on its own.
 // ===========================================================================
 
-/** Append a meta record + a JSON entirety entry for `doc-1`. */
-async function seedStoredDoc(data: string): Promise<InMemoryStoreData> {
-  const sharedData: InMemoryStoreData = {
-    records: new Map(),
-    metadata: new Map(),
-  }
-  const backend = new InMemoryStore(sharedData)
-  await backend.append("doc-1", makeMetaRecord())
-  await backend.append("doc-1", {
-    kind: "entry",
-    payload: {
-      kind: "entirety" as const,
-      encoding: "json" as const,
-      data,
-      lineage: "seed",
-    },
-    version: "seed:1",
-  })
-  return sharedData
-}
-
 describe("populated through storage hydration", () => {
   it("marks the doc populated from a hydration replay alone", async () => {
-    const sharedData = await seedStoredDoc('{"title":"stored","count":42}')
+    const sharedData = await seedStoredDoc({ title: "stored", count: 42 })
     const exchange = createExchange({
       id: "peer-1",
       stores: [createInMemoryStore({ sharedData })],
@@ -532,7 +534,7 @@ describe("populated through storage hydration", () => {
   })
 
   it("reads false while hydration is pending, though the store has data", async () => {
-    const sharedData = await seedStoredDoc('{"title":"stored","count":42}')
+    const sharedData = await seedStoredDoc({ title: "stored", count: 42 })
     const exchange = createExchange({
       id: "peer-1",
       stores: [createInMemoryStore({ sharedData })],

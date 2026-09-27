@@ -345,7 +345,9 @@ export interface ReplicaLike {
   /**
    * Trim history, advancing the base as far as possible without exceeding `to`.
    *
-   * Precondition: `baseVersion() ≤ to ≤ version()`, or throws.
+   * A `to` the base has already passed, or one this replica cannot place in
+   * its history (another lineage, or genesis), trims nothing. A `to` beyond
+   * `version()` throws.
    *
    * Postcondition: `baseVersion() <= to` — the substrate trims conservatively.
    * Plain lands exactly at `to`. Loro may undershoot to the nearest critical
@@ -377,13 +379,14 @@ export interface ReplicaLike {
   /**
    * Relative payload — what a peer at version `since` is missing.
    *
-   * Returns null if the relative export is not possible (e.g. version
-   * too old, log compacted, or nothing to send).
+   * Returns `null` only when the cursor cannot be served: history trimmed
+   * past it. A peer that is merely current gets an empty delta, never `null`,
+   * because the caller answers `null` with the whole document.
    *
-   * For Plain: JSON-serialized Op[] from the version log.
+   * For Plain: the logged batches after `since`, with the log position they
+   * start from; the whole document for a cursor the log cannot continue
+   * (another lineage, or genesis).
    * For Loro/Yjs: ops not in the peer's version vector.
-   *
-   * Always produces `{ kind: "since", ... }` when non-null.
    */
   exportSince(since: Version): SubstratePayload | null
 
@@ -414,15 +417,16 @@ export interface ReplicaLike {
    * Oplog substrates (Loro, Yjs): set union — idempotent, commutative.
    *   Handles both payload kinds identically via `doc.import()`.
    *
-   * State-image substrates (Plain): dispatches on `payload.kind`.
-   *   `"since"` → append the sender's batches to the log.
-   *   `"entirety"` → decompose state image to ReplaceChange ops.
+   * Plain: a payload names its log position. A delta that continues what
+   *   the replica holds appends the batches it lacks; one that starts past
+   *   it is a `"gap"`, and nothing is applied. A whole document ahead of the
+   *   replica is adopted at its position.
    *
    * A full Substrate then brings σ into agreement with λ and announces the
    * ops, so subscribers receive them with `Changeset.replay: true`. A bare
    * Replica has no changefeed and only updates its state and version.
    */
-  merge(payload: SubstratePayload, options?: MergeOptions): void
+  merge(payload: SubstratePayload, options?: MergeOptions): MergeOutcome
 
   /**
    * Discard local history and adopt an entirely new state and lineage.
@@ -433,17 +437,10 @@ export interface ReplicaLike {
    * payload shares causal ancestry with local state — `resetFromEntirety`
    * assumes no shared ancestry: local history is discarded, not merged.
    *
-   * @param payload A SubstratePayload where `kind === "entirety"`.
-   * @param remoteVersion The parsed `Version` of the remote peer that
-   *   authored the entirety — used to seed the local version/lineage so
-   *   subsequent comparisons agree with the sender without re-deriving
-   *   it from `payload`.
+   * @param payload A SubstratePayload where `kind === "entirety"`. It says
+   *   everything the replica takes on, its version included.
    */
-  resetFromEntirety(
-    payload: SubstratePayload,
-    remoteVersion: Version,
-    options?: MergeOptions,
-  ): void
+  resetFromEntirety(payload: SubstratePayload, options?: MergeOptions): void
 }
 
 // ---------------------------------------------------------------------------
@@ -550,6 +547,17 @@ export interface CommitOptions {
    */
   readonly source?: unknown
 }
+
+/**
+ * What `merge` did with a payload.
+ *
+ * `"gap"`: the payload continues from a point this replica does not hold, so
+ * nothing was applied; the caller must obtain the missing state first. Only
+ * a substrate whose merge depends on order reports it (Plain's positional
+ * log). Loro, Yjs and ephemeral merges are order-insensitive and always
+ * report `"merged"`.
+ */
+export type MergeOutcome = "merged" | "gap"
 
 /**
  * Options for `merge` and `resetFromEntirety`. There is no `source`: an echo
@@ -1025,6 +1033,18 @@ export function mismatchForSync(
 export interface ReplicaFactoryLike {
   /** Identifies the binary format this factory produces and consumes. */
   readonly replicaType: ReplicaType
+
+  /**
+   * Whether this format keeps no history to trim: its state carries its whole
+   * meaning, `advance` has nothing to do, and every cursor stays serviceable.
+   *
+   * Such a document is never compacted, so its receivers send no `accept`,
+   * and a whole-document payload from it is never a compaction reset. It is
+   * a property of the format, so every replica of one document agrees on it;
+   * whether a particular replica can `advance` is not (a live Loro substrate
+   * cannot, a relay's Loro replica can).
+   */
+  readonly historyFree: boolean
 
   /** Create a fresh, empty replica. No schema needed. */
   createEmpty(): ReplicaLike

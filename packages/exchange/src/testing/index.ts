@@ -14,5 +14,6 @@ export {
   makeBinaryEntryRecord,
   makeEntryRecord,
   makeMetaRecord,
+  makePlainEntirety,
   plainMeta,
 } from "./store-conformance.js"

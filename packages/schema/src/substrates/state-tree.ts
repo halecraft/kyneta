@@ -30,7 +30,7 @@ import type { BuiltinChange, ChangeBase, MapChange } from "../change.js"
 import { isReplaceChange, mapChangeEffects } from "../change.js"
 import { deepClonePlain } from "../clone.js"
 import { walkPath } from "../fold-path.js"
-import { isNonNullObject, samePlainValue } from "../guards.js"
+import { isNonNullObject } from "../guards.js"
 import { DIGEST_SEEDS, type Digest, digestFold } from "../hash.js"
 import { interpret, type Path } from "../interpret.js"
 import {
@@ -719,18 +719,6 @@ export function projectStateTree(
     withDecay(createMaterializeInterpreter(resolver), newestAt, now),
     materializeContextFromResolver(resolver),
   ) as PlainState
-}
-
-/**
- * The root fields whose projection differs between `current` and `next`.
- *
- * Only `next`'s keys are compared. The root is a product, so every projection
- * of one schema has the same root keys.
- */
-export function movedRootKeys(current: PlainState, next: PlainState): string[] {
-  return Object.keys(next).filter(
-    key => !(key in current) || !samePlainValue(current[key], next[key]),
-  )
 }
 
 // ---------------------------------------------------------------------------

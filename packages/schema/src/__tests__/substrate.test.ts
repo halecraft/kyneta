@@ -9,7 +9,9 @@ import {
   PlainVersion,
   plainReplicaFactory,
   plainSubstrateFactory,
+  RawPath,
   readable,
+  replaceChange,
   replicaTypesCompatible,
   requiresBidirectionalSync,
   Schema,
@@ -26,8 +28,9 @@ import {
   createPlainReplica,
   createPlainSubstrate,
   DEFAULT_LINEAGE,
+  decodePlainPayload,
   EMPTY_HISTORY,
-  parsePlainPayload,
+  planMerge,
 } from "../substrates/plain.js"
 
 // Helper: parse the store snapshot as a plain object for assertions.
@@ -36,11 +39,38 @@ import {
 function snapshotOf(
   substrate: Substrate<PlainVersion>,
 ): Record<string, unknown> {
-  const parsed = JSON.parse(substrate.exportEntirety().data as string)
-  if (parsed && typeof parsed === "object" && "i" in parsed && "s" in parsed) {
-    return parsed.s as Record<string, unknown>
+  const decoded = decodePlainPayload(substrate.exportEntirety(), "snapshotOf")
+  if (decoded.kind !== "entirety") throw new Error("expected an entirety")
+  return decoded.state
+}
+
+/** The document a plain `"entirety"` payload carries. */
+function wholeState(payload: SubstratePayload): Record<string, unknown> {
+  const decoded = decodePlainPayload(payload, "wholeState")
+  if (decoded.kind !== "entirety") throw new Error("expected an entirety")
+  return decoded.state
+}
+
+/** The ops a plain `"since"` payload carries, in order. */
+function sinceOps(payload: SubstratePayload | null): Op[] {
+  if (payload === null) throw new Error("expected a payload")
+  const decoded = decodePlainPayload(payload, "sinceOps")
+  if (decoded.kind !== "since") throw new Error("expected a delta")
+  return decoded.batches.flat()
+}
+
+/** A plain whole-document payload: `state` at log position `at`. */
+function entiretyAt(
+  state: Record<string, unknown>,
+  at: number,
+  lineage?: string,
+): SubstratePayload {
+  return {
+    kind: "entirety",
+    encoding: "json",
+    data: JSON.stringify({ at, state }),
+    ...(lineage === undefined ? {} : { lineage }),
   }
-  return parsed as Record<string, unknown>
 }
 
 // ===========================================================================
@@ -300,20 +330,133 @@ describe("createPlainClock", () => {
 })
 
 // ===========================================================================
-// parsePlainPayload
+// planMerge — what merging a plain payload does
 // ===========================================================================
 
-describe("parsePlainPayload", () => {
-  it("returns { content } for a bare-object payload", () => {
-    const data = JSON.stringify({ title: "Hi" })
-    const { content } = parsePlainPayload(data)
-    expect(content).toEqual({ title: "Hi" })
+describe("planMerge", () => {
+  const since = (
+    lineage: string,
+    from: number,
+    batchCount: number,
+  ): Parameters<typeof planMerge>[2] => ({
+    kind: "since",
+    lineage,
+    from,
+    batches: Array.from({ length: batchCount }, (_, i) => [
+      { path: RawPath.empty.field("n"), change: replaceChange(from + i) },
+    ]),
+  })
+  const entirety = (
+    lineage: string,
+    at: number,
+  ): Parameters<typeof planMerge>[2] => ({
+    kind: "entirety",
+    lineage,
+    at,
+    state: { n: at },
   })
 
-  it("returns { content } for a bare-array payload", () => {
-    const data = JSON.stringify([[{ foo: "bar" }]])
-    const { content } = parsePlainPayload(data)
-    expect(content).toEqual([[{ foo: "bar" }]])
+  it.each([
+    [
+      "a delta at our position appends all of it",
+      3,
+      "L",
+      since("L", 3, 2),
+      "append",
+      2,
+    ],
+    [
+      "a delta overlapping what we hold appends the rest",
+      4,
+      "L",
+      since("L", 3, 2),
+      "append",
+      1,
+    ],
+    [
+      "a delta we already hold changes nothing",
+      5,
+      "L",
+      since("L", 3, 2),
+      "none",
+      0,
+    ],
+    [
+      "a delta that starts past us is a gap",
+      2,
+      "L",
+      since("L", 3, 2),
+      "gap",
+      0,
+    ],
+    [
+      "a replica at genesis takes a delta from the start",
+      0,
+      DEFAULT_LINEAGE,
+      since("L", 0, 2),
+      "append",
+      2,
+    ],
+    [
+      "a replica at genesis cannot continue a delta from the middle",
+      0,
+      DEFAULT_LINEAGE,
+      since("L", 3, 2),
+      "gap",
+      0,
+    ],
+    [
+      "a delta from another lineage is a gap",
+      3,
+      "L",
+      since("M", 3, 2),
+      "gap",
+      0,
+    ],
+  ] as const)("%s", (_, position, lineage, payload, kind, appended) => {
+    const plan = planMerge(position, lineage, payload)
+    expect(plan.kind).toBe(kind)
+    if (plan.kind === "append") expect(plan.batches).toHaveLength(appended)
+  })
+
+  it.each([
+    [
+      "a whole document ahead of us is adopted",
+      3,
+      "L",
+      entirety("L", 5),
+      "adopt",
+    ],
+    [
+      "a whole document at our position changes nothing",
+      5,
+      "L",
+      entirety("L", 5),
+      "none",
+    ],
+    [
+      "a whole document behind us changes nothing",
+      6,
+      "L",
+      entirety("L", 5),
+      "none",
+    ],
+    [
+      "a replica at genesis adopts a whole document",
+      0,
+      DEFAULT_LINEAGE,
+      entirety("L", 5),
+      "adopt",
+    ],
+    [
+      "a whole document from another lineage is a gap",
+      3,
+      "L",
+      entirety("M", 5),
+      "gap",
+    ],
+  ] as const)("%s", (_, position, lineage, payload, kind) => {
+    expect(planMerge(position, lineage, payload).kind).toBe(kind)
   })
 })
 
@@ -428,14 +571,7 @@ describe("PlainSubstrate lifecycle", () => {
           (substrate.version() as PlainVersion).lineage,
         ),
       )
-      if (payload) {
-        opsPerNotification.push(
-          (
-            ((JSON.parse(payload.data as string) as any).b ||
-              JSON.parse(payload.data as string)) as Op[][]
-          ).flat(),
-        )
-      }
+      if (payload) opsPerNotification.push(sinceOps(payload))
       prevVersion = currentVer
     })
 
@@ -468,37 +604,52 @@ describe("PlainSubstrate lifecycle", () => {
     expect(snapshot.encoding).toBe("json")
     expect(typeof snapshot.data).toBe("string")
 
-    const parsed =
-      (JSON.parse(snapshot.data as string) as any).s ||
-      JSON.parse(snapshot.data as string)
-    expect(parsed).toEqual(snapshotOf(substrate))
+    const parsed = snapshotOf(substrate)
     expect(parsed.title).toBe("Test!")
     expect(parsed.count).toBe(10)
   })
 
-  it("exportSince(version) returns null when version is ahead", () => {
+  it("exportSince(version) is an empty delta when version is ahead", () => {
     const substrate = plainSubstrateFactory.create(TestSchema)
+    const doc = interpretSubstrate(substrate)
+    batch(doc, d => d.count.increment(1))
     const futureVersion = new PlainVersion(
       999,
       (substrate.version() as PlainVersion).lineage,
     )
-    expect(substrate.exportSince(futureVersion)).toBeNull()
+    expect(sinceOps(substrate.exportSince(futureVersion))).toEqual([])
   })
 
-  it("exportSince(version) returns null when version matches current version", () => {
+  it("exportSince(version) is an empty delta, not null, when version matches current version", () => {
+    // `null` means "cannot serve", and the caller answers it with the whole
+    // document. A peer that is merely current must not get that.
     const substrate = plainSubstrateFactory.create(TestSchema)
     const doc = interpretSubstrate(substrate)
 
     batch(doc, d => d.count.increment(1))
 
-    const payload = substrate.exportSince(substrate.version())
-    expect(payload).toBeNull()
+    expect(sinceOps(substrate.exportSince(substrate.version()))).toEqual([])
+  })
+
+  it("exportSince(genesis) is the whole document once the log is trimmed past genesis", () => {
+    const source = plainSubstrateFactory.create(TestSchema)
+    const doc = interpretSubstrate(source)
+    batch(doc, d => d.count.increment(1))
+    batch(doc, d => d.count.increment(1))
+    source.advance(source.version())
+
+    const genesis = new PlainVersion(0, DEFAULT_LINEAGE)
+    expect(source.exportSince(genesis)).toBeNull()
+    const fresh = plainReplicaFactory.createEmpty()
+    expect(fresh.merge(source.exportEntirety())).toBe("merged")
+    expect(fresh.version().compare(source.version())).toBe("equal")
   })
 
   it("exportSince(version) returns ops when version is behind", () => {
     const substrate = plainSubstrateFactory.create(TestSchema)
     const doc = interpretSubstrate(substrate)
 
+    batch(doc, d => d.theme.set("light"))
     const f0 = substrate.version()
     batch(doc, d => d.title.insert(0, "A"))
     batch(doc, d => d.count.increment(1))
@@ -507,9 +658,7 @@ describe("PlainSubstrate lifecycle", () => {
     expect(payload).not.toBeNull()
     expect(payload?.encoding).toBe("json")
 
-    const batches = ((JSON.parse(payload?.data as string) as any).b ||
-      JSON.parse(payload?.data as string)) as Op[][]
-    const ops = batches.flat()
+    const ops = sinceOps(payload)
     expect(ops.length).toBeGreaterThanOrEqual(2)
 
     // Should contain both a text change and an increment change
@@ -530,11 +679,7 @@ describe("PlainSubstrate lifecycle", () => {
     expect(substrate.version().value).toBe(2)
 
     // exportSince(f1) should only contain the second mutation
-    const payload = substrate.exportSince(f1) as any
-    const ops = (
-      ((JSON.parse(payload.data as string) as any).b ||
-        JSON.parse(payload.data as string)) as Op[][]
-    ).flat()
+    const ops = sinceOps(substrate.exportSince(f1))
     expect(ops.length).toBe(1)
     expect(ops[0]?.change.type).toBe("increment")
   })
@@ -666,9 +811,9 @@ describe("Round-trip replication", () => {
     const emptyPayload: SubstratePayload = {
       kind: "since",
       encoding: "json",
-      data: "[]",
+      data: JSON.stringify({ from: 0, batches: [] }),
     }
-    substrate.merge(emptyPayload)
+    expect(substrate.merge(emptyPayload)).toBe("merged")
 
     expect(substrate.version().value).toBe(0)
   })
@@ -679,99 +824,81 @@ describe("Round-trip replication", () => {
 // ===========================================================================
 
 describe("merge with entirety payload (PlainSubstrate)", () => {
-  it("absorbs a state image and updates the store", () => {
+  /** A substrate with two authored batches: position 2 on a REAL lineage. */
+  function authored() {
     const substrate = plainSubstrateFactory.create(TestSchema)
     const doc = interpretSubstrate(substrate)
-
     batch(doc, d => d.title.insert(0, "Original"))
     batch(doc, d => d.count.increment(5))
+    const lineage = (substrate.version() as PlainVersion).lineage
+    return { substrate, doc, lineage }
+  }
 
-    // Build an entirety payload representing different state
-    const entirety: SubstratePayload = {
-      kind: "entirety",
-      encoding: "json",
-      data: JSON.stringify({
-        title: "Replaced",
-        count: 99,
-        theme: "dark",
-        items: [],
-      }),
-    }
-    substrate.merge(entirety, { origin: "sync" })
+  const image = (title: string, count: number) => ({
+    title,
+    count,
+    theme: "dark",
+    items: [],
+  })
+
+  it("adopts a whole document ahead of it: state and position", () => {
+    const { substrate, lineage } = authored()
+
+    expect(substrate.merge(entiretyAt(image("Replaced", 99), 5, lineage))).toBe(
+      "merged",
+    )
 
     const snap = snapshotOf(substrate)
     expect(snap.title).toBe("Replaced")
     expect(snap.count).toBe(99)
-    expect(snap.theme).toBe("dark")
+    expect(substrate.version().serialize()).toBe(`${lineage}:5`)
   })
 
-  it("absorbing a peer's content via merge never mints a lineage (absorb ≠ author)", () => {
+  it("leaves a whole document at or behind it alone", () => {
+    const { substrate, lineage } = authored()
+    const before = substrate.version().serialize()
+
+    substrate.merge(entiretyAt(image("Stale", 1), 2, lineage))
+    substrate.merge(entiretyAt(image("Staler", 0), 1, lineage))
+
+    expect(snapshotOf(substrate).title).toBe("Original")
+    expect(substrate.version().serialize()).toBe(before)
+  })
+
+  it("takes the sender's lineage from genesis, never a fresh one (absorb ≠ author)", () => {
     const substrate = plainSubstrateFactory.create(TestSchema)
     expect((substrate.version() as PlainVersion).lineage).toBe(DEFAULT_LINEAGE)
 
-    // Only local authorship mints a lineage. Absorbing a peer's ops must never
-    // make the receiver claim a fresh identity for content it does not own — a
-    // writer that adopted a spurious lineage here would fork sync from its peers.
-    const entirety: SubstratePayload = {
-      kind: "entirety",
-      encoding: "json",
-      data: JSON.stringify({
-        title: "from-peer",
-        count: 1,
-        theme: "",
-        items: [],
-      }),
-    }
-    substrate.merge(entirety, { origin: "sync" })
+    // Only local authorship mints a lineage. Absorbing a peer's state must
+    // never make the receiver claim a fresh identity for content it does not
+    // own: a writer with a spurious lineage would fork sync from its peers.
+    substrate.merge(entiretyAt(image("from-peer", 1), 1, "peer-lineage"), {
+      origin: "sync",
+    })
 
-    expect((substrate.version() as PlainVersion).lineage).toBe(DEFAULT_LINEAGE)
+    expect(substrate.version().serialize()).toBe("peer-lineage:1")
   })
 
   it("preserves ref identity after entirety merge", () => {
-    const substrate = plainSubstrateFactory.create(TestSchema)
-    const doc = interpretSubstrate(substrate)
-
-    // Capture the ref before merge
+    const { substrate, doc, lineage } = authored()
     const refBefore = doc
 
-    batch(doc, d => d.title.insert(0, "Before"))
+    substrate.merge(entiretyAt(image("After", 0), 3, lineage), {
+      origin: "sync",
+    })
 
-    const entirety: SubstratePayload = {
-      kind: "entirety",
-      encoding: "json",
-      data: JSON.stringify({
-        title: "After",
-        count: 0,
-        theme: "light",
-        items: [],
-      }),
-    }
-    substrate.merge(entirety, { origin: "sync" })
-
-    // The ref object is still the same identity
     expect(refBefore).toBe(doc)
-    // And reads the new state
     expect(doc.title()).toBe("After")
   })
 
   it("fires changefeed with origin on entirety merge", () => {
-    const substrate = plainSubstrateFactory.create(TestSchema)
-    const doc = interpretSubstrate(substrate)
-
+    const { substrate, doc, lineage } = authored()
     const received: { origin?: string }[] = []
     subscribe(doc, cs => received.push({ origin: cs.origin }))
 
-    const entirety: SubstratePayload = {
-      kind: "entirety",
-      encoding: "json",
-      data: JSON.stringify({
-        title: "Synced",
-        count: 42,
-        theme: "dark",
-        items: [],
-      }),
-    }
-    substrate.merge(entirety, { origin: "sync" })
+    substrate.merge(entiretyAt(image("Synced", 42), 3, lineage), {
+      origin: "sync",
+    })
 
     expect(received.length).toBeGreaterThanOrEqual(1)
     for (const cs of received) {
@@ -779,96 +906,82 @@ describe("merge with entirety payload (PlainSubstrate)", () => {
     }
   })
 
-  it("bumps version after entirety merge", () => {
+  it("a whole document at genesis position changes nothing", () => {
     const substrate = plainSubstrateFactory.create(TestSchema)
     interpretSubstrate(substrate)
 
-    expect(substrate.version().value).toBe(0)
-
-    const entirety: SubstratePayload = {
-      kind: "entirety",
-      encoding: "json",
-      data: JSON.stringify({ title: "V1", count: 1, theme: "", items: [] }),
-    }
-    substrate.merge(entirety)
-
-    expect(substrate.version().value).toBeGreaterThan(0)
-  })
-
-  it("empty state image does not bump version", () => {
-    const substrate = plainSubstrateFactory.create(TestSchema)
-    interpretSubstrate(substrate)
-
-    const entirety: SubstratePayload = {
-      kind: "entirety",
-      encoding: "json",
-      data: JSON.stringify({}),
-    }
-    substrate.merge(entirety)
+    substrate.merge(entiretyAt({}, 0))
 
     expect(substrate.version().value).toBe(0)
   })
 })
 
 describe("merge with entirety payload (PlainReplica)", () => {
-  it("absorbs a state image into a replica", () => {
+  it("adopts a whole document: state and position", () => {
     const replica = plainReplicaFactory.createEmpty()
 
-    const entirety: SubstratePayload = {
-      kind: "entirety",
-      encoding: "json",
-      data: JSON.stringify({ title: "Hello", count: 7 }),
-    }
-    replica.merge(entirety)
+    replica.merge(entiretyAt({ title: "Hello", count: 7 }, 3, "peer"))
 
-    // The replica should now serve the new state via exportEntirety
-    const snap = replica.exportEntirety()
-    const state =
-      (JSON.parse(snap.data as string) as any).s ||
-      JSON.parse(snap.data as string)
-    expect(state.title).toBe("Hello")
-    expect(state.count).toBe(7)
+    const state = decodePlainPayload(replica.exportEntirety(), "test")
+    expect(state.kind === "entirety" && state.state).toEqual({
+      title: "Hello",
+      count: 7,
+    })
+    expect(replica.version().serialize()).toBe("peer:3")
   })
 
-  it("bumps version after entirety merge on replica", () => {
-    const replica = plainReplicaFactory.createEmpty()
-    expect(replica.version().value).toBe(0)
-
-    const entirety: SubstratePayload = {
-      kind: "entirety",
-      encoding: "json",
-      data: JSON.stringify({ title: "V1" }),
-    }
-    replica.merge(entirety)
-
-    expect(replica.version().value).toBeGreaterThan(0)
-  })
-
-  it("handles since and entirety payloads on the same replica", () => {
-    // Start with entirety
-    const replica = plainReplicaFactory.createEmpty()
-    const entirety: SubstratePayload = {
-      kind: "entirety",
-      encoding: "json",
-      data: JSON.stringify({ title: "Start", count: 0 }),
-    }
-    replica.merge(entirety)
-
-    const v1 = replica.version()
-
-    // Now create a substrate, mutate, and send a since payload
+  it("continues from an adopted whole document with the sender's later deltas", () => {
     const source = plainSubstrateFactory.create(TestSchema)
     const doc = interpretSubstrate(source)
     batch(doc, d => d.title.insert(0, "Start"))
+
+    const replica = plainReplicaFactory.createEmpty()
+    replica.merge(source.exportEntirety())
+    const adoptedAt = source.version()
+
     batch(doc, d => d.count.increment(5))
+    expect(
+      replica.merge(source.exportSince(adoptedAt) as SubstratePayload),
+    ).toBe("merged")
 
-    const since = source.exportSince(
-      new PlainVersion(0, (source.version() as PlainVersion).lineage),
-    ) as any
-    expect(since.kind).toBe("since")
-    replica.merge(since)
+    expect(replica.version().compare(source.version())).toBe("equal")
+  })
 
-    expect(replica.version().value).toBeGreaterThan(v1.value)
+  it("reports a gap for a delta that starts past it, and applies nothing", () => {
+    const source = plainSubstrateFactory.create(TestSchema)
+    const doc = interpretSubstrate(source)
+    batch(doc, d => d.title.insert(0, "A"))
+    const afterFirst = source.version()
+    batch(doc, d => d.title.insert(1, "B"))
+
+    const replica = plainReplicaFactory.createEmpty()
+
+    expect(
+      replica.merge(source.exportSince(afterFirst) as SubstratePayload),
+    ).toBe("gap")
+    expect(replica.version().value).toBe(0)
+  })
+
+  it("takes a redelivered delta once", () => {
+    const source = plainSubstrateFactory.create(TestSchema)
+    const doc = interpretSubstrate(source)
+    const genesis = new PlainVersion(0, DEFAULT_LINEAGE)
+    const replica = plainReplicaFactory.createEmpty()
+    batch(doc, d => d.title.insert(0, "A"))
+    replica.merge(source.exportEntirety())
+    const before = source.version()
+    batch(doc, d => d.title.insert(1, "B"))
+
+    const delta = source.exportSince(before) as SubstratePayload
+    replica.merge(delta)
+    replica.merge(delta)
+
+    expect(replica.version().compare(source.version())).toBe("equal")
+    const replicaState = decodePlainPayload(replica.exportEntirety(), "test")
+    expect(replicaState.kind === "entirety" && replicaState.state.title).toBe(
+      "AB",
+    )
+    void genesis
   })
 })
 
@@ -897,8 +1010,8 @@ describe("Lineage boundaries", () => {
     const snapshot = substrateA.exportEntirety()
     const substrateB = plainSubstrateFactory.fromEntirety(snapshot, TestSchema)
 
-    // fromEntirety logs the entirety as one batch, so version > 0
-    expect(substrateB.version().value).toBeGreaterThan(0)
+    // fromEntirety takes the document at the source's position
+    expect(substrateB.version().compare(substrateA.version())).toBe("equal")
 
     // But the snapshot matches the source's current state
     const snapA = snapshotOf(substrateA)
@@ -922,9 +1035,9 @@ describe("Lineage boundaries", () => {
     const substrateB = plainSubstrateFactory.fromEntirety(snapshot, TestSchema)
     const docB = interpretSubstrate(substrateB)
 
-    // fromEntirety logs the entirety as one batch, so version > 0
+    // fromEntirety takes the document at the source's position
     const vAfterSnapshot = substrateB.version().value
-    expect(vAfterSnapshot).toBeGreaterThan(0)
+    expect(substrateB.version().compare(substrateA.version())).toBe("equal")
 
     // Mutate the new substrate
     batch(docB, d => d.title.insert(6, "!"))
@@ -933,7 +1046,7 @@ describe("Lineage boundaries", () => {
 
     // Export from the new substrate works
     const snapshot2 = substrateB.exportEntirety()
-    expect((JSON.parse(snapshot2.data as string) as any).title).toBe("Source!")
+    expect(wholeState(snapshot2).title).toBe("Source!")
 
     // Export delta since the snapshot lineage version
     const delta = substrateB.exportSince(
@@ -941,9 +1054,8 @@ describe("Lineage boundaries", () => {
         vAfterSnapshot,
         (substrateB.version() as PlainVersion).lineage,
       ),
-    ) as any
-    const batches = JSON.parse(delta.data as string) as Op[][]
-    const ops = batches.flat()
+    )
+    const ops = sinceOps(delta)
     expect(ops.length).toBe(1)
     expect(ops[0]?.change.type).toBe("text")
   })
@@ -1010,7 +1122,7 @@ describe("replicaTypesCompatible", () => {
 
 describe("ReplicaFactory.replicaType", () => {
   it("plainReplicaFactory identifies as plain", () => {
-    expect(plainReplicaFactory.replicaType).toEqual(["plain", 1, 0])
+    expect(plainReplicaFactory.replicaType).toEqual(["plain", 2, 0])
   })
 })
 
@@ -1019,6 +1131,24 @@ describe("ReplicaFactory.replicaType", () => {
 // ===========================================================================
 
 describe("PlainReplica.advance()", () => {
+  it("trims nothing for a target the base has already passed, genesis included", () => {
+    const { source, replica } = replicaFollowing(2)
+    replica.advance(source.version())
+    const base = replica.baseVersion().serialize()
+
+    replica.advance(new PlainVersion(0, DEFAULT_LINEAGE))
+    replica.advance(new PlainVersion(1, source.version().lineage))
+
+    expect(replica.baseVersion().serialize()).toBe(base)
+  })
+
+  it("still throws for a target beyond its version", () => {
+    const { source, replica } = replicaFollowing(1)
+    expect(() =>
+      replica.advance(new PlainVersion(99, source.version().lineage)),
+    ).toThrow("exceeds")
+  })
+
   it("advance to current version (full projection) clears the log", () => {
     const replica = plainReplicaFactory.createEmpty()
     const source = plainSubstrateFactory.create(TestSchema)
@@ -1052,9 +1182,7 @@ describe("PlainReplica.advance()", () => {
 
     // exportEntirety still works
     const entirety = replica.exportEntirety()
-    const parsed =
-      (JSON.parse(entirety.data as string) as any).s ||
-      JSON.parse(entirety.data as string)
+    const parsed = wholeState(entirety)
     expect(parsed.title).toBe("Hello")
     expect(parsed.count).toBe(5)
   })
@@ -1093,9 +1221,7 @@ describe("PlainReplica.advance()", () => {
     expect(replica.exportSince(v2)).not.toBeNull()
 
     // State is still complete
-    const snap =
-      (JSON.parse(replica.exportEntirety().data as string) as any).s ||
-      JSON.parse(replica.exportEntirety().data as string)
+    const snap = wholeState(replica.exportEntirety())
     expect(snap.title).toBe("A")
     expect(snap.count).toBe(1)
     expect(snap.theme).toBe("dark")
@@ -1125,9 +1251,7 @@ describe("PlainReplica.advance()", () => {
     expect(since).not.toBeNull()
 
     // Full state includes both pre-advance and post-advance data
-    const snap =
-      (JSON.parse(replica.exportEntirety().data as string) as any).s ||
-      JSON.parse(replica.exportEntirety().data as string)
+    const snap = wholeState(replica.exportEntirety())
     expect(snap.title).toBe("Before")
     expect(snap.count).toBe(99)
   })
@@ -1185,9 +1309,7 @@ describe("PlainReplica.advance()", () => {
     expect(replica.exportSince(v2)).not.toBeNull()
 
     // exportEntirety always works (returns current state)
-    const snap =
-      (JSON.parse(replica.exportEntirety().data as string) as any).s ||
-      JSON.parse(replica.exportEntirety().data as string)
+    const snap = wholeState(replica.exportEntirety())
     expect(snap.title).toBe("A")
   })
 
@@ -1210,9 +1332,7 @@ describe("PlainReplica.advance()", () => {
     const entirety = replica.exportEntirety()
     const replica2 = plainReplicaFactory.fromEntirety(entirety)
 
-    const snap =
-      (JSON.parse(replica2.exportEntirety().data as string) as any).s ||
-      JSON.parse(replica2.exportEntirety().data as string)
+    const snap = wholeState(replica2.exportEntirety())
     expect(snap.title).toBe("Test")
     expect(snap.count).toBe(42)
   })
@@ -1267,8 +1387,7 @@ describe("lineage-aware merge", () => {
 
     const payload = source.exportEntirety()
     expect(payload.lineage).toBe("inc-source")
-    const parsed = JSON.parse(payload.data as string)
-    expect(parsed.title).toBe("Hello")
+    expect(wholeState(payload).title).toBe("Hello")
   })
 
   it("exportSince()'s payload carries the lineage once the substrate has a REAL lineage", () => {
@@ -1279,8 +1398,7 @@ describe("lineage-aware merge", () => {
 
     const payload = source.exportSince(v0) as SubstratePayload
     expect(payload.lineage).toBe("inc-source")
-    const parsed = JSON.parse(payload.data as string)
-    expect(Array.isArray(parsed)).toBe(true)
+    expect(sinceOps(payload)).toHaveLength(1)
   })
 
   it("merging an entirety from a different REAL lineage into a DEFAULT target adopts the incoming lineage", () => {
@@ -1294,8 +1412,7 @@ describe("lineage-aware merge", () => {
     target.merge(source.exportEntirety())
 
     expect((target.version() as PlainVersion).lineage).toBe("inc-source")
-    const snap = JSON.parse(target.exportEntirety().data as string)
-    expect(snap.title).toBe("World")
+    expect(wholeState(target.exportEntirety()).title).toBe("World")
   })
 
   it("merging an entirety from a different REAL lineage into a target with its own REAL lineage does NOT adopt (merge() is same-lineage-only)", () => {
@@ -1326,7 +1443,7 @@ describe("lineage-aware merge", () => {
 
     // `resetFromEntirety` is the lineage-boundary path: it adopts the new
     // lineage even though the target already had a different REAL one.
-    target.resetFromEntirety(source.exportEntirety(), source.version())
+    target.resetFromEntirety(source.exportEntirety())
 
     expect((target.version() as PlainVersion).lineage).toBe("inc-source")
   })
@@ -1368,11 +1485,24 @@ function sourceWithBatches(n: number) {
   return { source, doc, genesis }
 }
 
+/**
+ * A source with one batch, a replica that has adopted its document there, and
+ * `n` more source batches the replica has taken in as a delta: the replica's
+ * log holds `n` batches above a base at position 1.
+ */
+function replicaFollowing(n: number) {
+  const { source, doc } = sourceWithBatches(1)
+  const replica = plainReplicaFactory.createEmpty()
+  replica.merge(source.exportEntirety())
+  const adopted = source.version()
+  for (let i = 0; i < n; i++) batch(doc, d => d.count.increment(1))
+  replica.merge(source.exportSince(adopted) as SubstratePayload)
+  return { source, doc, replica, adopted }
+}
+
 describe("plain upgrade keeps history", () => {
   it("the upgraded substrate carries the replica's version and log", () => {
-    const { source, genesis } = sourceWithBatches(2)
-    const replica = plainReplicaFactory.createEmpty()
-    replica.merge(source.exportSince(genesis) as SubstratePayload)
+    const { source, replica } = replicaFollowing(2)
 
     const upgraded = plainSubstrateFactory.upgrade(replica, TestSchema)
     expect(upgraded.version().serialize()).toBe(replica.version().serialize())
@@ -1383,21 +1513,17 @@ describe("plain upgrade keeps history", () => {
 
     const delta = upgraded.exportSince(source.version())
     expect(delta?.kind).toBe("since")
-    expect(JSON.parse(delta?.data as string)).toHaveLength(1)
+    expect(sinceOps(delta)).toHaveLength(1)
   })
 
   it("the base offset survives the upgrade", () => {
-    const { source, genesis } = sourceWithBatches(2)
-    const replica = plainReplicaFactory.createEmpty()
-    replica.merge(source.exportSince(genesis) as SubstratePayload)
-    const first = new PlainVersion(1, source.version().lineage)
-    replica.advance(first)
+    const { source, replica, adopted } = replicaFollowing(2)
+    const second = new PlainVersion(2, source.version().lineage)
+    replica.advance(second)
 
     const upgraded = plainSubstrateFactory.upgrade(replica, TestSchema)
-    expect(upgraded.baseVersion().serialize()).toBe(first.serialize())
-    expect(
-      upgraded.exportSince(new PlainVersion(0, source.version().lineage)),
-    ).toBeNull()
+    expect(upgraded.baseVersion().serialize()).toBe(second.serialize())
+    expect(upgraded.exportSince(adopted)).toBeNull()
   })
 
   it("upgrade refuses a replica this factory did not build", () => {
@@ -1431,20 +1557,24 @@ describe("plain fromEntirety", () => {
 
 describe("plain merge announces after taking the ops in", () => {
   it("delivers one replayed changeset per sender batch and matches the sender", () => {
-    const { source, genesis } = sourceWithBatches(2)
+    const { source, doc: sourceDoc } = sourceWithBatches(1)
     const target = plainSubstrateFactory.create(TestSchema)
     const doc = interpretSubstrate(target)
+    target.merge(source.exportEntirety())
+    const adopted = source.version()
+    batch(sourceDoc, d => d.count.increment(1))
+    batch(sourceDoc, d => d.count.increment(1))
     const seen: { replay: boolean | undefined; count: unknown }[] = []
     subscribe(doc, cs => {
       seen.push({ replay: cs.replay, count: doc.count() })
     })
 
-    target.merge(source.exportSince(genesis) as SubstratePayload)
+    target.merge(source.exportSince(adopted) as SubstratePayload)
 
     // Each batch is announced once the doc holds it, and not before.
     expect(seen).toEqual([
-      { replay: true, count: 1 },
       { replay: true, count: 2 },
+      { replay: true, count: 3 },
     ])
     expect(target.exportEntirety().data).toBe(source.exportEntirety().data)
     expect(target.version().serialize()).toBe(source.version().serialize())
@@ -1466,7 +1596,7 @@ describe("plain replica materialization", () => {
     batch(doc, d => d.items.push(2))
 
     const replica = plainReplicaFactory.createEmpty()
-    const state = () => JSON.parse(replica.exportEntirety().data as string)
+    const state = () => wholeState(replica.exportEntirety())
     replica.merge(source.exportSince(genesis) as SubstratePayload)
     expect(state().items).toEqual([1, 2])
 
@@ -1484,7 +1614,7 @@ describe("plain replica materialization", () => {
       ])
     }
 
-    replica.resetFromEntirety(source.exportEntirety(), source.version())
+    replica.resetFromEntirety(source.exportEntirety())
     expect(state().items).toEqual([1, 2, 3, 4, 5])
   })
 })
@@ -1525,7 +1655,7 @@ describe("requiresBidirectionalSync", () => {
       // Compile-time check: ReplicaFactory<PlainVersion> is assignable to ReplicaFactoryLike
       const like: import("../substrate.js").ReplicaFactoryLike =
         plainReplicaFactory
-      expect(like.replicaType).toEqual(["plain", 1, 0])
+      expect(like.replicaType).toEqual(["plain", 2, 0])
     })
   })
 })

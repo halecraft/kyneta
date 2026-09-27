@@ -290,8 +290,8 @@ interface ReplicaLike {
   exportEntirety(): SubstratePayload
   exportSince(since: Version): SubstratePayload | null
   advance(to: Version): void
-  merge(payload: SubstratePayload, options?: MergeOptions): void
-  resetFromEntirety(payload: SubstratePayload, remoteVersion: Version, options?: MergeOptions): void
+  merge(payload: SubstratePayload, options?: MergeOptions): MergeOutcome // "merged" | "gap"
+  resetFromEntirety(payload: SubstratePayload, options?: MergeOptions): void
 }
 
 interface Replica<V> extends ReplicaLike {
@@ -317,7 +317,7 @@ interface Substrate<V> extends Replica<V>, SubstratePrepare {
 
 **`Replica<V>`** extends `ReplicaLike` with concrete version types. External consumers (binding targets, factories) use this for compile-time version-type safety on return values (`version(): V`, `baseVersion(): V`). Input methods (`exportSince`, `advance`) inherit the wider `Version` parameter type from `ReplicaLike`.
 
-**`ReplicaFactoryLike`** / **`ReplicaFactory<V>`** follow the same pattern: a variance-safe structural interface and a narrow extension with concrete return types.
+**`ReplicaFactoryLike`** / **`ReplicaFactory<V>`** follow the same pattern: a variance-safe structural interface and a narrow extension with concrete return types. A factory declares its format's `replicaType` and whether the format is `historyFree`: its state carries its whole meaning, so there is nothing to trim (the ephemeral CvRDT). That is a property of the format, shared by every replica of a document; whether one replica can `advance` is not (a live Loro substrate cannot, a relay's Loro replica can). The exchange uses it to skip `accept` and to exclude such documents from the compaction-reset trigger.
 
 The split exists because TypeScript treats generics as invariant: `Replica<LoroVersion>` is NOT assignable to `Replica<Version>`, even though `LoroVersion extends Version`. The `-Like` interfaces solve this by using `Version` in all positions, making them assignable from any concrete `Replica<V>`.
 
@@ -327,8 +327,8 @@ Every replica exposes six methods:
 - `baseVersion()` → the earliest version retained (trimmed history starts here).
 - `exportEntirety()` → full state as an opaque payload.
 - `exportSince(since)` → delta relative to the given version, or `null` when the cursor **cannot be served** (history trimmed past it, or an epoch this replica did not mint). `null` is not "nothing to send": the caller answers it with a whole document, so a peer that is merely current must get an empty delta instead. Conflating the two makes every agreement cost a full resend.
-- `advance(to)` → trim history up to the given version.
-- `merge(payload, options?)` → fold an incoming payload into local state. A full substrate then brings σ up to date and announces the ops (see [The functional shadow](#the-functional-shadow)); subscribers receive them with `replay: true`, so layered consumers (e.g. the exchange's echo filter) can discriminate the merge from a local write. `options.origin` propagates as an app-level label. `MergeOptions` has no `source`: an echo token names a local caller and never survives a merge.
+- `advance(to)` → trim history as far as possible without passing `to`; a `to` the base has already passed, or one the replica cannot place, trims nothing.
+- `merge(payload, options?)` → fold an incoming payload into local state, and say whether it could: `"gap"` means the payload continues from a point this replica does not hold, and nothing was applied. Only an order-dependent merge (plain's positional log) ever reports it. A full substrate then brings σ up to date and announces the ops (see [The functional shadow](#the-functional-shadow)); subscribers receive them with `replay: true`, so layered consumers (e.g. the exchange's echo filter) can discriminate the merge from a local write. `options.origin` propagates as an app-level label. `MergeOptions` has no `source`: an echo token names a local caller and never survives a merge.
 
 A `Substrate` adds interpretation:
 
@@ -390,7 +390,8 @@ Key functions (in `src/substrates/plain.ts`):
 - `plainSubstrateFactory` / `plainReplicaFactory` — the public construction surface. `plainContext(doc)` is a test shorthand.
 - `createPlainClock(lineage)` → `PlainClock`: the lineage, `adopt` (its only mutator), and the flush-count ↔ version mapping (`version`, `logOffset`).
 - `createPlainSubstrate(doc, clock, history)` / `createPlainReplica(clock)` — module-level constructors, not exported from the package.
-- `objectToReplaceOps(obj)` → one `ReplaceChange` op per top-level key; how an entirety payload, structural defaults, and ephemeral reprojections become ops.
+- `objectToReplaceOps(obj)` → one `ReplaceChange` op per top-level key; how an entirety payload, structural defaults, and ephemeral reprojections become ops. `movedRootKeys(current, next)` → the top-level keys whose value differs, which is what an adoption or a reprojection announces.
+- `decodePlainPayload(payload)` → `PlainPayload`, and the pure `planMerge(position, lineage, payload)` → `gap | append | adopt | none` (see below).
 
 A headless replica materializes base + log on demand, cached per core revision. `applyChange` steps containers in place, so the replay runs on a deep copy of the base and copies each logged payload; replaying onto the base itself would re-apply the retained log on every rematerialization after a trim.
 
@@ -415,15 +416,36 @@ A **single-entry version vector**: at most one authored *lineage* `{lineage: val
 
 **Op-free genesis.** A freshly created doc is the empty vector: `buildUpgrade` applies structural defaults directly to the doc *without* flushing them into the log (structure is schema-derived and reconstructed by every interpreter), so `version()` starts at `DEFAULT_LINEAGE:0`. Identity is minted lazily by `createPlainSubstrate.afterBatch` on the first authored flush (via `clock.adopt(randomHex(8))`) — never in `clock.version()` (a pure projection), and never on a merge, which appends to the log without reaching `afterBatch`. Absorbed content never causes a peer to invent an identity; a document built by `fromEntirety` from a genesis payload stays genesis until its own first write.
 
-`merge()` adopts an incoming lineage (via `clock.adopt`) only while the current lineage is still `DEFAULT_LINEAGE` — accepting the substrate's first real lineage. Genuine lineage-boundary resets (a REAL lineage transitioning to a *different* REAL lineage) are handled by `resetFromEntirety` (see `Substrate.resetFromEntirety` and `@kyneta/exchange`'s [Compaction and lineage boundaries](../exchange/TECHNICAL.md#compaction-and-lineage-boundaries)), which the Synchronizer invokes on an explicit mismatch — `merge()` never adopts across two REAL lineages. `SubstratePayload.lineage` is the preferred source for the incoming lineage; `parsePlainPayload`'s legacy `{ i, s|b }` envelope extraction is the fallback for peers that pre-date lineage support.
+`merge()` adopts an incoming lineage (via `clock.adopt`) only while the current lineage is still `DEFAULT_LINEAGE` — accepting the substrate's first real lineage. Genuine lineage-boundary resets (a REAL lineage transitioning to a *different* REAL lineage) are handled by `resetFromEntirety` (see `Substrate.resetFromEntirety` and `@kyneta/exchange`'s [Compaction and lineage boundaries](../exchange/TECHNICAL.md#compaction-and-lineage-boundaries)), which the Synchronizer invokes on an explicit mismatch — `merge()` never adopts across two REAL lineages. The incoming lineage is `SubstratePayload.lineage`.
+
+Genesis still precedes the whole authored log: a genesis cursor is served from offset 0 while nothing is trimmed, and with the whole document once the base has moved past it. Answering every genesis cursor with the whole document was tried and reverted: a document's first push is a delta from genesis too, and a whole document from a peer that is already synced is what the Synchronizer reads as a compaction reset.
+
+### Positioned payloads, and merging by plan
+
+A plain log is addressed by position within a lineage, so a payload has to say where it belongs, or a receiver cannot tell whether it continues what it holds:
+
+```ts
+{ from: number, batches: SerializedOp[][] }   // "since": the batches after log position `from`
+{ at: number, state: PlainState }              // "entirety": the document at log position `at`
+```
+
+Merging is decode → decide → execute, once in `createPlainCore` for the substrate and the headless replica:
+
+- `decodePlainPayload` reads either shape into a `PlainPayload`.
+- `planMerge(position, lineage, payload)` is pure. A delta that starts at or before `position` appends the batches we lack, skipping the ones we hold, so a redelivered delta is harmless. One that starts past `position` is a **`gap`**: nothing is applied, and `merge` returns `"gap"` (`MergeOutcome`). A whole document ahead of `position` is **adopted**; at or behind it, nothing changes. A payload from a different REAL lineage is a gap, since it continues nothing we hold.
+- One core `adopt` replaces the state, takes the lineage and restarts the log at `at`. `merge`'s adopt plan, `resetFromEntirety` (which adopts unconditionally) and `plainReplicaFactory.fromEntirety` all use it, so a document built from a peer's whole document is at the peer's version, not at count 1. A substrate announces only the top-level fields that moved (`movedRootKeys`).
+
+Why this matters: a push is a delta from the sender's previous version, and a peer that restarted without its state no longer holds that version. Appending the delta anyway corrupted it permanently (entries duplicated when the catch-up landed on top). A whole-document merge that appended one batch left the receiver's count disagreeing with the sender's, so every later delta mismatched.
+
+`exportSince` returns an empty delta for a cursor at or ahead of the current position, and `null` only when the cursor is behind the trimmed base — the contract's "cannot serve". `advance(to)` trims nothing for a target from another lineage or one the base has already passed (genesis included), and throws only beyond the current position.
+
+The format change moved the plain replica type to `["plain", 2, 0]`.
 
 ### Wire-codec opacity
 
 The plain substrate's `serializeOps` / `deserializeOps` embed `Op.change` by reference — the change is JSON-stringified as-is and passed through `WireOfferMsg.d` (an opaque `string | Uint8Array` payload). The exchange wire codec never inspects schema-level change types; it carries them as JSON inside the substrate payload. Adding a new `ChangeBase` variant (e.g. `SetChange { type: "set-op" }`) is purely additive — no exchange codec change required. The only caveat is for out-of-monorepo consumers parsing the plain JSON wire format with a strict change-type whitelist: those need to extend their whitelist when new change variants land.
 
-The lineage now travels as an explicit field, `SubstratePayload.lineage`, set by every substrate's `exportEntirety`/`exportSince` (Plain sets it to the current lineage; Loro/Yjs/`ephemeral` set it to `DEFAULT_LINEAGE`). Plain's own `data` payload is simply `JSON.stringify(materialize())` for entirety and `JSON.stringify(serializedBatches)` for since — no inner envelope. This is a simplification from an earlier design where Plain's JSON payload wrapped state/ops in an inline envelope (`{ i: string, s: PlainState }` / `{ i: string, b: SerializedOp[][] }`); that inline lineage field duplicated information already available via the parsed `Version` (which encodes as `"${lineage}:${value}"`) and via the new `SubstratePayload.lineage` field, creating a desync hazard between the wire-level version and the body-embedded lineage.
-
-`parsePlainPayload` still parses the legacy `{ i, s|b }` envelope for backward compatibility with peers/payloads that pre-date `SubstratePayload.lineage` — `SubstratePayload.lineage` is the preferred source when present; `parsePlainPayload`'s extracted `i` field is the fallback. Bare state objects / bare op-batch arrays (no `i` field, no `SubstratePayload.lineage`) still parse correctly via the same helper, one level further back in the compatibility chain.
+The lineage now travels as an explicit field, `SubstratePayload.lineage`, set by every substrate's `exportEntirety`/`exportSince` (Plain sets it to the current lineage; Loro/Yjs/`ephemeral` set it to `DEFAULT_LINEAGE`). Plain's own `data` payload is `{ at, state }` for entirety and `{ from, batches }` for since (see §"Positioned payloads, and merging by plan") — positions, but no lineage. This is a simplification from an earlier design where Plain's JSON payload wrapped state/ops in an inline envelope (`{ i: string, s: PlainState }` / `{ i: string, b: SerializedOp[][] }`); that inline lineage field duplicated information already available via the parsed `Version` (which encodes as `"${lineage}:${value}"`) and via the new `SubstratePayload.lineage` field, creating a desync hazard between the wire-level version and the body-embedded lineage.
 
 ### The op-log holds immutable `RawPath` (authoring-time freeze)
 

@@ -36,6 +36,7 @@ import {
   syncModeToWire,
   validateDocId,
   validateSchemaHash,
+  type WireAcceptMsg,
   type WireDismissMsg,
   type WireEstablishMsg,
   type WireInterestMsg,
@@ -52,7 +53,7 @@ import type {
   PresentMsg,
   WireFeatures,
 } from "./messages.js"
-import { PROTOCOL_VERSION } from "./types.js"
+import { BASELINE_PROTOCOL_VERSION } from "./types.js"
 
 export type { Alias } from "@kyneta/wire"
 
@@ -216,13 +217,12 @@ export function applyOutboundAliasing(
         if (msg.features.datagram !== undefined)
           wire.f.d = msg.features.datagram
       }
-      // Omit pv at the default so a (1,0) peer's establish stays
-      // byte-identical to a pre-protocolVersion peer's — the same
-      // omit-default convention as `shs` and `WireFeatures`.
+      // Omit pv only at the baseline, which is what its absence means: the
+      // same omit-default convention as `shs` and `WireFeatures`.
       const pv = msg.protocolVersion
       if (
-        pv.major !== PROTOCOL_VERSION.major ||
-        pv.minor !== PROTOCOL_VERSION.minor
+        pv.major !== BASELINE_PROTOCOL_VERSION.major ||
+        pv.minor !== BASELINE_PROTOCOL_VERSION.minor
       ) {
         wire.pv = [pv.major, pv.minor]
       }
@@ -320,9 +320,19 @@ export function applyOutboundAliasing(
       } else {
         wire.doc = msg.docId
       }
-      if (msg.reciprocate !== undefined) wire.r = msg.reciprocate
       if (msg.payload.lineage !== undefined) wire.ln = msg.payload.lineage
       if (msg.digest !== undefined) wire.g = msg.digest
+      return { state, result: ok(wire) }
+    }
+
+    case "accept": {
+      const wire: WireAcceptMsg = { t: MessageType.Accept, v: msg.version }
+      const aliasInfo = state.outboundAliasByDoc.get(msg.docId)
+      if (aliasInfo !== undefined && state.mutualAlias) {
+        wire.dx = aliasInfo
+      } else {
+        wire.doc = msg.docId
+      }
       return { state, result: ok(wire) }
     }
 
@@ -386,13 +396,13 @@ export function applyInboundAliasing(
       const msg: EstablishMsg = {
         type: "establish",
         identity: { peerId: wire.id, name: wire.n, type: wire.y },
-        // Default an absent pv to PROTOCOL_VERSION at the wire boundary, so
-        // the parsed domain message always carries a concrete version
-        // (absent and explicit-(1,0) are indistinguishable downstream).
+        // Default an absent pv to the baseline at the wire boundary, so the
+        // parsed domain message always carries a concrete version (absent
+        // and explicit-(1,0) are indistinguishable downstream).
         protocolVersion:
           wire.pv !== undefined
             ? { major: wire.pv[0], minor: wire.pv[1] }
-            : PROTOCOL_VERSION,
+            : BASELINE_PROTOCOL_VERSION,
       }
       if (features !== undefined) msg.features = features
       return { state: newState, result: ok(msg) }
@@ -502,9 +512,19 @@ export function applyInboundAliasing(
             : { kind, encoding, data: wire.d },
         version: wire.v,
       }
-      if (wire.r !== undefined) msg.reciprocate = wire.r
       if (wire.g !== undefined) msg.digest = wire.g
       return { state, result: ok(msg) }
+    }
+
+    case MessageType.Accept: {
+      const docResult = resolveDocId(s_get_inbound(state), wire.doc, wire.dx)
+      if ("error" in docResult) return { state, result: err(docResult.error) }
+      const docErr = validateDocId(docResult.docId)
+      if (docErr) return { state, result: err(docErr) }
+      return {
+        state,
+        result: ok({ type: "accept", docId: docResult.docId, version: wire.v }),
+      }
     }
 
     case MessageType.Dismiss: {

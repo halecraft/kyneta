@@ -27,7 +27,7 @@ import type { Store, StoreMeta, StoreRecord } from "../store/store.js"
 // ---------------------------------------------------------------------------
 
 export const plainMeta: StoreMeta = {
-  replicaType: ["plain", 1, 0] as const,
+  replicaType: ["plain", 2, 0] as const,
   syncMode: SYNC_AUTHORITATIVE,
   schemaHash: "00test",
 }
@@ -46,6 +46,27 @@ export function makeEntryRecord(
     kind: "entry",
     payload: { kind, encoding: "json", data: JSON.stringify({ v: version }) },
     version,
+  }
+}
+
+/**
+ * A stored whole-document entry for a plain document: `state` at log position
+ * `at` on `lineage`, with the version a plain document would record for it.
+ */
+export function makePlainEntirety(
+  state: Record<string, unknown>,
+  lineage = "seed",
+  at = 1,
+): StoreRecord & { kind: "entry" } {
+  return {
+    kind: "entry",
+    payload: {
+      kind: "entirety",
+      encoding: "json",
+      data: JSON.stringify({ at, state }),
+      lineage,
+    },
+    version: `${lineage}:${at}`,
   }
 }
 

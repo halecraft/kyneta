@@ -20,6 +20,7 @@ import type { ChangeBase } from "../change.js"
 import { replaceChange } from "../change.js"
 import type { Op } from "../changefeed.js"
 import { deepClonePlain } from "../clone.js"
+import { samePlainValue } from "../guards.js"
 import type { Path } from "../interpret.js"
 import type { WritableContext } from "../interpreters/writable.js"
 import { buildWritableContext } from "../interpreters/writable.js"
@@ -41,6 +42,7 @@ import type { Schema as SchemaNode } from "../schema.js"
 import type {
   HasBackingDoc,
   MergeOptions,
+  MergeOutcome,
   RecordInverseFn,
   Replica,
   ReplicaFactory,
@@ -159,7 +161,7 @@ export function createPlainClock(initialLineage: string): PlainClock {
     version: (flushCount: number) => new PlainVersion(flushCount, lineage),
     logOffset(since: PlainVersion) {
       // Genesis is the empty vector ⊥: it precedes the whole authored log, so
-      // a genesis peer receives everything regardless of the counter it carries.
+      // a genesis peer is served from offset 0 whatever counter it carries.
       if (since.lineage === DEFAULT_LINEAGE) return 0
       if (since.lineage !== lineage) return null
       return since.value
@@ -236,6 +238,27 @@ export function createPlainSubstrate(
   // The WritableContext is built lazily and cached — the same context
   // is returned on every call to `context()`.
   let cachedCtx: WritableContext | undefined
+
+  /**
+   * How ops taken in from elsewhere reach the doc: applied, then announced,
+   * after the log already holds them. One announcement per sender batch.
+   */
+  const docEffects = (options?: MergeOptions): PlainEffects => ({
+    append(batch) {
+      applyOps(doc, batch)
+      substrate.context().announce(batch, options?.origin)
+    },
+    adopt(state) {
+      // Every schema-defined top-level field is present in the incoming
+      // entirety (built from Zero.structural on the sender), so replacing the
+      // fields that moved supersedes what the doc held without wiping it.
+      const moved: PlainState = {}
+      for (const key of movedRootKeys(doc, state)) moved[key] = state[key]
+      const ops = objectToReplaceOps(moved)
+      applyOps(doc, ops)
+      substrate.context().announce(ops, options?.origin)
+    },
+  })
 
   const substrate = {
     [BACKING_DOC]: doc,
@@ -331,40 +354,18 @@ export function createPlainSubstrate(
       return core.exportSince(asPlainVersion(since))
     },
 
-    merge(payload: SubstratePayload, options?: MergeOptions): void {
-      const batches = payloadBatches(payload, "PlainSubstrate.merge")
-      if (shouldAdoptLineage(payload.lineage, clock.lineage())) {
-        clock.adopt(payload.lineage)
-      }
-      // One announcement per sender batch, each after the doc and the log
-      // hold it.
-      for (const batch of batches) {
-        applyOps(doc, batch)
-        core.append(batch)
-        substrate.context().announce(batch, options?.origin)
-      }
+    merge(payload: SubstratePayload, options?: MergeOptions): MergeOutcome {
+      return core.merge(
+        decodePlainPayload(payload, "PlainSubstrate.merge"),
+        docEffects(options),
+      )
     },
 
-    resetFromEntirety(
-      payload: SubstratePayload,
-      remoteVersion: Version,
-      options?: MergeOptions,
-    ): void {
-      const { lineage, ops } = resetPlan(
-        payload,
-        "PlainSubstrate.resetFromEntirety",
+    resetFromEntirety(payload: SubstratePayload, options?: MergeOptions): void {
+      core.adopt(
+        decodeEntirety(payload, "PlainSubstrate.resetFromEntirety"),
+        docEffects(options),
       )
-      if (lineage !== undefined && lineage !== clock.lineage()) {
-        clock.adopt(lineage)
-      }
-      // Every schema-defined top-level field is present in the incoming
-      // entirety (built from Zero.structural on the sender), so replacing each
-      // field supersedes the prior lineage's value without wiping the doc.
-      applyOps(doc, ops)
-      // Adopt the remote's flush count, so the version does not inflate
-      // across lineages.
-      core.resetLog(asPlainVersion(remoteVersion).value)
-      substrate.context().announce(ops, options?.origin)
     },
   }
 
@@ -396,6 +397,9 @@ function createPlainCore(
   // state can tell whether it is stale.
   let revision = 0
 
+  /** How many flush cycles this replica holds: the count its version carries. */
+  const position = (): number => baseOffset + log.length
+
   return {
     log: log as readonly (readonly Op[])[],
 
@@ -415,7 +419,7 @@ function createPlainCore(
     },
 
     version(): PlainVersion {
-      return clock.version(baseOffset + log.length)
+      return clock.version(position())
     },
 
     baseVersion(): PlainVersion {
@@ -431,16 +435,10 @@ function createPlainCore(
       advanceBase: (batches: readonly (readonly Op[])[]) => void,
     ): void {
       const targetOffset = clock.logOffset(to)
-      // A version from another lineage names no position in this log. The
-      // base stays put, which the undershoot contract of `advance` allows.
-      if (targetOffset === null) return
-
-      if (targetOffset < baseOffset) {
-        throw new Error(
-          `advance(${to.serialize()}): target offset ${targetOffset} is behind ` +
-            `base offset ${baseOffset}`,
-        )
-      }
+      // A target from another lineage names no position in this log, and one
+      // the base has already passed (genesis included) has nothing left to
+      // trim: `advance` trims as far as it can without passing `to`.
+      if (targetOffset === null || targetOffset <= baseOffset) return
       if (targetOffset > baseOffset + log.length) {
         throw new Error(
           `advance(${to.serialize()}): target offset ${targetOffset} exceeds ` +
@@ -449,25 +447,17 @@ function createPlainCore(
       }
 
       const count = targetOffset - baseOffset
-      if (count === 0) return
-
       advanceBase(log.splice(0, count))
       baseOffset = targetOffset
       revision++
     },
 
-    /** Discard the log and restart counting at `newBaseOffset`. */
-    resetLog(newBaseOffset: number): void {
-      log.length = 0
-      baseOffset = newBaseOffset
-      revision++
-    },
-
     exportEntirety(): SubstratePayload {
+      const body: EntiretyBody = { at: position(), state: materialize() }
       return {
         kind: "entirety",
         encoding: "json",
-        data: JSON.stringify(materialize()),
+        data: JSON.stringify(body),
         lineage: clock.lineage(),
       }
     },
@@ -479,23 +469,62 @@ function createPlainCore(
       // whole document is the only answer that means anything to it.
       if (offset === null) return this.exportEntirety()
 
-      // Peer is behind the base — incremental export is not possible.
-      // The caller (synchronizer) should fall back to exportEntirety().
+      // Behind the trimmed base: the delta can no longer be computed, and the
+      // caller answers with the whole document.
       if (offset < baseOffset) return null
 
-      // Nothing to send: offset is at or beyond the current version.
-      if (offset >= baseOffset + log.length) return null
-
-      // Slice relative to the base offset.
-      const batches = log.slice(offset - baseOffset)
-      if (batches.every(b => b.length === 0)) return null
-
+      // At or beyond our position this is an empty delta, not `null`: a peer
+      // that is merely current must not be answered with the whole document.
+      const from = Math.min(offset, position())
+      const body: SinceBody = {
+        from,
+        batches: log.slice(from - baseOffset).map(serializeOps),
+      }
       return {
         kind: "since",
         encoding: "json",
-        data: JSON.stringify(batches.map(batch => serializeOps(batch))),
+        data: JSON.stringify(body),
         lineage: clock.lineage(),
       }
+    },
+
+    /**
+     * Take in a payload: decide with `planMerge`, keep the log's books, and
+     * hand the ops to `effects` to reach the state.
+     */
+    merge(payload: PlainPayload, effects: PlainEffects): MergeOutcome {
+      const plan = planMerge(position(), clock.lineage(), payload)
+      switch (plan.kind) {
+        case "gap":
+          return "gap"
+        case "none":
+          return "merged"
+        case "append":
+          // A merge claims a lineage only while this replica has none; a
+          // different REAL lineage never reaches here (see `planMerge`).
+          if (plan.lineage !== clock.lineage()) clock.adopt(plan.lineage)
+          for (const batch of plan.batches) {
+            log.push(batch)
+            revision++
+            effects.append(batch)
+          }
+          return "merged"
+        case "adopt":
+          this.adopt(plan, effects)
+          return "merged"
+      }
+    },
+
+    /**
+     * Become the document at `adoption.at`: its lineage, its state, and a log
+     * that restarts at that position with nothing trimmed below it.
+     */
+    adopt(adoption: Adoption, effects: PlainEffects): void {
+      if (adoption.lineage !== clock.lineage()) clock.adopt(adoption.lineage)
+      log.length = 0
+      baseOffset = adoption.at
+      revision++
+      effects.adopt(adoption.state)
     },
   }
 }
@@ -547,6 +576,16 @@ export function createPlainReplica(clock: PlainClock): Replica<PlainVersion> {
 
   const core = createPlainCore(materialize, clock, EMPTY_HISTORY)
 
+  // Appended batches need nothing: the log is the state, replayed on demand.
+  // An adopted document becomes the base.
+  const baseEffects: PlainEffects = {
+    append() {},
+    adopt(state) {
+      for (const key of Object.keys(base)) delete base[key]
+      Object.assign(base, deepClonePlain(state))
+    },
+  }
+
   const replica: Replica<PlainVersion> & HasBackingDoc<PlainState> = {
     get [BACKING_DOC](): PlainState {
       return materialize()
@@ -580,34 +619,21 @@ export function createPlainReplica(clock: PlainClock): Replica<PlainVersion> {
       return core.exportSince(asPlainVersion(since))
     },
 
-    merge(payload: SubstratePayload, _options?: MergeOptions): void {
-      const batches = payloadBatches(payload, "PlainReplica.merge")
-      if (shouldAdoptLineage(payload.lineage, clock.lineage())) {
-        clock.adopt(payload.lineage)
-      }
-      for (const batch of batches) core.append(batch)
+    merge(payload: SubstratePayload, _options?: MergeOptions): MergeOutcome {
+      return core.merge(
+        decodePlainPayload(payload, "PlainReplica.merge"),
+        baseEffects,
+      )
     },
 
     resetFromEntirety(
       payload: SubstratePayload,
-      remoteVersion: Version,
       _options?: MergeOptions,
     ): void {
-      const { lineage, ops } = resetPlan(
-        payload,
-        "PlainReplica.resetFromEntirety",
+      core.adopt(
+        decodeEntirety(payload, "PlainReplica.resetFromEntirety"),
+        baseEffects,
       )
-      if (lineage !== undefined && lineage !== clock.lineage()) {
-        clock.adopt(lineage)
-      }
-      // Discard local history: the incoming state becomes the base.
-      for (const key of Object.keys(base)) {
-        delete base[key]
-      }
-      for (const op of ops) {
-        applyChange(base, op.path, op.change)
-      }
-      core.resetLog(asPlainVersion(remoteVersion).value)
     },
   }
 
@@ -651,6 +677,20 @@ export function plainContext(doc: PlainState): WritableContext {
  * structural defaults, and the ephemeral substrate's announcement of what a
  * merge or a decay sweep moved.
  */
+/**
+ * The root fields whose value differs between `current` and `next`.
+ *
+ * Only `next`'s keys are compared. The root is a product, so every state of
+ * one schema has the same root keys. A whole state image that replaces
+ * another announces these and no others: naming every field would wake
+ * subscribers whose subtree nothing touched.
+ */
+export function movedRootKeys(current: PlainState, next: PlainState): string[] {
+  return Object.keys(next).filter(
+    key => !(key in current) || !samePlainValue(current[key], next[key]),
+  )
+}
+
 export function objectToReplaceOps(state: Record<string, unknown>): Op[] {
   const ops: Op[] = []
   for (const [key, value] of Object.entries(state)) {
@@ -662,33 +702,131 @@ export function objectToReplaceOps(state: Record<string, unknown>): Op[] {
   return ops
 }
 
-export function parsePlainPayload(data: string): {
-  content: unknown
-} {
-  return { content: JSON.parse(data) }
+// ---------------------------------------------------------------------------
+// Plain payloads: each says where it belongs in the log
+// ---------------------------------------------------------------------------
+
+/** The JSON body of a `"since"` payload: the batches after log position `from`. */
+interface SinceBody {
+  readonly from: number
+  readonly batches: readonly SerializedOp[][]
+}
+
+/** The JSON body of an `"entirety"` payload: the document at log position `at`. */
+interface EntiretyBody {
+  readonly at: number
+  readonly state: PlainState
+}
+
+/** A document at a log position: what adopting a whole-document payload takes on. */
+interface Adoption {
+  readonly lineage: string
+  readonly at: number
+  readonly state: PlainState
 }
 
 /**
- * The batches a payload carries, one per flush cycle on the sender. An
- * entirety is one batch of top-level replaces; a delta is its non-empty
- * logged batches. Keeping the sender's batching preserves version parity
- * across export → merge → re-export.
+ * A plain payload, decoded. Positions count flush cycles within `lineage`,
+ * the count a `PlainVersion` carries, so a receiver can tell whether the
+ * payload continues what it holds.
  */
-function payloadBatches(payload: SubstratePayload, label: string): Op[][] {
+export type PlainPayload =
+  | {
+      readonly kind: "since"
+      readonly lineage: string
+      readonly from: number
+      readonly batches: readonly (readonly Op[])[]
+    }
+  | ({ readonly kind: "entirety" } & Adoption)
+
+/** What merging a plain payload does. Pure; see {@link planMerge}. */
+export type MergePlan =
+  | { readonly kind: "gap" }
+  | { readonly kind: "none" }
+  | {
+      readonly kind: "append"
+      readonly lineage: string
+      readonly batches: readonly (readonly Op[])[]
+    }
+  | ({ readonly kind: "adopt" } & Adoption)
+
+/** How ops taken in reach a replica's state, once the log holds them. */
+interface PlainEffects {
+  append(batch: readonly Op[]): void
+  adopt(state: PlainState): void
+}
+
+export function decodePlainPayload(
+  payload: SubstratePayload,
+  label: string,
+): PlainPayload {
   if (payload.encoding !== "json" || typeof payload.data !== "string") {
     throw new Error(
       `${label} expects JSON-encoded payloads. ` +
         "If you recently switched CRDT backends, stale clients may be sending incompatible data.",
     )
   }
-  const { content } = parsePlainPayload(payload.data)
+  const lineage = payload.lineage ?? DEFAULT_LINEAGE
   if (payload.kind === "entirety") {
-    const ops = objectToReplaceOps(content as Record<string, unknown>)
-    return ops.length === 0 ? [] : [ops]
+    const body = JSON.parse(payload.data) as EntiretyBody
+    return { kind: "entirety", lineage, at: body.at, state: body.state }
   }
-  return (content as SerializedOp[][])
-    .filter(batch => batch.length > 0)
-    .map(deserializeOps)
+  const body = JSON.parse(payload.data) as SinceBody
+  return {
+    kind: "since",
+    lineage,
+    from: body.from,
+    batches: body.batches.map(deserializeOps),
+  }
+}
+
+function decodeEntirety(payload: SubstratePayload, label: string): Adoption {
+  const decoded = decodePlainPayload(payload, label)
+  if (decoded.kind !== "entirety") {
+    throw new Error(`${label} expects an entirety payload`)
+  }
+  return decoded
+}
+
+/**
+ * What merging `payload` into a log at `position` on `lineage` does.
+ *
+ * - A delta that starts at or before `position` continues what we hold: the
+ *   batches we already have are skipped, so a redelivered delta is harmless.
+ *   One that starts past `position` does not, and is a gap.
+ * - A whole document ahead of `position` is adopted. At or behind it, we
+ *   already hold everything it says.
+ * - A payload from a different REAL lineage continues nothing we hold. The
+ *   Synchronizer crosses a lineage boundary with `resetFromEntirety` before a
+ *   merge would see it, so here it is a gap.
+ *
+ * A replica at genesis holds nothing, so any lineage continues it.
+ */
+export function planMerge(
+  position: number,
+  lineage: string,
+  payload: PlainPayload,
+): MergePlan {
+  const continues =
+    lineage === DEFAULT_LINEAGE ||
+    payload.lineage === lineage ||
+    payload.lineage === DEFAULT_LINEAGE
+  if (!continues) return { kind: "gap" }
+
+  if (payload.kind === "entirety") {
+    if (payload.at <= position) return { kind: "none" }
+    return {
+      kind: "adopt",
+      lineage: payload.lineage,
+      at: payload.at,
+      state: payload.state,
+    }
+  }
+
+  if (payload.from > position) return { kind: "gap" }
+  const batches = payload.batches.slice(position - payload.from)
+  if (batches.length === 0) return { kind: "none" }
+  return { kind: "append", lineage: payload.lineage, batches }
 }
 
 /**
@@ -699,34 +837,6 @@ function applyOps(state: PlainState, ops: readonly Op[]): void {
   for (const op of ops) {
     applyChange(state, op.path, ownedForStore(op.change))
   }
-}
-
-/**
- * Whether a merge adopts the payload's lineage: only while this document is
- * still at genesis. A REAL → different REAL transition is a lineage boundary,
- * which only `resetFromEntirety` crosses.
- */
-function shouldAdoptLineage(
-  incoming: string | undefined,
-  current: string,
-): incoming is string {
-  return (
-    incoming !== undefined &&
-    incoming !== current &&
-    current === DEFAULT_LINEAGE
-  )
-}
-
-/** The lineage and top-level replaces of an entirety that resets a document. */
-function resetPlan(
-  payload: SubstratePayload,
-  label: string,
-): { readonly lineage: string | undefined; readonly ops: Op[] } {
-  if (payload.kind !== "entirety") {
-    throw new Error(`${label} expects an entirety payload`)
-  }
-  const [ops = []] = payloadBatches(payload, label)
-  return { lineage: payload.lineage, ops }
 }
 
 // ---------------------------------------------------------------------------
@@ -790,15 +900,18 @@ function buildUpgrade(
  * `replica` accessor on `plainSubstrateFactory`.
  */
 export const plainReplicaFactory: ReplicaFactory<PlainVersion> = {
-  replicaType: ["plain", 1, 0] as const,
+  replicaType: ["plain", 2, 0] as const,
+  historyFree: false,
 
   createEmpty(): Replica<PlainVersion> {
     return createPlainReplica(createPlainClock(DEFAULT_LINEAGE))
   },
 
   fromEntirety(payload: SubstratePayload): Replica<PlainVersion> {
+    // Starts from nothing and becomes the document at the payload's position,
+    // so the replica's version is the sender's.
     const replica = this.createEmpty()
-    replica.merge(payload)
+    replica.resetFromEntirety(payload)
     return replica
   },
 

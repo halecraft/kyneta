@@ -45,7 +45,7 @@ describe("Capabilities", () => {
       resolveFactory,
     })
 
-    expect(caps.supportsReplicaType(["plain", 1, 0])).toBe(true)
+    expect(caps.supportsReplicaType(["plain", 2, 0])).toBe(true)
   })
 
   it("supportsReplicaType returns false for unregistered type", () => {
@@ -65,8 +65,8 @@ describe("Capabilities", () => {
       resolveFactory,
     })
 
-    // Registered as ["plain", 1, 0], querying with minor=2 should still match
-    expect(caps.supportsReplicaType(["plain", 1, 2])).toBe(true)
+    // Registered as ["plain", 2, 0], querying with minor=2 should still match
+    expect(caps.supportsReplicaType(["plain", 2, 2])).toBe(true)
   })
 
   it("supportsReplicaType rejects major version differences", () => {
@@ -76,8 +76,8 @@ describe("Capabilities", () => {
       resolveFactory,
     })
 
-    // Registered as ["plain", 1, 0], querying with major=2 should not match
-    expect(caps.supportsReplicaType(["plain", 2, 0])).toBe(false)
+    // Registered as ["plain", 2, 0], querying with major=1 should not match
+    expect(caps.supportsReplicaType(["plain", 1, 0])).toBe(false)
   })
 
   it("resolveReplica returns the BoundReplica for a matching pair", () => {
@@ -87,7 +87,7 @@ describe("Capabilities", () => {
       resolveFactory,
     })
 
-    const resolved = caps.resolveReplica(["plain", 1, 0], SYNC_AUTHORITATIVE)
+    const resolved = caps.resolveReplica(["plain", 2, 0], SYNC_AUTHORITATIVE)
     expect(resolved).toBeDefined()
     expect(resolved?.factory).toBe(plainReplicaFactory)
     expect(resolved?.syncMode).toBe(SYNC_AUTHORITATIVE)
@@ -100,9 +100,9 @@ describe("Capabilities", () => {
       resolveFactory,
     })
 
-    // ["plain", 1, 0] is registered with authoritative only; the ephemeral
+    // ["plain", 2, 0] is registered with authoritative only; the ephemeral
     // tier is ["ephemeral", 1, 0]. Neither covers collaborative.
-    const resolved = caps.resolveReplica(["plain", 1, 0], SYNC_COLLABORATIVE)
+    const resolved = caps.resolveReplica(["plain", 2, 0], SYNC_COLLABORATIVE)
     expect(resolved).toBeUndefined()
   })
 
@@ -133,7 +133,7 @@ describe("Capabilities", () => {
 
     const resolved = caps.resolveSchema(
       bound.schemaHash,
-      ["plain", 1, 0],
+      ["plain", 2, 0],
       SYNC_AUTHORITATIVE,
     )
     expect(resolved).toBe(bound)
@@ -163,7 +163,7 @@ describe("Capabilities", () => {
     })
 
     expect(
-      caps.resolveSchema(bound.schemaHash, ["plain", 1, 0], collidingMode),
+      caps.resolveSchema(bound.schemaHash, ["plain", 2, 0], collidingMode),
     ).toBeUndefined()
   })
 
@@ -179,7 +179,7 @@ describe("Capabilities", () => {
 
     const resolved = caps.resolveSchema(
       bound.schemaHash,
-      ["plain", 1, 0],
+      ["plain", 2, 0],
       SYNC_EPHEMERAL,
     )
     expect(resolved).toBeUndefined()
@@ -197,7 +197,7 @@ describe("Capabilities", () => {
 
     const resolved = caps.resolveSchema(
       "nonexistent",
-      ["plain", 1, 0],
+      ["plain", 2, 0],
       SYNC_AUTHORITATIVE,
     )
     expect(resolved).toBeUndefined()
@@ -243,18 +243,18 @@ describe("Capabilities", () => {
 
     // Before registration: nothing resolves
     expect(
-      caps.resolveSchema(bound.schemaHash, ["plain", 1, 0], SYNC_AUTHORITATIVE),
+      caps.resolveSchema(bound.schemaHash, ["plain", 2, 0], SYNC_AUTHORITATIVE),
     ).toBeUndefined()
-    expect(caps.supportsReplicaType(["plain", 1, 0])).toBe(false)
+    expect(caps.supportsReplicaType(["plain", 2, 0])).toBe(false)
 
     // Register dynamically
     caps.registerSchema(bound, resolveFactory)
 
     // After registration: schema resolves and replica type is supported
     expect(
-      caps.resolveSchema(bound.schemaHash, ["plain", 1, 0], SYNC_AUTHORITATIVE),
+      caps.resolveSchema(bound.schemaHash, ["plain", 2, 0], SYNC_AUTHORITATIVE),
     ).toBe(bound)
-    expect(caps.supportsReplicaType(["plain", 1, 0])).toBe(true)
+    expect(caps.supportsReplicaType(["plain", 2, 0])).toBe(true)
   })
 
   // -------------------------------------------------------------------------
@@ -268,7 +268,7 @@ describe("Capabilities", () => {
       resolveFactory,
     })
 
-    const durable = caps.resolveReplica(["plain", 1, 0], SYNC_AUTHORITATIVE)
+    const durable = caps.resolveReplica(["plain", 2, 0], SYNC_AUTHORITATIVE)
     const transient = caps.resolveReplica(["ephemeral", 1, 0], SYNC_EPHEMERAL)
 
     expect(durable?.factory).toBe(plainReplicaFactory)
@@ -277,8 +277,8 @@ describe("Capabilities", () => {
 
     // The two tiers are distinct on the wire, not merely by sync mode. A
     // headless relay picks its replica from `replicaType` first, so a
-    // transient document announced as ["plain", 1, 0] resolves to nothing —
+    // transient document announced as ["plain", 2, 0] resolves to nothing —
     // there is no plain-backed ephemeral replica any more.
-    expect(caps.resolveReplica(["plain", 1, 0], SYNC_EPHEMERAL)).toBeUndefined()
+    expect(caps.resolveReplica(["plain", 2, 0], SYNC_EPHEMERAL)).toBeUndefined()
   })
 })

@@ -541,6 +541,7 @@ export type {
   HasTreeNodeAllocation,
   HydrationHandle,
   MergeOptions,
+  MergeOutcome,
   MetadataAxis,
   MetadataMismatch,
   PrepareIngress,
@@ -588,7 +589,9 @@ export {
 // Plain substrate — plain JS object store with version tracking
 export {
   DEFAULT_LINEAGE,
+  decodePlainPayload,
   objectToReplaceOps,
+  type PlainPayload,
   PlainVersion,
   plainContext,
   plainReplicaFactory,

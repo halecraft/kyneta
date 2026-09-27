@@ -13,9 +13,8 @@ import { docStatus } from "../doc-status.js"
 import { Exchange, type ExchangeParams } from "../exchange.js"
 import type { Authority } from "../governance.js"
 import { initialize, planInitialization } from "../initialize.js"
-import type { InMemoryStoreData } from "../store/in-memory-store.js"
-import { createInMemoryStore, InMemoryStore } from "../store/in-memory-store.js"
-import { makeMetaRecord } from "../testing/store-conformance.js"
+import { createInMemoryStore } from "../store/in-memory-store.js"
+import { seedStoredDoc } from "./stored-doc.js"
 
 const TestSchema = Schema.struct({
   title: Schema.string(),
@@ -30,28 +29,6 @@ const MergeableDoc = loro.bind(Schema.struct({ title: Schema.text() }))
 
 function createExchange(options: Partial<ExchangeParams> = {}): Exchange {
   return new Exchange({ id: "test", ...options } as ExchangeParams)
-}
-
-async function seedStoredDoc(data: string): Promise<InMemoryStoreData> {
-  const sharedData: InMemoryStoreData = {
-    records: new Map(),
-    metadata: new Map(),
-  }
-  const backend = new InMemoryStore(sharedData)
-  await backend.append("doc-1", makeMetaRecord())
-  await backend.append("doc-1", {
-    kind: "entry",
-    // A plain version is `lineage:count`, and the payload names the same
-    // lineage: what a store written by a plain document holds.
-    payload: {
-      kind: "entirety" as const,
-      encoding: "json" as const,
-      data,
-      lineage: "seed",
-    },
-    version: "seed:1",
-  })
-  return sharedData
 }
 
 // ===========================================================================
@@ -160,7 +137,7 @@ describe("initialize", () => {
     // The regression that motivates the entire design. Before this layer
     // existed, `populated` read false while hydration was in flight, so a
     // naive `if (!populated) seed()` destroyed the stored document.
-    const sharedData = await seedStoredDoc('{"title":"stored","count":42}')
+    const sharedData = await seedStoredDoc({ title: "stored", count: 42 })
     const exchange = createExchange({
       stores: [createInMemoryStore({ sharedData })],
       authority: "self",

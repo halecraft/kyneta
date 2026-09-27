@@ -167,7 +167,6 @@ describe("Binary frame — complete", () => {
       encoding: "json",
       data: '{"key":"value"}',
       version: "3",
-      reciprocate: false,
     })
     const encoded = encodeToFrame(wire)
     const frame = decodeBinaryFrame(encoded)
@@ -251,7 +250,6 @@ describe("Binary frame — batch (via complete frame)", () => {
         encoding: "binary",
         data: new Uint8Array([1, 2, 3]),
         version: "6",
-        reciprocate: false,
       }),
     ]
 
