@@ -69,9 +69,17 @@ const failed = (error: unknown = new Error("io")): StoreInput => ({
   error,
 })
 
+/**
+ * `doc-1` idle at `version`: loaded, and the write loading owes has landed
+ * with nothing new to store.
+ */
+function idleAt(version: string): StoreModel {
+  return run(init, hydrated(version), succeeded(version))[0]
+}
+
 /** `doc-1` idle at `v1`, with a `since v1` write in flight. */
 function writingFromV1(): StoreModel {
-  return run(init, hydrated("v1"), advanced)[0]
+  return step(idleAt("v1"), advanced)[0]
 }
 
 // ---------------------------------------------------------------------------
@@ -85,10 +93,15 @@ describe("storeProgram", () => {
     expect(effects).toHaveLength(0)
   })
 
-  it("hydrated — idle at the loaded version, no effects", () => {
+  it("hydrated — writes since the loaded version, reverting to idle there", () => {
+    // The document may be ahead of what the store holds, by writes made
+    // while it loaded. When it is not, the executor touches no store.
     const [model, ...effects] = step(init, hydrated("v3"))
-    expect(getPhase(model, "doc-1")).toEqual({ status: "idle", version: "v3" })
-    expect(effects).toEqual([])
+    expect(getPhase(model, "doc-1")).toEqual({
+      status: "writing",
+      revertTo: { status: "idle", version: "v3" },
+    })
+    expect(effects).toEqual([persist({ kind: "since", version: "v3" })])
   })
 
   it("register — writes the whole document, reverting to unwritten", () => {
@@ -105,7 +118,7 @@ describe("storeProgram", () => {
   // -----------------------------------------------------------------------
 
   it("state-advanced while idle — writes since the confirmed version", () => {
-    const [model, ...effects] = run(init, hydrated("v1"), advanced)
+    const [model, ...effects] = step(idleAt("v1"), advanced)
     expect(getPhase(model, "doc-1")).toEqual({
       status: "writing",
       revertTo: { status: "idle", version: "v1" },
@@ -114,7 +127,7 @@ describe("storeProgram", () => {
   })
 
   it("compact while idle — writes a compaction", () => {
-    const [model, ...effects] = run(init, hydrated("v1"), compact)
+    const [model, ...effects] = step(idleAt("v1"), compact)
     expect(getPhase(model, "doc-1")).toEqual({
       status: "writing",
       revertTo: { status: "idle", version: "v1" },
@@ -224,7 +237,7 @@ describe("storeProgram", () => {
   })
 
   it("write-succeeded / write-failed for an unknown or settled doc — unchanged", () => {
-    const [idle] = step(init, hydrated("v1"))
+    const idle = idleAt("v1")
     for (const model of [init, idle]) {
       for (const msg of [succeeded("v9"), failed()]) {
         const [next, ...effects] = step(model, msg)
@@ -296,7 +309,7 @@ describe("storeProgram", () => {
   // -----------------------------------------------------------------------
 
   it("destroy — removes the doc and deletes, idle or writing", () => {
-    for (const model of [step(init, hydrated("v1"))[0], writingFromV1()]) {
+    for (const model of [idleAt("v1"), writingFromV1()]) {
       const [next, ...effects] = step(model, {
         type: "destroy",
         docId: "doc-1",
@@ -308,7 +321,7 @@ describe("storeProgram", () => {
 
   it("allDocsSettled — true unless some doc is writing", () => {
     expect(allDocsSettled(init)).toBe(true)
-    expect(allDocsSettled(step(init, hydrated("v1"))[0])).toBe(true)
+    expect(allDocsSettled(idleAt("v1"))).toBe(true)
     expect(allDocsSettled(unwritten())).toBe(true)
     expect(allDocsSettled(registered())).toBe(false)
     expect(allDocsSettled(writingFromV1())).toBe(false)
@@ -340,7 +353,7 @@ describe("storeProgram", () => {
     }
 
     for (let trial = 0; trial < 200; trial++) {
-      let model = step(init, hydrated("0"))[0]
+      let model = idleAt("0")
       let current = 0
       let confirmed = 0
       let inFlight: { from: number; to: number } | null = null

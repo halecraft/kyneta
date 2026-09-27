@@ -196,6 +196,13 @@ export interface PlainHistory {
 
 export const EMPTY_HISTORY: PlainHistory = { log: [], baseOffset: 0 }
 
+/** For a substrate that may author from the start. */
+export const ALWAYS_AUTHOR = (): boolean => true
+
+const STILL_LOADING =
+  "This document is still loading from its store. " +
+  "Await whenHydrated(doc) before writing to it."
+
 // ---------------------------------------------------------------------------
 // createPlainSubstrate — full Substrate from a doc, a clock and a history
 // ---------------------------------------------------------------------------
@@ -206,11 +213,18 @@ export const EMPTY_HISTORY: PlainHistory = { log: [], baseOffset: 0 }
  * `prepare` mutates `doc` eagerly, so the core's `materialize` is `() => doc`.
  * `history` must describe `doc`: its log replayed onto the trimmed base
  * produces `doc`. `plainSubstrateFactory` is the schema-aware entry point.
+ *
+ * `canAuthor` is false while the document's own history is still loading.
+ * A plain merge does not commute with a local write, so a write made then has
+ * no well-defined result: the loaded state would overwrite it, and it would
+ * mint a lineage the store does not know. Authored writes throw until it is
+ * true; merges and announcements are unaffected.
  */
 export function createPlainSubstrate(
   doc: PlainState,
   clock: PlainClock,
   history: PlainHistory,
+  canAuthor: () => boolean,
 ): Substrate<PlainVersion> {
   const reader = plainReader(doc)
   const core = createPlainCore(() => doc, clock, history)
@@ -233,6 +247,7 @@ export function createPlainSubstrate(
       change: ChangeBase,
       recordInverse: RecordInverseFn | null,
     ): void {
+      if (!canAuthor()) throw new Error(STILL_LOADING)
       if (recordInverse) {
         // Read, don't copy. `invert` snapshots whatever it retains — see
         // `invertReplace`, `invertMap`, `invertSequence` and the rich-text
@@ -620,6 +635,7 @@ export function plainContext(doc: PlainState): WritableContext {
     doc,
     createPlainClock("test"),
     EMPTY_HISTORY,
+    ALWAYS_AUTHOR,
   ).context()
 }
 
@@ -729,6 +745,7 @@ function resetPlan(
 function buildUpgrade(
   replica: Replica<PlainVersion>,
   schema: SchemaNode,
+  canAuthor: () => boolean,
 ): Substrate<PlainVersion> {
   const history = replicaHistories.get(replica)
   if (history === undefined || !hasBackingDoc<PlainState>(replica)) {
@@ -744,6 +761,7 @@ function buildUpgrade(
     doc,
     createPlainClock(replica.version().lineage),
     history(),
+    canAuthor,
   )
 
   const defaults = Zero.structural(schema) as Record<string, unknown>
@@ -812,6 +830,8 @@ export const plainReplicaFactory: ReplicaFactory<PlainVersion> = {
  * - `createReplica()` → bare replica (empty doc)
  * - `upgrade(replica, schema)` → full substrate over the replica's state and log
  * - `create(schema)` = `upgrade(createReplica(), schema)`
+ * - `createForHydration(schema)` — the same, refusing authored writes until
+ *   `adopt()` says the document's stored history has loaded
  * - `fromEntirety(payload, schema)` = `upgrade(replica.fromEntirety(payload), schema)`
  * - `parseVersion(serialized)` — deserialize a PlainVersion
  */
@@ -824,11 +844,23 @@ export const plainSubstrateFactory: SubstrateFactory<PlainVersion> = {
     replica: Replica<PlainVersion>,
     schema: SchemaNode,
   ): Substrate<PlainVersion> {
-    return buildUpgrade(replica, schema)
+    return buildUpgrade(replica, schema, ALWAYS_AUTHOR)
   },
 
   create(schema: SchemaNode): Substrate<PlainVersion> {
     return this.upgrade(this.createReplica(), schema)
+  },
+
+  createForHydration(schema: SchemaNode) {
+    // A plain document's identity is its lineage, and authoring is what
+    // mints it; `adopt`, called once its history has loaded, is what lets it.
+    let loaded = false
+    return {
+      substrate: buildUpgrade(this.createReplica(), schema, () => loaded),
+      adopt: () => {
+        loaded = true
+      },
+    }
   },
 
   fromEntirety(

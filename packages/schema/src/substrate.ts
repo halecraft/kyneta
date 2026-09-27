@@ -1111,13 +1111,17 @@ export interface ReplicaFactory<V extends Version = Version>
  */
 export type HydrationHandle<V extends Version = Version> = {
   readonly substrate: Substrate<V>
-  /** Claim this peer's stable identity. Idempotent — safe to call twice. */
+  /**
+   * The document's own history has loaded. Claims this peer's stable identity
+   * (Yjs, Loro) and allows authored writes (plain). Idempotent — safe to call
+   * twice.
+   */
   readonly adopt: () => void
 }
 
 /**
  * Build a substrate for a caller that is about to import this peer's own
- * history, and receive the obligation to claim identity afterwards.
+ * history, and receive the obligation to call `adopt` afterwards.
  *
  * Falls back to `create()` plus a no-op `adopt` for backends that declare no
  * {@link SubstrateFactory.createForHydration}. That default lives here rather
@@ -1142,7 +1146,8 @@ const NOOP_ADOPT = (): void => {}
 export interface SubstrateFactory<V extends Version = Version> {
   /**
    * Create a bare replica with no schema, no identity, no structural
-   * initialization. Safe for hydration — no local writes.
+   * initialization. A replica has no write surface, so it can import stored
+   * history without anything being written ahead of it.
    *
    * The backing CRDT document (Y.Doc, LoroDoc) is created with a
    * default/random identity. For Plain/LWW, the backing store is
@@ -1214,10 +1219,10 @@ export interface SubstrateFactory<V extends Version = Version> {
    * Create a substrate for a caller that is about to import this peer's own
    * history — hydration from a store, principally.
    *
-   * **Optional.** Implement it when claiming identity on an empty document
-   * would be unsafe once that document imports operations the same peer
-   * authored earlier. {@link beginHydration} supplies `create()` plus a no-op
-   * for backends that leave it out.
+   * **Optional.** Implement it when claiming identity, or writing, on an
+   * empty document would be unsafe once that document imports what it held
+   * earlier. {@link beginHydration} supplies `create()` plus a no-op for
+   * backends that leave it out.
    *
    * Whether it is unsafe follows from how the backend addresses operations.
    * Where an address is `(peer, counter)` and the counter restarts at zero on
@@ -1229,9 +1234,14 @@ export interface SubstrateFactory<V extends Version = Version> {
    * Both operation-log backends are in this position, and both implement this.
    * Neither defends itself adequately: Yjs notices the collision and reassigns
    * its id, which saves the data but costs the peer its identity, and Loro
-   * does not notice at all. The plain and ephemeral substrates need nothing
-   * here: they carry no peer identity whatsoever, storing values in
-   * last-write-wins registers rather than an addressed operation log.
+   * does not notice at all.
+   *
+   * Plain is in a different position and implements it too. Its merge does
+   * not commute with a local write, so a write made before its history loads
+   * has no well-defined result: the loaded state overwrites it, and it mints
+   * a lineage the store does not know. Its substrate refuses authored writes
+   * until `adopt`. The ephemeral substrate needs nothing here: it is never
+   * stored.
    *
    * The returned `adopt` is the obligation that comes with the substrate: call
    * it once the imports are finished and no further ones are outstanding.

@@ -5,14 +5,15 @@
 // sees at creation time — yet `initialize` needs it, because whether
 // concurrent seeds merge or overwrite is decided by `writerModel`.
 //
-// Keyed by ref in a WeakMap, the same pattern as `syncRefMap` in `sync.ts` and
-// the settle registry: out-of-band per-document state that must not keep the
-// document alive.
+// A `DocumentMap`, like `syncRefMap` in `sync.ts` and the settle registry:
+// out-of-band per-document state, reachable from any ref in the document, that
+// must not keep the document alive.
 
 import type { SyncMode, WriterModel } from "@kyneta/schema"
+import { createDocumentMap } from "./document-key.js"
 import type { Authority } from "./governance.js"
 
-const docSyncModes = new WeakMap<object, SyncMode>()
+const docSyncModes = createDocumentMap<SyncMode>()
 
 /**
  * Record the sync mode a document was created under.

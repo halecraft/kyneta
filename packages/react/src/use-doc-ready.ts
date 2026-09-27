@@ -4,7 +4,7 @@
 // as its own hook because the boolean reads better at a call site that only
 // wants a gate, and because it is the older, established name.
 
-import type { PeerIdentityDetails } from "@kyneta/exchange"
+import type { Authority } from "@kyneta/exchange"
 import { useDocStatus } from "./use-doc-status.js"
 
 /**
@@ -28,13 +28,12 @@ import { useDocStatus } from "./use-doc-status.js"
  * {@link useDocStatus} directly, or {@link useInitialize} to act on it.
  *
  * @param doc - A document ref (or any ref within one).
- * @param opts.peer - Require this specific peer to have answered, rather than
- *   accepting whichever source reports first.
+ * @param opts.authority - Whose answer settles the question. Defaults to the
+ *   Exchange's declared `Policy.authority`, and to `"any"` if none was set.
  */
 export function useDocReady(
   doc: object,
-  opts?: { peer?: (peer: PeerIdentityDetails) => boolean },
+  opts?: { authority?: Authority },
 ): boolean {
-  const pred = opts?.peer
-  return useDocStatus(doc, pred ? { authority: pred } : undefined) !== "pending"
+  return useDocStatus(doc, opts) !== "pending"
 }

@@ -34,8 +34,15 @@ async function seedStoredDoc(data: string): Promise<InMemoryStoreData> {
   await backend.append("doc-1", makeMetaRecord())
   await backend.append("doc-1", {
     kind: "entry",
-    payload: { kind: "entirety" as const, encoding: "json" as const, data },
-    version: "1",
+    // A plain version is `lineage:count`, and the payload names the same
+    // lineage: what a store written by a plain document holds.
+    payload: {
+      kind: "entirety" as const,
+      encoding: "json" as const,
+      data,
+      lineage: "seed",
+    },
+    version: "seed:1",
   })
   return sharedData
 }

@@ -527,6 +527,8 @@ const doc = exchange.get("my-doc", TodoDoc)
 // Mutations are automatically persisted. On restart, documents hydrate from storage.
 ```
 
+**Write to a stored plain document after it has loaded.** A `json.bind` document with stores refuses writes until loading completes, and throws "still loading" if you try: its history is a sequence, and a write made before that history is known would be overwritten by it. `await whenHydrated(doc)` (storage only) or `await whenSettled(doc)` (storage and the authority) first, or seed defaults with `initialize`. Loro and Yjs documents accept writes while loading and merge them.
+
 **Ephemeral documents are never stored.** Anything bound through `ephemeral` declares `durability: "transient"`, and the exchange keeps it out of stores in both directions — no hydrate on open, no write on mutation, no delete on destroy. That is the point of the tier: presence, cursors and live input describe who is here *now*, and a restarted server resurrecting yesterday's cursor positions would be worse than having none. Configuring stores does not change this, and there is no way to opt a transient document into persistence — use a durable binding target instead.
 
 **Store format gate.** On open, every persistent backend stamps a `{ major, minor }` on-disk format version into a dedicated store-metadata namespace (a `kyneta_store_meta` table, an IndexedDB `store_meta` object store, or a `store-meta\x00` key prefix — separate from the per-document `doc_meta` namespace). On a later open it refuses — throwing `StoreFormatVersionError` — a store whose stamped major is incompatible with the running build, or an unversioned store that already holds documents. The gate is a compatibility check only; it performs no automatic migration.
@@ -543,13 +545,14 @@ declare const exchange: Exchange
 <!-- Not compiled: assumes a document shape the shared prelude does not declare. -->
 <!-- ts-docs-verifier:ignore -->
 ```ts
-const sharedData: InMemoryStoreData = { entries: new Map(), metadata: new Map() }
+const sharedData: InMemoryStoreData = { records: new Map(), metadata: new Map() }
 
 const exchange1 = new Exchange({
   id: "server",
   stores: [createInMemoryStore({ sharedData })],
 })
 const doc = exchange1.get("my-doc", TodoDoc)
+await whenHydrated(doc) // a stored plain document refuses writes until it has loaded
 doc.title.set("Saved")
 await exchange1.shutdown()
 

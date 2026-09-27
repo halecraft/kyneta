@@ -60,6 +60,40 @@ import {
 /** The obligation a no-store document has: none. */
 const NO_ADOPT = (): void => {}
 
+/** What loading found. `#hydrate` gathers it; `#becomeReady` acts on it. */
+export type LoadOutcome =
+  /** The store holds the document at `version`, the last loaded entry's. */
+  | { readonly kind: "stored"; readonly version: string }
+  /** No store holds the document. */
+  | { readonly kind: "empty" }
+  /** Nothing was loaded: no stores, a transient document, or a promotion
+   *  whose replica already loaded. */
+  | { readonly kind: "none" }
+
+const NOTHING_LOADED: LoadOutcome = { kind: "none" }
+
+/**
+ * The store program's view of a load, or `null` when there is nothing to tell
+ * it. `hydrated` carries the version the store holds, which the program keeps
+ * as its baseline for later writes.
+ */
+export function storeInputFor(
+  docId: DocId,
+  outcome: LoadOutcome,
+): StoreInput | null {
+  switch (outcome.kind) {
+    case "stored":
+      return { type: "hydrated", docId, version: outcome.version }
+    case "empty":
+      return { type: "register", docId }
+    case "none":
+      return null
+  }
+}
+
+/** A cache entry that can become ready: anything but a deferred one. */
+type ReadyEntry = Extract<DocCacheEntry, { mode: "interpret" | "replicate" }>
+
 // ---------------------------------------------------------------------------
 // RuntimeGet — the call signature for Runtime.get (mirrors Exchange's Get type)
 // ---------------------------------------------------------------------------
@@ -114,8 +148,9 @@ export type DocReadyInfo = {
  * readiness layer exists to prevent. So a failed load keeps the document
  * un-settled and hangs on to the error for whoever asks.
  *
- * A document with no stores configured starts `loaded`: there is nothing to
- * wait for.
+ * Every latch starts `pending`, and `#becomeReady` is what moves it on, on
+ * every path. A document with nothing to load passes through it before
+ * `get()` returns, so no caller ever sees it pending.
  */
 export type HydrationLatch = {
   state: "pending" | "loaded" | "failed"
@@ -136,21 +171,19 @@ export function resolveHydration(
   latch.listeners.clear()
 }
 
-/** @internal A latch for a document with nothing to load. */
-export function createHydrationLatch(
-  initial: "pending" | "loaded",
-): HydrationLatch {
-  return { state: initial, listeners: new Set() }
+/** @internal A latch for a document that has not become ready yet. */
+export function createHydrationLatch(): HydrationLatch {
+  return { state: "pending", listeners: new Set() }
 }
 
 /**
  * `readyInfo` + `announced` let {@link Runtime.setHooks} safely backfill
  * `onDocReady` for documents that already existed before hooks were
  * attached (e.g. a standalone `Runtime` later wrapped in an `Exchange`).
- * `readyInfo` is captured once, when the document first becomes ready
- * (post-hydration, or immediately if no stores are configured); `announced`
- * tracks whether `onDocReady` has actually fired for it yet, so repeated or
- * out-of-order `setHooks` calls never double-announce. Context: jj:mrlnmlus.
+ * `readyInfo` is captured when the entry is created, and announced by
+ * `#becomeReady` once the document is ready; `announced` tracks whether
+ * `onDocReady` has actually fired for it yet, so repeated or out-of-order
+ * `setHooks` calls never double-announce. Context: jj:mrlnmlus.
  *
  * `hydration` is the storage half of the document's readiness — see
  * {@link HydrationLatch} and `settle.ts`.
@@ -895,7 +928,7 @@ export class Runtime {
     //
     // A document that will hydrate is about to import operations this peer
     // wrote in an earlier session, so it takes the deferred-identity path:
-    // `adopt` is called once that import lands, below. One that will not
+    // `adopt` is called by `#becomeReady` once that import finishes. One that will not
     // hydrate has nothing to import, so `create()`'s immediate claim is
     // correct and `adopt` is a no-op.
     //
@@ -939,10 +972,7 @@ export class Runtime {
       supportedHashes: [...bound.supportedHashes],
     }
 
-    // `loaded` means "there is nothing further to wait for", not "a load
-    // happened". A document that will not hydrate is in that state from the
-    // start, because nothing downstream will ever resolve this latch for it.
-    const hydration = createHydrationLatch(willHydrate ? "pending" : "loaded")
+    const hydration = createHydrationLatch()
 
     const entry: DocCacheEntry = {
       mode: "interpret",
@@ -983,39 +1013,10 @@ export class Runtime {
       () => (hydration.state === "failed" ? hydration.error : undefined),
     )
 
-    // ── Divergent tail: hydrate, or be ready now ──
     if (willHydrate) {
-      const hydrationOp = this.#hydrate(docId, substrate).then(
-        () => {
-          resolveHydration(hydration, { ok: true })
-          // Claim identity before announcing or subscribing. Registration
-          // publishes this document's version to the sync graph and the
-          // subscription starts forwarding local changes; both should carry
-          // the peer's final identity rather than the throwaway one it wore
-          // while loading.
-          //
-          // Deliberately not on the failure branch below: a document whose
-          // load failed stays unregistered and un-settled because its state is
-          // unknown, and claiming a stable identity on something we may yet
-          // reload would defeat that.
-          adopt()
-          this.#register(entry)
-          this.#wireDocSubscription(docId, ref)
-        },
-        (error: unknown) => {
-          // A failed load must stay visible. Marking the latch `failed` keeps
-          // the document un-settled (so nothing concludes it is empty) and
-          // holds the error for `whenSettled` to surface, rather than leaving
-          // an unexplained hang. The document deliberately does NOT get
-          // registered or announced: we have no idea what its state is.
-          resolveHydration(hydration, { ok: false, error })
-        },
-      )
-      this.#trackHydration(hydrationOp)
+      this.#loadThenBecomeReady(entry, adopt)
     } else {
-      // No stores — doc is immediately ready.
-      this.#register(entry)
-      this.#wireDocSubscription(docId, ref)
+      this.#becomeReady(entry, NOTHING_LOADED, adopt)
     }
 
     return ref
@@ -1050,9 +1051,9 @@ export class Runtime {
 
     // A replicate document has no ref, so no settle term can be keyed to it
     // and it has no `docStatus` surface. The latch is still tracked so the
-    // entry's hydration state is uniform across modes and available for
-    // diagnostics.
-    const hydration = createHydrationLatch(willHydrate ? "pending" : "loaded")
+    // entry's hydration state is uniform across modes, and
+    // `whenHydrated(docId)` can wait on it.
+    const hydration = createHydrationLatch()
 
     const entry: DocCacheEntry = {
       mode: "replicate",
@@ -1063,20 +1064,61 @@ export class Runtime {
     this.#docCache.set(docId, entry)
 
     if (willHydrate) {
-      const hydrationOp = this.#hydrate(docId, replica).then(
-        () => {
-          resolveHydration(hydration, { ok: true })
-          this.#register(entry)
-        },
-        (error: unknown) => {
-          resolveHydration(hydration, { ok: false, error })
-        },
-      )
-      this.#trackHydration(hydrationOp)
+      this.#loadThenBecomeReady(entry, NO_ADOPT)
     } else {
-      // No stores — doc is immediately ready.
-      this.#register(entry)
+      this.#becomeReady(entry, NOTHING_LOADED, NO_ADOPT)
     }
+  }
+
+  /**
+   * Load the document from the stores, then make it ready. A failed load
+   * marks the latch `failed` and nothing else: its state is unknown, so the
+   * document is neither registered, announced, nor given a stable identity.
+   */
+  #loadThenBecomeReady(entry: ReadyEntry, adopt: () => void): void {
+    const loading = this.#hydrate(entry.readyInfo).then(
+      outcome => this.#becomeReady(entry, outcome, adopt),
+      (error: unknown) =>
+        resolveHydration(entry.hydration, { ok: false, error }),
+    )
+    this.#trackHydration(loading)
+  }
+
+  /**
+   * The one place a document becomes ready, whatever path created it.
+   *
+   * The order is fixed:
+   * 1. A document destroyed or replaced while it loaded is no longer this
+   *    entry's to make ready: its latch fails, so waiters are not told a
+   *    document that is gone has loaded, and nothing below runs.
+   * 2. The store program learns what the store holds.
+   * 3. `adopt` claims identity (Yjs, Loro) and the right to author (plain)
+   *    before anyone is told the document has loaded, so a listener that
+   *    writes on that signal finds the document writable.
+   * 4. The latch resolves `loaded`.
+   * 5. `#register` publishes the document to the sync graph, and an
+   *    interpreted document starts forwarding its changesets. Both carry the
+   *    identity claimed in step 3.
+   */
+  #becomeReady(
+    entry: ReadyEntry,
+    outcome: LoadOutcome,
+    adopt: () => void,
+  ): void {
+    const { docId } = entry.readyInfo
+    if (this.#docCache.get(docId) !== entry) {
+      resolveHydration(entry.hydration, {
+        ok: false,
+        error: new Error(`Document '${docId}' was destroyed while loading`),
+      })
+      return
+    }
+    const input = storeInputFor(docId, outcome)
+    if (input) this.#storeHandle?.dispatch(input)
+    adopt()
+    resolveHydration(entry.hydration, { ok: true })
+    this.#register(entry)
+    if (entry.mode === "interpret") this.#wireDocSubscription(docId, entry.ref)
   }
 
   /**
@@ -1097,7 +1139,7 @@ export class Runtime {
    * documents — within one microtask. See {@link Runtime.#dirtyLocalChanges}.
    * Context: jj:mrlnmlus.
    *
-   * Called after hydration completes (or immediately if no stores).
+   * Called by `#becomeReady`, the one place a document becomes ready.
    */
   #wireDocSubscription(docId: DocId, ref: any): void {
     subscribe(ref, changeset => {
@@ -1194,9 +1236,11 @@ export class Runtime {
    * state has. Merging stored data deduplicates the structural ops and
    * applies application ops. No separate replica, no upgrade step.
    */
-  async #hydrate(docId: DocId, replica: ReplicaLike): Promise<void> {
-    // First-hit semantics: use the first store that has data
-    let hadStoredEntries = false
+  async #hydrate(readyInfo: DocReadyInfo): Promise<LoadOutcome> {
+    const { docId, replica, replicaFactory } = readyInfo
+    // First-hit semantics: use the first store that has data. `storedVersion`
+    // is the version of the last entry loaded: what the store holds.
+    let storedVersion: string | undefined
     // A store that throws has told us nothing — not "the document is empty",
     // merely "I could not answer". Track those separately from stores that
     // answered (with data or with a definitive null), because the difference
@@ -1212,9 +1256,23 @@ export class Runtime {
         if (existing) {
           for await (const record of backend.loadAll(docId)) {
             if (record.kind === "entry") {
+              // The store holds this entry whether or not it loads here, so
+              // it counts toward the store's version either way.
+              storedVersion = record.version
               try {
-                replica.merge(record.payload, { origin: "sync" })
-                hadStoredEntries = true
+                // A whole-document entry is the state at its recorded
+                // version, not one more batch on top of what came before.
+                // Plain would otherwise count it as a new flush, and its
+                // version would run ahead of the store's.
+                if (record.payload.kind === "entirety") {
+                  replica.resetFromEntirety(
+                    record.payload,
+                    replicaFactory.parseVersion(record.version),
+                    { origin: "sync" },
+                  )
+                } else {
+                  replica.merge(record.payload, { origin: "sync" })
+                }
               } catch (err) {
                 console.warn(
                   `[runtime] failed to merge stored entry for doc '${docId}':`,
@@ -1242,18 +1300,9 @@ export class Runtime {
       throw readFailures[0]
     }
 
-    // A document destroyed while it loaded is no longer ours to write.
-    // Registering it would put it back on disk.
-    const entry = this.#docCache.get(docId)
-    if (entry?.mode === "deferred" || entry?.readyInfo.replica !== replica) {
-      return
-    }
-
-    this.#storeHandle?.dispatch(
-      hadStoredEntries
-        ? { type: "hydrated", docId, version: replica.version().serialize() }
-        : { type: "register", docId },
-    )
+    return storedVersion === undefined
+      ? { kind: "empty" }
+      : { kind: "stored", version: storedVersion }
   }
 
   // =========================================================================

@@ -1,9 +1,9 @@
 // sync — sync capabilities access for exchange documents.
 //
 // The `sync()` function retrieves sync capabilities for a document
-// created by `Exchange.get()`. Internally, sync state is tracked via
-// a module-scoped WeakMap (same pattern as @kyneta/loro-schema's
-// substrate tracking and the vendor's syncRefMap).
+// created by `Exchange.get()`, reached from any ref within it. Sync state is
+// kept in a `DocumentMap` (`document-key.ts`), like every per-document
+// registry in this package.
 //
 // Usage:
 //   const doc = exchange.get("my-doc", schema)
@@ -15,6 +15,7 @@
 
 import type { DocId, PeerId, PeerIdentityDetails } from "@kyneta/transport"
 import { authorityFor } from "./doc-meta.js"
+import { createDocumentMap } from "./document-key.js"
 import type { Authority } from "./governance.js"
 import { settledWith, whenHydrated } from "./settle.js"
 import type { Synchronizer } from "./synchronizer.js"
@@ -76,16 +77,16 @@ export interface SyncRef {
 }
 
 // ---------------------------------------------------------------------------
-// Module-scoped WeakMap — primary storage for sync refs
+// Per-document storage for sync refs, reachable from any ref in the document
 // ---------------------------------------------------------------------------
 
-const syncRefMap = new WeakMap<object, SyncRef>()
+const syncRefMap = createDocumentMap<SyncRef>()
 
 /** The raw wiring behind each `SyncRef`, for waits that need the synchronizer. */
-const syncSourceMap = new WeakMap<
-  object,
-  { docId: DocId; synchronizer: Synchronizer }
->()
+const syncSourceMap = createDocumentMap<{
+  docId: DocId
+  synchronizer: Synchronizer
+}>()
 
 // ---------------------------------------------------------------------------
 // SyncRef implementation
@@ -256,8 +257,6 @@ export function sync(ref: object): SyncRef {
  * @param ref - A document ref.
  * @param opts.authority - Whose answer settles the wait. Resolution order is
  *   call-site → the Exchange's `Policy.authority` → `"any"`.
- * @param opts.peer - Deprecated spelling of `opts.authority`, kept for 3.0.0
- *   callers. Require a peer matching this predicate to have answered.
  * @param opts.offlineAfter - Give up waiting for peers after this many ms.
  *   `0` (the default) waits indefinitely. Never applies to the storage wait.
  */
@@ -269,12 +268,6 @@ export async function whenSettled(
      * `Policy.authority`, and to `"any"` if none was declared.
      */
     authority?: Authority
-    /**
-     * @deprecated Use `authority`. A predicate passed here means exactly the
-     * same thing — `Authority` accepts one — so this is a spelling, kept so
-     * that 3.0.0 callers keep working.
-     */
-    peer?: (peer: PeerIdentityDetails) => boolean
     offlineAfter?: number
   },
 ): Promise<{ via: "peer" | "local" | "offline" }> {
@@ -289,7 +282,7 @@ export async function whenSettled(
   // Resolution order: call-site → Policy.authority → "any", the same order
   // `docStatus` and `initialize` use. Sharing it is what stops the promise and
   // the boolean forms from answering differently about the same document.
-  const authority = opts?.authority ?? opts?.peer ?? authorityFor(ref)
+  const authority = opts?.authority ?? authorityFor(ref)
 
   const { docId, synchronizer } = source
 

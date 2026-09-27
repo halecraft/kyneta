@@ -1758,26 +1758,6 @@ describe("whenSettled — authority", () => {
     })
   })
 
-  it("the deprecated peer option still selects the authority", async () => {
-    // `peer` was 3.0.0's spelling. It means the same thing as an `authority`
-    // predicate, so it keeps working rather than breaking those callers.
-    const bridge = new Bridge()
-    const clientA = createExchange({
-      id: "client-a",
-      transports: [createBridgeTransport({ transportId: "client-a", bridge })],
-    })
-    const clientB = createExchange({
-      id: "client-b",
-      transports: [createBridgeTransport({ transportId: "client-b", bridge })],
-    })
-
-    const docA = clientA.get("doc-1", SequentialDoc)
-    clientB.get("doc-1", SequentialDoc)
-    await drain(40)
-
-    expect(await within(whenSettled(docA, { peer: isServer }))).toBe("pending")
-  })
-
   it("gives up with { via: 'offline' } when the authority never arrives", async () => {
     // The escape hatch for an offline-first client: act on local evidence
     // rather than block forever. `docStatus` stays "pending" throughout —

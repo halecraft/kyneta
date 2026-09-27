@@ -1,7 +1,12 @@
 import { textChange } from "@kyneta/schema"
 import { batch, createDoc, Schema } from "@kyneta/schema/basic"
 import { describe, expect, it, vi } from "vitest"
-import { attach, diffText, transformSelection } from "../text-adapter.js"
+import {
+  attach,
+  attachWhenLoaded,
+  diffText,
+  transformSelection,
+} from "../text-adapter.js"
 
 // ===========================================================================
 // Functional Core: diffText
@@ -534,5 +539,85 @@ describe("attach", () => {
       detach()
       expect(() => detach()).not.toThrow()
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// attachWhenLoaded
+// ---------------------------------------------------------------------------
+
+function deferred(): {
+  promise: Promise<void>
+  resolve: () => void
+  reject: (error: unknown) => void
+} {
+  let resolve: () => void = () => {}
+  let reject: (error: unknown) => void = () => {}
+  const promise = new Promise<void>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
+describe("attachWhenLoaded", () => {
+  const TitleDoc = Schema.struct({ title: Schema.text() })
+
+  it("is read-only and unbound until loaded, then binds", async () => {
+    const doc = createDoc(TitleDoc)
+    batch(doc, d => d.title.insert(0, "loaded"))
+    const textarea = document.createElement("textarea")
+    const load = deferred()
+
+    const detach = attachWhenLoaded(textarea, doc.title, load.promise)
+    expect(textarea.readOnly).toBe(true)
+    expect(textarea.value).toBe("")
+
+    load.resolve()
+    await load.promise
+    expect(textarea.readOnly).toBe(false)
+    expect(textarea.value).toBe("loaded")
+    detach()
+  })
+
+  it("stays read-only and unbound when the load fails", async () => {
+    const doc = createDoc(TitleDoc)
+    const textarea = document.createElement("textarea")
+    const load = deferred()
+
+    attachWhenLoaded(textarea, doc.title, load.promise)
+    load.reject(new Error("unreadable"))
+    await load.promise.catch(() => {})
+
+    expect(textarea.readOnly).toBe(true)
+    batch(doc, d => d.title.insert(0, "later"))
+    expect(textarea.value).toBe("")
+  })
+
+  it("binds nothing when disposed before the load completes", async () => {
+    const doc = createDoc(TitleDoc)
+    const textarea = document.createElement("textarea")
+    const load = deferred()
+
+    const detach = attachWhenLoaded(textarea, doc.title, load.promise)
+    detach()
+    expect(textarea.readOnly).toBe(false)
+
+    load.resolve()
+    await load.promise
+    batch(doc, d => d.title.insert(0, "after"))
+    expect(textarea.value).toBe("")
+  })
+
+  it("keeps an element the application made read-only", async () => {
+    const doc = createDoc(TitleDoc)
+    const textarea = document.createElement("textarea")
+    textarea.readOnly = true
+    const load = deferred()
+
+    attachWhenLoaded(textarea, doc.title, load.promise)
+    load.resolve()
+    await load.promise
+    expect(textarea.readOnly).toBe(true)
   })
 })

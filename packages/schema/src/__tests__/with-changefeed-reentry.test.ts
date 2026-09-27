@@ -23,6 +23,7 @@ import {
   writable,
 } from "../index.js"
 import {
+  ALWAYS_AUTHOR,
   createPlainClock,
   createPlainSubstrate,
   EMPTY_HISTORY,
@@ -175,11 +176,13 @@ describe("with-changefeed: cross-doc cascade with shared lease", () => {
       { v: 0 },
       createPlainClock("testA"),
       EMPTY_HISTORY,
+      ALWAYS_AUTHOR,
     )
     const substrateB = createPlainSubstrate(
       { v: 0 },
       createPlainClock("testB"),
       EMPTY_HISTORY,
+      ALWAYS_AUTHOR,
     )
 
     const docA = createRef(schemaA, substrateA, { lease: sharedLease })

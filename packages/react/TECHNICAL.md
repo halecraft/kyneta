@@ -462,7 +462,15 @@ Returns a React ref callback. Assign it to the element's `ref` prop:
 <textarea ref={useText(doc.body)} />
 ```
 
-The hook calls `attach(element, textRef, options)` when the element mounts and the returned detach function when it unmounts. Between those two events, `useText` **does not cause re-renders on text changes**. The textarea is an *uncontrolled* element — its value lives in the DOM, and the adapter keeps the DOM and the `TextRef` in sync imperatively.
+The hook binds the element when it mounts and calls the returned detach function when it unmounts. Between those two events, `useText` **does not cause re-renders on text changes**.
+
+### Binding waits for the document to load
+
+If the document has loaded (`hydrated(textRef)`), the hook calls `attach` at once. Otherwise it calls `attachWhenLoaded(element, textRef, whenHydrated(textRef), options)`, which keeps the element `readOnly` until the promise resolves, then restores the element's own `readOnly` and attaches. If the load fails the element stays read-only: nothing should be typed over state that could not be read.
+
+Two reasons, and they apply to every substrate. Text typed before loading is written over a document nobody has seen, and on a stored plain document the write is refused outright — the refusal would throw inside the `input` handler after the element had already changed, leaving element and model apart. And binding early shows the pre-load (empty) text first.
+
+`attachWhenLoaded` lives in the framework-agnostic adapter and takes a promise, not a document, so the adapter stays free of `@kyneta/exchange`; its tests use a deferred promise and no React. The synchronous `hydrated` check is what spares a loaded document a read-only flash: `whenHydrated` resolves in a microtask even when the load is long done. The textarea is an *uncontrolled* element — its value lives in the DOM, and the adapter keeps the DOM and the `TextRef` in sync imperatively.
 
 ### Why uncontrolled
 

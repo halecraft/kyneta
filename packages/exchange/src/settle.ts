@@ -35,6 +35,7 @@ import type {
   HasChangefeed,
 } from "@kyneta/changefeed"
 import { CHANGEFEED } from "@kyneta/changefeed"
+import { createDocumentMap } from "./document-key.js"
 import type { Authority } from "./governance.js"
 
 // ---------------------------------------------------------------------------
@@ -95,14 +96,10 @@ export const makeSettleTerm: (
 // ---------------------------------------------------------------------------
 
 /**
- * Terms attached to a document, keyed by its root ref.
- *
- * A `WeakMap` for the same reason `syncRefMap` in `sync.ts` is one: the
- * registry must not keep a document alive, and the ref is the natural identity
- * for "which document is this?". Mirroring that existing pattern also means
- * there is one way to attach out-of-band per-document state, not two.
+ * Terms attached to a document. A `DocumentMap`, like every per-document
+ * registry in this package, so any ref within the document finds them.
  */
-const settleTerms = new WeakMap<object, SettleTerm[]>()
+const settleTerms = createDocumentMap<SettleTerm[]>()
 
 /**
  * Attach a settle term to a document.
@@ -161,10 +158,11 @@ export function settled(ref: object): boolean {
  * and answering it through the whole conjunction would also wait on peers,
  * which an authoritative peer has no reason to do.
  */
-const hydrationTerms = new WeakMap<object, SettleTerm>()
-
-/** Reads the load error for a document, if its load failed. */
-const hydrationErrors = new WeakMap<object, () => unknown | undefined>()
+const storage = createDocumentMap<{
+  readonly term: SettleTerm
+  /** The load error, if the load failed. */
+  readonly readError: () => unknown | undefined
+}>()
 
 /**
  * Register the storage term for a document: it joins the conjunction *and*
@@ -182,8 +180,7 @@ export function registerHydrationTerm(
   term: SettleTerm,
   readError: () => unknown | undefined,
 ): void {
-  hydrationTerms.set(ref, term)
-  hydrationErrors.set(ref, readError)
+  storage.set(ref, { term, readError })
   registerSettleTerm(ref, term)
 }
 
@@ -192,7 +189,7 @@ export function registerHydrationTerm(
  * succeeded, is still running, or there was nothing to load.
  */
 export function hydrationError(ref: object): unknown | undefined {
-  return hydrationErrors.get(ref)?.()
+  return storage.get(ref)?.readError()
 }
 
 /**
@@ -206,7 +203,7 @@ export function hydrationError(ref: object): unknown | undefined {
  * data we merely failed to read.
  */
 export function whenHydrated(ref: object): Promise<void> {
-  const term = hydrationTerms.get(ref)
+  const term = storage.get(ref)?.term
   if (!term) return Promise.resolve() // nothing to load
   if (term()) return Promise.resolve()
 
@@ -237,14 +234,14 @@ export function whenHydrated(ref: object): Promise<void> {
  * implementation detail.
  */
 export function hydrated(ref: object): boolean {
-  const term = hydrationTerms.get(ref)
+  const term = storage.get(ref)?.term
   return term ? term() : true
 }
 
 /** Observable form of {@link hydrated}. A callable, so never put it in an `if`. */
 export function hydratedFeed(ref: object): SettleTerm {
   return (
-    hydrationTerms.get(ref) ??
+    storage.get(ref)?.term ??
     makeSettleTerm(
       () => true,
       () => () => {},
@@ -281,7 +278,7 @@ export function settledFeed(ref: object): SettleTerm {
 // ---------------------------------------------------------------------------
 
 /** Re-evaluates the peer term against a caller-supplied authority. */
-const peerResolvers = new WeakMap<object, (authority: Authority) => boolean>()
+const peerResolvers = createDocumentMap<(authority: Authority) => boolean>()
 
 /**
  * Register the peer term's resolver, so a caller can ask "would this be

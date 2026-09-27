@@ -1,10 +1,23 @@
 // runtime.test.ts — verifies the Runtime can manage documents standalone
 // (no Exchange, no network transports) with stores and the tick clock.
 
-import { batch, type DocRef, json, Schema } from "@kyneta/schema"
+import { loro } from "@kyneta/loro-schema"
+import {
+  applyChanges,
+  batch,
+  type DocRef,
+  json,
+  RawPath,
+  replaceChange,
+  Schema,
+} from "@kyneta/schema"
 import { describe, expect, it, vi } from "vitest"
-import { Runtime } from "../runtime.js"
+import { Exchange } from "../exchange.js"
+import { Runtime, storeInputFor } from "../runtime.js"
+import { whenHydrated } from "../settle.js"
 import { createInMemoryStore } from "../store/in-memory-store.js"
+import type { Store } from "../store/store.js"
+import { collectAll } from "../testing/store-conformance.js"
 
 const TodoSchema = Schema.struct({
   title: Schema.string(),
@@ -49,6 +62,8 @@ describe("Runtime (standalone, no Exchange)", () => {
     // First runtime: create and persist
     const runtime1 = new Runtime({ peerId: "alice", stores: [store] })
     const doc1 = runtime1.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
+    // A stored plain document refuses writes until it has loaded.
+    await whenHydrated(doc1)
     doc1.title.set("Buy milk")
     await runtime1.flush()
     await runtime1.shutdown()
@@ -94,6 +109,7 @@ describe("Runtime (standalone, no Exchange)", () => {
     // Generation 1: create + mutate + persist.
     const runtime1 = new Runtime({ peerId: "alice", stores: [store] })
     const doc1 = runtime1.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
+    await whenHydrated(doc1)
     doc1.title.set("Buy milk")
     await runtime1.flush()
     await runtime1.shutdown()
@@ -102,7 +118,7 @@ describe("Runtime (standalone, no Exchange)", () => {
     // stored data exists), mutate again, persist.
     const runtime2 = new Runtime({ peerId: "alice", stores: [store] })
     const doc2 = runtime2.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
-    await runtime2.flush() // let hydration settle before mutating
+    await whenHydrated(doc2)
     doc2.title.set("Buy milk and eggs")
     await runtime2.flush()
     await runtime2.shutdown()
@@ -284,6 +300,7 @@ describe("Exchange with pre-constructed Runtime (rare overload)", () => {
 
     // Write data via the Runtime directly
     const doc1 = runtime.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
+    await whenHydrated(doc1)
     doc1.title.set("Hello")
     await runtime.flush()
 
@@ -320,6 +337,7 @@ describe("Exchange with pre-constructed Runtime (rare overload)", () => {
     // An interpret-mode doc and a replicate-mode doc, both created BEFORE
     // any Exchange (and therefore any hooks) existed.
     const doc1 = runtime.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
+    await whenHydrated(doc1)
     doc1.title.set("Hello")
 
     const boundReplica = json.replica()
@@ -520,3 +538,149 @@ describe("Runtime.get and replicate-mode documents", () => {
     await runtime.shutdown()
   })
 })
+
+// ---------------------------------------------------------------------------
+// Becoming ready — one step, for every creation path
+// ---------------------------------------------------------------------------
+
+describe("storeInputFor", () => {
+  it.each([
+    [
+      { kind: "stored", version: "L:3" } as const,
+      { type: "hydrated", docId: "d", version: "L:3" },
+    ],
+    [{ kind: "empty" } as const, { type: "register", docId: "d" }],
+    [{ kind: "none" } as const, null],
+  ])("%j", (outcome, expected) => {
+    expect(storeInputFor("d", outcome)).toEqual(expected)
+  })
+})
+
+describe("a document destroyed while it loads", () => {
+  it("is not registered, not written, and its waiters reject", async () => {
+    const store = createInMemoryStore()
+    const exchange = new Exchange({ id: "alice", stores: [store] })
+    const doc = exchange.get("todo-1", TodoDoc)
+    const loaded = whenHydrated(doc)
+    exchange.destroy("todo-1")
+    await exchange.flush()
+
+    expect(exchange.documents.has("todo-1")).toBe(false)
+    await expect(loaded).rejects.toThrow("destroyed while loading")
+    expect(await collectAll(store.loadAll("todo-1"))).toEqual([])
+    await exchange.shutdown()
+  })
+
+  it("does not touch a document created again under the same id", async () => {
+    const store = createInMemoryStore()
+    const exchange = new Exchange({ id: "alice", stores: [store] })
+    const first = exchange.get("todo-1", TodoDoc)
+    const firstLoaded = whenHydrated(first)
+    exchange.destroy("todo-1")
+    const second = exchange.get("todo-1", TodoDoc)
+    await exchange.flush()
+
+    expect(second).not.toBe(first)
+    await expect(firstLoaded).rejects.toThrow("destroyed while loading")
+    await expect(whenHydrated(second)).resolves.toBeUndefined()
+    expect(exchange.documents.has("todo-1")).toBe(true)
+    await exchange.shutdown()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// A stored plain document refuses writes until it has loaded
+// ---------------------------------------------------------------------------
+
+describe("writing to a stored plain document before it loads", () => {
+  /** A store holding `todo-1`, written by an earlier session. */
+  async function storeWithTodo(): Promise<Store> {
+    const store = createInMemoryStore()
+    const runtime = new Runtime({ peerId: "alice", stores: [store] })
+    const doc = runtime.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
+    await whenHydrated(doc)
+    doc.title.set("stored")
+    await runtime.flush()
+    await runtime.shutdown()
+    return store
+  }
+
+  it("throws for every authored write until loading completes", async () => {
+    const store = await storeWithTodo()
+    const runtime = new Runtime({ peerId: "alice", stores: [store] })
+    const doc = runtime.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
+
+    expect(() => doc.title.set("early")).toThrow("still loading")
+    expect(() => batch(doc, d => d.done.set(true))).toThrow("still loading")
+    expect(() =>
+      applyChanges(doc, [
+        { path: RawPath.empty.field("done"), change: replaceChange(true) },
+      ]),
+    ).toThrow("still loading")
+
+    await whenHydrated(doc)
+    expect(doc.title()).toBe("stored")
+    doc.title.set("after")
+    expect(doc.title()).toBe("after")
+    await runtime.shutdown()
+  })
+
+  it("keeps the store's lineage across its first write", async () => {
+    const store = await storeWithTodo()
+    const runtime = new Runtime({ peerId: "alice", stores: [store] })
+    const doc = runtime.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
+    await whenHydrated(doc)
+    const replica = () =>
+      (runtime.getEntry("todo-1") as { readyInfo: { replica: any } }).readyInfo
+        .replica
+    const lineage = replica().version().lineage
+
+    doc.done.set(true)
+    expect(replica().version().lineage).toBe(lineage)
+    await runtime.shutdown()
+  })
+
+  it("stays refused when the load fails", async () => {
+    const failing: Store = {
+      ...methodsOf(createInMemoryStore()),
+      currentMeta: async () => {
+        throw new Error("disk unreadable")
+      },
+    }
+    const runtime = new Runtime({
+      peerId: "alice",
+      stores: [failing],
+      onStoreError: () => {},
+    })
+    const doc = runtime.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
+    await expect(whenHydrated(doc)).rejects.toThrow("disk unreadable")
+    expect(() => doc.title.set("over unknown state")).toThrow("still loading")
+    await runtime.shutdown()
+  })
+
+  it("does not apply to a concurrent-writer document", async () => {
+    const LoroTodo = loro.bind(TodoSchema)
+    const runtime = new Runtime({
+      peerId: "alice",
+      stores: [createInMemoryStore()],
+    })
+    const doc = runtime.get("todo-1", LoroTodo) as DocRef<typeof TodoSchema>
+    doc.title.set("while loading")
+    await whenHydrated(doc)
+    expect(doc.title()).toBe("while loading")
+    await runtime.shutdown()
+  })
+})
+
+/** A store's methods as a plain object, so one of them can be replaced. */
+function methodsOf(store: Store): Store {
+  return {
+    append: (docId, record) => store.append(docId, record),
+    loadAll: docId => store.loadAll(docId),
+    replace: (docId, records) => store.replace(docId, records),
+    delete: docId => store.delete(docId),
+    currentMeta: docId => store.currentMeta(docId),
+    listDocIds: prefix => store.listDocIds(prefix),
+    close: () => store.close(),
+  }
+}

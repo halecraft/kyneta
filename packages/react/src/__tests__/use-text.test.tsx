@@ -4,6 +4,13 @@
 // React's ref callback mechanism. Thin tests — the core attach() logic
 // is already covered exhaustively by text-adapter.test.ts (Tier 1).
 
+import {
+  createInMemoryStore,
+  Exchange,
+  type Store,
+  whenHydrated,
+} from "@kyneta/exchange"
+import { json } from "@kyneta/schema"
 import { batch, createDoc, Schema } from "@kyneta/schema/basic"
 import { act, renderHook } from "@testing-library/react"
 import { describe, expect, it } from "vitest"
@@ -223,5 +230,70 @@ describe("useText", () => {
       })
       expect(textarea.value).toBe("doc2!") // unchanged
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// useText with a document that loads from a store
+// ---------------------------------------------------------------------------
+
+describe("useText on a document still loading", () => {
+  const StoredDoc = json.bind(TextDocSchema)
+
+  /** A store holding `doc` with `title` set, written by an earlier session. */
+  async function storeWithTitle(title: string): Promise<Store> {
+    const store = createInMemoryStore()
+    const exchange = new Exchange({ id: "writer", stores: [store] })
+    const doc = exchange.get("doc", StoredDoc)
+    await whenHydrated(doc)
+    batch(doc, d => d.title.insert(0, title))
+    await exchange.flush()
+    await exchange.shutdown()
+    return store
+  }
+
+  it("is read-only until loaded, then shows the stored text and takes edits", async () => {
+    const store = await storeWithTitle("stored")
+    const exchange = new Exchange({ id: "reader", stores: [store] })
+    const doc = exchange.get("doc", StoredDoc)
+    const textarea = document.createElement("textarea")
+    const { result } = renderHook(() => useText(doc.title))
+
+    act(() => {
+      result.current(textarea)
+    })
+    expect(textarea.readOnly).toBe(true)
+    // A plain document refuses writes while loading; the element must not
+    // try to make one.
+    textarea.value = "typed"
+    expect(() => textarea.dispatchEvent(new Event("input"))).not.toThrow()
+
+    await act(async () => {
+      await whenHydrated(doc)
+    })
+    expect(textarea.readOnly).toBe(false)
+    expect(textarea.value).toBe("stored")
+
+    textarea.value = "stored!"
+    textarea.selectionStart = textarea.selectionEnd = 7
+    textarea.dispatchEvent(new Event("input"))
+    expect(doc.title()).toBe("stored!")
+    await exchange.shutdown()
+  })
+
+  it("binds a document that has already loaded on the first call", async () => {
+    const store = await storeWithTitle("ready")
+    const exchange = new Exchange({ id: "reader", stores: [store] })
+    const doc = exchange.get("doc", StoredDoc)
+    await whenHydrated(doc)
+    const textarea = document.createElement("textarea")
+    const { result } = renderHook(() => useText(doc.title))
+
+    act(() => {
+      result.current(textarea)
+    })
+    expect(textarea.readOnly).toBe(false)
+    expect(textarea.value).toBe("ready")
+    await exchange.shutdown()
   })
 })

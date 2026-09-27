@@ -673,10 +673,18 @@ waiting for:
 
 | Layer | Construction | Adds |
 | --- | --- | --- |
-| Ref | `doc.field` | — (inherits the document's) |
+| Ref | `doc.field` | — (inherits the document's; see below) |
 | Document | `createDoc(bound)` | — nothing to await |
 | + Runtime | stores configured | the stored data finishing its load |
 | + Exchange | transports configured | the authoritative peer answering |
+
+A ref inherits its document's terms because every per-document registry here
+(the settle terms, the storage term and its error, the peer resolver, the sync
+mode, the sync handle) is a `DocumentMap` (`src/document-key.ts`). It is keyed
+by the document's shared context, which every writable ref carries under
+`[TRANSACT]`, so `docStatus(doc.items)` and `useText(doc.title)` see what the
+root sees. Keyed by the root ref, as they once were, a child ref found nothing
+and reported "nothing to wait for" while its document was still loading.
 
 Each registers one **settle term** — a boolean that starts `false` and flips
 when its source reports. `settled(ref)` is the conjunction. Zero terms is the
@@ -696,7 +704,7 @@ one-line adapter rather than a store core.
 
 Every readiness surface — `settled`, `settledWith`, `docStatus`, `docStatusFeed`, `whenSettled`, `initialize`, and the React hooks over them — derives its peer half from **one** function: `derivePeerSettled` (`synchronizer.ts`), reached through the peer settle term. None of them re-implements it. The boolean forms read the term directly; `whenSettled` waits on `settledWith(ref, authority)`, which is the same term with the authority supplied by the caller.
 
-That is an invariant rather than a stylistic preference, and it is written down because 3.0.0 shipped without it. `whenSettled` had a second, private copy of "has the authority answered?" that checked only `hasReconciled` (or `reconciledMatching`, when the caller passed the now-deprecated `peer` option). It never consulted `Policy.authority`. The two copies disagreed in both directions:
+That is an invariant rather than a stylistic preference, and it is written down because 3.0.0 shipped without it. `whenSettled` had a second, private copy of "has the authority answered?" that checked only `hasReconciled` (or `reconciledMatching`, when the caller passed a `peer` predicate, an option since removed in favour of `authority`). It never consulted `Policy.authority`. The two copies disagreed in both directions:
 
 - **Over-waiting.** A server declaring `authority: "self"` with a transport configured — the normal shape of a server, since it has to listen for clients — hung forever inside `initialize`. `settled(doc)` was already `true` and `docStatus(doc)` already read `"empty"`; only the promise disagreed. The `"self"` rule exists precisely to say "my own storage is the last word, there is nobody to wait for", and the wait ignored it.
 - **Under-waiting.** A client declaring `authority: p => p.peerId === "server"` resolved as soon as *any* peer reconciled, including another equally-empty client. `initialize` then returned `"loaded"` — "the document already had data" — on the word of a peer that had never seen it.
@@ -764,8 +772,9 @@ opened it, from replying "I do not have this" and inviting the client to seed
 over it? Two independent mechanisms.
 
 First, a document with stores does not enter the sync graph until it has
-hydrated — `#register` runs inside `#hydrate(...).then(...)`, so a server never
-announces a half-loaded document.
+hydrated — `#register` runs in `#becomeReady`, after the load completes, so a
+server never announces a half-loaded document. See
+[How a document becomes ready](#how-a-document-becomes-ready).
 
 Second, the default disposition for an unrecognised document is `defer`, not
 `vacant` (`exchange.ts`, the discovery handler): "NOT terminal, so no `vacant`
@@ -826,6 +835,26 @@ not gate the executor.
 Source: `src/store/*.ts`, `src/store/store-program.ts`, `src/exchange.ts` → store-program executor.
 
 A `Store` is a persistence interface this package defines. A `Store` instance must be owned by exactly one `Exchange` for its entire lifetime — exclusive ownership ensures that version tracking, append ordering, and compaction are never corrupted by concurrent access from a second exchange.
+
+### How a document becomes ready
+
+Source: `src/runtime.ts` → `#hydrate`, `#becomeReady`, `storeInputFor`.
+
+A document's ref is returned at once; loading from the stores runs afterwards. `#hydrate` only gathers: it reads the first store that holds the document and returns a `LoadOutcome` — `stored` with the version the store holds, `empty`, or `none` when nothing was loaded (no stores, a transient document, or a promotion whose replica already loaded). `#becomeReady` is **the one place a document becomes ready**, for every creation path, and runs in a fixed order:
+
+1. If the cache no longer holds this entry (destroyed, or destroyed and created again, while it loaded), the latch fails with "destroyed while loading" and nothing else happens. Otherwise the dismissed document would be registered with the Synchronizer again.
+2. The store program learns what the store holds: `storeInputFor(docId, outcome)`, a pure mapping (`stored` → `hydrated`, `empty` → `register`, `none` → nothing).
+3. `adopt()` claims the peer identity (Yjs, Loro) and the right to author (plain), before anyone is told the document has loaded — a listener that writes the moment it is told finds the document writable.
+4. The latch resolves `loaded`.
+5. `#register` publishes the document to the sync graph, and an interpreted document starts forwarding its changesets.
+
+A failed load only marks the latch `failed`: its state is unknown, so the document is not registered, announced or given a stable identity.
+
+**The store's confirmed version is read from the store.** Every stored entry records the version the store reached with it, and `hydrated` carries the last loaded entry's version, even when that entry failed to load, since the store holds it all the same. It used to carry the replica's live version, which already includes anything written while the document loaded; every later `since` write then started past that write, and it was never stored. `hydrated` now owes a `since` write from the stored version: when nothing arrived during loading the executor finds the versions equal and touches no store.
+
+**A whole-document entry is the state at its version.** `#hydrate` loads an `entirety` entry with `resetFromEntirety(payload, parseVersion(record.version))` and merges deltas. Yjs and Loro implement `resetFromEntirety` as a merge. Plain would otherwise count the entry as one more flush on top of its log, so a reloaded plain document's version ran one ahead of the store's; with a correct baseline its first write would then have stored the last delta a second time, and replaying a repeated sequence delete removes a second item. A load with nothing new therefore writes nothing on every substrate, including after a compaction (`store-hydration.test.ts`, "a load with nothing new writes nothing").
+
+**Writing before a document has loaded.** On a concurrent-writer substrate (Yjs, Loro) a write made during loading merges with the loaded history whenever it arrives, and is stored. A serialized-writer (plain) document with stores refuses authored writes until `adopt`: its merge does not commute with a local write, so the loaded state would overwrite the write, and the write would mint a lineage the store does not know. The write throws "still loading"; `await whenHydrated(doc)` first, or seed with `initialize`. After a failed load `adopt` never runs, and writes stay refused.
 
 ### `StoreRecord` and `StoreMeta`
 
@@ -890,7 +919,7 @@ Persistence is driven by a pure Mealy machine: `Program<StoreInput, StoreModel, 
 | Input | Trigger |
 |-------|---------|
 | `register` | First boot — doc not found in any store during hydration |
-| `hydrated` | Re-boot — doc loaded from a store during hydration |
+| `hydrated` | Re-boot — doc loaded from a store; carries the version the store holds, and owes a `since` write from it |
 | `state-advanced` | `Runtime.onStateAdvanced` — after a local or remote mutation. Carries only the `docId`. |
 | `compact` | `exchange.compact(docId)` called. Carries only the `docId`. |
 | `destroy` | `exchange.destroy(docId)` called |
@@ -913,9 +942,9 @@ Persistence is driven by a pure Mealy machine: `Program<StoreInput, StoreModel, 
 4. The Exchange's listener forwards the `docId` to `Runtime.onStateAdvanced`, which dispatches `{ type: 'state-advanced', docId }` into the store-program and does nothing else.
 5. The store-program decides which write, if any, to start, and emits a `persist` effect naming it. The Runtime's executor resolves the replica from its own `#docCache`, builds the records, calls the stores, and feeds back `write-succeeded` or `write-failed`.
 
-**Transient documents are never offered to a store.** A document whose `SyncMode` carries `durability: "transient"` — today that is anything bound through `ephemeral` — is never registered, never hydrated, and never deleted. `Runtime` decides this once, in `#usesStores(syncMode)`, and every storage decision consults it: which substrate to build, how to initialise the readiness latch, whether to hydrate on creation, and whether to dispatch a delete on `destroy`.
+**Transient documents are never offered to a store.** A document whose `SyncMode` carries `durability: "transient"` — today that is anything bound through `ephemeral` — is never registered, never hydrated, and never deleted. `Runtime` decides this once, in `#usesStores(syncMode)`, and every storage decision consults it: which substrate to build, whether to hydrate on creation, and whether to dispatch a delete on `destroy`.
 
-Those decisions have to agree. The readiness latch is registered as a settle term before hydration starts, so a document that is set up to hydrate and then never does stays `pending` forever — `whenSettled` never returns and `docStatus` never leaves `pending`. That is why the rule is one predicate rather than a condition repeated at each site.
+Those decisions have to agree. Every readiness latch starts `pending` and is resolved only by `#becomeReady`, so a document that is set up to hydrate and then never does stays `pending` forever — `whenSettled` never returns and `docStatus` never leaves `pending`. That is why the rule is one predicate rather than a condition repeated at each site.
 
 The rule is *declared*, read off the type, rather than emergent. Previously nothing told the store a document was transient: it simply could not persist updates, because the ephemeral substrate always returned `null` from `exportSince`. That kept later writes off disk by accident and did nothing about the creation-time write — and it would have reversed silently the day a transient substrate learned delta export. **That day came.** The substrate now produces deltas, the accident is gone, and the declared rule carried the behaviour across unchanged: `store-integration.test.ts` asserts the contract rather than the mechanism and did not need touching.
 

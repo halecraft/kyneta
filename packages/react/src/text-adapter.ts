@@ -360,3 +360,47 @@ export function attach(
     element.removeEventListener("beforeinput", onBeforeInput)
   }
 }
+
+/**
+ * Bind `element` to `textRef` once `loaded` resolves.
+ *
+ * Until then the element is read-only: text typed into a document that has not
+ * loaded would be written over state nobody has seen, and on a plain document
+ * the write is refused outright. On resolution the element's own `readOnly` is
+ * restored and {@link attach} binds it, showing the loaded text. On rejection
+ * (the load failed) the element stays read-only.
+ *
+ * Takes a promise rather than a document, so the adapter needs no knowledge
+ * of stores: a caller passes whatever says the document has loaded.
+ *
+ * The returned function cancels a bind that has not happened yet, restores
+ * `readOnly`, and detaches a binding that has.
+ */
+export function attachWhenLoaded(
+  element: HTMLInputElement | HTMLTextAreaElement,
+  textRef: TextRefLike,
+  loaded: Promise<void>,
+  options?: AttachOptions,
+): () => void {
+  const ownReadOnly = element.readOnly
+  element.readOnly = true
+  let state: "waiting" | "failed" | "disposed" | { detach: () => void } =
+    "waiting"
+
+  loaded.then(
+    () => {
+      if (state !== "waiting") return
+      element.readOnly = ownReadOnly
+      state = { detach: attach(element, textRef, options) }
+    },
+    () => {
+      if (state === "waiting") state = "failed"
+    },
+  )
+
+  return () => {
+    if (typeof state === "object") state.detach()
+    else element.readOnly = ownReadOnly
+    state = "disposed"
+  }
+}

@@ -8,6 +8,8 @@
 import { CHANGEFEED } from "@kyneta/changefeed"
 import { json, Schema } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
+import { writerModelOf } from "../doc-meta.js"
+import { docStatus } from "../doc-status.js"
 import { Exchange, type ExchangeParams } from "../exchange.js"
 import {
   hydrated,
@@ -61,8 +63,15 @@ async function seedStoredDoc(data: string): Promise<InMemoryStoreData> {
   await backend.append("doc-1", makeMetaRecord())
   await backend.append("doc-1", {
     kind: "entry",
-    payload: { kind: "entirety" as const, encoding: "json" as const, data },
-    version: "1",
+    // A plain version is `lineage:count`, and the payload names the same
+    // lineage: what a store written by a plain document holds.
+    payload: {
+      kind: "entirety" as const,
+      encoding: "json" as const,
+      data,
+      lineage: "seed",
+    },
+    version: "seed:1",
   })
   return sharedData
 }
@@ -335,5 +344,53 @@ describe("whenSettled", () => {
     expect(settled(doc)).toBe(false)
 
     exchange.reset()
+  })
+})
+
+// ===========================================================================
+// Any ref within a document answers for the document
+// ===========================================================================
+
+describe("readiness from a child ref", () => {
+  it("matches the root while loading and after", async () => {
+    const sharedData = await seedStoredDoc('{"title":"stored","count":42}')
+    const exchange = createExchange({
+      stores: [createInMemoryStore({ sharedData })],
+    })
+    const doc = exchange.get("doc-1", TestDoc)
+
+    expect(hydrated(doc.title)).toBe(false)
+    expect(settled(doc.title)).toBe(false)
+    expect(docStatus(doc.title)).toBe("pending")
+
+    await exchange.flush()
+
+    expect(hydrated(doc.title)).toBe(true)
+    expect(settled(doc.title)).toBe(true)
+    expect(docStatus(doc.title)).toBe(docStatus(doc))
+    await exchange.shutdown()
+  })
+
+  it("waits in whenSettled with an authority, and finds the sync handle", async () => {
+    const sharedData = await seedStoredDoc('{"title":"stored","count":42}')
+    const exchange = createExchange({
+      stores: [createInMemoryStore({ sharedData })],
+    })
+    const doc = exchange.get("doc-1", TestDoc)
+
+    let resolved = false
+    const wait = whenSettled(doc.title, { authority: "self" }).then(() => {
+      resolved = true
+    })
+    await Promise.resolve()
+    expect(resolved).toBe(false)
+    await exchange.flush()
+    await wait
+    expect(resolved).toBe(true)
+
+    expect(sync(doc.title)).toBe(sync(doc))
+    expect(writerModelOf(doc.title)).toBe(writerModelOf(doc))
+    expect(writerModelOf(doc.title)).not.toBe("concurrent")
+    await exchange.shutdown()
   })
 })

@@ -735,7 +735,7 @@ export type Writable<S extends Schema> =
  *
  * ```ts
  * const interp = withWritable(withCaching(withReadable(bottomInterpreter)))
- * const ctx = createPlainSubstrate(store).context()
+ * const ctx = plainContext(store)
  * const doc = interpret(schema, interp, ctx)
  * doc.title.insert(0, "Hello")   // mutation via withWritable
  * doc.title()                    // "Hello" via withReadable

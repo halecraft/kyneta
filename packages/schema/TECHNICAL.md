@@ -1677,7 +1677,9 @@ Get it wrong and a peer writing before its own stored history arrives produces o
 | `create(schema)` | immediately | a document that imports nothing at construction |
 | `beginHydration(factory, schema)` | on `adopt()` | a document about to load this peer's own history |
 
-`beginHydration` returns `{ substrate, adopt }`. The obligation travels in the return value rather than sitting on the substrate as an optional capability, because a capability a caller must know to look for can only be discharged by a caller who already knew. `@kyneta/exchange`'s `Runtime` takes the second path whenever stores are configured and calls `adopt()` once hydration resolves — before registering the document, so peers never see the transient identity.
+`beginHydration` returns `{ substrate, adopt }`. The obligation travels in the return value rather than sitting on the substrate as an optional capability, because a capability a caller must know to look for can only be discharged by a caller who already knew. `@kyneta/exchange`'s `Runtime` takes the second path whenever stores are configured and calls `adopt()` once hydration resolves — before telling anyone the document has loaded, and before registering it, so peers never see the transient identity.
+
+**Plain uses the same hook for a different reason.** A plain document has no addressed operations, but its identity is its lineage, and authoring is what mints it. Its merge also does not commute with a local write: a stored whole-document entry, replayed after a write made during loading, overwrites it. So `plainSubstrateFactory.createForHydration` returns a substrate that refuses authored writes until `adopt()` — for plain, `adopt` grants the right to write. Merges during loading are announcements, not authored writes, and are unaffected.
 
 Backends opt in by implementing `SubstrateFactory.createForHydration`; `beginHydration` supplies `create()` plus a no-op for those that do not. **Both identity-bearing backends need it.** Yjs and Loro fail differently, which is worth knowing because the difference is misleading:
 

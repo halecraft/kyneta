@@ -1,15 +1,18 @@
 // use-text — collaborative plain-text binding for <input> and <textarea>.
 //
 // useText(textRef, options?) returns a React ref callback. When the callback
-// receives a non-null element, it calls attach() to set up bidirectional
-// binding. When it receives null (unmount), it calls the detach function.
+// receives a non-null element, it binds it: at once with attach() if the
+// document has loaded, otherwise with attachWhenLoaded(), which keeps the
+// element read-only until the load completes. When it receives null
+// (unmount), it calls the detach function.
 //
 // The hook does NOT cause re-renders on text changes. The textarea is an
 // uncontrolled element managed imperatively by the adapter. For reading
 // the text value reactively (e.g. character count), use useValue(textRef).
 
+import { hydrated, whenHydrated } from "@kyneta/exchange"
 import { useCallback, useRef } from "react"
-import { attach, type TextRefLike } from "./text-adapter.js"
+import { attach, attachWhenLoaded, type TextRefLike } from "./text-adapter.js"
 
 // ---------------------------------------------------------------------------
 // UseTextOptions
@@ -38,6 +41,9 @@ export interface UseTextOptions {
  *   return <textarea ref={textRef} />
  * }
  * ```
+ *
+ * The element is bound once its document has loaded, and is read-only until
+ * then: text typed before the load would be written over state not yet seen.
  *
  * The binding is model-as-source-of-truth:
  * - Local edits are captured on `input` events, diffed against the model,
@@ -74,9 +80,12 @@ export function useText(
         detachRef.current = null
       }
 
-      // Attach new binding
+      // Attach new binding. Checking `hydrated` first binds a loaded document
+      // on this render, with no read-only phase.
       if (element) {
-        detachRef.current = attach(element, textRef, { undo })
+        detachRef.current = hydrated(textRef)
+          ? attach(element, textRef, { undo })
+          : attachWhenLoaded(element, textRef, whenHydrated(textRef), { undo })
       }
     },
     [textRef, undo],

@@ -1024,8 +1024,9 @@ describe("Multi-store first-hit reads", () => {
         kind: "entirety",
         encoding: "json",
         data: '{"title":"from-A","count":1}',
+        lineage: "seed-1",
       },
-      version: "v1",
+      version: "seed-1:1",
     })
 
     // Store B has doc with DIFFERENT value "from-B"
@@ -1037,8 +1038,9 @@ describe("Multi-store first-hit reads", () => {
         kind: "entirety",
         encoding: "json",
         data: '{"title":"from-B","count":2}',
+        lineage: "seed-2",
       },
-      version: "v2",
+      version: "seed-2:1",
     })
 
     const exchange = createExchange({

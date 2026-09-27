@@ -21,6 +21,7 @@ import {
   Zero,
 } from "../index.js"
 import {
+  ALWAYS_AUTHOR,
   createPlainClock,
   createPlainReplica,
   createPlainSubstrate,
@@ -1250,7 +1251,12 @@ describe("PlainSubstrate.advance()", () => {
 // can construct a known cross-lineage scenario deterministically.
 function createSubstrateWithLineage(lineage: string) {
   const doc = { ...(Zero.structural(TestSchema) as object) }
-  return createPlainSubstrate(doc, createPlainClock(lineage), EMPTY_HISTORY)
+  return createPlainSubstrate(
+    doc,
+    createPlainClock(lineage),
+    EMPTY_HISTORY,
+    ALWAYS_AUTHOR,
+  )
 }
 
 describe("lineage-aware merge", () => {

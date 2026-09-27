@@ -74,7 +74,7 @@ export type StoreModel = {
 export type StoreInput =
   /** Hydration found the document in no store. */
   | { type: "register"; docId: DocId }
-  /** Hydration loaded the document at `version`. */
+  /** Hydration loaded the document; the store holds it at `version`. */
   | { type: "hydrated"; docId: DocId; version: string }
   /** The document's state may have moved past what the store holds. */
   | { type: "state-advanced"; docId: DocId }
@@ -209,8 +209,11 @@ export const storeProgram: Program<StoreInput, StoreModel, StoreEffect> = {
       }
 
       case "hydrated": {
+        // The store holds the document at `version`. The document may be
+        // ahead of that, by writes made while it loaded, so a `since` write
+        // is owed from there; when nothing arrived it touches no store.
         const phase: DocPhase = { status: "idle", version: msg.version }
-        return [withDoc(model, msg.docId, phase)]
+        return request(model, msg.docId, phase, "advance")
       }
 
       case "state-advanced": {

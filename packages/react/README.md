@@ -223,7 +223,7 @@ Built on [`@kyneta/reactive`](../reactive); change detection is version-driven (
 
 ### `useDocReady(doc, opts?)`
 
-The 90% gate. Returns a **monotonic** `boolean` that flips to `true` the first time the doc reconciles with a peer (receives data, **or** a terminal `vacant` reply) and never regresses — across the reconnect re-handshake flip or a reconciled peer departing. Flicker-free (a stable scalar). Pass `opts.peer` to require reconciliation with a peer matching a predicate (authority / quorum).
+The 90% gate. Returns a **monotonic** `boolean` that flips to `true` the first time the doc reconciles with a peer (receives data, **or** a terminal `vacant` reply) and never regresses — across the reconnect re-handshake flip or a reconciled peer departing. Flicker-free (a stable scalar). Pass `opts.authority` to require a specific peer (or `"self"`) to have answered.
 
 <!-- Not compiled: a fragment from inside a component, so it returns at top level. -->
 <!-- ts-docs-verifier:ignore -->
@@ -231,7 +231,7 @@ The 90% gate. Returns a **monotonic** `boolean` that flips to `true` the first t
 const ready = useDocReady(doc)
 if (!ready) return <Spinner />
 // require a service peer specifically:
-const authReady = useDocReady(doc, { peer: (p) => p.type === "service" })
+const authReady = useDocReady(doc, { authority: (p) => p.peerId === "my-server" })
 ```
 
 ### `useSyncState(doc)`
@@ -265,6 +265,8 @@ batch(doc, (d) => {
   d.items.push({ text: "New item", done: false })
 })
 ```
+
+A plain (`json.bind`) document backed by stores refuses writes until it has loaded, so render its write controls once `useDocReady(doc)` is `true`. `useText` handles this itself: its element stays read-only until the document has loaded, then shows the loaded text.
 
 ### Re-exports
 
