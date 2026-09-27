@@ -125,11 +125,11 @@ const doc = exchange.get("my-todos", TodoDoc)
 Access the underlying `Y.Doc` for direct Yjs API usage:
 
 ```ts
-import { yjs, createDoc } from "@kyneta/yjs-schema"
+import { yjs, createDoc, unwrap } from "@kyneta/yjs-schema"
 
 const MyDoc = yjs.bind(MySchema)
 const doc = createDoc(MyDoc)
-const yjsDoc = yjs(doc)
+const yjsDoc = unwrap(doc)
 
 // Use with Yjs ecosystem
 // y-websocket, y-indexeddb, y-webrtc, Hocuspocus, etc.
@@ -141,7 +141,7 @@ yjsDoc.clientID                  // client ID
 
 ## Yjs Ecosystem Compatibility
 
-Because `yjs(doc)` returns a standard `Y.Doc`, the entire Yjs provider ecosystem works out of the box:
+Because `unwrap(doc)` returns a standard `Y.Doc`, the entire Yjs provider ecosystem works out of the box:
 
 - **y-websocket** — WebSocket sync
 - **y-indexeddb** — Local persistence
@@ -149,6 +149,8 @@ Because `yjs(doc)` returns a standard `Y.Doc`, the entire Yjs provider ecosystem
 - **Hocuspocus** — Scalable Yjs server
 - **Liveblocks** — Managed collaboration infrastructure
 - **y-prosemirror** / **y-codemirror** — Rich text editor bindings
+
+The substrate writes one top-level type of its own, `kyneta.clock` (`DELETE_CLOCK`): after a change that deleted without inserting, it advances the document's state vector, so every change, a delete included, moves the version. Providers sync it like any other type.
 
 ## API Reference
 
@@ -164,7 +166,7 @@ Because `yjs(doc)` returns a standard `Y.Doc`, the entire Yjs provider ecosystem
 | `batch(doc, fn)` | Transactional mutation |
 | `subscribe(doc, callback)` | Observe changes |
 | `yjs.bind(schema)` | Bind schema for exchange use |
-| `yjs(ref)` | Escape hatch → `Y.Doc` |
+| `unwrap(ref)` | Escape hatch → `Y.Doc` |
 | `text()` | `Schema.text()` convenience — collaborative text schema kind |
 
 ### Low-level primitives (power users)

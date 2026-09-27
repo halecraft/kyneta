@@ -337,27 +337,15 @@ export function observeSyncEffect(fx: SyncEffect): ObsEventBody[] {
         peer,
         ...msgFields(fx.message),
       }))
-    case "send-offer":
-      return [
-        {
-          layer: "protocol",
-          kind: "message",
-          dir: "out",
-          peer: fx.to,
-          msgType: "offer",
-          docId: fx.docId,
-          version: fx.sinceVersion,
-        },
-      ]
     case "send-offers":
-      return fx.to.map(peer => ({
+      return fx.to.map(({ peerId, sinceVersion }) => ({
         layer: "protocol" as const,
         kind: "message" as const,
         dir: "out" as const,
-        peer,
+        peer: peerId,
         msgType: "offer",
         docId: fx.docId,
-        version: fx.sinceVersion,
+        version: sinceVersion,
       }))
     case "emit-doc-events":
       return fx.events.map(e => ({

@@ -120,8 +120,9 @@ export type Diagnostic =
  * - "synced": nothing left to receive from it;
  * - "vacant": it confirmed it doesn't have, and won't serve, this document.
  *
- * The two versions are facts in opposite directions, independent of the
- * status, so they survive it changing.
+ * The versions are facts independent of the status, so they survive it
+ * changing: two about our versions the peer holds (acknowledged, and
+ * expected once what we sent arrives), and one about its versions we hold.
  */
 export type PeerDocSyncState = {
   readonly status: "pending" | "synced" | "vacant"
@@ -131,9 +132,16 @@ export type PeerDocSyncState = {
    */
   readonly ourVersionTheyHold?: string
   /**
-   * The latest of this peer's versions we have applied: the version of the
-   * last offer we imported from it, or the version it stated when we already
-   * held it. Quoted back to it as an interest's `since`.
+   * The version of ours this peer will hold once every offer we have sent it
+   * arrives, joined with what its own offers said it holds. Each push to it
+   * starts here. Optimistic, unlike `ourVersionTheyHold`: it moves when we
+   * send, not when the peer acknowledges, and so never falls behind it.
+   */
+  readonly ourVersionTheyWillHold?: string
+  /**
+   * The latest of this peer's versions we hold: the version of the last offer
+   * of its we held, or the version it stated when we already held it. Quoted
+   * back to it as an interest's `since`.
    */
   readonly theirVersionWeHold?: string
   readonly lastUpdated: Date

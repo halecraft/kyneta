@@ -18,3 +18,7 @@ export {
   type ProjectionWrite,
   projectionConformance,
 } from "./projection-conformance.js"
+export {
+  type VersionConformanceOptions,
+  versionConformance,
+} from "./version-conformance.js"

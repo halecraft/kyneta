@@ -1,3 +1,4 @@
+import { versionConformance } from "@kyneta/schema/testing"
 import { LoroDoc } from "loro-crdt"
 import { describe, expect, it } from "vitest"
 import { LoroVersion } from "../version.js"
@@ -201,6 +202,7 @@ describe("LoroVersion", () => {
         serialize: () => "fake",
         compare: () => "equal" as const,
         meet: () => fake,
+        join: () => fake,
       }
       expect(() => v.compare(fake)).toThrow(
         "LoroVersion can only be compared with another LoroVersion",
@@ -228,5 +230,59 @@ describe("LoroVersion", () => {
       expect(earlyParsed.compare(late)).toBe("behind")
       expect(late.compare(earlyParsed)).toBe("ahead")
     })
+  })
+})
+
+// ===========================================================================
+// The lattice laws
+// ===========================================================================
+
+versionConformance({
+  label: "loro",
+  order: "partial",
+  samples: () => {
+    const one = new LoroDoc()
+    one.setPeerId(1n)
+    one.getText("t").insert(0, "ab")
+    one.commit()
+    const two = new LoroDoc()
+    two.setPeerId(2n)
+    two.getText("t").insert(0, "c")
+    two.commit()
+    const both = new LoroDoc()
+    both.import(one.export({ mode: "update" }))
+    both.import(two.export({ mode: "update" }))
+    return [new LoroDoc(), one, two, both].map(
+      doc => new LoroVersion(doc.version()),
+    )
+  },
+  parse: LoroVersion.parse,
+})
+
+describe("LoroVersion.join as an export cursor", () => {
+  it("exports what brings the peer to the joiner's state", () => {
+    // Alice holds her base, Bob wrote on top of it, and Alice wrote while
+    // taking Bob's write in. What Bob holds is the join of the two; the
+    // export from it carries Alice's own write and nothing of Bob's.
+    const alice = new LoroDoc()
+    alice.setPeerId(1n)
+    alice.getText("t").insert(0, "base")
+    alice.commit()
+    const bob = new LoroDoc()
+    bob.setPeerId(2n)
+    bob.import(alice.export({ mode: "update" }))
+    const prior = new LoroVersion(alice.version())
+    bob.getText("t").insert(4, "x".repeat(1000))
+    bob.commit()
+    const offered = new LoroVersion(bob.version())
+    alice.import(bob.export({ mode: "update", from: prior.vv }))
+    alice.getText("t").insert(0, "R")
+    alice.commit()
+
+    const joined = prior.join(offered)
+    const delta = alice.export({ mode: "update", from: joined.vv })
+    bob.import(delta)
+    expect(bob.getText("t").toString()).toBe(alice.getText("t").toString())
+    expect(delta.length).toBeLessThan(200)
   })
 })

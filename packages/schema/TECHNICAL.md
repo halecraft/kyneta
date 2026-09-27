@@ -290,7 +290,7 @@ interface ReplicaLike {
   exportEntirety(): SubstratePayload
   exportSince(since: Version): SubstratePayload | null
   advance(to: Version): void
-  merge(payload: SubstratePayload, options?: MergeOptions): MergeOutcome // "merged" | "gap"
+  merge(payload: SubstratePayload, options?: MergeOptions): void
   resetFromEntirety(payload: SubstratePayload, options?: MergeOptions): void
 }
 
@@ -328,7 +328,7 @@ Every replica exposes six methods:
 - `exportEntirety()` → full state as an opaque payload.
 - `exportSince(since)` → delta relative to the given version, or `null` when the cursor **cannot be served** (history trimmed past it, or an epoch this replica did not mint). `null` is not "nothing to send": the caller answers it with a whole document, so a peer that is merely current must get an empty delta instead. Conflating the two makes every agreement cost a full resend.
 - `advance(to)` → trim history as far as possible without passing `to`; a `to` the base has already passed, or one the replica cannot place, trims nothing.
-- `merge(payload, options?)` → fold an incoming payload into local state, and say whether it could: `"gap"` means the payload continues from a point this replica does not hold, and nothing was applied. Only an order-dependent merge (plain's positional log) ever reports it. A full substrate then brings σ up to date and announces the ops (see [The functional shadow](#the-functional-shadow)); subscribers receive them with `replay: true`, so layered consumers (e.g. the exchange's echo filter) can discriminate the merge from a local write. `options.origin` propagates as an app-level label. `MergeOptions` has no `source`: an echo token names a local caller and never survives a merge.
+- `merge(payload, options?)` → fold an incoming payload into local state. Whether it was taken in is whether the replica's version now reaches the version the payload was offered at (`reaches(version(), offered)`): a plain delta that does not continue the log is refused and applies nothing, and a CRDT holds back ops whose dependencies are missing, so both leave the version short. A full substrate then brings σ up to date and announces the ops (see [The functional shadow](#the-functional-shadow)); subscribers receive them with `replay: true`, so layered consumers (e.g. the exchange's echo filter) can discriminate the merge from a local write. `options.origin` propagates as an app-level label. `MergeOptions` has no `source`: an echo token names a local caller and never survives a merge.
 
 A `Substrate` adds interpretation:
 
@@ -362,9 +362,12 @@ Source: `packages/schema/src/version-vector.ts`.
 For substrates whose `V` is a map of `PeerId → number` (Lamport-style vectors), two helpers are provided:
 
 - `versionVectorMeet(a, b)` → the greatest lower bound. Component-wise minimum.
-- `versionVectorCompare(a, b)` → `-1 | 0 | 1 | "concurrent"`. Determines whether one version strictly precedes the other, equals it, or is concurrent.
+- `versionVectorJoin(a, b)` → the least upper bound. Component-wise maximum.
+- `versionVectorCompare(a, b)` → `"behind" | "equal" | "ahead" | "concurrent"`. Determines whether one version strictly precedes the other, equals it, or is concurrent.
 
-Both are pure. Loro and Yjs substrates use these directly for their Lamport vectors; substrates with different version shapes (wall clock, Loro's opaque version) implement their own comparison.
+All are pure. Loro and Yjs versions use them over their native vectors, through one private pair of projections each (to and from the vector), so `compare`, `meet` and `join` agree by construction.
+
+**`Version` is a lattice.** `meet` and `join` are commutative, associative and idempotent, bound their arguments from below and above, and absorb each other; `versionConformance` (`@kyneta/schema/testing`) checks the laws for any version type against samples of its own. `join` is defined within one lineage: a plain replica holds one, so two real lineages have no join and `PlainVersion.join` throws, and `StateVersion`'s counters from two incarnations have none either. **`reaches(ours, theirs)`** — `ours` ahead of or equal to `theirs` — is the one test of holding a version: whether an offer was taken in, and whether a stored delta loaded. It never reads a digest, which can answer only "equal".
 
 `PlainVersion` (the plain substrate's version, below) **is** a version vector — a single authored *lineage* entry `{lineage: value}`, with genesis (`DEFAULT_LINEAGE`) projecting to the **empty** vector ⊥. Its `compare`/`meet` delegate to `versionVectorCompare`/`versionVectorMeet` over that projection (`PlainVersion.#toVector`) — the same lattice Loro/Yjs use, with no Plain-specific case matrix. `Version.lineage` is the version-vector *lineage key* (the writer/identity coordinate), not a scalar bolted on beside the counter. A serialized writer holds at most one authored lineage at a time (prune-on-reset), so the vector is single-entry.
 
@@ -432,10 +435,10 @@ A plain log is addressed by position within a lineage, so a payload has to say w
 Merging is decode → decide → execute, once in `createPlainCore` for the substrate and the headless replica:
 
 - `decodePlainPayload` reads either shape into a `PlainPayload`.
-- `planMerge(position, lineage, payload)` is pure. A delta that starts at or before `position` appends the batches we lack, skipping the ones we hold, so a redelivered delta is harmless. One that starts past `position` is a **`gap`**: nothing is applied, and `merge` returns `"gap"` (`MergeOutcome`). A whole document ahead of `position` is **adopted**; at or behind it, nothing changes. A payload from a different REAL lineage is a gap, since it continues nothing we hold.
+- `planMerge(position, lineage, payload)` is pure. A delta that starts at or before `position` appends the batches we lack, skipping the ones we hold, so a redelivered delta is harmless. One that starts past `position` is a **`gap`**: nothing is applied, which leaves the version short of the one the delta was offered at, and the receiver asks for the rest. A whole document ahead of `position` is **adopted**; at or behind it, nothing changes. A payload from a different REAL lineage is a gap, since it continues nothing we hold.
 - One core `adopt` replaces the state, takes the lineage and restarts the log at `at`. `merge`'s adopt plan, `resetFromEntirety` (which adopts unconditionally) and `plainReplicaFactory.fromEntirety` all use it, so a document built from a peer's whole document is at the peer's version, not at count 1. A substrate announces only the top-level fields that moved (`movedRootKeys`).
 
-Why this matters: a push is a delta from the sender's previous version, and a peer that restarted without its state no longer holds that version. Appending the delta anyway corrupted it permanently (entries duplicated when the catch-up landed on top). A whole-document merge that appended one batch left the receiver's count disagreeing with the sender's, so every later delta mismatched.
+Why this matters: a push is a delta from the version the sender believes the receiver will hold, and a peer that restarted without its state no longer holds that version. Appending the delta anyway corrupted it permanently (entries duplicated when the catch-up landed on top). A whole-document merge that appended one batch left the receiver's count disagreeing with the sender's, so every later delta mismatched.
 
 `exportSince` returns an empty delta for a cursor at or ahead of the current position, and `null` only when the cursor is behind the trimmed base — the contract's "cannot serve". `advance(to)` trims nothing for a target from another lineage or one the base has already passed (genesis included), and throws only beyond the current position.
 
@@ -681,7 +684,7 @@ Three properties are load-bearing, and each has a test:
 - **Path sensitivity.** The same value under a different key must not fold alike. The path is encoded *structurally*: four lanes of the path prefix travel down the recursion as plain numbers with each key folded in, so no path string is ever built. That is also what keeps the walk allocation-free — an early version that allocated a digest per node cost 29.7 ms over 5000 leaves against 3.8 ms for this one.
 - **Nothing local.** `.decay()` is a read-time projection that never touches the tree, so two peers configured with different `decayMs` hold identical trees and must agree. `decayMs` is excluded from the schema hash for the same reason.
 
-The digest is deliberately **not** part of `Version`. A version orders things and supports `meet`, which `exchange.compact` relies on; digests have no meet, so putting one inside a version string would leave `StateVersion.meet` with no defined answer.
+The digest is deliberately **not** part of `Version`. A version orders things and supports `meet` and `join`, which `exchange.compact` and the exchange's push baselines rely on; digests have neither, so putting one inside a version string would leave them with no defined answer. The Yjs substrate reached the same conclusion from the other side: its version once carried a delete-set digest, and broke the lattice laws; it now advances its clock after every delete instead (see the Yjs backend's §"The delete clock").
 
 Collision resistance is four independent FNV-1a-32 lanes, which is ample against ordinary divergence and is not a claim of adversarial resistance. A peer that can choose leaf values could attack one lane at a time. Making this hostile-safe needs a real multiset hash.
 

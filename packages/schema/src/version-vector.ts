@@ -1,7 +1,8 @@
 // version-vector — shared utilities for version vector lattice operations.
 //
-// Two algebraic operations over version vectors (Map<K, number>):
+// Three algebraic operations over version vectors (Map<K, number>):
 // - versionVectorMeet: lattice meet (greatest lower bound)
+// - versionVectorJoin: lattice join (least upper bound)
 // - versionVectorCompare: partial-order comparison
 //
 // Used by both Loro (VersionVector → Map<PeerID, number>) and Yjs
@@ -40,6 +41,27 @@ export function versionVectorMeet<K>(
     // If key is not in b, min(aVal, 0) = 0 → omit
   }
 
+  return result
+}
+
+/**
+ * Compute the lattice join (least upper bound) of two version vectors: for
+ * each key present in either map, the larger of the two values (absent keys
+ * default to 0).
+ *
+ * Algebraic properties:
+ * - Commutative, associative, idempotent.
+ * - Upper bound: for all keys k, `a.get(k) ≤ result.get(k)` and `b.get(k) ≤ result.get(k)`.
+ * - Absorption with `versionVectorMeet`: `meet(a, join(a, b)) = a` and `join(a, meet(a, b)) = a`.
+ */
+export function versionVectorJoin<K>(
+  a: Map<K, number>,
+  b: Map<K, number>,
+): Map<K, number> {
+  const result = new Map(a)
+  for (const [key, bVal] of b) {
+    result.set(key, Math.max(result.get(key) ?? 0, bVal))
+  }
   return result
 }
 

@@ -221,6 +221,7 @@ describe("sync-program", () => {
           offered: "v2",
           fromPeerId: "bob",
           changed: true,
+          held: true,
         },
         model,
       )
@@ -266,6 +267,7 @@ describe("sync-program", () => {
           offered: "v2",
           fromPeerId: "bob",
           changed: true,
+          held: true,
         },
         model,
       )
@@ -296,6 +298,7 @@ describe("sync-program", () => {
           offered: "v2",
           fromPeerId: "bob",
           changed: true,
+          held: true,
         },
         model,
       )
@@ -351,6 +354,7 @@ describe("sync-program", () => {
           offered: "v2",
           fromPeerId: "bob",
           changed: true,
+          held: true,
         },
         model,
       )
@@ -452,6 +456,7 @@ describe("sync-program", () => {
           offered: "b:3",
           fromPeerId: "bob",
           changed: true,
+          held: true,
         },
         model,
       )
@@ -968,6 +973,7 @@ describe("sync-program", () => {
           offered: "bob-v7",
           fromPeerId: "bob",
           changed: true,
+          held: true,
         },
         model,
       )
@@ -1053,28 +1059,44 @@ describe("sync-program", () => {
       expect(model.pendingPeerSyncDocIds).toEqual(before.pendingPeerSyncDocIds)
     })
 
-    it("a gap asks the offering peer for what we lack", () => {
-      const { update, model } = importedFromBob()
+    it("an offer not held leaves its sender pending, keeps our cursor of theirs, and asks for the rest", () => {
+      const { update, model: before } = importedFromBob()
 
-      const [, effects] = applyUpdate(
+      const [model, effects] = applyUpdate(
         update,
-        { type: "sync/doc-gap", docId: "doc-1", fromPeerId: "bob" },
-        model,
+        {
+          type: "sync/doc-imported",
+          docId: "doc-1",
+          version: "v3",
+          offered: "bob-v9",
+          fromPeerId: "bob",
+          changed: true,
+          held: false,
+        },
+        before,
       )
 
-      expect(effects).toEqual([
+      expect(docState(model, "bob")?.status).toBe("pending")
+      expect(docState(model, "bob")?.theirVersionWeHold).toBe("bob-v7")
+      expect(effectsOfType(effects, "send-to-peer")).toEqual([
         {
           type: "send-to-peer",
           to: "bob",
           message: {
             type: "interest",
             docId: "doc-1",
-            version: "v2",
+            version: "v3",
             reciprocate: false,
             since: "bob-v7",
           },
         },
       ])
+    })
+
+    it("an offer held marks its sender synced and records what we hold of theirs", () => {
+      const { model } = importedFromBob()
+      expect(docState(model, "bob")?.status).toBe("synced")
+      expect(docState(model, "bob")?.theirVersionWeHold).toBe("bob-v7")
     })
 
     it("a returning peer's holding of ours is forgotten, and ours of theirs kept", () => {
@@ -1096,6 +1118,141 @@ describe("sync-program", () => {
     })
   })
 
+  describe("what each peer will hold", () => {
+    const willHold = (model: SyncModel, peer: string) =>
+      defined(
+        model.peers.get(peer)?.docSyncStates.get("doc-1"),
+        `${peer}'s state for doc-1`,
+      ).ourVersionTheyWillHold
+
+    /** Alice holds doc-1 at v1; bob and carol have each sent an interest. */
+    function bothInterested() {
+      const update = makeUpdate()
+      let model = initSync(alice)
+      ;[model] = addPeer(update, model, "bob", bob)
+      ;[model] = addPeer(update, model, "carol", carol)
+      ;[model] = ensureDoc(update, model, "doc-1")
+      ;[model] = receiveMessage(update, model, "bob", {
+        type: "interest",
+        docId: "doc-1",
+        version: "b0",
+      })
+      ;[model] = receiveMessage(update, model, "carol", {
+        type: "interest",
+        docId: "doc-1",
+        version: "c0",
+      })
+      return { update, model }
+    }
+
+    it("an interest, answered, brings the peer to our version", () => {
+      const { model } = bothInterested()
+      expect(willHold(model, "bob")).toBe("v1")
+      expect(willHold(model, "carol")).toBe("v1")
+    })
+
+    it("a local change pushes each peer from its own baseline, and moves every baseline", () => {
+      const { update, model: before } = bothInterested()
+      const [imported] = applyUpdate(
+        update,
+        {
+          type: "sync/doc-imported",
+          docId: "doc-1",
+          version: "v2",
+          offered: "b1",
+          fromPeerId: "bob",
+          changed: true,
+          held: true,
+          senderWillHold: "v1+b1",
+        },
+        before,
+      )
+      expect(willHold(imported, "bob")).toBe("v1+b1")
+      expect(willHold(imported, "carol")).toBe("v2")
+
+      const [model, effects] = applyUpdate(
+        update,
+        { type: "sync/local-doc-change", docId: "doc-1", version: "v3" },
+        imported,
+      )
+      expect(effectsOfType(effects, "send-offers")).toEqual([
+        {
+          type: "send-offers",
+          docId: "doc-1",
+          to: [
+            { peerId: "bob", sinceVersion: "v1+b1" },
+            { peerId: "carol", sinceVersion: "v2" },
+          ],
+        },
+      ])
+      expect(willHold(model, "bob")).toBe("v3")
+      expect(willHold(model, "carol")).toBe("v3")
+    })
+
+    it("an import relays to the other peers from theirs, not to its sender", () => {
+      const { update, model } = bothInterested()
+      const [, effects] = applyUpdate(
+        update,
+        {
+          type: "sync/doc-imported",
+          docId: "doc-1",
+          version: "v2",
+          offered: "b1",
+          fromPeerId: "bob",
+          changed: true,
+          held: true,
+          senderWillHold: "v1+b1",
+        },
+        model,
+      )
+      expect(effectsOfType(effects, "send-offers")).toEqual([
+        {
+          type: "send-offers",
+          docId: "doc-1",
+          to: [{ peerId: "carol", sinceVersion: "v1" }],
+        },
+      ])
+    })
+
+    it("an offer carries its sender's baseline to the shell", () => {
+      const { update, model } = bothInterested()
+      const [, effects] = receiveMessage(update, model, "bob", {
+        type: "offer",
+        docId: "doc-1",
+        version: "b1",
+        payload: { kind: "since", encoding: "json", data: "{}" },
+      })
+      expect(effectsOfType(effects, "import-doc-data")).toMatchObject([
+        { fromPeerId: "bob", ourVersionTheyWillHold: "v1" },
+      ])
+    })
+
+    it("a peer whose baseline we do not know is not pushed to", () => {
+      // A returning peer's baseline is forgotten; the answer to its interest
+      // catches it up.
+      const { update, model: before } = bothInterested()
+      const [returned] = applyUpdate(
+        update,
+        { type: "sync/peer-available", peerId: "bob", identity: bob },
+        before,
+      )
+      expect(willHold(returned, "bob")).toBeUndefined()
+
+      const [, effects] = applyUpdate(
+        update,
+        { type: "sync/local-doc-change", docId: "doc-1", version: "v2" },
+        returned,
+      )
+      expect(effectsOfType(effects, "send-offers")).toEqual([
+        {
+          type: "send-offers",
+          docId: "doc-1",
+          to: [{ peerId: "carol", sinceVersion: "v1" }],
+        },
+      ])
+    })
+  })
+
   describe("sync/message-received — interest", () => {
     it("collaborative doc: sends offer with sinceVersion", () => {
       const update = makeUpdate()
@@ -1111,11 +1268,13 @@ describe("sync-program", () => {
         version: "v0",
       })
 
-      const offers = effectsOfType(effects, "send-offer")
-      expect(offers.length).toBe(1)
-      expect(defined(offers[0], "offers[0]").to).toBe("bob")
-      expect(defined(offers[0], "offers[0]").docId).toBe("doc-1")
-      expect(defined(offers[0], "offers[0]").sinceVersion).toBe("v0")
+      expect(effectsOfType(effects, "send-offers")).toEqual([
+        {
+          type: "send-offers",
+          docId: "doc-1",
+          to: [{ peerId: "bob", sinceVersion: "v0" }],
+        },
+      ])
     })
 
     it("collaborative doc with reciprocate: sends offer + reciprocal interest", () => {
@@ -1133,9 +1292,11 @@ describe("sync-program", () => {
         reciprocate: true,
       })
 
-      const offers = effectsOfType(effects, "send-offer")
+      const offers = effectsOfType(effects, "send-offers")
       expect(offers.length).toBe(1)
-      expect(defined(offers[0], "offers[0]").to).toBe("bob")
+      expect(defined(offers[0], "offers[0]").to).toEqual([
+        { peerId: "bob", sinceVersion: "v0" },
+      ])
 
       const sends = effectsOfType(effects, "send-to-peer")
       const interestSend = sends.find(
@@ -1162,10 +1323,13 @@ describe("sync-program", () => {
         version: "v0",
       })
 
-      const offers = effectsOfType(effects, "send-offer")
-      expect(offers.length).toBe(1)
-      expect(defined(offers[0], "offers[0]").docId).toBe("doc-1")
-      expect(defined(offers[0], "offers[0]").sinceVersion).toBe("v0")
+      expect(effectsOfType(effects, "send-offers")).toEqual([
+        {
+          type: "send-offers",
+          docId: "doc-1",
+          to: [{ peerId: "bob", sinceVersion: "v0" }],
+        },
+      ])
     })
 
     it("ephemeral doc: sends offer (no sinceVersion)", () => {
@@ -1181,10 +1345,13 @@ describe("sync-program", () => {
         docId: "doc-1",
       })
 
-      const offers = effectsOfType(effects, "send-offer")
-      expect(offers.length).toBe(1)
-      expect(defined(offers[0], "offers[0]").docId).toBe("doc-1")
-      expect(defined(offers[0], "offers[0]").sinceVersion).toBeUndefined()
+      expect(effectsOfType(effects, "send-offers")).toEqual([
+        {
+          type: "send-offers",
+          docId: "doc-1",
+          to: [{ peerId: "bob", sinceVersion: undefined }],
+        },
+      ])
     })
 
     it("unknown doc: no-op", () => {
@@ -1329,6 +1496,7 @@ describe("sync-program", () => {
           offered: "bob:54",
           fromPeerId: "bob",
           changed: true,
+          held: true,
         },
         model,
       )
@@ -1361,6 +1529,7 @@ describe("sync-program", () => {
           offered: "v1",
           fromPeerId: "bob",
           changed: true,
+          held: true,
         },
         model,
       )
@@ -1420,9 +1589,13 @@ describe("sync-program", () => {
         { type: "sync/local-doc-change", docId: "doc-1", version: "v2" },
         model,
       )
-      const offers = effectsOfType(effects, "send-offers")
-      expect(offers.length).toBe(1)
-      expect(defined(offers[0], "offers[0]").to).toContain("bob")
+      expect(effectsOfType(effects, "send-offers")).toEqual([
+        {
+          type: "send-offers",
+          docId: "doc-1",
+          to: [{ peerId: "bob", sinceVersion: "v1" }],
+        },
+      ])
     })
 
     // The by-id request path. Announcing a doc has always been gated by
@@ -1445,7 +1618,7 @@ describe("sync-program", () => {
         version: "v0",
       })
 
-      expect(effectsOfType(effects, "send-offer")).toHaveLength(0)
+      expect(effectsOfType(effects, "send-offers")).toHaveLength(0)
       const replies = effectsOfType(effects, "send-to-peer")
       expect(replies).toHaveLength(1)
       expect(defined(replies[0], "replies[0]").to).toBe("bob")
@@ -1480,7 +1653,7 @@ describe("sync-program", () => {
         reciprocate: true,
       })
 
-      expect(effectsOfType(effects, "send-offer")).toHaveLength(0)
+      expect(effectsOfType(effects, "send-offers")).toHaveLength(0)
       const replies = effectsOfType(effects, "send-to-peer")
       expect(replies).toHaveLength(1)
       expect((defined(replies[0], "replies[0]").message as any).type).toBe(
@@ -1727,7 +1900,7 @@ describe("sync-program", () => {
         syncMode: SYNC_COLLABORATIVE,
       })
 
-      // Create a synced peer state for bob via doc-imported
+      // Bob offered us his version, which he holds: his baseline.
       ;[model] = update(
         {
           type: "sync/doc-imported",
@@ -1736,6 +1909,8 @@ describe("sync-program", () => {
           offered: "v2",
           fromPeerId: "bob",
           changed: true,
+          held: true,
+          senderWillHold: "v2",
         },
         model,
       )
@@ -1746,11 +1921,13 @@ describe("sync-program", () => {
         model,
       )
 
-      const offers = effectsOfType(effects, "send-offers")
-      expect(offers.length).toBe(1)
-      expect(defined(offers[0], "offers[0]").to).toContain("bob")
-      expect(defined(offers[0], "offers[0]").docId).toBe("doc-1")
-      expect(defined(offers[0], "offers[0]").sinceVersion).toBeDefined()
+      expect(effectsOfType(effects, "send-offers")).toEqual([
+        {
+          type: "send-offers",
+          docId: "doc-1",
+          to: [{ peerId: "bob", sinceVersion: "v2" }],
+        },
+      ])
     })
 
     it("pushes to synced peers for ephemeral, with a baseline to delta from", () => {
@@ -1762,18 +1939,11 @@ describe("sync-program", () => {
         syncMode: SYNC_EPHEMERAL,
       })
 
-      // Only bob has synced — carol has not expressed interest
-      ;[model] = update(
-        {
-          type: "sync/doc-imported",
-          docId: "doc-1",
-          version: "v2",
-          offered: "v2",
-          fromPeerId: "bob",
-          changed: true,
-        },
-        model,
-      )
+      // Only bob has expressed interest; carol has not.
+      ;[model] = receiveMessage(update, model, "bob", {
+        type: "interest",
+        docId: "doc-1",
+      })
 
       const [, effects] = applyUpdate(
         update,
@@ -1781,14 +1951,15 @@ describe("sync-program", () => {
         model,
       )
 
-      // Interest-based routing: only bob (synced) receives the push, not carol
-      const offers = effectsOfType(effects, "send-offers")
-      expect(offers.length).toBe(1)
-      expect(defined(offers[0], "offers[0]").to).toContain("bob")
-      expect(defined(offers[0], "offers[0]").to).not.toContain("carol")
-      // The baseline is the document's own pre-change version, shared by every
-      // recipient — one delta computed for the whole fan-out, not one per peer.
-      expect(defined(offers[0], "offers[0]").sinceVersion).toBe("v2")
+      // Interest-based routing: only bob receives the push, from the version
+      // our answer to his interest brought him to.
+      expect(effectsOfType(effects, "send-offers")).toEqual([
+        {
+          type: "send-offers",
+          docId: "doc-1",
+          to: [{ peerId: "bob", sinceVersion: "v1" }],
+        },
+      ])
     })
 
     it("emits state-advanced via model.pendingStateAdvancedDocIds", () => {
@@ -1869,6 +2040,7 @@ describe("sync-program", () => {
           offered: "bob-v7",
           fromPeerId: "bob",
           changed: true,
+          held: true,
         },
         model,
       )
@@ -1906,6 +2078,8 @@ describe("sync-program", () => {
           offered: "v2",
           fromPeerId: "bob",
           changed: true,
+          held: true,
+          senderWillHold: "v2",
         },
         model,
       )
@@ -1917,6 +2091,8 @@ describe("sync-program", () => {
           offered: "v3",
           fromPeerId: "carol",
           changed: true,
+          held: true,
+          senderWillHold: "v3",
         },
         model,
       )
@@ -1931,14 +2107,19 @@ describe("sync-program", () => {
           offered: "v4",
           fromPeerId: "bob",
           changed: true,
+          held: true,
         },
         model,
       )
 
-      const offers = effectsOfType(effects, "send-offers")
-      expect(offers.length).toBe(1)
-      expect(defined(offers[0], "offers[0]").to).toContain("carol")
-      expect(defined(offers[0], "offers[0]").to).not.toContain("bob") // excluded sender
+      // Relayed to carol from her baseline, not back to bob, the sender.
+      expect(effectsOfType(effects, "send-offers")).toEqual([
+        {
+          type: "send-offers",
+          docId: "doc-1",
+          to: [{ peerId: "carol", sinceVersion: "v3" }],
+        },
+      ])
     })
 
     it("emits readyStateChanged and stateAdvanced via model fields", () => {
@@ -1956,6 +2137,7 @@ describe("sync-program", () => {
           offered: "v2",
           fromPeerId: "bob",
           changed: true,
+          held: true,
         },
         model,
       )
@@ -2113,6 +2295,7 @@ describe("sync-program", () => {
         offered: "v3",
         fromPeerId: "bob",
         changed: true,
+        held: true,
       })
       drive({ type: "sync/doc-dismiss", docId: VETOED_DOC })
       drive({

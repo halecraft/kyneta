@@ -541,7 +541,6 @@ export type {
   HasTreeNodeAllocation,
   HydrationHandle,
   MergeOptions,
-  MergeOutcome,
   MetadataAxis,
   MetadataMismatch,
   PrepareIngress,
@@ -573,6 +572,7 @@ export {
   hasTreeNodeAllocation,
   mismatchForInterpretation,
   mismatchForSync,
+  reaches,
   replicaTypesCompatible,
   requiresBidirectionalSync,
   STRUCTURAL_YJS_CLIENT_ID,
@@ -620,6 +620,10 @@ export type { HasNativeAny } from "./unwrap.js"
 // Unwrap — typed escape hatch for accessing the native container backing a ref
 export { unwrap } from "./unwrap.js"
 // Version vector — shared lattice utilities for version vectors
-export { versionVectorCompare, versionVectorMeet } from "./version-vector.js"
+export {
+  versionVectorCompare,
+  versionVectorJoin,
+  versionVectorMeet,
+} from "./version-vector.js"
 // Zero — default values derived from the schema grammar
 export { scalarDefault, Zero, zeroInterpreter } from "./zero.js"

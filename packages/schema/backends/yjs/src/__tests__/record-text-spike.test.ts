@@ -26,6 +26,7 @@ import {
   subscribe,
   version,
 } from "@kyneta/schema"
+import { defined } from "@kyneta/schema/testing"
 import { describe, expect, it } from "vitest"
 import { yjs } from "../bind-yjs.js"
 
@@ -147,7 +148,7 @@ describe("record-of-struct (plain baseline)", () => {
 
     const delta = exportSince(docA, v0)
     expect(delta).not.toBeNull()
-    merge(docB, delta!, { origin: "sync" })
+    merge(docB, defined(delta, "delta"), { origin: "sync" })
 
     expect(docB.profiles()).toEqual({
       alice: { displayName: "Alice", age: 30 },
@@ -304,7 +305,7 @@ describe("text-inside-struct-inside-record", () => {
 
     const delta = exportSince(docA, v0)
     expect(delta).not.toBeNull()
-    merge(docB, delta!, { origin: "sync" })
+    merge(docB, defined(delta, "delta"), { origin: "sync" })
 
     expect(docB.profiles()).toEqual({
       alice: { displayName: "Alice", bio: "Hello from A" },
@@ -342,8 +343,8 @@ describe("text-inside-struct-inside-record", () => {
     const deltaBA = exportSince(docB, vA)
     expect(deltaAB).not.toBeNull()
     expect(deltaBA).not.toBeNull()
-    merge(docB, deltaAB!, { origin: "sync" })
-    merge(docA, deltaBA!, { origin: "sync" })
+    merge(docB, defined(deltaAB, "deltaAB"), { origin: "sync" })
+    merge(docA, defined(deltaBA, "deltaBA"), { origin: "sync" })
 
     // Both converge to the same value (order depends on client IDs)
     expect((docA as any).profiles.at("alice").bio()).toBe(
@@ -429,7 +430,7 @@ describe("text-inside-struct-inside-list", () => {
 
     const delta = exportSince(docA, v0)
     expect(delta).not.toBeNull()
-    merge(docB, delta!, { origin: "sync" })
+    merge(docB, defined(delta, "delta"), { origin: "sync" })
 
     expect(docB.players.length).toBe(1)
     expect((docB as any).players.at(0).name()).toBe("Alice")

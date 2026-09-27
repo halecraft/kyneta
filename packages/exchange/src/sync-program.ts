@@ -195,6 +195,20 @@ export type SyncInput =
        * forever in a mesh of three or more.
        */
       changed: boolean
+      /**
+       * Whether our version now reaches `offered`. An offer that leaves us
+       * short (a plain delta that did not continue our log, CRDT ops held
+       * back for a missing dependency, or ops of a third peer the sender held
+       * and we lack) is not held: we ask its sender for the rest.
+       */
+      held: boolean
+      /**
+       * What the sender will hold of ours, now that it has told us its
+       * version: its `ourVersionTheyWillHold` joined with `offered`, computed
+       * by the shell. Absent for a history-free document, whose versions do
+       * not join across replicas.
+       */
+      senderWillHold?: string
     }
   | {
       type: "sync/peer-synced"
@@ -202,12 +216,6 @@ export type SyncInput =
       /** The version the peer stated, which the check found we already hold. */
       version: string
       peerId: PeerId
-    }
-  | {
-      /** An offer did not continue what we hold, so nothing was applied. */
-      type: "sync/doc-gap"
-      docId: DocId
-      fromPeerId: PeerId
     }
   | { type: "sync/declare-vacant"; docId: DocId; to: PeerId }
   | { type: "sync/queue-doc-event"; event: DocChange }
@@ -267,16 +275,13 @@ export type SyncEffect =
   | { type: "send-to-peer"; to: PeerId; message: SyncMsg }
   | { type: "send-to-peers"; to: PeerId[]; message: SyncMsg }
   | {
-      type: "send-offer"
-      to: PeerId
-      docId: DocId
-      sinceVersion?: string
-    }
-  | {
       type: "send-offers"
-      to: PeerId[]
       docId: DocId
-      sinceVersion?: string
+      /** Each recipient, and the version its offer starts from; absent sends the whole document. */
+      to: ReadonlyArray<{
+        readonly peerId: PeerId
+        readonly sinceVersion?: string
+      }>
     }
   | {
       type: "import-doc-data"
@@ -295,10 +300,15 @@ export type SyncEffect =
       accept: boolean
       /**
        * The sender's `Replica.digest()`, when its version cannot answer
-       * equality on its own. Compared *after* the merge: the question is
-       * whether we still differ once we have taken in what arrived.
+       * equality on its own. Compared before anything is applied, to decide
+       * whether there is anything to take in.
        */
       digest?: string
+      /**
+       * The sender's `ourVersionTheyWillHold`, carried so the shell can join
+       * it with the offered version without reading this program's state.
+       */
+      ourVersionTheyWillHold?: string
     }
   | {
       /**
@@ -455,6 +465,7 @@ function setPeerDocState(
 type PeerDocSyncPatch = {
   readonly status?: PeerDocSyncState["status"]
   readonly ourVersionTheyHold?: string
+  readonly ourVersionTheyWillHold?: string
   readonly theirVersionWeHold?: string
 }
 
@@ -612,39 +623,46 @@ function versionTheyHold(message: InterestMsg): string | undefined {
 }
 
 /**
- * Build a push effect for document changes — used for both local changes
- * and relay (imported changes forwarded to other peers).
+ * Push a document's change to every peer we push to, each from what it will
+ * hold, and move each one's baseline to `version`, the version after the
+ * change. Used for local changes and to relay an import to the peers that did
+ * not send it (`excludePeerId`).
  *
- * When `excludePeerId` is provided, that peer is excluded from the push
- * (relay case: don't echo back to the sender).
+ * The baseline is per peer because peers hold different things: after an
+ * import, its sender holds what it offered and every other peer does not.
+ * It moves when we send, not when the peer acknowledges: a baseline that
+ * waited for the acknowledgement would lag every offer in flight, and each
+ * push would resend them (an earlier per-peer attempt corrupted plain replay
+ * this way, jj:5e9e3185). A peer whose baseline we do not know, one that has
+ * just come back, is not pushed to; the answer to its interest catches it up.
+ * A peer that no longer holds its baseline, one that restarted without its
+ * state, takes the push short of the offered version and asks for the rest.
  */
 function buildPush(
   docId: DocId,
-  docEntry: DocEntry,
   model: SyncModel,
   canShare: SyncPredicate,
+  version: string,
   excludePeerId?: PeerId,
-): SyncEffect | undefined {
+): [SyncModel, ...SyncEffect[]] {
   // Interest-based routing for all protocols — only peers who have
   // expressed interest (via announce → interest → offer) receive pushes.
   const raw = getSyncedPeers(model, docId, excludePeerId)
   const peerIds = filterPeersByShare(model, raw, docId, canShare)
-  if (peerIds.length === 0) return undefined
-
-  // sinceVersion is the doc's own pre-change baseline (docEntry.version),
-  // shared by every target peer: on a reliable, ordered channel each push
-  // starts where the previous one ended. A per-peer baseline would have to
-  // be what the peer is known to hold (`ourVersionTheyHold`), which lags
-  // every push still in flight, so each push would resend them; an earlier
-  // per-peer attempt corrupted op replay for this reason (jj:5e9e3185). A
-  // peer that no longer holds the baseline, one that restarted without its
-  // state, reports a gap on merge and asks for a catch-up (`sync/doc-gap`).
-  return {
-    type: "send-offers",
-    to: peerIds,
-    docId,
-    sinceVersion: docEntry.version,
+  const to: { peerId: PeerId; sinceVersion: string }[] = []
+  let pushed = model
+  for (const peerId of peerIds) {
+    const since = model.peers
+      .get(peerId)
+      ?.docSyncStates.get(docId)?.ourVersionTheyWillHold
+    if (since === undefined) continue
+    to.push({ peerId, sinceVersion: since })
+    pushed = setPeerDocState(pushed, peerId, docId, {
+      ourVersionTheyWillHold: version,
+    })
   }
+  if (to.length === 0) return [model]
+  return [pushed, { type: "send-offers", docId, to }]
 }
 
 /**
@@ -731,10 +749,9 @@ function buildInterestResponse(
   const effects: SyncEffect[] = []
 
   effects.push({
-    type: "send-offer",
-    to: fromPeerId,
+    type: "send-offers",
     docId: message.docId,
-    sinceVersion: versionTheyHold(message),
+    to: [{ peerId: fromPeerId, sinceVersion: versionTheyHold(message) }],
   })
 
   // Concurrent writers need to hear each other, so ask for the peer's state
@@ -858,8 +875,6 @@ export function createSyncUpdate(
         return handleDocImported(input, model, canShare)
       case "sync/peer-synced":
         return handlePeerSynced(input, model)
-      case "sync/doc-gap":
-        return handleDocGap(input, model)
       case "sync/declare-vacant":
         return handleDeclareVacant(input, model)
       case "sync/queue-doc-event":
@@ -942,12 +957,18 @@ function handlePeerAvailable(
   return present ? [updatedModel, present] : [updatedModel]
 }
 
-/** The same sync states, with no record of which of our versions the peer holds. */
+/**
+ * The same sync states, with no record of which of our versions the peer
+ * holds or will hold: a peer that comes back may have lost its state.
+ */
 function forgetWhatTheyHold(
   states: ReadonlyMap<DocId, PeerDocSyncState> | undefined,
 ): Map<DocId, PeerDocSyncState> {
   const forgotten = new Map<DocId, PeerDocSyncState>()
-  for (const [docId, { ourVersionTheyHold: _, ...rest }] of states ?? []) {
+  for (const [
+    docId,
+    { ourVersionTheyHold: _held, ourVersionTheyWillHold: _willHold, ...rest },
+  ] of states ?? []) {
     forgotten.set(docId, rest)
   }
   return forgotten
@@ -1128,14 +1149,9 @@ function handleLocalDocChange(
   const docEntry = model.documents.get(msg.docId)
   if (!docEntry) return [model]
 
-  // Update version
   const documents = new Map(model.documents)
   documents.set(msg.docId, { ...docEntry, version: msg.version })
-
-  // Push to peers based on sync protocol
-  const effect = buildPush(msg.docId, docEntry, model, canShare)
-
-  const nextModel: SyncModel = {
+  const bumped: SyncModel = {
     ...model,
     documents,
     pendingStateAdvancedDocIds: appendUniqueDocId(
@@ -1143,7 +1159,7 @@ function handleLocalDocChange(
       msg.docId,
     ),
   }
-  return effect ? [nextModel, effect] : [nextModel]
+  return buildPush(msg.docId, bumped, canShare, msg.version)
 }
 
 function handleDocDelete(
@@ -1219,21 +1235,11 @@ function handleDocImported(
   const docEntry = model.documents.get(msg.docId)
   if (!docEntry) return [model]
 
-  // Relay to other peers (multi-hop propagation), but only for an import that
-  // actually moved us. Re-broadcasting state a peer already held is what turns
-  // a three-peer mesh into a cycle: every peer relays to everyone but the
-  // sender, so there is always somewhere left to forward to.
-  //
-  // Must read docEntry.version BEFORE updating — this is the "since" version
-  // for delta export, so peers receive exactly the imported ops.
-  const effect = msg.changed
-    ? buildPush(msg.docId, docEntry, model, canShare, msg.fromPeerId)
-    : undefined
-
   // Bump version + record state-advanced (regardless of peer presence). An
   // import that changed nothing advanced nothing, so subscribers hear nothing.
+  const bumpedEntry: DocEntry = { ...docEntry, version: msg.version }
   const documents = new Map(model.documents)
-  documents.set(msg.docId, { ...docEntry, version: msg.version })
+  documents.set(msg.docId, bumpedEntry)
   const bumped: SyncModel = {
     ...model,
     documents,
@@ -1242,27 +1248,45 @@ function handleDocImported(
       : model.pendingStateAdvancedDocIds,
   }
 
-  // Fold the peer's sync transition through the single fold point. What we
-  // now hold of theirs is the version they offered, in their terms.
-  const nextModel = setPeerDocState(bumped, msg.fromPeerId, msg.docId, {
-    status: "synced",
-    theirVersionWeHold: msg.offered,
-  })
-  return effect ? [nextModel, effect] : [nextModel]
-}
+  // Relay to the other peers, each from what it will hold, but only for an
+  // import that moved us. Re-broadcasting state a peer already held is what
+  // turns a three-peer mesh into a cycle: every peer relays to everyone but
+  // the sender, so there is always somewhere left to forward to.
+  const [relayed, ...relay] = msg.changed
+    ? buildPush(msg.docId, bumped, canShare, msg.version, msg.fromPeerId)
+    : [bumped]
 
-/**
- * An offer did not continue what we hold (`MergeOutcome` `"gap"`), so nothing
- * was applied. Ask its sender for what we lack: an interest quoting our
- * version and the cursor of theirs we hold.
- */
-function handleDocGap(
-  msg: Extract<SyncInput, { type: "sync/doc-gap" }>,
-  model: SyncModel,
-): [SyncModel, ...SyncEffect[]] {
-  const docEntry = model.documents.get(msg.docId)
-  if (!docEntry) return [model]
-  return [model, interestTo(model, msg.fromPeerId, msg.docId, docEntry, false)]
+  // The sender told us its version, which it holds: its baseline joins it.
+  const willHold =
+    msg.senderWillHold === undefined
+      ? {}
+      : { ourVersionTheyWillHold: msg.senderWillHold }
+
+  // Held: nothing left to receive from this peer, and what we now hold of
+  // theirs is the version they offered, in their terms.
+  if (msg.held) {
+    return [
+      setPeerDocState(relayed, msg.fromPeerId, msg.docId, {
+        status: "synced",
+        theirVersionWeHold: msg.offered,
+        ...willHold,
+      }),
+      ...relay,
+    ]
+  }
+
+  // Not held: we still lack something the sender holds. Ask it for the rest,
+  // quoting our version and the cursor of theirs we do hold; its answer is the
+  // catch-up.
+  const pending = setPeerDocState(relayed, msg.fromPeerId, msg.docId, {
+    status: "pending",
+    ...willHold,
+  })
+  return [
+    pending,
+    ...relay,
+    interestTo(pending, msg.fromPeerId, msg.docId, bumpedEntry, false),
+  ]
 }
 
 function handlePeerSynced(
@@ -1515,6 +1539,8 @@ function handleInterestForKnownDoc(
     setPeerDocState(model, fromPeerId, message.docId, {
       status: "pending",
       ourVersionTheyHold: versionTheyHold(message),
+      // The answer above brings the peer to our version.
+      ourVersionTheyWillHold: docEntry.version,
     }),
     ...effects,
     {
@@ -1551,7 +1577,7 @@ function handleOffer(
   if (!canAccept(message.docId, peerState.identity)) return [model]
 
   // Import the payload — the shell calls replica.merge(payload) and reports
-  // back with `sync/doc-imported`, `sync/peer-synced` or `sync/doc-gap`.
+  // back with `sync/doc-imported` or `sync/peer-synced`.
   return [
     model,
     {
@@ -1564,6 +1590,8 @@ function handleOffer(
       accept:
         docEntry.historyFree === false &&
         canShare(message.docId, peerState.identity),
+      ourVersionTheyWillHold: peerState.docSyncStates.get(message.docId)
+        ?.ourVersionTheyWillHold,
     },
   ]
 }

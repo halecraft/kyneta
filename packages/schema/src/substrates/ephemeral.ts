@@ -42,7 +42,6 @@ import {
 import type { Schema as SchemaNode } from "../schema.js"
 import type {
   MergeOptions,
-  MergeOutcome,
   RecordInverseFn,
   Replica,
   ReplicaFactory,
@@ -149,6 +148,27 @@ export class StateVersion implements Version {
     return new StateVersion(
       this.incarnation,
       Math.min(this.installSeq, other.installSeq),
+    )
+  }
+
+  /**
+   * Within one incarnation the counters order, so the join is the larger.
+   * Counters from two incarnations measure different replicas' intake and
+   * have no join; nothing asks for one, since a history-free document's
+   * versions are never joined across replicas.
+   */
+  join(other: Version): StateVersion {
+    if (!(other instanceof StateVersion)) {
+      throw new Error("StateVersion mismatch")
+    }
+    if (other.incarnation !== this.incarnation) {
+      throw new Error(
+        "StateVersion: counters from two incarnations have no join",
+      )
+    }
+    return new StateVersion(
+      this.incarnation,
+      Math.max(this.installSeq, other.installSeq),
     )
   }
 
@@ -307,7 +327,7 @@ function createStateReplicaCore(
       }
     },
 
-    merge(payload: SubstratePayload): MergeOutcome {
+    merge(payload: SubstratePayload): void {
       if (payload.encoding !== "json" || typeof payload.data !== "string") {
         throw new Error("StateReplica expects JSON-encoded StateTree payloads.")
       }
@@ -333,7 +353,6 @@ function createStateReplicaCore(
       // two peers, where the sender is excluded from the relay and the cycle
       // closes, and an endless loop among three, where it never does.
       if (!changed) installSeq -= 1
-      return "merged"
     },
 
     resetFromEntirety(payload: SubstratePayload): void {
@@ -541,13 +560,12 @@ export function createStateSubstrate(
       return core.exportSince(since)
     },
 
-    merge(payload: SubstratePayload, options?: MergeOptions): MergeOutcome {
+    merge(payload: SubstratePayload, options?: MergeOptions): void {
       // Both kinds join the same way. A delta is a partial tree and the merge
       // unions keys, so a key it omits is one it makes no claim about — the
       // same rule that makes an entirety safe to join rather than adopt.
       core.merge(payload)
       announceReprojection(Date.now(), options?.origin)
-      return "merged"
     },
 
     resetFromEntirety(payload: SubstratePayload, options?: MergeOptions): void {
@@ -598,8 +616,8 @@ export function createStateReplica(): Replica<StateVersion> {
     advance: core.advance,
     exportEntirety: core.exportEntirety,
     exportSince: core.exportSince,
-    merge(payload: SubstratePayload): MergeOutcome {
-      return core.merge(payload)
+    merge(payload: SubstratePayload): void {
+      core.merge(payload)
     },
     resetFromEntirety(payload: SubstratePayload) {
       // See createStateSubstrate's resetFromEntirety — same rationale:

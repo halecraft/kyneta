@@ -12,6 +12,7 @@ import {
   base64ToUint8Array,
   DEFAULT_LINEAGE,
   uint8ArrayToBase64,
+  versionVectorJoin,
   versionVectorMeet,
 } from "@kyneta/schema"
 import { VersionVector } from "loro-crdt"
@@ -96,6 +97,20 @@ export class LoroVersion implements Version {
       throw new Error("LoroVersion can only be meet'd with another LoroVersion")
     }
     const result = versionVectorMeet(this.vv.toJSON(), other.vv.toJSON())
+    return new LoroVersion(new VersionVector(result))
+  }
+
+  /**
+   * Least upper bound (lattice join) of two Loro versions: the
+   * component-wise maximum of the two version vectors.
+   *
+   * @throws If `other` is not a `LoroVersion`.
+   */
+  join(other: Version): LoroVersion {
+    if (!(other instanceof LoroVersion)) {
+      throw new Error("LoroVersion can only be joined with another LoroVersion")
+    }
+    const result = versionVectorJoin(this.vv.toJSON(), other.vv.toJSON())
     return new LoroVersion(new VersionVector(result))
   }
 

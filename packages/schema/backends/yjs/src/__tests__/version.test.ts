@@ -1,4 +1,4 @@
-import { uint8ArrayToBase64 } from "@kyneta/schema"
+import { versionConformance } from "@kyneta/schema/testing"
 import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
 import { YjsVersion } from "../version.js"
@@ -190,6 +190,7 @@ describe("YjsVersion", () => {
         serialize: () => "fake",
         compare: () => "equal" as const,
         meet: () => fake,
+        join: () => fake,
       }
       expect(() => v.compare(fake)).toThrow(
         "YjsVersion can only be compared with another YjsVersion",
@@ -198,131 +199,38 @@ describe("YjsVersion", () => {
   })
 
   // ===========================================================================
-  // Snapshot-aware comparison (delete detection)
+  // A state vector alone
   // ===========================================================================
 
-  describe("YjsVersion: snapshot-aware comparison (delete detection)", () => {
+  describe("a state vector alone", () => {
     it("serialized size stays bounded across many non-contiguous insert-then-delete cycles", () => {
-      // Regression test for unbounded version growth: Yjs's delete set only
-      // merges ADJACENT same-client deleted ranges. A workload that commits
-      // permanent text interleaved with insert-then-delete "correction"
-      // cycles (e.g. STT partial corrections) produces non-contiguous
-      // deletes that never merge, so the raw encoded snapshot — and
-      // therefore the old raw-bytes YjsVersion representation — grew
-      // without bound. The digest-based representation must stay flat.
+      // Yjs's delete set only merges adjacent same-client ranges, so a
+      // workload of insert-then-correct cycles (STT partial corrections)
+      // accumulates delete ranges forever. A version must grow with the
+      // number of clients, never with that history.
       const doc = new Y.Doc()
       const text = doc.getText("body")
 
       function correctionCycle(i: number): void {
-        text.insert(text.length, `word${i} `) // permanently committed
+        text.insert(text.length, `word${i} `)
         text.insert(text.length, "partialguess")
-        text.delete(text.length - 12, 12) // non-contiguous delete
+        text.delete(text.length - 12, 12)
       }
 
       for (let i = 0; i < 10; i++) correctionCycle(i)
-      const lenAt10 = new YjsVersion(
-        Y.encodeStateVector(doc),
-        Y.encodeSnapshot(Y.snapshot(doc)),
-      ).serialize().length
+      const lenAt10 = YjsVersion.fromDoc(doc).serialize().length
+      for (let i = 10; i < 1000; i++) correctionCycle(i)
+      const lenAt1000 = YjsVersion.fromDoc(doc).serialize().length
 
-      for (let i = 10; i < 100; i++) correctionCycle(i)
-      const lenAt100 = new YjsVersion(
-        Y.encodeStateVector(doc),
-        Y.encodeSnapshot(Y.snapshot(doc)),
-      ).serialize().length
-
-      for (let i = 100; i < 1000; i++) correctionCycle(i)
-      const lenAt1000 = new YjsVersion(
-        Y.encodeStateVector(doc),
-        Y.encodeSnapshot(Y.snapshot(doc)),
-      ).serialize().length
-
-      // A single client ID (state vector) plus a fixed-size digest — the
-      // serialized length must not grow with cycle count.
-      expect(lenAt100).toBe(lenAt10)
-      expect(lenAt1000).toBe(lenAt10)
+      // The clock grows by a varint byte or two, never with the delete set.
+      expect(lenAt1000 - lenAt10).toBeLessThanOrEqual(4)
     })
 
-    it("compare returns 'concurrent' when SVs match but delete sets differ", () => {
+    it("refuses a string that is not a base64 state vector", () => {
       const doc = new Y.Doc()
       doc.getText("body").insert(0, "hello")
-      const sv1 = Y.encodeStateVector(doc)
-      const snap1 = Y.encodeSnapshot(Y.snapshot(doc))
-      const v1 = new YjsVersion(sv1, snap1)
-
-      doc.getText("body").delete(1, 1)
-      const sv2 = Y.encodeStateVector(doc)
-      const snap2 = Y.encodeSnapshot(Y.snapshot(doc))
-      const v2 = new YjsVersion(sv2, snap2)
-
-      // SVs are identical (Yjs doesn't advance SV on delete)
-      expect(v1.compare(v2)).toBe("concurrent")
-      expect(v2.compare(v1)).toBe("concurrent")
-    })
-
-    it("compare returns 'equal' when both SV and delete set match", () => {
-      const doc = new Y.Doc()
-      doc.getText("body").insert(0, "hello")
-      doc.getText("body").delete(1, 1)
-      const sv = Y.encodeStateVector(doc)
-      const snap = Y.encodeSnapshot(Y.snapshot(doc))
-
-      const v1 = new YjsVersion(sv, snap)
-      const v2 = new YjsVersion(sv, snap)
-      expect(v1.compare(v2)).toBe("equal")
-    })
-
-    it("serialize/parse round-trips the delete-set digest", () => {
-      const doc = new Y.Doc()
-      doc.getText("body").insert(0, "hello")
-      doc.getText("body").delete(1, 1)
-      const sv = Y.encodeStateVector(doc)
-      const snap = Y.encodeSnapshot(Y.snapshot(doc))
-      const v = new YjsVersion(sv, snap)
-
-      const parsed = YjsVersion.parse(v.serialize())
-      expect(parsed.compare(v)).toBe("equal")
-      // Digest is a fixed-size (32-char hex) fingerprint, preserved
-      // byte-for-byte through the round-trip (not re-hashed from raw bytes).
-      expect(parsed.deleteSetDigest).toBe(v.deleteSetDigest)
-      expect(parsed.deleteSetDigest).toMatch(/^[0-9a-f]{32}$/)
-    })
-
-    it("SV-ahead still returns 'ahead' even with different snapshots", () => {
-      const doc = new Y.Doc()
-      doc.getText("body").insert(0, "hello")
-      const sv1 = Y.encodeStateVector(doc)
-      const snap1 = Y.encodeSnapshot(Y.snapshot(doc))
-      const v1 = new YjsVersion(sv1, snap1)
-
-      doc.getText("body").insert(5, " world")
-      doc.getText("body").delete(0, 1)
-      const sv2 = Y.encodeStateVector(doc)
-      const snap2 = Y.encodeSnapshot(Y.snapshot(doc))
-      const v2 = new YjsVersion(sv2, snap2)
-
-      // v2 has more inserts (SV advanced), snapshot check is moot
-      expect(v2.compare(v1)).toBe("ahead")
-      expect(v1.compare(v2)).toBe("behind")
-    })
-
-    it("legacy parse (no dot) treats SV bytes as snapshot", () => {
-      // Legacy serialized format: just base64(sv), no "."
-      const doc = new Y.Doc()
-      doc.getText("body").insert(0, "hello")
-      const sv = Y.encodeStateVector(doc)
-
-      const legacy = new YjsVersion(sv) // no snapshot arg
-      const serialized = legacy.serialize()
-      // Should have a "." separator in new format
-      expect(serialized).toContain(".")
-
-      // But parsing old-format strings without "." should work
-      const oldFormat = uint8ArrayToBase64(sv) // no dot
-      const parsed = YjsVersion.parse(oldFormat)
-      // deleteSetDigest defaults to a digest of the SV bytes themselves
-      expect(parsed.sv.length).toBe(sv.length)
-      expect(parsed.deleteSetDigest).toBe(legacy.deleteSetDigest)
+      const withSuffix = `${YjsVersion.fromDoc(doc).serialize()}.${"0".repeat(32)}`
+      expect(() => YjsVersion.parse(withSuffix)).toThrow()
     })
   })
 
@@ -353,6 +261,23 @@ describe("YjsVersion", () => {
   // -------------------------------------------------------------------------
 
   describe("YjsVersion.meet()", () => {
+    it("is a lower bound of a replica holding an offer plus deletes of its own", () => {
+      // The replica took everything `offerer` had, then deleted locally. It
+      // holds everything the offerer does, and their meet is below both.
+      const offerer = new Y.Doc()
+      offerer.getText("t").insert(0, "abc")
+      const replica = new Y.Doc()
+      Y.applyUpdate(replica, Y.encodeStateAsUpdate(offerer))
+      replica.getText("t").delete(1, 1)
+      const ours = YjsVersion.fromDoc(replica)
+      const theirs = YjsVersion.fromDoc(offerer)
+
+      expect(["ahead", "equal"]).toContain(ours.compare(theirs))
+      const meet = ours.meet(theirs)
+      expect(["behind", "equal"]).toContain(meet.compare(ours))
+      expect(["behind", "equal"]).toContain(meet.compare(theirs))
+    })
+
     it("meet of concurrent versions produces component-wise minimum", () => {
       // Create two docs with independent edits
       const doc1 = new Y.Doc()
@@ -421,4 +346,26 @@ describe("YjsVersion", () => {
       expect(meet.compare(early)).toBe("equal")
     })
   })
+})
+
+// ===========================================================================
+// The lattice laws
+// ===========================================================================
+
+versionConformance({
+  label: "yjs",
+  order: "partial",
+  samples: () => {
+    const one = new Y.Doc()
+    one.clientID = 1
+    one.getText("t").insert(0, "ab")
+    const two = new Y.Doc()
+    two.clientID = 2
+    two.getText("t").insert(0, "c")
+    const both = new Y.Doc()
+    Y.applyUpdate(both, Y.encodeStateAsUpdate(one))
+    Y.applyUpdate(both, Y.encodeStateAsUpdate(two))
+    return [new Y.Doc(), one, two, both].map(doc => YjsVersion.fromDoc(doc))
+  },
+  parse: YjsVersion.parse,
 })

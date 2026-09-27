@@ -18,6 +18,7 @@ import {
   Schema,
 } from "@kyneta/schema"
 import {
+  defined,
   type PositionTestEnv,
   positionConformance,
 } from "@kyneta/schema/testing"
@@ -156,10 +157,10 @@ describe("YjsPosition: concurrent edits", () => {
     const idx2 = pos2.resolve()
     expect(idx1).not.toBeNull()
     expect(idx2).not.toBeNull()
-    expect(idx1!).toBeGreaterThanOrEqual(0)
-    expect(idx2!).toBeGreaterThanOrEqual(0)
-    expect(idx1!).toBeLessThanOrEqual(finalText.length)
-    expect(idx2!).toBeLessThanOrEqual(finalText.length)
+    expect(defined(idx1, "idx1")).toBeGreaterThanOrEqual(0)
+    expect(defined(idx2, "idx2")).toBeGreaterThanOrEqual(0)
+    expect(defined(idx1, "idx1")).toBeLessThanOrEqual(finalText.length)
+    expect(defined(idx2, "idx2")).toBeLessThanOrEqual(finalText.length)
   })
 
   it("sticky side preserved through concurrent inserts at same position", () => {
@@ -213,7 +214,9 @@ describe("YjsPosition: concurrent edits", () => {
 
     // Left-sticky should be ≤ right-sticky: the left-sticky cursor
     // stays before insertions at its gap, while right-sticky shifts past.
-    expect(leftIdx!).toBeLessThanOrEqual(rightIdx!)
+    expect(defined(leftIdx, "leftIdx")).toBeLessThanOrEqual(
+      defined(rightIdx, "rightIdx"),
+    )
   })
 
   it("position survives deletion on remote peer and re-insertion", () => {
@@ -251,8 +254,10 @@ describe("YjsPosition: concurrent edits", () => {
     // — they bind to item IDs, and deleted items remain in the CRDT graph)
     const afterDelete = pos.resolve()
     expect(afterDelete).not.toBeNull()
-    expect(afterDelete!).toBeGreaterThanOrEqual(0)
-    expect(afterDelete!).toBeLessThanOrEqual(ref1.title().length)
+    expect(defined(afterDelete, "afterDelete")).toBeGreaterThanOrEqual(0)
+    expect(defined(afterDelete, "afterDelete")).toBeLessThanOrEqual(
+      ref1.title().length,
+    )
 
     // Now insert new content near the collapsed position
     batch(ref1, (d: any) => {
@@ -262,8 +267,10 @@ describe("YjsPosition: concurrent edits", () => {
     // Position should still resolve to a valid index
     const afterInsert = pos.resolve()
     expect(afterInsert).not.toBeNull()
-    expect(afterInsert!).toBeGreaterThanOrEqual(0)
-    expect(afterInsert!).toBeLessThanOrEqual(ref1.title().length)
+    expect(defined(afterInsert, "afterInsert")).toBeGreaterThanOrEqual(0)
+    expect(defined(afterInsert, "afterInsert")).toBeLessThanOrEqual(
+      ref1.title().length,
+    )
   })
 
   it("encode/decode round-trip works across synced documents", () => {
@@ -369,8 +376,10 @@ describe("YjsPosition: concurrent edits", () => {
     ] as const) {
       const idx = pos.resolve()
       expect(idx, `${label} should resolve`).not.toBeNull()
-      expect(idx!, `${label} >= 0`).toBeGreaterThanOrEqual(0)
-      expect(idx!, `${label} <= length`).toBeLessThanOrEqual(finalText.length)
+      expect(defined(idx, "idx"), `${label} >= 0`).toBeGreaterThanOrEqual(0)
+      expect(defined(idx, "idx"), `${label} <= length`).toBeLessThanOrEqual(
+        finalText.length,
+      )
     }
   })
 })

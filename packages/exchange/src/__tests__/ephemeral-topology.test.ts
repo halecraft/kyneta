@@ -255,3 +255,32 @@ describe("a longer chain: A — B — C — D — E", () => {
     expect(counter.frames).toBeLessThanOrEqual(2 * links.length)
   }, 30_000)
 })
+
+describe("a triangle: A — B — C — A, each link its own bridge", () => {
+  const build = () => {
+    const links = Array.from({ length: 3 }, () => new Bridge())
+    const a = peerOn("alice", [links[0], links[2]])
+    const b = peerOn("bob", [links[0], links[1]])
+    const c = peerOn("carol", [links[1], links[2]])
+    return { links, peers: [a, b, c] }
+  }
+
+  it("goes quiet once converged: taking in what it already holds relays nothing", async () => {
+    // Around a cycle every peer hears each write twice, by both routes. The
+    // second copy moves nothing; a peer that relayed it would send it round
+    // the cycle again.
+    const { links, peers } = build()
+    const names = ["alice", "bob", "carol"]
+    await drain(80)
+    for (let i = 0; i < peers.length; i++) {
+      batch(peers[i].doc, d => d.peers.set(names[i], "online"))
+    }
+    await drain(160)
+    const expected = Object.fromEntries(names.map(n => [n, "online"]))
+    for (const { doc } of peers) expect(doc.peers()).toEqual(expected)
+
+    const counter = meterFrames(links)
+    await drain(160)
+    expect(counter.frames).toBe(0)
+  }, 30_000)
+})

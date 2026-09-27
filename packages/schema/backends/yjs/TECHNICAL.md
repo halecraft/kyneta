@@ -4,8 +4,8 @@
 > **Role**: Yjs CRDT substrate for `@kyneta/schema`. Wraps a `Y.Doc` as a `Substrate<YjsVersion>` with a single-root-`Y.Map` design, schema-guided live navigation via `instanceof` discrimination, imperative writes inside `Y.transact`, identity-keyed containers for cross-schema sync, and a persistent `observeDeep` event bridge so every mutation — local kyneta writes, `merge()`, `Y.applyUpdate()`, or raw Yjs API — fires the kyneta changefeed.
 > **Depends on**: `@kyneta/schema` (peer), `@kyneta/changefeed` (peer), `yjs` (peer)
 > **Depended on by**: `@kyneta/exchange` (dev), `@kyneta/react` (dev), `@kyneta/cast` (dev), application code that wants collaborative documents via Yjs
-> **Canonical symbols**: `yjs` (binding target: `yjs.bind`, `yjs.replica`), `YjsLaws`, `YjsNativeMap`, `createYjsSubstrate`, `yjsSubstrateFactory`, `yjsReplicaFactory`, `YjsVersion`, `YjsPosition`, `yjsReader`, `resolveYjsType`, `stepIntoYjs`, `ensureContainers`, `applyChangeToYjs`, `eventsToOps`, `toYjsAssoc`, `STRUCTURAL_YJS_CLIENT_ID`
-> **Key invariant(s)**: Every schema field is a child of one root `Y.Map` obtained via `doc.getMap("root")`. This is what makes a single `observeDeep` call capture every mutation with correct relative paths — and what makes `instanceof` container discrimination reliable (Yjs shared types are native JS classes, not WASM handles).
+> **Canonical symbols**: `yjs` (binding target: `yjs.bind`, `yjs.replica`), `YjsLaws`, `YjsNativeMap`, `createYjsSubstrate`, `yjsSubstrateFactory`, `yjsReplicaFactory`, `YjsVersion`, `YjsPosition`, `yjsReader`, `resolveYjsType`, `stepIntoYjs`, `ensureContainers`, `applyChangeToYjs`, `eventsToOps`, `toYjsAssoc`, `STRUCTURAL_YJS_CLIENT_ID`, `DELETE_CLOCK`
+> **Key invariant(s)**: Every schema field is a child of one root `Y.Map` obtained via `doc.getMap("root")`. This is what makes a single `observeDeep` call capture every mutation with correct relative paths — and what makes `instanceof` container discrimination reliable (Yjs shared types are native JS classes, not WASM handles). Every change to a substrate's `Y.Doc`, a delete included, advances its state vector, so the version is the state vector alone.
 
 The Yjs backend for Kyneta. Hands you a substrate instance — stored state, versioning, export/import, and a `Reader` — in exchange for a `Y.Doc`. Every ref produced by the interpreter stack reads through schema-guided shared-type resolution; every write runs inside a `Y.transact` that tags its origin; every Yjs-visible mutation surfaces as a `Changeset` on the kyneta changefeed.
 
@@ -18,7 +18,7 @@ Consumed by applications that bind schemas with `yjs.bind(schema)`. Not imported
 - Why one root `Y.Map` instead of multiple root shared types? → [The single-root-`Y.Map` design](#the-single-root-ymap-design)
 - How does this differ from `@kyneta/loro-schema` — same job, different substrate? → [Loro vs Yjs: what changes](#loro-vs-yjs-what-changes)
 - Why `instanceof` here but `.kind()` there? → [`instanceof` container discrimination](#instanceof-container-discrimination)
-- What does `YjsVersion` include that a bare state vector doesn't? → [`YjsVersion` — state vector + delete-set digest](#yjsversion--state-vector--delete-set-digest)
+- Why does a delete write to a `kyneta.clock` type? → [`YjsVersion` and the delete clock](#yjsversion-and-the-delete-clock)
 - How do structural inserts (a whole struct into a map) commit atomically? → [The write path and populate-then-attach](#the-write-path-and-populate-then-attach)
 - Why is there a reserved `clientID = 0` for structural operations? → [`STRUCTURAL_YJS_CLIENT_ID`](#structural_yjs_client_id)
 - Why is the peer's own `clientID` claimed *after* hydration, not at construction? → [`clientID` and the order it is claimed in](#clientid-and-the-order-it-is-claimed-in)
@@ -31,7 +31,8 @@ Consumed by applications that bind schemas with `yjs.bind(schema)`. Not imported
 | `Y.Doc` | Yjs's top-level document (from `yjs`). Owns shared types, client ID, update stream. | A kyneta `DocRef` — the `Y.Doc` is the substrate-native backing |
 | `YjsLaws` | The composition-law set `"lww" \| "positional-ot" \| "lww-per-key" \| "lww-tag-replaced"`. Yjs supports text (`positional-ot`), structural (`lww-per-key`), scalars (`lww`), and rich text (`positional-ot` + `lww-tag-replaced`) — but not `"additive"` (counter), `"positional-ot-move"` (movable), `"tree-move"` (tree), or `"add-wins-per-key"` (set). | Yjs's full feature set — this is the subset kyneta exposes via composition-law tags |
 | `YjsNativeMap` | The `NativeMap` functor mapping schema kinds to Yjs shared types (`text → Y.Text`, `list → Y.Array`, `struct → Y.Map`, `map → Y.Map`). Slots for unsupported kinds are `undefined`. | A JS `Map` — this is a type-level functor |
-| `YjsVersion` | `@kyneta/schema`'s `Version` implementation wrapping a Yjs state vector plus a **fixed-size digest** of the delete set. | A bare state vector — SV-only versions cannot distinguish same-state from divergent-deletes. Also not a raw snapshot — the delete set is hashed, never stored verbatim, to keep serialized size bounded by peer count. |
+| `YjsVersion` | `@kyneta/schema`'s `Version` implementation over a Yjs state vector: `compare`, `meet` and `join` are the version-vector lattice. | A Yjs snapshot — it carries no delete set. The delete clock is what lets the state vector alone order Yjs documents. |
+| Delete clock | The follow-up transaction the substrate writes to the `kyneta.clock` top-level type after any transaction that deleted without advancing any clock, so every change advances the state vector. | A clock of wall time, or anything the schema can see |
 | `YjsPosition` | `Position` implementation wrapping `Y.RelativePosition`. Stateless `transform` — resolution queries the CRDT directly. | A numeric index |
 | `resolveYjsType` | Thin wrapper over the core `foldPath(stepIntoYjs, ...)` primitive (from `@kyneta/schema`). The two semantic invariants (identity-keying, opaque-boundary stop) live in `@kyneta/schema/src/fold-path.ts`, not here. | A cache lookup — resolution happens on every read |
 | `stepIntoYjs` | The Yjs `PathStepper`: per-step substrate dispatch. Given `(current, _nextSchema, segment, identity)` returns the child shared type or scalar (the `_nextSchema` slot is unused; Yjs's `instanceof` dispatch doesn't look ahead). | `stepIntoLoro` from the Loro backend — both are `PathStepper` instances, both driven by `foldPath`; the dispatch is what differs |
@@ -66,7 +67,7 @@ Plus one Yjs-specific concern: `src/populate.ts` owns `ensureContainers`, the co
 ### What `@kyneta/yjs-schema` is NOT
 
 - **Not a `Y.Doc` wrapper or subclass.** It accepts a user-owned or factory-created `Y.Doc` and adapts it to `Substrate<YjsVersion>`. The `Y.Doc` is still usable directly — `unwrap(doc)` returns it.
-- **Not a Yjs provider.** It does not talk to y-websocket, y-webrtc, y-indexeddb, or any other Yjs provider. The exchange owns sync; this package only exports/imports `SubstratePayload` when the exchange asks. Applications are free to attach their own Yjs providers in parallel — the event bridge will pick up their mutations.
+- **Not a Yjs provider.** It does not talk to y-websocket, y-webrtc, y-indexeddb, or any other Yjs provider. The exchange owns sync; this package only exports/imports `SubstratePayload` when the exchange asks. Applications are free to attach their own Yjs providers in parallel — the event bridge will pick up their mutations, and a provider's delete is clocked where it lands (see [the delete clock](#yjsversion-and-the-delete-clock)).
 - **Not feature-complete relative to Yjs.** Yjs has types (`Y.XmlElement`, `Y.XmlText`) and features (undo manager, awareness) that kyneta doesn't model. They are accessible via `unwrap(doc)`; they just aren't first-class in the schema grammar.
 - **Not an adapter library for multiple CRDTs.** This is Yjs-specific.
 
@@ -88,7 +89,7 @@ The two backends implement the same `Substrate<V>` contract and share the overal
 | Structural creation | Lazy — creation happens on first typed accessor call | Eager — `ensureContainers` walks the schema on upgrade |
 | Structural client ID | Not needed (Loro has no equivalent concern) | `STRUCTURAL_YJS_CLIENT_ID = 0` during `ensureContainers` |
 | Composition laws | `LoroLaws` = `"lww" \| "additive" \| "positional-ot" \| "positional-ot-move" \| "lww-per-key" \| "tree-move" \| "lww-tag-replaced"` | `YjsLaws` = `"lww" \| "positional-ot" \| "lww-per-key" \| "lww-tag-replaced"` |
-| Version | Wraps `VersionVector` | Wraps state vector + fixed-size digest of the delete set |
+| Version | Wraps `VersionVector`, which Loro advances for every op, deletes included | Wraps the state vector, which Yjs advances only for inserts; the substrate's delete clock makes it advance for every change |
 | Position | Wraps `Cursor` | Wraps `Y.RelativePosition` |
 
 When a concept is structurally identical to Loro's (navigation fold, event bridge's purpose, identity-keying rationale, write-path FC/IS intent), the Loro document is the canonical reference. This document focuses on the Yjs-specific mechanics.
@@ -154,43 +155,47 @@ Yjs does not expose a uniform `.kind()` method. Each type has its own shape (`Y.
 
 ---
 
-## `YjsVersion` — state vector + delete-set digest
+## `YjsVersion` and the delete clock
 
-Source: `packages/schema/backends/yjs/src/version.ts`.
+Source: `packages/schema/backends/yjs/src/version.ts`, and `installDeleteClock` in `src/substrate.ts`.
 
-Yjs's state vector tracks how many operations from each peer have been observed, but it only advances on *inserts*. Deletes (tombstones) do not bump the vector. A version based solely on the state vector cannot distinguish:
+Yjs's state vector counts the items each client has inserted. It does not advance for a delete: a delete is recorded in the delete set, by the ID of the item deleted, not by who deleted it or when. So on its own a state vector does not order Yjs documents:
 
-- Peer A: inserted 3 items, deleted 0 → state vector `{A: 3}`.
-- Peer A: inserted 3 items, deleted 1 → state vector `{A: 3}` (same!).
+- Peer A inserted 3 items and deleted none → `{A: 3}`.
+- Peer A inserted 3 items and deleted one → `{A: 3}` (the same).
 
-This matters for sync: if the exchange compared SV-only versions, it would skip pushing deletes to peers with a matching SV.
+A peer that lacks a delete could not tell from any version that it holds less. Concretely, when Bob deleted while Alice inserted, Alice's version was ahead of Bob's, she took his offer as holding nothing new, and skipped the delete it carried; they stayed apart until Bob wrote again.
 
-`YjsVersion` pairs the state vector with a **fixed-size digest** of the full Yjs snapshot (state vector + delete set) so `compare` distinguishes same-state from divergent-deletes, without embedding the raw delete set:
+**The delete clock.** After any transaction that deleted something without advancing any state-vector entry, the substrate runs one follow-up transaction that inserts one character into the `kyneta.clock` top-level `Y.Text` (`DELETE_CLOCK`) and deletes it. That advances this client's entry, so every change to the document advances its state vector:
+
+- **The condition** is local or remote alike. A local delete-only change ticks, and so does a plain Yjs client's delete arriving through a parallel provider, which also advances no clock. A Kyneta delete arriving through the exchange does not tick again: the author's tick travels in the same payload, so that transaction advanced a clock.
+- **A transaction that inserted** already advanced the clock, and its deletes travel in the same update, so it does not tick. The tick itself inserts, so it never triggers another.
+- **A separate transaction.** It runs while the deleting transaction is cleaned up (`afterTransaction`), so the deleting call returns with the clock advanced. It fires a second `update` event. Yjs offers no way to write into the deleting transaction: a write from `beforeObserverCalls` starts a new transaction too.
+- **Holding the tick means holding the delete.** A peer whose state vector reaches the deleter's holds the deleted item (the deleter held it, so its clock is in the deleter's vector) and the tick. Kyneta exports from a state vector, and a Yjs update exported from one always carries the whole delete set, so the tick and the delete arrive together.
+- **Once per document.** A `WeakSet` guards the handler, so two substrates over one `Y.Doc` tick once per delete. A headless replica has none: it takes changes only through the exchange, whose payloads carry every author's tick, and makes none of its own.
+- **Invisible to the schema.** `kyneta.clock` is a top-level type outside the root map, so the event bridge raises no changeset for it. It is visible in `doc.share`, and providers sync it like any other type.
+- **Parallel providers.** A provider that forwards Kyneta changes transaction by transaction delivers a delete before its tick, so each receiving Kyneta peer ticks once more: one tiny item per receiver per delete-only transaction. Loading stored updates in one transaction (the y-indexeddb shape) ticks nothing, since the stored updates carry their ticks.
+- **Cost.** Each tick is one item and one delete-set entry, kept for the life of the document. With `gc` on, Yjs drops the tick's content, but not the item: it merges items only when their clock values are consecutive and they sit next to each other, so ticks merge into one run only when nothing else takes a clock value between them. Measured, per delete-only transaction: about 0 bytes when deletes run back to back (1000 of them add 11 bytes); about 5 bytes while typing (5000 keystrokes with a backspace every 10: 10973 → 13466 bytes, +23%); and up to about 13 bytes when the ticks also split a run of the client's own inserts, which would otherwise merge into one item (1000 cycles of appending and deleting elsewhere: 8524 → 21520 bytes). Nothing grows with the size of what was deleted, and the state vector does not grow at all. The type the tick writes to does not matter: a `Y.Array` or a `Y.Map` key costs the same, because the cost is the clock value the tick takes.
+
+With every change clocked, `YjsVersion` is the state vector alone:
 
 | Method | Behaviour |
 |--------|-----------|
-| `serialize()` | `base64(stateVector)` + `"."` + `deleteSetDigest` (32-char hex). Only the state vector is base64-wrapped; the digest is already compact. |
-| `compare(other)` | Compare SVs first via `versionVectorCompare`; if SVs agree, compare `deleteSetDigest` strings for equality; a mismatch with matching SVs → `"concurrent"`. |
-| `meet(other)` | Component-wise minimum on state vectors via `versionVectorMeet`; delete set ignored for the lattice meet. |
-| `YjsVersion.parse(s)` | Split on `"."`; decode SV, read the digest as-is (no re-hashing). Legacy format (no `"."`) decodes as SV-only for back-compat. |
+| `serialize()` | `base64(stateVector)`. |
+| `compare(other)` | `versionVectorCompare` of the two state vectors. |
+| `meet(other)` / `join(other)` | Component-wise minimum / maximum, through one private pair of projections to and from the vector. |
+| `YjsVersion.parse(s)` | Decode base64, and check the bytes decode as a state vector; anything else throws. |
+| `YjsVersion.fromDoc(doc)` | `Y.encodeStateVector(doc)`: O(clients). |
 
-### Why a digest, not raw snapshot bytes
-
-Yjs's delete set (`Map<clientID, DeleteItem[]>`) only merges *adjacent* same-client deleted ranges. A workload with non-contiguous deletes — concretely, insert-then-correct cycles such as STT partial corrections (permanently commit a word, then insert-and-delete a corrected guess, repeat) — accumulates new, never-merging `DeleteItem` entries forever. Because the raw encoded snapshot was embedded directly in `serialize()`'s output (which flows into every wire offer, ack, and persisted `Store` version record), this caused the serialized version to grow **unboundedly with edit history** rather than with peer count — confirmed in production and via a minimal reproduction (a 500-cycle insert-then-delete-correction loop grew the raw snapshot from 150 to 1501 bytes while the state vector itself stayed flat at 4 bytes).
-
-A version vector's serialized size must scale with the number of distinct peers alone, matching `PlainVersion` (O(1)) and `LoroVersion` (O(peers)). `YjsVersion` restores this invariant by reducing the delete-set component to a **128-bit FNV-1a digest** (`deleteSetDigest`, via `@sindresorhus/fnv1a`) — a fixed-size fingerprint used exclusively for equality comparison, never reconstructed from. This is the same fixed-size-fingerprint tradeoff already accepted elsewhere in `@kyneta/schema` (see `computeSchemaHash` in `packages/schema/src/hash.ts`): a digest collision would cause a genuine delete-only divergence to be misreported as `"equal"`, but at 128 bits this probability is negligible, and the alternative (unbounded growth) is a real, observed production defect.
-
-### Backward compatibility with SV-only versions
-
-A `YjsVersion` parsed from the legacy SV-only format has no delete-set component — its `deleteSetDigest` is computed from the state-vector bytes themselves, which is guaranteed to differ from any real snapshot's digest. When compared against a new-format version with the same SV but different deletes, the comparison yields `"concurrent"` — which causes the exchange to push an update. The push is redundant in cases where the deletes actually match, but it is always *safe*: a legacy peer receiving a push it didn't strictly need is merely bandwidth, never corruption.
+The version's size grows with the number of clients, never with edit history. An earlier version embedded the encoded snapshot, which grew without bound under non-contiguous deletes (insert-then-correct cycles, as in speech-to-text partial corrections), and then a fixed-size digest of it, which bounded the size but broke the lattice laws: a replica holding an offer plus deletes of its own compared `"concurrent"` to it, and `meet` was not a lower bound.
 
 ### What `YjsVersion` is NOT
 
 - **Not a bare `Uint8Array`.** It is a structured wrapper with a documented serialise/parse protocol.
 - **Not a wall-clock timestamp.** Yjs versions are CRDT causal history, not physical time.
 - **Not totally ordered.** Two concurrent peers can be `"concurrent"`. `compare` returns the full partial order.
-- **Not interchangeable with `LoroVersion`.** They serialize differently and compare with different algorithms.
-- **Not a store of the raw delete set.** `deleteSetDigest` is a one-way fingerprint — there is no way to recover the delete set from a `YjsVersion`, by design; that would defeat the whole point of bounding its size.
+- **Not interchangeable with `LoroVersion`.** They serialize differently and wrap different vectors.
+- **Not a snapshot.** It carries no delete set; the delete clock is what makes that sufficient.
 
 ---
 
@@ -332,7 +337,7 @@ Source: `materializeValue` (shared, `@kyneta/schema/src/materialize-value.ts` �
 
 `runBatch`'s transaction closes before Kyneta subscribers run: Yjs fires `observeDeep` and `afterTransaction` for our transaction first, then the changeset is delivered. Hooks on `afterTransaction` therefore see the finished transaction before any Kyneta subscriber does. If such a hook writes to the document, its transaction is announced by the event bridge after our changeset, in causal order.
 
-`version()` is `YjsVersion.fromDoc(doc)`, the same derivation the replica uses: the state vector plus the delete set read from the struct store.
+`version()` is `YjsVersion.fromDoc(doc)`, the same derivation the replica uses: the state vector.
 
 ---
 
@@ -477,7 +482,8 @@ This is the same mechanism as the Loro backend, exercised with a narrower law se
 | `yjs` | `src/bind-yjs.ts` | The binding target: `.bind(schema)`, `.replica()`. |
 | `YjsLaws` | `src/bind-yjs.ts` | `"lww" \| "positional-ot" \| "lww-per-key" \| "lww-tag-replaced"` — composition laws Yjs supports. |
 | `YjsNativeMap` | `src/native-map.ts` | The `NativeMap` functor for Yjs. Unsupported kinds map to `undefined`. |
-| `YjsVersion` | `src/version.ts` | `Version` over Yjs SV + a fixed-size digest of the delete set. |
+| `YjsVersion` | `src/version.ts` | `Version` over the Yjs state vector. |
+| `DELETE_CLOCK` | `src/substrate.ts` | The top-level type the delete clock writes to. |
 | `YjsPosition` | `src/position.ts` | `Position` over `Y.RelativePosition`. |
 | `toYjsAssoc` | `src/position.ts` | `Side → Yjs assoc` enum. |
 | `yjsSubstrateFactory` / `yjsReplicaFactory` | `src/substrate.ts` | Factory instances. |
@@ -494,12 +500,12 @@ This is the same mechanism as the Loro backend, exercised with a narrower law se
 |------|------|
 | `src/index.ts` | Public barrel. Re-exports generic API from `@kyneta/schema`; exports Yjs-specific symbols. |
 | `src/bind-yjs.ts` | `yjs.bind` / `yjs.replica` binding target; `YjsLaws`. |
-| `src/substrate.ts` | `YjsSubstrate`, factories, prepare/flush, `Y.transact` wrapping, `observeDeep` event bridge, origin-based suppression. |
+| `src/substrate.ts` | `YjsSubstrate`, factories, prepare/flush, `Y.transact` wrapping, `observeDeep` event bridge, origin-based suppression, the delete clock. |
 | `src/change-mapping.ts` | `applyChangeToYjs` (per kyneta change type → Yjs mutations) + `realizeYjs` (`MaterializedNode` → Yjs shared type, populate-then-attach) + `eventsToOps` (Yjs events → kyneta `Op[]`). |
 | `src/yjs-resolve.ts` | `stepIntoYjs`; `resolveYjsType` is a thin wrapper over the core `foldPath` primitive. |
 | `src/populate.ts` | `ensureContainers` (conditional doc-init structural creation, `clientID:0`, identity-keyed via shared `containerKey`). Value-driven population lives in `realizeYjs` (`src/change-mapping.ts`), not here. |
 | `src/reader.ts` | `yjsReader` — reads via `resolveYjsType` + per-type extraction. |
-| `src/version.ts` | `YjsVersion` (SV + delete-set digest), two-part serialisation, legacy SV-only compat. |
+| `src/version.ts` | `YjsVersion`: the state vector, its lattice operations, serialisation. |
 | `src/position.ts` | `YjsPosition` (wraps `Y.RelativePosition`), `toYjsAssoc`. |
 | `src/native-map.ts` | `YjsNativeMap` type-level functor. |
 | `src/__tests__/create.test.ts` | End-to-end: `createDoc(yjs.bind(schema))` → read/write round-trips. |
@@ -510,7 +516,7 @@ This is the same mechanism as the Loro backend, exercised with a narrower law se
 | `src/__tests__/position.test.ts` | `YjsPosition` cursor stability across concurrent edits. |
 | `src/__tests__/bind-constraints.test.ts` | Compile-time composition-law enforcement (`counter`, `movable`, `tree`, `set` all rejected). |
 | `src/__tests__/bind-yjs.test.ts` | `yjs.bind` API surface. |
-| `src/__tests__/version.test.ts` | `YjsVersion` serialise/parse (both formats), `compare`, `meet`; delete-set distinguishing cases. |
+| `src/__tests__/version.test.ts` | `YjsVersion` serialise/parse, `compare`, `meet`, and the lattice laws (`versionConformance`). |
 
 ## Testing
 
@@ -518,7 +524,7 @@ Tests use real `Y.Doc` instances from `yjs` — no mocks. Two-peer scenarios con
 
 One test stdout line is expected: `[yjs] Changed the client-id because another client seems to be using it.` — this is Yjs's own warning when a test deliberately creates two peers with colliding IDs; Yjs auto-recovers by re-issuing an ID, which is the correct behaviour.
 
-**Tests**: 217 passed, 4 skipped across 9 files (`bind-yjs`: 17, `bind-constraints`: included in `bind-yjs` coverage, `create`: 30, `position`: 27 passed + 4 skipped, `reader`: included in `create`/`substrate` coverage, `record-text-spike`: 20, `structural-merge`: 12, `substrate`: 29, `version`: ~82 — approximate per-file breakdown). Run with `cd packages/schema/backends/yjs && pnpm exec vitest run`.
+Run with `cd packages/schema/backends/yjs && pnpm exec vitest run`.
 
 ## `richtext` support
 

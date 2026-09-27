@@ -200,7 +200,7 @@ Source: `src/sync-program.ts` message handlers. The eight messages from `@kyneta
 | `present` | Sync | One-way | `{ docs: Array<{ docId, replicaType, syncMode, schemaHash, supportedHashes? }> }` | "I have these documents." Filtered by `canShare`. |
 | `interest` | Sync | One-way | `{ docId, version?, reciprocate?, since? }` | "I want this doc. Here's my version." Answered with `offer`, or with `vacant` if `canShare` denies the requester. Receiving one marks the sender `pending` and emits `classify-peer-version`; the sender becomes `synced` only when the shell finds its version not ahead of ours, or when its own `offer` merges. `reciprocate` asks for the symmetric interest and prevents an interest loop; it carries no other meaning. |
 | `offer` | Sync | One-way | `{ docId, payload: SubstratePayload, version }` | State transfer, and nothing else. `payload.kind` (`"entirety" | "since"`) is substrate-internal. |
-| `accept` | Sync | One-way | `{ docId, version }` | "I now hold your version `version`." Sent once per offer held (imported, already held, or taken by a reset), quoting the offer's `version`. Not sent for a history-free document, a refused offer, a failed import or a gap. See §"What each side knows about the other". |
+| `accept` | Sync | One-way | `{ docId, version }` | "I now hold your version `version`." Sent once per offer held — our version, after taking it in, reaches the offer's (imported, already held, or taken by a reset) — quoting the offer's `version`. Not sent for a history-free document, a refused offer, a failed import, or an offer that left us short. See §"What each side knows about the other". |
 | `dismiss` | Sync | One-way | `{ docId }` | "I am leaving the sync graph for this doc." Dual of `present`. Receiver deletes its per-peer entry + fires `ensure-doc-dismissed`. |
 | `vacant` | Sync | Point-to-point | `{ docId }` | "You asked, and I will not serve you this doc." Two producers, both via the shared `vacantReply` builder: `declareVacant` from `onEnsureDoc`'s terminal non-serve branches (we don't have it), and `handleInterest` on a `canShare` denial (we won't share it). Identical on the wire, deliberately — see §"Every path a document can leave by". Consumed by `handleVacant` (sets the peer `vacant`, emits **no** `ensure-doc-dismissed` — our replica survives). |
 
@@ -208,26 +208,31 @@ The eight are defined once in `@kyneta/transport`; the wire encoding is defined 
 
 ### What each side knows about the other
 
-Source: `src/types.ts` → `PeerDocSyncState`, `src/sync-program.ts` → `setPeerDocState`, `handleAccept`, `handleDocGap`, `src/synchronizer.ts` → `#acceptIfOwed`, `leastCommonVersion`.
+Source: `src/types.ts` → `PeerDocSyncState`, `src/sync-program.ts` → `setPeerDocState`, `handleAccept`, `handleDocImported`, `buildPush`, `src/synchronizer.ts` → `#acceptIfOwed`, `#senderWillHold`, `leastCommonVersion`.
 
-Per peer and document the sync model keeps a `status` and two versions, facts in opposite directions:
+Per peer and document the sync model keeps a `status` and three versions:
 
-| Event | `status` | `ourVersionTheyHold` | `theirVersionWeHold` |
-|---|---|---|---|
-| interest received | `pending` | := its `since ?? version` | kept |
-| `accept` received | kept | := its `version` | kept |
-| offer imported | `synced` | kept | := the offer's `version` |
-| version check finds no gap | `synced` | kept | := the peer's stated version |
-| peer's channel returns | kept | cleared | kept |
+| Event | `status` | `ourVersionTheyHold` | `ourVersionTheyWillHold` | `theirVersionWeHold` |
+|---|---|---|---|---|
+| interest received, and answered | `pending` | := its `since ?? version` | := our version | kept |
+| `accept` received | kept | := its `version` | kept | kept |
+| offer held | `synced` | kept | := joined with the offer's `version` | := the offer's `version` |
+| offer not held | `pending` | kept | := joined with the offer's `version` | kept |
+| a push sent to it | kept | kept | := our new version | kept |
+| version check finds no gap | `synced` | kept | kept | := the peer's stated version |
+| peer's channel returns | kept | cleared | cleared | kept |
 
 - **`theirVersionWeHold` is quoted back as an interest's `since`.** It is always a version the peer minted, which matters where versions are private: the ephemeral substrate's is an install counter, and a reconnecting peer that quoted its own counter used to be answered with the whole document.
 - **`ourVersionTheyHold` is what compaction trims to.** Nothing else tells an offer's sender which of its versions a receiver holds, because a peer that only reads never offers anything back; before `accept`, the record of such a peer stayed at its handshake and `compact` trimmed nothing. An interest's `since` names one of our versions, so it wins over the peer's own `version`.
+- **`ourVersionTheyWillHold` is where each push to the peer starts.** It is optimistic: it moves when we send, not when the peer acknowledges, so it never lags an offer in flight (an earlier per-peer baseline that waited for acknowledgement resent every one) and never falls behind `ourVersionTheyHold`, which is why compaction never trims past a push baseline. When a peer offers us its version, it holds that version, so its baseline joins it (`#senderWillHold`, computed by the shell from the value the `import-doc-data` effect carries): a push after an import sends its sender only what it lacks, never its own import back. After a reset the baseline is the offered version alone; a history-free document's versions do not join across replicas, so an import leaves it unchanged. A peer whose baseline is unknown, one that has just come back, is not pushed to; the answer to its interest catches it up.
 - **A reconnecting peer's holding is forgotten**, because it may have restarted without its state. Its interest restates it.
 - **`leastCommonVersion` counts every peer we push to** (`pending` or `synced`) whose holding is known, filtered by `cohort`. Leaving out a `pending` peer could trim past what it holds.
 
 **`accept` is decided by the program and sent by the shell.** `handleOffer` puts `accept: boolean` on the `import-doc-data` effect: true unless the document is history-free (`ReplicaFactoryLike.historyFree`, which never compacts) or `canShare` vetoes the peer. The shell sends it as soon as the offer is held, before dispatching the import's outcome. Sending it from `handleDocImported` put it behind whatever the import made this peer send: a `Line` receiver's ack is written by a subscriber during the merge, so the writer heard the ack, pruned and compacted before hearing the `accept`, and trimmed nothing.
 
-**A gap asks for a catch-up.** When `merge` reports `"gap"` (a plain delta that does not continue what the replica holds), nothing was applied; the shell dispatches `sync/doc-gap` and the program sends the offerer an interest quoting our version and `theirVersionWeHold`. The same input serves the lineage-reset branch when a non-entirety payload crosses a lineage boundary.
+**An offer is held when our version reaches it.** After taking an offer in, the shell asks `reaches(ours, offered)` and reports `held` on `sync/doc-imported`. An offer can leave us short: a plain delta that does not continue our log applies nothing; a CRDT holds back ops whose dependencies are missing; and a Yjs delta merges cleanly while its sender held a third peer's op we lack. An offer not held is not accepted, its sender stays `pending`, and the program sends it an interest quoting our version and `theirVersionWeHold`; its answer is the catch-up. The lineage-reset branch reports a delta that crosses a lineage boundary the same way, which asks for the sender's whole document. A history-free document's offer is held once merged, since its versions do not compare across replicas.
+
+**Taking in an offer is a plan and an executor.** `#executeImportDocData` gathers the facts — the version comparison (`#classifyPeer`), the reset trigger (`classifyResetTrigger`), and, for a reset, the `canReset` policy — and `planImport` (pure) names one action: `unreadable`, `already-held`, `refused`, `ask-whole`, `rebuild`, `reset` or `merge`. The executor performs it, and `reportImport` (pure) derives `changed` and `held` from the versions around it. `#took` is the one exit: it sends the owed `accept` only when held, then dispatches `sync/doc-imported`. `import-plan.test.ts` tables both decisions.
 
 ### Establish-time protocol-version compatibility
 
@@ -610,9 +615,9 @@ A document can reach a peer four ways, and **all four consult `canShare`**:
 | Path | Handler | Effect |
 |------|---------|--------|
 | Announce | `handlePeerAvailable`, `handleDocEnsure` / `handleDocDefer` → `announceDoc` | `present` |
-| Push | `handleLocalDocChange` → `buildPush` | `send-offers` |
-| Relay | `handleDocImported` → `buildPush` | `send-offers` |
-| Answer a request | `handleInterest` → `handleInterestForKnownDoc` | `send-offer` |
+| Push | `handleLocalDocChange` → `buildPush` | `send-offers`, one recipient per peer, each from its own baseline |
+| Relay | `handleDocImported` → `buildPush` | `send-offers`, likewise |
+| Answer a request | `handleInterest` → `handleInterestForKnownDoc` | `send-offers` with one recipient |
 
 The first three filter recipients through `filterPeersByShare`. The fourth is a single-peer check inside `handleInterest`.
 
@@ -879,7 +884,7 @@ A failed load only marks the latch `failed`: its state is unknown, so the docume
 
 **The store's confirmed version is read from the store.** Every stored entry records the version the store reached with it, and `hydrated` carries the last loaded entry's version, even when that entry failed to load, since the store holds it all the same. It used to carry the replica's live version, which already includes anything written while the document loaded; every later `since` write then started past that write, and it was never stored. `hydrated` now owes a `since` write from the stored version: when nothing arrived during loading the executor finds the versions equal and touches no store.
 
-**A whole-document entry is the state at its version.** `#hydrate` loads a whole-document entry with `resetFromEntirety`, which adopts it whatever came before, and merges deltas. A plain whole-document payload carries the log position it represents, so a reloaded plain document's version equals the store's; Yjs and Loro implement `resetFromEntirety` as a merge. It is not a merge for plain because the entries before it may be from an older lineage: after a lineage reset, the store's next write is the new lineage's whole document, and a merge refuses a payload from a different lineage. Before payloads carried positions, plain counted the entry as one more flush on top of its log, its version ran one ahead of the store's, and with a correct baseline its first write would have stored the last delta a second time: replaying a repeated sequence delete removes a second item. A stored delta that does not continue the entries loaded before it (`merge` reports `"gap"`) is a failed read of that entry. A load with nothing new therefore writes nothing on every substrate, including after a compaction (`store-hydration.test.ts`, "a load with nothing new writes nothing").
+**A whole-document entry is the state at its version.** `#hydrate` loads a whole-document entry with `resetFromEntirety`, which adopts it whatever came before, and merges deltas. A plain whole-document payload carries the log position it represents, so a reloaded plain document's version equals the store's; Yjs and Loro implement `resetFromEntirety` as a merge. It is not a merge for plain because the entries before it may be from an older lineage: after a lineage reset, the store's next write is the new lineage's whole document, and a merge refuses a payload from a different lineage. Before payloads carried positions, plain counted the entry as one more flush on top of its log, its version ran one ahead of the store's, and with a correct baseline its first write would have stored the last delta a second time: replaying a repeated sequence delete removes a second item. A stored delta must bring the replica to the version it was stored at (`reaches`); one that does not continue the entries loaded before it leaves the replica short, and is a failed read of that entry. A load with nothing new therefore writes nothing on every substrate, including after a compaction (`store-hydration.test.ts`, "a load with nothing new writes nothing").
 
 **Writing before a document has loaded.** On a concurrent-writer substrate (Yjs, Loro) a write made during loading merges with the loaded history whenever it arrives, and is stored. A serialized-writer (plain) document with stores refuses authored writes until `adopt`: its merge does not commute with a local write, so the loaded state would overwrite the write, and the write would mint a lineage the store does not know. The write throws "still loading"; `await whenHydrated(doc)` first, or seed with `initialize`. After a failed load `adopt` never runs, and writes stay refused.
 
@@ -1239,7 +1244,7 @@ the bus (`createObservationBus`), and **pure** mappers
 | Layer | Source seam |
 |-------|-------------|
 | `engine` | both handles' `subscribeToTransitions` (coalesced; `from !== to`) |
-| `protocol` | OUT = `send`/`send-to-peer(s)`/`send-offer(s)` effects; IN = the `route` input tap |
+| `protocol` | OUT = `send`/`send-to-peer(s)`/`send-offers` effects (one observation per recipient, with its own baseline); IN = the `route` input tap |
 | `directory` | `emit-peer-events`/`emit-doc-events` effects, plus the authoritative per-peer-doc **`sync-state`** event teed in `#emitPeerSyncChanges` (`observePeerSyncState`) — the reconciliation result a consumer must not re-derive (jj:pusmrzuy) |
 | `doc` | the per-`DocRuntime` changefeed subscription in `exchange.ts#interpretDoc` (both local + replay, before the echo filter — so auto-resolved docs are covered) |
 | `diagnostic` | the unified `diagnostic` effect (both programs) carrying a structured `Diagnostic` — see below |

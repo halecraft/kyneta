@@ -151,9 +151,11 @@ describe("observe — pure mappers", () => {
   it("send-offers → one offer per target peer", () => {
     const fx: SyncEffect = {
       type: "send-offers",
-      to: ["a", "b"],
       docId: "d1",
-      sinceVersion: "v9",
+      to: [
+        { peerId: "a", sinceVersion: "v9" },
+        { peerId: "b", sinceVersion: "v8" },
+      ],
     }
     expect(observeSyncEffect(fx)).toEqual([
       {
@@ -172,7 +174,7 @@ describe("observe — pure mappers", () => {
         peer: "b",
         msgType: "offer",
         docId: "d1",
-        version: "v9",
+        version: "v8",
       },
     ])
   })

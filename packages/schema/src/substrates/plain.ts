@@ -42,7 +42,6 @@ import type { Schema as SchemaNode } from "../schema.js"
 import type {
   HasBackingDoc,
   MergeOptions,
-  MergeOutcome,
   RecordInverseFn,
   Replica,
   ReplicaFactory,
@@ -52,7 +51,11 @@ import type {
   Version,
 } from "../substrate.js"
 import { BACKING_DOC, hasBackingDoc } from "../substrate.js"
-import { versionVectorCompare, versionVectorMeet } from "../version-vector.js"
+import {
+  versionVectorCompare,
+  versionVectorJoin,
+  versionVectorMeet,
+} from "../version-vector.js"
 import { Zero } from "../zero.js"
 
 // ---------------------------------------------------------------------------
@@ -94,13 +97,30 @@ export class PlainVersion implements Version {
   /**
    * Project this version to a single-entry version vector: genesis
    * (`DEFAULT_LINEAGE`) → the empty vector ⊥; a REAL lineage → `{lineage: value}`.
-   * `compare`/`meet` are then the shared `versionVector*` algebra — the same
-   * lattice Loro/Yjs use — with zero Plain-specific special cases. See
-   * jj:kxswmuzx for the derivation.
+   * `compare`/`meet`/`join` are then the shared `versionVector*` algebra,
+   * the same lattice Loro/Yjs use, with no Plain-specific special cases.
+   * See jj:kxswmuzx for the derivation.
    */
   #toVector(): Map<string, number> {
     if (this.#lineage === DEFAULT_LINEAGE) return new Map()
     return new Map([[this.#lineage, this.#value]])
+  }
+
+  /**
+   * The inverse of `#toVector`. A plain replica holds one lineage, so a vector
+   * naming two, which only a join of two real lineages produces, is no
+   * version at all.
+   */
+  static #fromVector(vector: Map<string, number>): PlainVersion {
+    if (vector.size > 1) {
+      throw new Error(
+        `PlainVersion: versions of different lineages have no join (${[...vector.keys()].join(", ")})`,
+      )
+    }
+    const entry = vector.entries().next()
+    if (entry.done) return new PlainVersion(0, DEFAULT_LINEAGE)
+    const [lineage, value] = entry.value
+    return new PlainVersion(value, lineage)
   }
 
   compare(other: Version): "behind" | "equal" | "ahead" | "concurrent" {
@@ -120,13 +140,22 @@ export class PlainVersion implements Version {
     }
     // Greatest common ancestor of the two lineage vectors. For divergent
     // lineages the meet is the empty vector → genesis; for a shared lineage
-    // it is the min counter. Inputs are ≤1 entry (single authored lineage,
-    // prune-on-reset), so the result is ≤1 entry.
-    const met = versionVectorMeet(this.#toVector(), other.#toVector())
-    const entry = met.entries().next()
-    if (entry.done) return new PlainVersion(0, DEFAULT_LINEAGE)
-    const [lineage, value] = entry.value
-    return new PlainVersion(value, lineage)
+    // it is the min counter.
+    return PlainVersion.#fromVector(
+      versionVectorMeet(this.#toVector(), other.#toVector()),
+    )
+  }
+
+  /** The larger counter within one lineage; genesis joins as the identity. */
+  join(other: Version): PlainVersion {
+    if (!(other instanceof PlainVersion)) {
+      throw new Error(
+        "PlainVersion can only be joined with another PlainVersion",
+      )
+    }
+    return PlainVersion.#fromVector(
+      versionVectorJoin(this.#toVector(), other.#toVector()),
+    )
   }
 }
 
@@ -354,8 +383,8 @@ export function createPlainSubstrate(
       return core.exportSince(asPlainVersion(since))
     },
 
-    merge(payload: SubstratePayload, options?: MergeOptions): MergeOutcome {
-      return core.merge(
+    merge(payload: SubstratePayload, options?: MergeOptions): void {
+      core.merge(
         decodePlainPayload(payload, "PlainSubstrate.merge"),
         docEffects(options),
       )
@@ -490,15 +519,15 @@ function createPlainCore(
 
     /**
      * Take in a payload: decide with `planMerge`, keep the log's books, and
-     * hand the ops to `effects` to reach the state.
+     * hand the ops to `effects` to reach the state. A gap applies nothing,
+     * which leaves the version short of the one the payload was offered at.
      */
-    merge(payload: PlainPayload, effects: PlainEffects): MergeOutcome {
+    merge(payload: PlainPayload, effects: PlainEffects): void {
       const plan = planMerge(position(), clock.lineage(), payload)
       switch (plan.kind) {
         case "gap":
-          return "gap"
         case "none":
-          return "merged"
+          return
         case "append":
           // A merge claims a lineage only while this replica has none; a
           // different REAL lineage never reaches here (see `planMerge`).
@@ -508,10 +537,10 @@ function createPlainCore(
             revision++
             effects.append(batch)
           }
-          return "merged"
+          return
         case "adopt":
           this.adopt(plan, effects)
-          return "merged"
+          return
       }
     },
 
@@ -619,11 +648,8 @@ export function createPlainReplica(clock: PlainClock): Replica<PlainVersion> {
       return core.exportSince(asPlainVersion(since))
     },
 
-    merge(payload: SubstratePayload, _options?: MergeOptions): MergeOutcome {
-      return core.merge(
-        decodePlainPayload(payload, "PlainReplica.merge"),
-        baseEffects,
-      )
+    merge(payload: SubstratePayload, _options?: MergeOptions): void {
+      core.merge(decodePlainPayload(payload, "PlainReplica.merge"), baseEffects)
     },
 
     resetFromEntirety(

@@ -11,11 +11,17 @@ import {
   unwrap,
   version,
 } from "@kyneta/schema"
+import { defined } from "@kyneta/schema/testing"
 import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
 import { yjs } from "../bind-yjs.js"
 import { ensureContainers } from "../populate.js"
-import { createYjsSubstrate, yjsSubstrateFactory } from "../substrate.js"
+import {
+  createYjsSubstrate,
+  DELETE_CLOCK,
+  yjsReplicaFactory,
+  yjsSubstrateFactory,
+} from "../substrate.js"
 import { YjsVersion } from "../version.js"
 
 // ===========================================================================
@@ -262,7 +268,7 @@ describe("YjsSubstrate", () => {
       const delta = exportSince(doc1, v1Before)
       expect(delta).not.toBeNull()
 
-      merge(doc2, delta!)
+      merge(doc2, defined(delta, "delta"))
       expect(doc2.title()).toBe("Start Edited")
       expect(doc2.count()).toBe(99)
     })
@@ -291,8 +297,8 @@ describe("YjsSubstrate", () => {
       const d1to2 = exportSince(doc1, v2Before)
       const d2to1 = exportSince(doc2, v1Before)
 
-      merge(doc2, d1to2!)
-      merge(doc1, d2to1!)
+      merge(doc2, defined(d1to2, "d1to2"))
+      merge(doc1, defined(d2to1, "d2to1"))
 
       // Should now be equal
       expect(version(doc1).compare(version(doc2))).toBe("equal")
@@ -332,7 +338,7 @@ describe("YjsSubstrate", () => {
       })
 
       const delta = exportSince(doc1, v2Before)
-      merge(doc2, delta!)
+      merge(doc2, defined(delta, "delta"))
 
       expect(received.length).toBeGreaterThanOrEqual(1)
       expect(doc2.count()).toBe(42)
@@ -403,7 +409,7 @@ describe("YjsSubstrate", () => {
       })
 
       // Sync the toggle to doc2b
-      const delta = exportSince(doc1, v2)!
+      const delta = defined(exportSince(doc1, v2), "the delta")
       merge(doc2b, delta)
 
       // Value should be updated
@@ -443,7 +449,7 @@ describe("YjsSubstrate", () => {
       })
 
       // Sync to doc2
-      const delta = exportSince(doc1, v2)!
+      const delta = defined(exportSince(doc1, v2), "the delta")
       merge(doc2, delta)
 
       // Both field-level changefeeds should have fired
@@ -645,7 +651,7 @@ describe("YjsSubstrate", () => {
       batch(docA, (d: any) => {
         d.title.insert((d.title() as string).length, "more")
       })
-      const delta = exportSince(docA, v0)!
+      const delta = defined(exportSince(docA, v0), "the delta")
       merge(docB, delta, { origin: "sync" })
 
       expect(docB.title()).toBe("seedmore")
@@ -706,5 +712,180 @@ describe("YjsSubstrate", () => {
 
       expect(kynetaFires).toBe(1)
     })
+  })
+})
+
+// ===========================================================================
+// The delete clock
+// ===========================================================================
+
+describe("the delete clock", () => {
+  /**
+   * The ticks `doc`'s own client has written from here on: the characters
+   * it inserted into the delete clock, deleted or not.
+   */
+  function countTicks(doc: Y.Doc): () => number {
+    const written = () => {
+      let count = 0
+      let item = doc.getText(DELETE_CLOCK)._start
+      while (item !== null) {
+        if (item.id.client === doc.clientID) count += item.length
+        item = item.right
+      }
+      return count
+    }
+    const start = written()
+    return () => written() - start
+  }
+
+  function setup() {
+    const doc = createDoc(yjs.bind(SimpleSchema))
+    const native = unwrap(doc)
+    batch(doc, d => d.title.insert(0, "abc"))
+    return { doc, native, ticks: countTicks(native) }
+  }
+
+  const advanced = (before: YjsVersion, after: YjsVersion) =>
+    after.compare(before) === "ahead"
+
+  it("advances the version for a delete-only Kyneta batch", () => {
+    const { doc, native, ticks } = setup()
+    const before = YjsVersion.fromDoc(native)
+    batch(doc, d => d.title.delete(1, 1))
+    expect(advanced(before, YjsVersion.fromDoc(native))).toBe(true)
+    expect(ticks()).toBe(1)
+  })
+
+  it("advances the version for native deletes, however they are made", () => {
+    const { doc, native, ticks } = setup()
+    const text = unwrap(doc.title)
+
+    let before = YjsVersion.fromDoc(native)
+    text.delete(0, 1) // an implicit transaction
+    expect(advanced(before, YjsVersion.fromDoc(native))).toBe(true)
+
+    before = YjsVersion.fromDoc(native)
+    native.transact(() => text.delete(0, 1), { binding: true }) // an editor binding's origin
+    expect(advanced(before, YjsVersion.fromDoc(native))).toBe(true)
+
+    const undo = new Y.UndoManager(text)
+    text.insert(0, "xy")
+    undo.stopCapturing()
+    before = YjsVersion.fromDoc(native)
+    undo.undo() // delete-only
+    expect(advanced(before, YjsVersion.fromDoc(native))).toBe(true)
+    expect(ticks()).toBe(3)
+  })
+
+  it("does not tick for an insert, an empty transaction, or a delete of nothing", () => {
+    const { doc, native, ticks } = setup()
+    batch(doc, d => d.title.insert(0, "z"))
+    native.transact(() => {})
+    unwrap(doc.title).delete(0, 0)
+    expect(ticks()).toBe(0)
+  })
+
+  it("does not tick for a Kyneta delete taken in by merge, which carries its author's tick", () => {
+    const { doc, native } = setup()
+    const peer = createDoc(yjs.bind(SimpleSchema), exportEntirety(doc))
+    const peerNative = unwrap(peer)
+    const ticks = countTicks(peerNative)
+    const since = version(peer)
+    batch(doc, d => d.title.delete(1, 1))
+    merge(peer, exportSince(doc, since) ?? exportEntirety(doc))
+    expect(peer.title()).toBe("ac")
+    expect(ticks()).toBe(0)
+    expect(
+      YjsVersion.fromDoc(peerNative).compare(YjsVersion.fromDoc(native)),
+    ).toBe("equal")
+  })
+
+  it("ticks once for a plain Yjs client's delete arriving as a provider would deliver it", () => {
+    const { native, ticks } = setup()
+    const plain = new Y.Doc()
+    Y.applyUpdate(plain, Y.encodeStateAsUpdate(native))
+    const before = Y.encodeStateVector(plain)
+    const titleKey = [...plain.getMap("root").keys()].find(
+      key => plain.getMap("root").get(key) instanceof Y.Text,
+    )
+    if (titleKey === undefined) throw new Error("title not found")
+    const plainTitle = plain.getMap("root").get(titleKey)
+    if (!(plainTitle instanceof Y.Text)) throw new Error("title is not text")
+    plainTitle.delete(1, 1)
+    const versionBefore = YjsVersion.fromDoc(native)
+    Y.applyUpdate(native, Y.encodeStateAsUpdate(plain, before), "provider")
+    expect(ticks()).toBe(1)
+    expect(advanced(versionBefore, YjsVersion.fromDoc(native))).toBe(true)
+  })
+
+  it("does not tick for stored updates loaded in one transaction", () => {
+    const { doc, native } = setup()
+    const stored: Uint8Array[] = []
+    native.on("update", (update: Uint8Array) => stored.push(update))
+    batch(doc, d => d.title.delete(0, 1))
+    batch(doc, d => d.title.delete(0, 1))
+
+    const loaded = createDoc(yjs.bind(SimpleSchema))
+    const loadedNative = unwrap(loaded)
+    Y.applyUpdate(
+      loadedNative,
+      Y.encodeStateAsUpdate(native, Y.encodeStateVector(native)),
+    )
+    const ticks = countTicks(loadedNative)
+    const seeded = createDoc(yjs.bind(SimpleSchema))
+    const seededNative = unwrap(seeded)
+    const seededTicks = countTicks(seededNative)
+    seededNative.transact(() => {
+      for (const update of stored) Y.applyUpdate(seededNative, update)
+    }, "idb")
+    expect(ticks()).toBe(0)
+    expect(seededTicks()).toBe(0)
+  })
+
+  it("ticks once per delete however many substrates wrap the document", () => {
+    const { native, ticks } = setup()
+    createYjsSubstrate(
+      native,
+      SimpleSchema,
+      yjs.bind(SimpleSchema).identityBinding,
+    )
+    const before = YjsVersion.fromDoc(native)
+    const text = [...native.getMap("root").values()].find(
+      v => v instanceof Y.Text,
+    )
+    if (!(text instanceof Y.Text)) throw new Error("title not found")
+    text.delete(0, 1)
+    expect(ticks()).toBe(1)
+    expect(advanced(before, YjsVersion.fromDoc(native))).toBe(true)
+  })
+
+  it("raises no changeset, and lives outside the schema root", () => {
+    const { doc, native } = setup()
+    const heard: unknown[] = []
+    subscribe(doc, changeset => heard.push(changeset))
+    batch(doc, d => d.title.delete(0, 1))
+    expect(heard).toHaveLength(1)
+    expect(native.getMap("root").has(DELETE_CLOCK)).toBe(false)
+    expect(native.share.has(DELETE_CLOCK)).toBe(true)
+  })
+
+  it("is not installed on a headless replica", () => {
+    const replica = yjsReplicaFactory.createEmpty()
+    const source = new Y.Doc()
+    source.getText("t").insert(0, "abc")
+    replica.merge({
+      kind: "entirety",
+      encoding: "binary",
+      data: Y.encodeStateAsUpdate(source),
+    })
+    const before = replica.version()
+    const sv = Y.encodeStateVector(source)
+    source.getText("t").delete(0, 1)
+    replica.merge({
+      kind: "since",
+      encoding: "binary",
+      data: Y.encodeStateAsUpdate(source, sv),
+    })
+    expect(replica.version().compare(before)).toBe("equal")
   })
 })

@@ -39,7 +39,6 @@ import type {
   ChangeBase,
   CommitOptions,
   MergeOptions,
-  MergeOutcome,
   Path,
   PlainState,
   PositionCapable,
@@ -100,6 +99,53 @@ import { resolveYjsType } from "./yjs-resolve.js"
 const KYNETA_MARK = Symbol("kyneta:own-commit")
 
 // ---------------------------------------------------------------------------
+// The delete clock
+// ---------------------------------------------------------------------------
+
+/** A top-level type Kyneta writes to only to advance the clock. */
+export const DELETE_CLOCK = "kyneta.clock"
+
+const clockedDocs = new WeakSet<Y.Doc>()
+
+/**
+ * Keep "every change advances the state vector" true of `doc`.
+ *
+ * Yjs clocks inserts only: a delete leaves the state vector where it was, so
+ * a peer that lacks the delete cannot tell from any version that it holds
+ * less. After a transaction that deleted something without advancing any
+ * entry, this inserts one character into `DELETE_CLOCK` and deletes it, which
+ * advances this client's entry. Local or remote alike: a plain Yjs client's
+ * delete arriving through a parallel provider advances no clock either. A
+ * Kyneta delete arriving through the exchange carries its author's tick in
+ * the same payload, so it does not tick again.
+ *
+ * The tick is a transaction of its own, run while the deleting one is cleaned
+ * up, so the deleting call returns with the clock advanced. It inserts, so it
+ * never triggers another. Installs once per document, however many
+ * substrates wrap it.
+ */
+export function installDeleteClock(doc: Y.Doc): void {
+  if (clockedDocs.has(doc)) return
+  clockedDocs.add(doc)
+  doc.on("afterTransaction", (transaction: Y.Transaction) => {
+    if (transaction.deleteSet.clients.size === 0) return
+    if (advancedAnyClock(transaction)) return
+    doc.transact(() => {
+      const clock = doc.getText(DELETE_CLOCK)
+      clock.insert(0, ".")
+      clock.delete(0, 1)
+    })
+  })
+}
+
+function advancedAnyClock(transaction: Y.Transaction): boolean {
+  for (const [client, clock] of transaction.afterState) {
+    if (clock > (transaction.beforeState.get(client) ?? 0)) return true
+  }
+  return false
+}
+
+// ---------------------------------------------------------------------------
 // createYjsSubstrate — wrap a user-provided Y.Doc
 // ---------------------------------------------------------------------------
 
@@ -153,6 +199,8 @@ export function createYjsSubstrate(
   // The root Y.Map — all schema fields are children of this single map.
   const rootMap = doc.getMap("root")
 
+  installDeleteClock(doc)
+
   // The shadow — a plain JS object materialized from the Y.Doc.
   // `prepare` steps it for local writes; the event bridge re-materializes it
   // for everything else.
@@ -168,7 +216,12 @@ export function createYjsSubstrate(
    * identity hash, others pass through raw.
    */
   function boundaryKey(path: Path, prefixLength: number): string | number {
-    const seg = path.segments[prefixLength]!
+    const seg = path.segments[prefixLength]
+    if (seg === undefined) {
+      throw new Error(
+        `boundaryKey: path ${path.format()} has no segment at ${prefixLength}`,
+      )
+    }
     if (seg.role === "field") {
       const absPath = fieldAbsPath(path.segments.slice(0, prefixLength + 1))
       return containerKey(binding, absPath, seg.resolve() as string)
@@ -378,7 +431,7 @@ export function createYjsSubstrate(
 
     baseVersion(): YjsVersion {
       // Yjs substrate: base is always the initial state (no advance supported).
-      return new YjsVersion(new Uint8Array([0]))
+      return YjsVersion.empty
     },
 
     advance(_to: YjsVersion): void {
@@ -407,7 +460,7 @@ export function createYjsSubstrate(
       }
     },
 
-    merge(payload: SubstratePayload, options?: MergeOptions): MergeOutcome {
+    merge(payload: SubstratePayload, options?: MergeOptions): void {
       if (
         payload.encoding !== "binary" ||
         !(payload.data instanceof Uint8Array)
@@ -425,8 +478,8 @@ export function createYjsSubstrate(
         pendingMergeOrigin = undefined
       }
       // The observeDeep handler announces the merged ops. Yjs holds back
-      // structs whose dependencies are missing, so there is no gap.
-      return "merged"
+      // structs whose dependencies are missing; the version stays short of
+      // the offer's, which is how a caller sees what is missing.
     },
 
     resetFromEntirety(payload: SubstratePayload, options?: MergeOptions): void {
@@ -549,7 +602,7 @@ function yjsDevtoolsHistory(getDoc: () => Y.Doc): DevtoolsHistory {
 
 export function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
   let currentDoc = doc
-  let currentBase: YjsVersion = new YjsVersion(Y.encodeStateVector(new Y.Doc()))
+  let currentBase: YjsVersion = YjsVersion.empty
 
   return {
     get [BACKING_DOC]() {
@@ -611,7 +664,7 @@ export function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
       }
     },
 
-    merge(payload: SubstratePayload, _options?: MergeOptions): MergeOutcome {
+    merge(payload: SubstratePayload, _options?: MergeOptions): void {
       if (
         payload.encoding !== "binary" ||
         !(payload.data instanceof Uint8Array)
@@ -622,7 +675,6 @@ export function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
         )
       }
       Y.applyUpdate(currentDoc, payload.data)
-      return "merged"
     },
 
     resetFromEntirety(payload: SubstratePayload, options?: MergeOptions): void {
@@ -635,7 +687,7 @@ export function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
 }
 
 export const yjsReplicaFactory: ReplicaFactory<YjsVersion> = {
-  replicaType: ["yjs", 1, 0] as const,
+  replicaType: ["yjs", 2, 0] as const,
   historyFree: false,
 
   createEmpty(): Replica<YjsVersion> {

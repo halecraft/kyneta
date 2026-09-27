@@ -58,7 +58,6 @@ import {
   type MapChange,
   type MarkConfig,
   type MergeOptions,
-  type MergeOutcome,
   ownedForStore,
   type Path,
   type PlainState,
@@ -566,7 +565,7 @@ export function createLoroSubstrate(
       }
     },
 
-    merge(payload: SubstratePayload, options?: MergeOptions): MergeOutcome {
+    merge(payload: SubstratePayload, options?: MergeOptions): void {
       if (
         payload.encoding !== "binary" ||
         !(payload.data instanceof Uint8Array)
@@ -584,8 +583,8 @@ export function createLoroSubstrate(
         pendingImportOrigin = undefined
       }
       // The doc.subscribe() handler announces the merged ops. Loro holds back
-      // imported ops whose dependencies are missing, so there is no gap.
-      return "merged"
+      // imported ops whose dependencies are missing; the version stays short
+      // of the offer's, which is how a caller sees what is missing.
     },
 
     resetFromEntirety(payload: SubstratePayload, options?: MergeOptions): void {
@@ -760,7 +759,7 @@ export function createLoroReplica(doc: LoroDocType): Replica<LoroVersion> {
       }
     },
 
-    merge(payload: SubstratePayload, _options?: MergeOptions): MergeOutcome {
+    merge(payload: SubstratePayload, _options?: MergeOptions): void {
       if (
         payload.encoding !== "binary" ||
         !(payload.data instanceof Uint8Array)
@@ -771,7 +770,6 @@ export function createLoroReplica(doc: LoroDocType): Replica<LoroVersion> {
         )
       }
       currentDoc.import(payload.data)
-      return "merged"
     },
 
     resetFromEntirety(payload: SubstratePayload, options?: MergeOptions): void {

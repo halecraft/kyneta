@@ -54,6 +54,7 @@ export { fromYjsAssoc, toYjsAssoc, YjsPosition } from "./position.js"
 // Substrate
 export {
   createYjsSubstrate,
+  DELETE_CLOCK,
   yjsReplicaFactory,
   yjsSubstrateFactory,
 } from "./substrate.js"

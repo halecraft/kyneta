@@ -39,6 +39,7 @@ import {
   beginHydration,
   createRef,
   metadataOf,
+  reaches,
   replicaTypesCompatible,
   SUBSTRATE,
   subscribe,
@@ -1279,16 +1280,26 @@ export class Runtime {
                 // came before it: after a lineage reset, the store's next
                 // write is the new lineage's whole document, which a merge
                 // would refuse as not continuing the old one. A delta must
-                // continue what loaded before it; one that does not is a
-                // failed read of that entry, not something to apply anyway.
+                // bring the replica to the version it was stored at; one that
+                // does not continue what loaded before it leaves the replica
+                // short, and is a failed read of that entry.
                 if (record.payload.kind === "entirety") {
                   replica.resetFromEntirety(record.payload, { origin: "sync" })
-                } else if (
-                  replica.merge(record.payload, { origin: "sync" }) === "gap"
-                ) {
-                  throw new Error(
-                    `stored entry at ${record.version} does not continue the entries loaded before it`,
-                  )
+                } else {
+                  replica.merge(record.payload, { origin: "sync" })
+                  // A history-free version is a private counter, compared
+                  // with nothing but its own replica.
+                  if (
+                    !replicaFactory.historyFree &&
+                    !reaches(
+                      replica.version(),
+                      replicaFactory.parseVersion(record.version),
+                    )
+                  ) {
+                    throw new Error(
+                      `stored entry at ${record.version} does not continue the entries loaded before it`,
+                    )
+                  }
                 }
               } catch (err) {
                 console.warn(

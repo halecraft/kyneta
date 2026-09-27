@@ -29,7 +29,6 @@ import {
 import type {
   DevtoolsHistory,
   DocMetadata,
-  MergeOutcome,
   ReplicaFactoryLike,
   ReplicaLike,
   ReplicaType,
@@ -42,6 +41,7 @@ import {
   DEFAULT_LINEAGE,
   DEVTOOLS_HISTORY,
   hasDevtoolsHistory,
+  reaches,
 } from "@kyneta/schema"
 import type {
   AddressedEnvelope,
@@ -201,8 +201,8 @@ export type SynchronizerParams = {
 /** The `import-doc-data` effect the shell executes. */
 type ImportDocData = Extract<SyncEffect, { type: "import-doc-data" }>
 
-/** What comparing a *stated* version against ours can yield. */
-type StatedVersionGap =
+/** What comparing a peer's version against ours can yield. */
+export type VersionGapResult =
   | { kind: "parse-error"; error: unknown }
   | { kind: "no-gap"; comparison: "behind" | "equal" }
   | {
@@ -210,53 +210,18 @@ type StatedVersionGap =
       comparison: "ahead" | "concurrent"
       parsed: Version
     }
-
-export type VersionGapResult =
-  | StatedVersionGap
   /**
    * The peer sent no version at all. Only an inbound `interest` can produce
    * this — `InterestMsg.version` is optional and the wire decoder omits it
    * when the frame carries none — and it means the peer holds nothing we
-   * need. Offers always carry a version, so `classifyVersionGap` and the
-   * outbound resolver never yield this and their callers need not handle it.
+   * need. Offers always carry a version.
    */
   | { kind: "absent" }
 
 /**
- * Common parse + compare + classify pipeline. Comparison *direction* is
- * the caller's responsibility — see `resolveInboundVersionGap` and
- * `resolveOutboundVersionGap` for the two specializations.
- */
-function classifyVersionGap(
-  replica: ReplicaLike,
-  replicaFactory: ReplicaFactoryLike,
-  serializedVersion: string,
-  compare: (
-    parsed: Version,
-    current: Version,
-  ) => "behind" | "equal" | "ahead" | "concurrent",
-): StatedVersionGap {
-  let parsed: Version
-  try {
-    parsed = replicaFactory.parseVersion(serializedVersion)
-  } catch (error) {
-    return { kind: "parse-error", error }
-  }
-
-  const currentVersion = replica.version()
-  const comparison = compare(parsed, currentVersion)
-
-  if (comparison === "behind" || comparison === "equal") {
-    return { kind: "no-gap", comparison }
-  }
-
-  return { kind: "gap", comparison, parsed }
-}
-
-/**
- * Inbound: compare `incoming` against `current`. `ahead`/`concurrent`
- * means the peer has data we may need to import; `behind`/`equal` means
- * the offer is stale — no action.
+ * Compare an offered or stated version against ours. `ahead`/`concurrent`
+ * means the peer has data we may need to take in; `behind`/`equal` means it
+ * has nothing we lack.
  */
 function resolveInboundVersionGap(
   replica: ReplicaLike,
@@ -265,23 +230,24 @@ function resolveInboundVersionGap(
   peerDigest?: string,
 ): VersionGapResult {
   if (serializedVersion === undefined) return { kind: "absent" }
-  const result = classifyVersionGap(
-    replica,
-    replicaFactory,
-    serializedVersion,
-    // The digest enters as part of the comparison, not as part of the
-    // `Version`: a version is a lattice element with a `meet`, and a
-    // fingerprint has neither. Reporting `"equal"` on a match is the whole
-    // mechanism — the existing `behind || equal → no-gap` branch does the
-    // rest, and `classifyVersionGap` needs no knowledge of any of it.
-    (parsed, current) => {
-      if (peerDigest !== undefined && replica.digest?.() === peerDigest) {
-        return "equal"
-      }
-      return parsed.compare(current)
-    },
-  )
-  return result
+  let parsed: Version
+  try {
+    parsed = replicaFactory.parseVersion(serializedVersion)
+  } catch (error) {
+    return { kind: "parse-error", error }
+  }
+  // The digest enters as part of the comparison, not as part of the
+  // `Version`: a version is a lattice element with a `meet`, and a
+  // fingerprint has neither. A match reports `"equal"`, which is all a
+  // digest can say.
+  const comparison =
+    peerDigest !== undefined && replica.digest?.() === peerDigest
+      ? "equal"
+      : parsed.compare(replica.version())
+  if (comparison === "behind" || comparison === "equal") {
+    return { kind: "no-gap", comparison }
+  }
+  return { kind: "gap", comparison, parsed }
 }
 
 /**
@@ -321,20 +287,6 @@ export function transitionForPeerVersion(
     case "parse-error":
       return null
   }
-}
-
-function resolveOutboundVersionGap(
-  replica: ReplicaLike,
-  replicaFactory: ReplicaFactoryLike,
-  serializedVersion: string,
-): StatedVersionGap {
-  const result = classifyVersionGap(
-    replica,
-    replicaFactory,
-    serializedVersion,
-    (parsed, current) => current.compare(parsed),
-  )
-  return result
 }
 
 /**
@@ -400,6 +352,86 @@ export function classifyResetTrigger(
   }
 
   return "none"
+}
+
+// ---------------------------------------------------------------------------
+// Taking in an offer — a pure plan, and a pure report
+// ---------------------------------------------------------------------------
+
+/** What is known about an inbound offer before anything is applied. */
+export type ImportFacts = {
+  /** The offered version against ours. */
+  readonly gap: VersionGapResult
+  /** `classifyResetTrigger`, or `"none"` when there is no gap. */
+  readonly resetTrigger: ResetTrigger
+  /** The `canReset` policy's answer, asked only for a reset. */
+  readonly resetPermitted: boolean
+  readonly payloadKind: SubstratePayload["kind"]
+}
+
+/**
+ * What to do with an inbound offer.
+ *
+ * - `unreadable`: its version does not parse. Nothing, and no `accept`.
+ * - `already-held`: we hold its version. `accept` if owed.
+ * - `refused`: a reset the policy vetoed. Keep local state.
+ * - `ask-whole`: a delta across a lineage boundary, which no reset can
+ *   take. Report it not held, which asks the sender for its whole document.
+ * - `reset`: take the sender's whole document in place of ours. A headless
+ *   replica is rebuilt from it; an interpreted document calls
+ *   `resetFromEntirety`.
+ * - `merge`: an ordinary offer.
+ */
+export type ImportPlan =
+  | "unreadable"
+  | "already-held"
+  | "refused"
+  | "ask-whole"
+  | "reset"
+  | "merge"
+
+export function planImport(facts: ImportFacts): ImportPlan {
+  switch (facts.gap.kind) {
+    case "parse-error":
+      return "unreadable"
+    case "absent":
+    case "no-gap":
+      return "already-held"
+    case "gap":
+      break
+  }
+  if (facts.resetTrigger === "none") return "merge"
+  if (!facts.resetPermitted) return "refused"
+  // `resetFromEntirety`/`fromEntirety` take only a self-sufficient state
+  // image. The lineage trigger fires regardless of payload shape, so a delta
+  // can reach here; the sender's answer to an interest is its whole document.
+  if (facts.payloadKind !== "entirety") return "ask-whole"
+  return "reset"
+}
+
+/**
+ * What taking an offer in did, from the versions around it.
+ *
+ * `changed`: a reset replaced the state; a merge moved it iff our version's
+ * serialization changed. That is not a lattice comparison: a history-free
+ * version (an install counter) compares `"concurrent"` even with itself, and
+ * reporting such a merge as a change relays it, which loops in a mesh of
+ * three. `held`: our version now reaches the offered one (`reaches`). A
+ * history-free document's offer is held once merged, since its versions do
+ * not compare across replicas and its merge is a join that waits on nothing.
+ */
+export function reportImport(r: {
+  readonly plan: "ask-whole" | "reset" | "merge"
+  readonly prior: Version
+  readonly after: Version
+  readonly offered: Version
+  readonly historyFree: boolean
+}): { readonly changed: boolean; readonly held: boolean } {
+  if (r.plan === "ask-whole") return { changed: false, held: false }
+  const changed =
+    r.plan === "reset" || r.after.serialize() !== r.prior.serialize()
+  const held = r.historyFree || reaches(r.after, r.offered)
+  return { changed, held }
 }
 
 // ---------------------------------------------------------------------------
@@ -1367,27 +1399,9 @@ export class Synchronizer {
         }
         break
       }
-      case "send-offer": {
-        const offer = this.#buildOffer(effect.docId, effect.sinceVersion)
-        if (offer) {
-          this.#sendOfferToPeer(effect.to, effect.docId, offer)
-        }
+      case "send-offers":
+        this.#executeSendOffers(effect)
         break
-      }
-      case "send-offers": {
-        // One payload for the whole fan-out. `sinceVersion` is the document's
-        // own pre-change baseline and is deliberately the same for every
-        // recipient, so resolving and exporting inside the loop produced N
-        // identical payloads — N delta computations and N serializations for
-        // one change. At roster scale that is the cost the delta was meant to
-        // remove, reintroduced by the fan-out.
-        const offer = this.#buildOffer(effect.docId, effect.sinceVersion)
-        if (!offer) break
-        for (const peerId of effect.to) {
-          this.#sendOfferToPeer(peerId, effect.docId, offer)
-        }
-        break
-      }
       case "import-doc-data":
         this.#executeImportDocData(effect)
         break
@@ -1465,56 +1479,49 @@ export class Synchronizer {
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
   /**
-   * The payload to offer, computed once for every recipient of one fan-out.
-   *
-   * Separate from delivery because it depends only on the document: the
-   * baseline is the document's own pre-change version, not anything per-peer,
-   * so the same bytes go to everyone.
+   * Send each recipient an offer from its own baseline, exporting once per
+   * distinct baseline. Baselines differ only between an import and the next
+   * push, so a fan-out usually costs one export however many peers it reaches.
    */
-  #buildOffer(
-    docId: DocId,
-    sinceVersion?: string,
-  ): SubstratePayload | undefined {
+  #executeSendOffers(
+    effect: Extract<SyncEffect, { type: "send-offers" }>,
+  ): void {
+    const payloads = new Map<string | undefined, SubstratePayload | null>()
+    for (const { peerId, sinceVersion } of effect.to) {
+      let payload = payloads.get(sinceVersion)
+      if (payload === undefined) {
+        payload = this.#buildOffer(effect.docId, sinceVersion)
+        payloads.set(sinceVersion, payload)
+      }
+      if (payload !== null) this.#sendOfferToPeer(peerId, effect.docId, payload)
+    }
+  }
+
+  /**
+   * The payload that brings a peer at `sinceVersion` to our version: the
+   * delta from it, or the whole document when we cannot serve it (history
+   * trimmed past it, an incarnation not ours) or no baseline is given. `null`
+   * when there is nothing to send: the document is gone, or the baseline does
+   * not parse.
+   */
+  #buildOffer(docId: DocId, sinceVersion?: string): SubstratePayload | null {
     const runtime = this.#docRuntimes.get(docId)
     if (!runtime) {
       console.warn(`[exchange] doc runtime not found, offer not sent: ${docId}`)
-      return undefined
+      return null
     }
+    if (sinceVersion === undefined) return runtime.replica.exportEntirety()
 
-    if (!sinceVersion) return runtime.replica.exportEntirety()
-
-    const gap = resolveOutboundVersionGap(
-      runtime.replica,
-      runtime.replicaFactory,
-      sinceVersion,
+    let since: Version
+    try {
+      since = runtime.replicaFactory.parseVersion(sinceVersion)
+    } catch (error) {
+      console.warn(`[exchange] version parse failed for doc '${docId}':`, error)
+      return null
+    }
+    return (
+      runtime.replica.exportSince(since) ?? runtime.replica.exportEntirety()
     )
-
-    switch (gap.kind) {
-      case "parse-error":
-        console.warn(
-          `[exchange] version parse failed for doc '${docId}':`,
-          gap.error,
-        )
-        return undefined
-
-      case "no-gap":
-        // Nothing has happened since the baseline we are offering from, so
-        // there is nothing to send. A substrate that still produces a payload
-        // here is answering a different question and is offered as-is.
-        return (
-          runtime.replica.exportSince(runtime.replica.version()) ?? undefined
-        )
-
-      case "gap": {
-        // `null` means the peer's cursor is one we cannot serve — history
-        // trimmed past it, or an incarnation that is not ours. An entirety resets
-        // them to our current state rather than leaving them diverged.
-        return (
-          runtime.replica.exportSince(gap.parsed) ??
-          runtime.replica.exportEntirety()
-        )
-      }
-    }
   }
 
   #sendOfferToPeer(
@@ -1610,6 +1617,10 @@ export class Synchronizer {
     )
   }
 
+  /**
+   * Take in an offer: gather what is known, plan, do the one thing the plan
+   * names, and report what it did.
+   */
   #executeImportDocData(effect: ImportDocData): void {
     const runtime = this.#docRuntimes.get(effect.docId)
     if (!runtime) return
@@ -1621,151 +1632,165 @@ export class Synchronizer {
       effect.version,
       effect.digest,
     )
-    // Nothing to take in: we already hold what was offered.
-    if (gap.kind === "no-gap") {
-      this.#acceptIfOwed(effect)
-      return
+    const sync = this.#syncHandle.getState()
+    const peerState = sync.peers.get(effect.fromPeerId)
+    const resetTrigger =
+      gap.kind === "gap"
+        ? classifyResetTrigger(
+            runtime.replica.version().lineage,
+            gap.parsed.lineage,
+            effect.payload.kind === "entirety",
+            peerState?.docSyncStates.get(effect.docId)?.status === "synced",
+            runtime.replicaFactory.historyFree,
+          )
+        : "none"
+    const plan = planImport({
+      gap,
+      resetTrigger,
+      resetPermitted:
+        resetTrigger !== "none" &&
+        this.#canReset(
+          effect.docId,
+          (peerState?.identity ?? {
+            peerId: effect.fromPeerId,
+          }) as PeerIdentityDetails,
+          runtime.syncMode,
+        ),
+      payloadKind: effect.payload.kind,
+    })
+
+    switch (plan) {
+      case "unreadable":
+      case "refused":
+        // A refused reset keeps local state: the document diverges from the
+        // compacted peers until governance reconciles or a new entirety is
+        // accepted.
+        return
+      case "already-held":
+        this.#acceptIfOwed(effect)
+        return
     }
-    // A version we cannot read is not one we can say we hold.
+    // Every remaining plan follows a gap, which carries the parsed version.
     if (gap.kind !== "gap") return
 
-    // Does this offer mean "reconcile with me" or "take my word for it"?
-    // `classifyResetTrigger` holds that entire decision — see its doc comment
-    // for what each trigger means and which substrates can produce it.
-    const sync = this.#syncHandle.getState()
-    const senderAlreadySynced =
-      sync.peers.get(effect.fromPeerId)?.docSyncStates.get(effect.docId)
-        ?.status === "synced"
-    const resetTrigger = classifyResetTrigger(
-      runtime.replica.version().lineage,
-      gap.parsed.lineage,
-      effect.payload.kind === "entirety",
-      senderAlreadySynced,
-      runtime.replicaFactory.historyFree,
-    )
-
-    if (resetTrigger !== "none") {
-      const peerState = sync.peers.get(effect.fromPeerId)
-      const peerIdentity = peerState?.identity ?? {
-        peerId: effect.fromPeerId,
-      }
-
-      const accept = this.#canReset(
-        effect.docId,
-        peerIdentity as PeerIdentityDetails,
-        runtime.syncMode,
+    if (plan === "ask-whole") {
+      console.warn(
+        `[exchange] lineage boundary detected for doc '${effect.docId}' ` +
+          `with a non-entirety payload — re-requesting the sender's full state.`,
       )
-
-      if (!accept) {
-        // Reject keeps local state — the doc diverges from the
-        // compacted peers until governance reconciles or a new
-        // entirety is accepted.
-        return
-      }
-
-      // `resetFromEntirety`/`fromEntirety` are partial functions: they
-      // are only well-defined for a self-sufficient `kind: "entirety"`
-      // state image — a `kind: "since"` delta has no valid causal anchor
-      // once the lineage has changed, so there is no coherent way to
-      // "reset" with it. The lineage trigger is intentionally independent of
-      // payload shape (see classifyResetTrigger), so it can and does fire on
-      // `"since"` offers. Recover by re-requesting
-      // the sender's current state (a fresh `interest`) instead of
-      // feeding an inapplicable delta to a reset path that cannot
-      // service it — the sender's existing interest-response path
-      // (buildInterestResponse) already supplies a full entirety when
-      // asked, the same mechanism first-sync relies on.
-      // Context: jj:5e9e318542ee2006ccb720fd4ec9f819.
-      if (effect.payload.kind !== "entirety") {
-        console.warn(
-          `[exchange] lineage boundary detected for doc '${effect.docId}' ` +
-            `with a non-entirety payload — re-requesting the sender's full state.`,
-        )
-        this.#dispatchSync({
-          type: "sync/doc-gap",
-          docId: effect.docId,
-          fromPeerId: effect.fromPeerId,
-        })
-        return
-      }
-
-      try {
-        if (runtime.mode === "replicate") {
-          // Headless replicas rebuild from the payload rather than merging it.
-          //
-          // Merging would be wrong for both triggers, for the same underlying
-          // reason: the incoming image is not a continuation of what we hold.
-          // Under `"compaction"` the sender genuinely rewrote its history —
-          // `LoroReplica.advance()` exports a shallow snapshot and rebuilds
-          // the doc from it, and `YjsReplica.advance()` re-projects into a
-          // fresh `Y.Doc`, because Yjs has no trim primitive at all. Merging
-          // such an image keeps local ops whose causal anchors it no longer
-          // carries. Under `"lineage"` the sender's history is a different
-          // identity altogether, so there is nothing to reconcile against.
-          //
-          // Rebuilding would be wrong for a field-level LWW substrate — it
-          // drops concurrent field writes the sender has not seen. That is
-          // safe here only because such a document never reaches this
-          // branch; see `classifyResetTrigger` for why.
-          runtime.replica = runtime.replicaFactory.fromEntirety(effect.payload)
-        } else {
-          // Interpret-mode substrates: `resetFromEntirety` discards local
-          // history and adopts the incoming state and lineage explicitly,
-          // decoupled from the routine `merge()` path, which assumes shared
-          // causal ancestry and never adopts across lineages.
-          const substrate = runtime.replica as Substrate<Version>
-          substrate.resetFromEntirety(effect.payload, { origin: "sync" })
-        }
-      } catch (err) {
-        console.warn(
-          `[exchange] ${resetTrigger} reset failed for doc '${effect.docId}'.`,
-          err,
-        )
-        return
-      }
-      // A reset replaces the state rather than joining it, so the state
-      // moved by construction.
-      this.#held(effect, runtime.replica.version().serialize(), true)
-      return
     }
 
-    const priorVersion = runtime.replica.version().serialize()
-    let outcome: MergeOutcome
+    const prior = runtime.replica.version()
     try {
-      outcome = runtime.replica.merge(effect.payload, { origin: "sync" })
+      switch (plan) {
+        case "reset":
+          if (runtime.mode === "replicate") {
+            // Headless replicas rebuild from the payload rather than merging
+            // it, for both triggers: the incoming image is not a continuation
+            // of what we hold. Under `"compaction"` the sender rewrote its
+            // history (`LoroReplica.advance()` exports a shallow snapshot and
+            // rebuilds from it; `YjsReplica.advance()` re-projects into a
+            // fresh `Y.Doc`, because Yjs has no trim primitive), and merging
+            // such an image keeps local ops whose causal anchors it no longer
+            // carries. Under `"lineage"` the sender's history is a different
+            // identity, so there is nothing to reconcile against. Rebuilding
+            // would be wrong for a field-level LWW substrate, which drops
+            // concurrent field writes the sender has not seen; such a
+            // document never reaches here (see `classifyResetTrigger`).
+            runtime.replica = runtime.replicaFactory.fromEntirety(
+              effect.payload,
+            )
+          } else {
+            // `resetFromEntirety` discards local history and adopts the
+            // incoming state and lineage, which the routine merge never does
+            // across lineages.
+            runtime.replica.resetFromEntirety(effect.payload, {
+              origin: "sync",
+            })
+          }
+          break
+        case "merge":
+          runtime.replica.merge(effect.payload, { origin: "sync" })
+          break
+        case "ask-whole":
+          break
+      }
     } catch (err) {
       console.warn(
-        `[exchange] import failed for doc '${effect.docId}'. ` +
-          `If you recently switched CRDT backends, stale clients may be sending incompatible data.`,
+        plan === "merge"
+          ? `[exchange] import failed for doc '${effect.docId}'. ` +
+              `If you recently switched CRDT backends, stale clients may be sending incompatible data.`
+          : `[exchange] ${resetTrigger} reset failed for doc '${effect.docId}'.`,
         err,
       )
       return
     }
-    // The payload continues from a point we do not hold, so nothing was
-    // applied. Applying it anyway is how a restarted peer's copy used to be
-    // corrupted; asking for what we lack is how it catches up.
-    if (outcome === "gap") {
-      this.#dispatchSync({
-        type: "sync/doc-gap",
-        docId: effect.docId,
-        fromPeerId: effect.fromPeerId,
-      })
-      return
-    }
-    const newVersion = runtime.replica.version().serialize()
-    this.#held(effect, newVersion, newVersion !== priorVersion)
+
+    const after = runtime.replica.version()
+    this.#took(
+      effect,
+      after.serialize(),
+      reportImport({
+        plan,
+        prior,
+        after,
+        offered: gap.parsed,
+        historyFree: runtime.replicaFactory.historyFree,
+      }),
+      this.#senderWillHold(runtime, effect, gap.parsed, plan),
+    )
   }
 
-  /** The offer is held at `version`: accept it if owed, then tell the program. */
-  #held(effect: ImportDocData, version: string, changed: boolean): void {
-    this.#acceptIfOwed(effect)
+  /**
+   * What the sender will hold of ours now that it has told us its version:
+   * its baseline joined with the version it offered. After a reset it is the
+   * offered version alone, since the reset discarded what the sender held of
+   * our old state. Absent for a history-free document,
+   * whose versions are private counters that do not join across replicas.
+   */
+  #senderWillHold(
+    runtime: DocRuntime,
+    effect: ImportDocData,
+    offered: Version,
+    plan: ImportPlan,
+  ): string | undefined {
+    if (runtime.replicaFactory.historyFree) return undefined
+    const baseline = effect.ourVersionTheyWillHold
+    if (baseline === undefined || plan === "reset") {
+      return offered.serialize()
+    }
+    try {
+      return runtime.replicaFactory
+        .parseVersion(baseline)
+        .join(offered)
+        .serialize()
+    } catch {
+      // A baseline that does not parse or join (from another lineage) is
+      // no longer what the sender holds; its offer is.
+      return offered.serialize()
+    }
+  }
+
+  /**
+   * The one exit of a taken offer: `accept` it if it is held and an accept is
+   * owed, then tell the program what taking it in did.
+   */
+  #took(
+    effect: ImportDocData,
+    version: string,
+    report: { readonly changed: boolean; readonly held: boolean },
+    senderWillHold: string | undefined,
+  ): void {
+    if (report.held) this.#acceptIfOwed(effect)
     this.#dispatchSync({
       type: "sync/doc-imported",
       docId: effect.docId,
       version,
       offered: effect.version,
       fromPeerId: effect.fromPeerId,
-      changed,
+      changed: report.changed,
+      held: report.held,
+      ...(senderWillHold === undefined ? {} : { senderWillHold }),
     })
   }
 

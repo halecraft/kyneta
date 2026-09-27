@@ -271,6 +271,33 @@ export interface Version {
    * - Lower bound: `a.meet(b) ≤ a` and `a.meet(b) ≤ b`
    */
   meet(other: Version): Version
+
+  /**
+   * Least upper bound (lattice join): the least version that holds
+   * everything either holds.
+   *
+   * Laws, for versions of one lineage:
+   * - Commutative, associative, idempotent.
+   * - Upper bound: `a ≤ a.join(b)` and `b ≤ a.join(b)`.
+   * - Absorption: `a.meet(a.join(b)) = a` and `a.join(a.meet(b)) = a`.
+   *
+   * Two versions of different real lineages have no join (a replica holds
+   * one lineage); implementations throw.
+   */
+  join(other: Version): Version
+}
+
+/**
+ * Whether `ours` holds everything `theirs` does: `ours` is ahead of or equal
+ * to `theirs`.
+ *
+ * The one test of holding a version. It never reads a digest: a digest
+ * answers only "equal", and a replica that took an offer and holds more of
+ * its own must still reach it.
+ */
+export function reaches(ours: Version, theirs: Version): boolean {
+  const order = ours.compare(theirs)
+  return order === "ahead" || order === "equal"
 }
 
 // ---------------------------------------------------------------------------
@@ -395,7 +422,8 @@ export interface ReplicaLike {
    * when the version already answers equality.
    *
    * Only substrates whose version cannot say "equal" need one. A version
-   * vector compares two replicas exactly, so Plain and Loro return nothing and
+   * vector compares two replicas exactly, so Plain, Loro and Yjs (whose delete
+   * clock makes every change advance its state vector) return nothing and
    * mean it: *ask my version*. The ephemeral substrate's version is an install
    * counter — a fact about itself, meaningless to a peer — so it answers here
    * instead.
@@ -419,14 +447,18 @@ export interface ReplicaLike {
    *
    * Plain: a payload names its log position. A delta that continues what
    *   the replica holds appends the batches it lacks; one that starts past
-   *   it is a `"gap"`, and nothing is applied. A whole document ahead of the
+   *   it is refused, and nothing is applied. A whole document ahead of the
    *   replica is adopted at its position.
+   *
+   * Whether the payload was taken in is whether the replica's version now
+   * reaches the version it was offered at (`reaches`): a refused plain delta,
+   * or CRDT ops held back for a missing dependency, leave it short.
    *
    * A full Substrate then brings σ into agreement with λ and announces the
    * ops, so subscribers receive them with `Changeset.replay: true`. A bare
    * Replica has no changefeed and only updates its state and version.
    */
-  merge(payload: SubstratePayload, options?: MergeOptions): MergeOutcome
+  merge(payload: SubstratePayload, options?: MergeOptions): void
 
   /**
    * Discard local history and adopt an entirely new state and lineage.
@@ -547,17 +579,6 @@ export interface CommitOptions {
    */
   readonly source?: unknown
 }
-
-/**
- * What `merge` did with a payload.
- *
- * `"gap"`: the payload continues from a point this replica does not hold, so
- * nothing was applied; the caller must obtain the missing state first. Only
- * a substrate whose merge depends on order reports it (Plain's positional
- * log). Loro, Yjs and ephemeral merges are order-insensitive and always
- * report `"merged"`.
- */
-export type MergeOutcome = "merged" | "gap"
 
 /**
  * Options for `merge` and `resetFromEntirety`. There is no `source`: an echo

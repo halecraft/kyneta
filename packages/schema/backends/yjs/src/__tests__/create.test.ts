@@ -6,6 +6,7 @@ import {
   subscribe,
   unwrap,
 } from "@kyneta/schema"
+import { defined } from "@kyneta/schema/testing"
 import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
 import { yjs } from "../bind-yjs.js"
@@ -412,7 +413,7 @@ describe("sync primitives", () => {
       expect(delta).not.toBeNull()
       expect(delta?.encoding).toBe("binary")
 
-      merge(doc2, delta!)
+      merge(doc2, defined(delta, "delta"))
 
       expect(doc2.title()).toBe("Start Edited")
       expect(doc2.count()).toBe(42)
@@ -428,21 +429,21 @@ describe("sync primitives", () => {
       batch(doc1, (d: any) => {
         d.title.insert(0, "A")
       })
-      merge(doc2, exportSince(doc1, vBefore)!)
+      merge(doc2, defined(exportSince(doc1, vBefore), "the delta"))
 
       // Second round
       vBefore = version(doc2)
       batch(doc1, (d: any) => {
         d.title.insert(1, "B")
       })
-      merge(doc2, exportSince(doc1, vBefore)!)
+      merge(doc2, defined(exportSince(doc1, vBefore), "the delta"))
 
       // Third round
       vBefore = version(doc2)
       batch(doc1, (d: any) => {
         d.count.set(3)
       })
-      merge(doc2, exportSince(doc1, vBefore)!)
+      merge(doc2, defined(exportSince(doc1, vBefore), "the delta"))
 
       expect(doc2.title()).toBe("AB")
       expect(doc2.count()).toBe(3)
@@ -468,7 +469,7 @@ describe("sync primitives", () => {
         received.push(changeset)
       })
 
-      merge(doc2, delta!)
+      merge(doc2, defined(delta, "delta"))
 
       expect(received.length).toBeGreaterThanOrEqual(1)
       expect(doc2.count()).toBe(77)
@@ -488,7 +489,9 @@ describe("sync primitives", () => {
         receivedOrigins.push(changeset.origin)
       })
 
-      merge(doc2, exportSince(doc1, v2Before)!, { origin: "my-sync-origin" })
+      merge(doc2, defined(exportSince(doc1, v2Before), "the delta"), {
+        origin: "my-sync-origin",
+      })
 
       expect(receivedOrigins).toContain("my-sync-origin")
     })
@@ -527,8 +530,8 @@ describe("sync primitives", () => {
       // Bidirectional sync
       const d1to2 = exportSince(doc1, v2Before)
       const d2to1 = exportSince(doc2, v1Before)
-      merge(doc2, d1to2!)
-      merge(doc1, d2to1!)
+      merge(doc2, defined(d1to2, "d1to2"))
+      merge(doc1, defined(d2to1, "d2to1"))
 
       expect(version(doc1).compare(version(doc2))).toBe("equal")
     })
@@ -564,7 +567,7 @@ describe("full workflow", () => {
 
     // 4. Sync doc1 → doc2
     const delta = exportSince(doc1, vBefore)
-    merge(doc2, delta!)
+    merge(doc2, defined(delta, "delta"))
 
     // 5. Verify state converged
     expect(doc2.tasks.length).toBe(2)
@@ -585,7 +588,7 @@ describe("full workflow", () => {
     })
 
     const delta2 = exportSince(doc2, v1Before)
-    merge(doc1, delta2!)
+    merge(doc1, defined(delta2, "delta2"))
 
     expect(doc1.tasks.length).toBe(3)
     expect((doc1.tasks.at(2) as any).name()).toBe("Read book")
@@ -655,8 +658,8 @@ describe("full workflow", () => {
     // 4. Bidirectional sync
     const d1to2 = exportSince(doc1, v2Before)
     const d2to1 = exportSince(doc2, v1Before)
-    merge(doc2, d1to2!)
-    merge(doc1, d2to1!)
+    merge(doc2, defined(d1to2, "d1to2"))
+    merge(doc1, defined(d2to1, "d2to1"))
 
     // 5. Versions converge
     expect(version(doc1).compare(version(doc2))).toBe("equal")

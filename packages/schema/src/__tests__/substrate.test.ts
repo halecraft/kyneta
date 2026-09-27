@@ -10,6 +10,7 @@ import {
   plainReplicaFactory,
   plainSubstrateFactory,
   RawPath,
+  reaches,
   readable,
   replaceChange,
   replicaTypesCompatible,
@@ -641,7 +642,7 @@ describe("PlainSubstrate lifecycle", () => {
     const genesis = new PlainVersion(0, DEFAULT_LINEAGE)
     expect(source.exportSince(genesis)).toBeNull()
     const fresh = plainReplicaFactory.createEmpty()
-    expect(fresh.merge(source.exportEntirety())).toBe("merged")
+    fresh.merge(source.exportEntirety())
     expect(fresh.version().compare(source.version())).toBe("equal")
   })
 
@@ -813,7 +814,7 @@ describe("Round-trip replication", () => {
       encoding: "json",
       data: JSON.stringify({ from: 0, batches: [] }),
     }
-    expect(substrate.merge(emptyPayload)).toBe("merged")
+    substrate.merge(emptyPayload)
 
     expect(substrate.version().value).toBe(0)
   })
@@ -844,9 +845,7 @@ describe("merge with entirety payload (PlainSubstrate)", () => {
   it("adopts a whole document ahead of it: state and position", () => {
     const { substrate, lineage } = authored()
 
-    expect(substrate.merge(entiretyAt(image("Replaced", 99), 5, lineage))).toBe(
-      "merged",
-    )
+    substrate.merge(entiretyAt(image("Replaced", 99), 5, lineage))
 
     const snap = snapshotOf(substrate)
     expect(snap.title).toBe("Replaced")
@@ -940,14 +939,12 @@ describe("merge with entirety payload (PlainReplica)", () => {
     const adoptedAt = source.version()
 
     batch(doc, d => d.count.increment(5))
-    expect(
-      replica.merge(source.exportSince(adoptedAt) as SubstratePayload),
-    ).toBe("merged")
+    replica.merge(source.exportSince(adoptedAt) as SubstratePayload)
 
     expect(replica.version().compare(source.version())).toBe("equal")
   })
 
-  it("reports a gap for a delta that starts past it, and applies nothing", () => {
+  it("applies nothing from a delta that starts past it, so it does not reach the offer", () => {
     const source = plainSubstrateFactory.create(TestSchema)
     const doc = interpretSubstrate(source)
     batch(doc, d => d.title.insert(0, "A"))
@@ -956,9 +953,8 @@ describe("merge with entirety payload (PlainReplica)", () => {
 
     const replica = plainReplicaFactory.createEmpty()
 
-    expect(
-      replica.merge(source.exportSince(afterFirst) as SubstratePayload),
-    ).toBe("gap")
+    replica.merge(source.exportSince(afterFirst) as SubstratePayload)
+    expect(reaches(replica.version(), source.version())).toBe(false)
     expect(replica.version().value).toBe(0)
   })
 
