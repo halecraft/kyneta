@@ -420,6 +420,20 @@ export type RuntimeHooks = {
   onDocSuspended?: (docId: DocId) => void
 
   /**
+   * Called when an interpreted document is created, on every path (a new
+   * document, a stored one, a promotion from a relay), and for every
+   * interpreted document already cached when the hooks are set. Fired
+   * before the document becomes ready, so what is attached here observes its
+   * registration with the sync graph.
+   *
+   * The Exchange implements this to attach the ref's network capabilities:
+   * `sync(ref)`, its authority, and the peer half of its settle conjunction.
+   * The Runtime has already attached the local ones (hydration, persistence,
+   * refusal).
+   */
+  onDocInterpreted?: (docId: DocId, ref: object) => void
+
+  /**
    * Called when an interpreted document's state was replaced locally by what
    * its store holds (a lost writer race's rebuild). Peers may have sent
    * operations the replacement discarded, and believe this replica holds
@@ -645,13 +659,16 @@ export class Runtime {
    * to bridge the Runtime into the Synchronizer.
    *
    * Once per Runtime: a second call throws. Two Exchanges over one Runtime
-   * would share its seat and sync its documents twice.
+   * would share its seat and sync its documents twice. So a document gets
+   * `onDocInterpreted` exactly once: from the backfill below if it already
+   * exists, at creation otherwise.
    *
-   * Backfills `onDocReady` for every already-live, non-deferred document
-   * in the cache — covers the "standalone Runtime later wrapped in an
-   * Exchange" path (`new Exchange(runtime, params)`), where documents
-   * created via `runtime.get()`/`runtime.replicate()` before this call
-   * fired `onDocReady` with no hooks set and were never announced.
+   * Backfills `onDocInterpreted` for every interpreted document in the
+   * cache, then `onDocReady` for every already-live, non-deferred one —
+   * covers the "standalone Runtime later wrapped in an Exchange" path
+   * (`new Exchange(runtime, params)`), where documents created via
+   * `runtime.get()`/`runtime.replicate()` before this call had no hooks to
+   * fire: they gain `sync()` and the peer settle term, and are announced.
    * Context: jj:mrlnmlus.
    */
   setHooks(hooks: RuntimeHooks): void {
@@ -660,6 +677,13 @@ export class Runtime {
         "[runtime] this Runtime already belongs to an Exchange; two Exchanges over one Runtime would share its seat",
       )
     this.#hooks = hooks
+    // Network capabilities first, so a peer term is listening before the
+    // document registers with the sync graph.
+    if (hooks.onDocInterpreted) {
+      for (const [docId, entry] of this.#docCache) {
+        if (entry.mode === "interpret") hooks.onDocInterpreted(docId, entry.ref)
+      }
+    }
     if (hooks.onDocReady) {
       for (const [, entry] of this.#docCache) {
         if (entry.mode !== "deferred") this.#register(entry)
@@ -988,12 +1012,24 @@ export class Runtime {
   }
 
   /**
-   * Compact a document: take in what the store holds of it, then replace
-   * what was read with the whole document ({@link Runtime.#compact}).
-   * Resolves once no write is in flight for it, which a `destroy` makes true
-   * at once.
+   * Compact a document: trim its history in memory to `trimTo`, or entirely
+   * without one, as far as its replica can; then take in what the store
+   * holds of it and replace what was read with the whole document
+   * ({@link Runtime.#compact}). Resolves once no write is in flight for it,
+   * which a `destroy` makes true at once.
+   *
+   * `trimTo` is what the network allows: the Exchange passes the least common
+   * version of the peers it keeps up to date, so none is stranded behind the
+   * trimmed base. A live CRDT document trims nothing, since it cannot swap
+   * the native document its callers hold; its storage is compacted all the
+   * same. Without a store, only the trim happens.
    */
-  async compact(docId: DocId): Promise<void> {
+  async compact(docId: DocId, trimTo?: Version): Promise<void> {
+    const entry = this.#docCache.get(docId)
+    if (entry === undefined || entry.mode === "deferred") return
+    const { replica } = entry.readyInfo
+    replica.advance(trimTo ?? replica.version())
+
     if (!this.#storeHandle) return
     this.#storeHandle.dispatch({ type: "compact", docId })
     await this.#storeHandle.waitForState((s: StoreModel) => {
@@ -1401,6 +1437,10 @@ export class Runtime {
         },
       ),
     )
+
+    // Before it can become ready: a document that loads nothing does so
+    // below, synchronously, and registers with the sync graph.
+    this.#hooks?.onDocInterpreted?.(docId, ref)
 
     if (willHydrate) {
       this.#loadThenBecomeReady(entry)

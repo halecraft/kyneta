@@ -172,7 +172,7 @@ describe("Exchange", () => {
       exchange.get("doc-1", DocA)
 
       // Builder is invoked at each use site: registerSchema (capabilities +
-      // auto-promote scan) and #interpretDoc. No WeakMap caching.
+      // auto-promote scan) and document creation. No WeakMap caching.
       for (const call of builder.mock.calls as unknown as Array<
         [{ peerId: string }]
       >) {

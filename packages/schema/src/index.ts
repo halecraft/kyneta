@@ -576,6 +576,7 @@ export {
   hasTreeNodeAllocation,
   mismatchForInterpretation,
   mismatchForSync,
+  planAdvance,
   reaches,
   replicaTypesCompatible,
   requiresBidirectionalSync,

@@ -300,6 +300,31 @@ export function reaches(ours: Version, theirs: Version): boolean {
   return order === "ahead" || order === "equal"
 }
 
+/**
+ * What `advance(to)` must do under the `Replica` contract, for a replica
+ * whose history starts at `base` and reaches `current`:
+ *
+ * - `"beyond"`: `to` is ahead of `current`; the caller asked for history the
+ *   replica does not hold, and `advance` throws.
+ * - `"trim"`: `to` lies after `base` and at or before `current`; trim to it,
+ *   as far as the replica can.
+ * - `"nothing"`: anything else. A `to` at or behind the base was already
+ *   trimmed past; one concurrent with the base or with `current`, or from
+ *   another lineage, cannot be placed.
+ */
+export function planAdvance(input: {
+  readonly base: Version
+  readonly current: Version
+  readonly to: Version
+}): "beyond" | "trim" | "nothing" {
+  const { base, current, to } = input
+  if (to.lineage !== current.lineage) return "nothing"
+  const toCurrent = to.compare(current)
+  if (toCurrent === "ahead") return "beyond"
+  if (toCurrent === "concurrent") return "nothing"
+  return to.compare(base) === "ahead" ? "trim" : "nothing"
+}
+
 // ---------------------------------------------------------------------------
 // SubstratePayload — opaque transfer format
 // ---------------------------------------------------------------------------

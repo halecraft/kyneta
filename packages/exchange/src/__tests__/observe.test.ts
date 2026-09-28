@@ -520,8 +520,8 @@ describe("observe — integration (two peers, one bridge)", () => {
     )
     await drain()
 
-    // bob never called get("auto"), yet doc-layer changesets arrive via the
-    // shared #interpretDoc subscription.
+    // bob never called get("auto"), yet doc-layer changesets arrive: an
+    // auto-interpreted document is wired like one bob asked for.
     expect(
       b.some(
         e => e.layer === "doc" && e.kind === "changeset" && e.docId === "auto",

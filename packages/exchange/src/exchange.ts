@@ -388,9 +388,8 @@ export class Exchange {
           //
           // `resolveSchema` has already matched the triple, so a compatible
           // document reaches `create` or `return-cached` exactly as before.
-          // What this closes is the replicate case: this path used to call
-          // `#interpretDoc` directly, which would have overwritten a replicate
-          // entry's accumulated state.
+          // What this closes is the replicate case: creating the document
+          // directly would overwrite a replicate entry's accumulated state.
           const action = planInterpretation({
             phase: phaseOf(this.#runtime.getEntry(docId)),
             reader: metadataOf(resolvedBound),
@@ -399,7 +398,7 @@ export class Exchange {
           })
           if (action.action === "promote") this.#runtime.deleteDeferred(docId)
           if (action.action !== "refuse") {
-            this.#interpretDoc(docId, resolvedBound)
+            this.#runtime.createInterpretDoc(docId, resolvedBound)
           }
           return
         }
@@ -431,7 +430,7 @@ export class Exchange {
 
         switch (result.kind) {
           case "interpret":
-            this.#interpretDoc(docId, result.bound)
+            this.#runtime.createInterpretDoc(docId, result.bound)
             break
           case "replicate": {
             const boundReplica = this.#capabilities.resolveReplica(
@@ -477,6 +476,7 @@ export class Exchange {
       // The Runtime's own record, not a copy: a replica the Runtime rebuilds
       // is then the one the Synchronizer syncs from.
       onDocReady: info => this.#synchronizer.registerDoc(info),
+      onDocInterpreted: (docId, ref) => this.#attachNetwork(docId, ref),
       onDocChangeset: (docId, changeset) => {
         // Observation only: the changeset feed is for readers. What leaves
         // the process follows `onDocAdvanced`.
@@ -529,38 +529,23 @@ export class Exchange {
   }
 
   /**
-   * Internal document creation — delegates to the Runtime, then wires
-   * sync capabilities onto the returned ref.
+   * Attach a ref's network capabilities: `sync(ref)`, its authority, and
+   * the peer half of its settle conjunction. The Runtime calls this through
+   * `onDocInterpreted` for every interpreted document, whether created
+   * through `get()`, loaded, promoted, or created on a standalone Runtime
+   * before it was wrapped; it has already attached the local half.
    *
-   * This is the single creation path for interpreted docs. Both the
-   * public `get()` and internal `onEnsureDoc` paths delegate here.
+   * The peer term is registered now rather than once sync completes, because
+   * it has to be observable *while still false*. That is what stops a caller
+   * reading a not-yet-synced document as empty. Nothing needs undoing on
+   * eviction: each registry is keyed by the document itself.
    */
-  #interpretDoc(docId: DocId, bound: BoundSchema): any {
-    // The Runtime handles substrate creation, caching, hydration, and
-    // fires onDocReady (which the Exchange wires to registerDoc).
-    //
-    // Uses createInterpretDoc (non-generic) instead of get (generic) to
-    // avoid TS2589: #interpretDoc is called from both the generic #getImpl
-    // (precise types) and the non-generic onEnsureDoc callback. Since this
-    // method returns `any` and #getImpl supplies the precise return type via
-    // the Get call-signature, the non-generic internal path is correct.
-    const ref = this.#runtime.createInterpretDoc(docId, bound)
-
-    // Wire sync capabilities onto the ref. This must happen after the
-    // Runtime creates the ref so sync() works immediately.
+  #attachNetwork(docId: DocId, ref: object): void {
     registerSync(ref, {
       peerId: this.peerId,
       docId,
       synchronizer: this.#synchronizer,
     })
-
-    // The peer term — the network half of this document's settle conjunction.
-    // The Runtime already attached the storage half; together they answer
-    // "has everything that could tell me about this document reported yet?".
-    //
-    // Registered here rather than once sync completes, because the term has to
-    // be observable *while still false*. That is what stops a caller reading a
-    // not-yet-synced document as empty.
     registerDocAuthority(ref, () => this.#governance.authority() ?? "any")
     registerPeerResolver(ref, authority => this.#peerSettled(docId, authority))
     registerSettleTerm(
@@ -573,8 +558,6 @@ export class Exchange {
           }),
       ),
     )
-
-    return ref
   }
 
   /**
@@ -789,7 +772,7 @@ export class Exchange {
     // no infinite recursion or cache corruption.
     this.registerSchema(bound)
 
-    return this.#interpretDoc(docId, bound) as Ref<S>
+    return this.#runtime.createInterpretDoc(docId, bound) as Ref<S>
   }
 
   /**
@@ -940,31 +923,24 @@ export class Exchange {
   }
 
   /**
-   * Compact a document — advance the base to the LCV and replace
-   * stored payloads with the trimmed entirety.
+   * Compact a document: trim its history in memory as far as every peer we
+   * keep up to date allows, and replace what the store holds with the whole
+   * document (`Runtime.compact`). Works for every document; a live CRDT
+   * document trims nothing in memory, and its storage is compacted all the
+   * same.
    *
-   * This is a convenience that composes `leastCommonVersion()` →
-   * `replica.advance()` → store-program `compact`, whose write exports the
-   * trimmed entirety when it starts.
-   *
-   * If no peer's holding is known, the full document is projected (all
-   * history discarded). The base never passes the LCV, so no peer whose
-   * holding is known is stranded; one whose holding is not known catches
-   * up with the whole document.
+   * The bound is `leastCommonVersion()`, so no peer whose holding is known is
+   * stranded behind the trimmed base. With none known, history is trimmed
+   * entirely; a peer whose holding is not known catches up with the whole
+   * document.
    *
    * @param docId - The document to compact
    */
   async compact(docId: DocId): Promise<void> {
-    const doc = this.#synchronizer.getDoc(docId)
-    if (!doc) return
-
-    const lcv = this.leastCommonVersion(docId)
-    // If no peers are synced, advance to current version (full projection).
-    const target = lcv ?? doc.replica.version()
-
-    doc.replica.advance(target)
-
-    await this.#runtime.compact(docId)
+    await this.#runtime.compact(
+      docId,
+      this.leastCommonVersion(docId) ?? undefined,
+    )
   }
 
   /**
@@ -1093,10 +1069,10 @@ export class Exchange {
         hydrated: true,
       })
       if (action.action === "refuse") continue
-      // Safe: Runtime.deleteDeferred removes from cache, then #interpretDoc
-      // inserts the new entry.
+      // Safe: Runtime.deleteDeferred removes from cache, then
+      // createInterpretDoc inserts the new entry.
       this.#runtime.deleteDeferred(docId)
-      this.#interpretDoc(docId, bound)
+      this.#runtime.createInterpretDoc(docId, bound)
     }
   }
 

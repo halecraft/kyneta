@@ -74,6 +74,7 @@ import {
   KIND,
   ownedForStore,
   plainReader,
+  planAdvance,
   syncShadow,
 } from "@kyneta/schema"
 import * as Y from "yjs"
@@ -444,15 +445,25 @@ export function createYjsSubstrate(
     },
 
     baseVersion(): YjsVersion {
-      // Yjs substrate: base is always the initial state (no advance supported).
+      // A live substrate never trims, so its history starts at the beginning.
       return YjsVersion.empty
     },
 
-    advance(_to: YjsVersion): void {
-      throw new Error(
-        "advance() on a live Yjs substrate is not yet supported. " +
-          "Use advance() on a YjsReplica instead.",
-      )
+    /**
+     * Trims nothing, and throws only for a `to` beyond the current version.
+     * Yjs has no trim primitive, and re-projecting into a fresh `Y.Doc`, as
+     * the replica does, would strand every native type editor bindings and
+     * `unwrap` callers hold.
+     */
+    advance(to: Version): void {
+      const plan = planAdvance({
+        base: this.baseVersion(),
+        current: this.version(),
+        to,
+      })
+      if (plan === "beyond") {
+        throw new Error("advance(): target is ahead of current version")
+      }
     },
 
     exportEntirety(): SubstratePayload {
@@ -627,18 +638,14 @@ export function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
     },
 
     advance(to: Version): void {
-      const baseCmp = currentBase.compare(to)
-      if (baseCmp === "ahead") {
-        throw new Error("advance(): target is behind base version")
-      }
-      const currentCmp = to.compare(this.version())
-      if (currentCmp === "ahead") {
+      const current = this.version()
+      const plan = planAdvance({ base: currentBase, current, to })
+      if (plan === "beyond") {
         throw new Error("advance(): target is ahead of current version")
       }
-
-      // Yjs can only do full projection (to = version).
-      // For any to < version, it's a no-op — undershoot contract.
-      if (currentCmp !== "equal") return
+      // Yjs has no partial trim, only a full projection, so it trims only
+      // at the current version; short of it, as far as it can is nothing.
+      if (plan !== "trim" || to.compare(current) !== "equal") return
 
       // Full projection: create a new doc with current state, no history.
       const update = Y.encodeStateAsUpdate(currentDoc)

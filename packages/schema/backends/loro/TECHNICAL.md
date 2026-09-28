@@ -426,6 +426,14 @@ The choice of `VersionVector` (not `Frontiers`) is deliberate: `VersionVector` t
 
 ---
 
+## `advance`: the replica trims, the live substrate does not
+
+Source: `src/substrate.ts` → `advance` on `createLoroSubstrate` and `createLoroReplica`.
+
+Both follow `planAdvance` from `@kyneta/schema`, and throw only for a target beyond the current version. A relay's replica trims to a shallow snapshot at the target's frontiers; its `baseVersion()` is then `shallowSinceVV()`, at or just behind the target. A target behind or concurrent with the base cannot be placed, and trims nothing. A live substrate never trims: importing a shallow snapshot means a new `LoroDoc`, and editor bindings and `unwrap` callers hold its containers. Its `baseVersion()` is `shallowSinceVV()` of the document it holds, which is shallow only if it loaded a shallow snapshot. Compacting a live document still replaces its storage with the whole document.
+
+---
+
 ## `LoroPosition`
 
 Source: `packages/schema/backends/loro/src/position.ts`.

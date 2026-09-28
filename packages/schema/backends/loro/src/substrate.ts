@@ -65,6 +65,7 @@ import {
   type PositionCapable,
   type ProductSchema,
   plainReader,
+  planAdvance,
   type RecordInverseFn,
   type Replica,
   type ReplicaFactory,
@@ -360,11 +361,21 @@ export function createLoroSubstrate(
       return new LoroVersion(doc.shallowSinceVV())
     },
 
-    advance(_to: LoroVersion): void {
-      throw new Error(
-        "advance() on a live Loro substrate is not yet supported. " +
-          "Use advance() on a LoroReplica instead.",
-      )
+    /**
+     * Trims nothing, and throws only for a `to` beyond the current version.
+     * Trimming means importing a shallow snapshot into a new `LoroDoc`, as
+     * the replica does, which would strand every native container editor
+     * bindings and `unwrap` callers hold.
+     */
+    advance(to: Version): void {
+      const plan = planAdvance({
+        base: this.baseVersion(),
+        current: this.version(),
+        to,
+      })
+      if (plan === "beyond") {
+        throw new Error("advance(): target is ahead of current version")
+      }
     },
 
     prepare(
@@ -734,15 +745,15 @@ export function createLoroReplica(doc: LoroDocType): Replica<LoroVersion> {
     },
 
     advance(to: Version): void {
-      const base = this.baseVersion()
-      const cmp = base.compare(to)
-      if (cmp === "ahead") {
-        throw new Error(`advance(): target is behind base version`)
+      const plan = planAdvance({
+        base: this.baseVersion(),
+        current: this.version(),
+        to,
+      })
+      if (plan === "beyond") {
+        throw new Error("advance(): target is ahead of current version")
       }
-      const cmpCurrent = to.compare(this.version())
-      if (cmpCurrent === "ahead") {
-        throw new Error(`advance(): target is ahead of current version`)
-      }
+      if (plan === "nothing") return
       // Convert VV to frontiers for the shallow-snapshot API.
       const frontiers = currentDoc.vvToFrontiers((to as LoroVersion).vv)
       // Export a shallow snapshot at the target frontiers.

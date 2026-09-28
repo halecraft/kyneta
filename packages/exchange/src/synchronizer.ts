@@ -978,12 +978,16 @@ export class Synchronizer {
   }
 
   /**
-   * Greatest version that is ≤ what every peer we keep up to date holds of
-   * ours (`ourVersionTheyHold`, from its `accept`s and interests): the safe
-   * trim point for `advance()`. The local version is excluded deliberately:
-   * the LCV represents "what every remote has," so including local state
-   * would raise it past what peers actually have and strand them on
-   * subsequent syncs.
+   * The greatest version at or below our own and what every peer we keep up
+   * to date holds of ours (`ourVersionTheyHold`, from its `accept`s and
+   * interests): the safe trim point for `advance()`.
+   *
+   * The meet starts from our own version. A peer's first interest carries no
+   * cursor, so its holding is recorded as its whole version, which includes
+   * its own operations we do not hold yet, and is concurrent with or ahead of
+   * ours until its `accept` arrives. Meeting with our own version keeps what
+   * the peer holds of ours and drops what we lack, so the result can always
+   * be placed; a meet can only lower it.
    *
    * Returns `null` when no peer's holding is known (nothing to bound
    * against) or the doc is unknown.
@@ -996,6 +1000,7 @@ export class Synchronizer {
     if (!doc) return null
 
     let lcv: Version | null = null
+    const ours = doc.replica.version()
 
     for (const [, peerState] of this.#syncHandle.getState().peers) {
       const docSync = peerState.docSyncStates.get(docId)
@@ -1016,7 +1021,7 @@ export class Synchronizer {
         continue
       }
 
-      lcv = lcv === null ? peerVersion : lcv.meet(peerVersion)
+      lcv = (lcv ?? ours).meet(peerVersion)
     }
 
     return lcv

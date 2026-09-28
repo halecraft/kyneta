@@ -201,6 +201,12 @@ The version's size grows with the number of clients, never with edit history. An
 
 ---
 
+## `advance`: the replica trims, the live substrate does not
+
+Source: `src/substrate.ts` → `advance` on `createYjsSubstrate` and `createYjsReplica`.
+
+Both follow `planAdvance` from `@kyneta/schema`, and throw only for a target beyond the current version. Yjs has no trim primitive: a relay's replica trims by re-projecting its state into a fresh `Y.Doc`, which it can do only at its current version, so a target short of it trims nothing. A live substrate never trims, and its `baseVersion()` stays empty: re-projecting would swap the `Y.Doc`, and editor bindings and `unwrap` callers hold its shared types. Compacting a live document still replaces its storage with the whole document.
+
 ## `STRUCTURAL_YJS_CLIENT_ID`
 
 Source: `@kyneta/schema`'s `src/substrate.ts` → `STRUCTURAL_YJS_CLIENT_ID = 0`; consumed by `packages/schema/backends/yjs/src/populate.ts` → `ensureContainers`.
