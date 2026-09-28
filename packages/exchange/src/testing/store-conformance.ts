@@ -400,6 +400,33 @@ export function describeStore(
       ])
     })
 
+    it("listDocIds(prefix) is exactly the ids starting with prefix", async () => {
+      // Each id guards against a way a store has got this wrong: `%` and `_`
+      // read as LIKE wildcards, case ignored (SQLite's LIKE), a character
+      // after the prefix above a hand-picked sentinel (LevelDB's "\xff",
+      // which is C3 BF in UTF-8), an astral character, and a sibling that
+      // sorts just past the prefix.
+      const ids = [
+        "users/alice",
+        "Users/Bob",
+        "users/\u0101lice",
+        "users/\u65e5\u672c",
+        "users/\u{1f600}",
+        "users0",
+        "100%_done",
+        "100_other",
+        "100xyz",
+      ]
+      for (const id of ids) await backend.append(id, makeMetaRecord())
+
+      for (const prefix of ["users/", "Users/", "100%", "100_", "users", ""]) {
+        const listed = await collectAll(backend.listDocIds(prefix))
+        expect(listed.sort(), `prefix ${JSON.stringify(prefix)}`).toEqual(
+          ids.filter(id => id.startsWith(prefix)).sort(),
+        )
+      }
+    })
+
     // =======================================================================
     // 12. append after compact produces correct ordering
     // =======================================================================

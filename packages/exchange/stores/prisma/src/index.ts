@@ -46,7 +46,7 @@ interface RecordRow {
 interface MetaModel {
   findUnique(args: { where: { docId: string } }): Promise<MetaRow | null>
   findMany(args: {
-    where?: { docId?: { gte?: string; lt?: string } }
+    where?: { docId?: { startsWith: string } }
     select: { docId: true }
   }): Promise<Array<{ docId: string }>>
   upsert(args: {
@@ -314,14 +314,18 @@ export class PrismaStore implements Store {
       return
     }
 
-    const upper = prefixUpperBound(prefix)
+    // Prisma serves several databases, which order and match text
+    // differently, so no one query is exact on all of them. A range scan
+    // assumes code-point order, which a locale collation breaks, and misses
+    // ids. `startsWith` becomes LIKE, which Prisma escapes, and which SQLite
+    // and MySQL's default collation match without regard to case: it can
+    // return extra ids, never fewer. So the database narrows with
+    // `startsWith`, and the exact test is ours.
     const rows = await this.#meta.findMany({
-      where: {
-        docId: upper === null ? { gte: prefix } : { gte: prefix, lt: upper },
-      },
+      where: { docId: { startsWith: prefix } },
       select: { docId: true },
     })
-    for (const r of rows) yield r.docId
+    for (const r of rows) if (r.docId.startsWith(prefix)) yield r.docId
   }
 
   async close(): Promise<void> {
@@ -382,11 +386,6 @@ export class PrismaStore implements Store {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Prisma's `Json` field arrives parsed on Postgres/MySQL but as a raw
- * string on SQLite — the only place where the underlying database
- * type leaks through Prisma's abstraction.
- */
 /** Prisma's unique-constraint violation (`P2002`). */
 function isUniqueViolation(error: unknown): boolean {
   return (
@@ -397,23 +396,14 @@ function isUniqueViolation(error: unknown): boolean {
   )
 }
 
+/**
+ * Prisma's `Json` field arrives parsed on Postgres/MySQL but as a raw
+ * string on SQLite — the only place where the underlying database
+ * type leaks through Prisma's abstraction.
+ */
 function parseMetaData(value: unknown): unknown {
   if (typeof value === "string") return JSON.parse(value)
   return value
-}
-
-function prefixUpperBound(prefix: string): string | null {
-  if (prefix.length === 0) return null
-  const codes = Array.from(prefix)
-  for (let i = codes.length - 1; i >= 0; i--) {
-    const ch = codes[i] as string
-    const code = ch.codePointAt(0) as number
-    if (code < 0x10ffff) {
-      const next = String.fromCodePoint(code + 1)
-      return codes.slice(0, i).join("") + next
-    }
-  }
-  return null
 }
 
 /**

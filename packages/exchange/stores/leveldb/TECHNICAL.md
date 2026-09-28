@@ -73,12 +73,12 @@ Eight methods, each of which is either a single LevelDB op or a single prefix it
 | Method | LevelDB mapping |
 |--------|-----------------|
 | `append(docId, record: StoreRecord)` | Gather (existing meta, next seqNo) → pure `planAppend` → one atomic `batch`. A `meta` record: a `batch` of `{ put(recordKey(seq), encoded), put(docMetaKey, JSON) }`. An `entry` record: a one-op `batch` of `put(recordKey(seq), encoded)` (requires existing meta). Never two sequential writes. |
-| `loadAll(docId)` → `AsyncIterable<StoreRecord>` | `db.values({ gte: prefix, lt: prefix + "\xff" })` in key order |
+| `loadAll(docId)` → `AsyncIterable<StoreRecord>` | `db.values(keysWithPrefix(prefix))` in key order |
 | `mark(docId)` → `StoreMark \| null` | The seqNo of the doc's last record: one reverse-iterator seek, limited to one key. |
 | `compact(docId, records, through)` | Collect the record keys at or before `recordKey(through)`, issue one `batch` that deletes them and writes the new records at the next seqNos — atomic. Must contain at least one `meta` record; materialized index is updated. |
 | `delete(docId)` | Collect `[metaKey, ...recordKeys]`, one `batch` of `del`s — atomic |
 | `currentMeta(docId)` → `StoreMeta \| null` | `db.get(metaKey)`; `LEVEL_NOT_FOUND` → `null` |
-| `listDocIds(prefix?)` → `AsyncIterable<DocId>` | Iterate `meta\x00{prefix}*` keys, slice the prefix |
+| `listDocIds(prefix?)` → `AsyncIterable<DocId>` | Iterate `keysWithPrefix("doc-meta\x00" + prefix)`, slice the namespace off |
 | `close()` | `db.close()` — required, releases file handles |
 
 Every method is `async`. All writes go through LevelDB's single-writer guarantee — there is no in-memory write buffer to lose on crash.
@@ -100,7 +100,7 @@ The three namespaces sort `doc-meta` < `record` < `store-meta` (`d` < `r` < `s`)
 Two observations drove this layout:
 
 1. **`\x00` cannot appear in valid UTF-8 strings.** The null byte is not a legal continuation byte, not a legal start byte, and not representable in a well-formed UTF-8 string. This means no docId — whatever characters it contains — can collide with the separator or "escape" its prefix. The store imposes zero naming constraints on the exchange.
-2. **LevelDB orders keys lexicographically.** Within a record namespace, keys for one doc sort together; within one doc, keys sort by `seqNo`. Prefix iteration with `{ gte: prefix, lt: prefix + "\xff" }` scans exactly the keys in a prefix.
+2. **LevelDB orders keys lexicographically.** Within a record namespace, keys for one doc sort together; within one doc, keys sort by `seqNo`. Prefix iteration with `keysWithPrefix(prefix)`, which is `{ gte: prefix, lt: prefixSuccessor(prefix, "code-point") }`, scans exactly the keys in a prefix: keys compare as UTF-8 bytes, which is code-point order. The sentinel it replaced, `lt: prefix + "\xff"`, did not: `"\xff"` is the bytes `C3 BF` in UTF-8, so a document id continuing with any character from U+0100 on (`p/ālice`, `p/日本`) fell outside `listDocIds("p/")`, and outside the store-format probe's "does any document exist?" scan.
 
 The `meta\x00{docId}` key is a **materialized index** — it stores the resolved `StoreMeta` for fast lookup without scanning the record stream. It is updated on every `meta`-kind `append` and during `compact`.
 
@@ -136,7 +136,7 @@ The store keeps a `SeqNoTracker` (`#seqNos`) — an in-memory `Map<DocId, number
 | Phase | Mechanism |
 |-------|-----------|
 | Steady state | `#seqNos.next(docId, discover)` reads the cache, increments, writes back. One write per `append` (a single `batch`). |
-| Cold start (first `append` to a doc after process restart) | Cache miss. Issue a single reverse-iterator seek: `db.keys({ gte: prefix, lt: prefix + "\xff", reverse: true, limit: 1 })`. Parse the one returned key to get `maxSeq`, cache `maxSeq + 1`. |
+| Cold start (first `append` to a doc after process restart) | Cache miss. Issue a single reverse-iterator seek: `db.keys({ ...keysWithPrefix(prefix), reverse: true, limit: 1 })`. Parse the one returned key to get `maxSeq`, cache `maxSeq + 1`. |
 
 The cold-start seek is **one** reverse iteration limited to one result. It is O(log n) in LevelDB's LSM structure, not O(n). No full scan.
 

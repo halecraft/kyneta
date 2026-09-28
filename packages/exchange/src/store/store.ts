@@ -306,3 +306,56 @@ export function validateAppend(
 
   return resolveMetaFromBatch([record], existingMeta)
 }
+
+// ---------------------------------------------------------------------------
+// prefixSuccessor — the upper bound of a prefix scan
+// ---------------------------------------------------------------------------
+
+/**
+ * How a storage compares string keys.
+ *
+ * - `code-point`: by Unicode code point. UTF-8 byte order is code-point
+ *   order, so this is Postgres under `COLLATE "C"`, SQLite's default binary
+ *   collation, and LevelDB over UTF-8 keys.
+ * - `code-unit`: by UTF-16 code unit, as IndexedDB and JavaScript's `<` do.
+ *   The two differ only between astral characters and U+E000–U+FFFF.
+ */
+export type KeyOrder = "code-point" | "code-unit"
+
+/**
+ * The least string greater than every string that starts with `prefix`, in
+ * `order`: `prefix` with its last symbol incremented, dropping trailing
+ * symbols already at the maximum. `null` when there is none (an empty
+ * prefix, or one made only of maximal symbols); the scan then has no upper
+ * bound.
+ *
+ * The strings starting with `prefix` are then exactly the range
+ * `[prefix, prefixSuccessor(prefix, order))`, which a store can scan on its
+ * key index. A hand-picked sentinel such as `prefix + "\uffff"` is not: it
+ * cuts off keys that continue with a greater symbol, and under UTF-8 bytes
+ * `"\xff"` encodes as `C3 BF`, below every character from U+0100 on.
+ *
+ * In code-point order the successor of U+D7FF is U+E000: surrogates are not
+ * characters, and one alone would be written to UTF-8 as U+FFFD.
+ */
+export function prefixSuccessor(
+  prefix: string,
+  order: KeyOrder,
+): string | null {
+  const symbols = order === "code-point" ? Array.from(prefix) : prefix.split("")
+  const max = order === "code-point" ? 0x10ffff : 0xffff
+  for (let i = symbols.length - 1; i >= 0; i--) {
+    const symbol = symbols[i]
+    const value = symbol === undefined ? undefined : symbol.codePointAt(0)
+    if (value === undefined || value >= max) continue
+    const next =
+      order === "code-point" && value + 1 === 0xd800 ? 0xe000 : value + 1
+    return (
+      symbols.slice(0, i).join("") +
+      (order === "code-point"
+        ? String.fromCodePoint(next)
+        : String.fromCharCode(next))
+    )
+  }
+  return null
+}

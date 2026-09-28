@@ -32,9 +32,10 @@ Recommended entry point is the async `createPostgresStore(fromPool(pool), option
 
 - All three tables exist.
 - Each expected column is present with a compatible `data_type` (Postgres types: `text`, `jsonb`, `integer`, `bytea`).
-- A curated error names the missing table or column on failure.
+- Both `doc_id` columns have `COLLATE "C"` (see "Range scan instead of LIKE").
+- A curated error names the missing table or column on failure, and for a wrong collation gives the `ALTER TABLE` that fixes it.
 
-Validation does **not** auto-DDL. Postgres convention is migrations-as-deployment-step; the `schema.sql` file ships canonical DDL for callers to include in their migration pipeline. (The per-document table was renamed `kyneta_meta` → `kyneta_doc_meta`, and `kyneta_store_meta` was added — adopting both in an existing deployment is an explicit migration.)
+Validation does **not** auto-DDL. Postgres convention is migrations-as-deployment-step; the `schema.sql` file ships canonical DDL for callers to include in their migration pipeline. The DDL has one source, `postgresSchema(tables?)` (`src/schema.ts`): `schema.sql` is its output for the default names, a test keeps the two equal, and every test creates its tables from it. (The per-document table was renamed `kyneta_meta` → `kyneta_doc_meta`, and `kyneta_store_meta` was added — adopting both in an existing deployment is an explicit migration.)
 
 After validation, the factory runs the **store-format gate**: it reads `store_meta.format`, probes whether `doc_meta` holds any rows, and via `decideStoreFormat` either stamps a brand-new store (`INSERT … ON CONFLICT DO NOTHING` — one idempotent row, *not* DDL, so the no-auto-DDL invariant holds), accepts a compatible major, or throws `StoreFormatVersionError` (incompatible major, or unversioned data already present). No migration is performed.
 
@@ -48,7 +49,9 @@ Schema validation runs once at factory time. If a DBA alters the schema while th
 
 ## Range scan instead of LIKE
 
-`listDocIds(prefix)` uses `WHERE doc_id >= prefix AND doc_id < successor(prefix)` — not `LIKE`. The successor is computed by incrementing the last code unit of the prefix (`/` (0x2F) → `0` (0x30), and so on). Doc IDs containing `%` and `_` are matched literally, eliminating the LIKE-pattern hazard that motivated SQLite's `escapeLike` helper.
+`listDocIds(prefix)` uses `WHERE doc_id >= prefix AND doc_id < successor(prefix)` — not `LIKE`. The successor is computed by incrementing the last code point of the prefix (`/` (0x2F) → `0` (0x30), and so on). Doc IDs containing `%` and `_` are matched literally. The successor is `prefixSuccessor(prefix, "code-point")` from `@kyneta/exchange`, shared with SQLite, LevelDB and IndexedDB.
+
+**The range is the set of ids with that prefix only in code-point order**, which is why `doc_id` is `COLLATE "C"`: UTF-8 byte order is code-point order, and the primary-key index stays usable. Under a locale collation such as `en_US.utf8`, the default almost everywhere, punctuation is nearly ignored: `'users/alice' < 'users0'` is false, and a prefix like `users/` returned nothing. The conformance suite had asserted this all along, but never ran against a real Postgres until `scripts/postgres.sh` gave the repository one. Document ids are opaque identifiers, so byte order is also the right meaning. Rejected: `COLLATE "C"` inside the query, which cannot use the index built under the column's collation, and `starts_with(doc_id, prefix)`, which is correct under any collation but always scans.
 
 ## Adapter semantics: `fromPool` vs `fromClient`
 
@@ -75,22 +78,34 @@ Records table is byte-identical (TEXT + BYTEA in Postgres ↔ TEXT + BLOB in SQL
 |------|------|
 | `PostgresStore` | Sync-constructed Store; advanced callers only. |
 | `createPostgresStore` | Async factory. Validates schema, returns a ready Store. |
+| `postgresSchema` | The canonical DDL for given table names; the one source of the schema. |
+| `pgTestServer`, `pgTestDatabase` (`@kyneta/postgres-store/testing`) | The `KYNETA_PG_URL` server or `null`; the URL of a named database on it, created if missing. |
 | `PostgresStoreOptions` | `{ tables?: Partial<TableNames> }`. |
 
 ## File Map
 
 | File | Role |
 |------|------|
-| `src/index.ts` | `PostgresStore` class, `createPostgresStore` factory, `validateSchema`, `prefixUpperBound`. |
-| `schema.sql` | Canonical DDL — run once or include in migrations. |
+| `src/index.ts` | `PostgresStore` class, `createPostgresStore` factory, `validateSchema`. |
+| `src/schema.ts` | `postgresSchema`, `DOC_ID_COLLATION`. |
+| `src/testing.ts` | `pgTestServer`, `pgTestDatabase`, exported as `@kyneta/postgres-store/testing`. |
+| `schema.sql` | Canonical DDL — `postgresSchema()` for the default names. Run once or include in migrations. |
+| `src/__tests__/schema.test.ts` | `schema.sql` equals `postgresSchema()`; runs without Postgres. |
 | `src/__tests__/postgres-store.test.ts` | Conformance suite + Postgres-specific tests, gated by `KYNETA_PG_URL`. |
 
 ## Testing
 
-Conformance suite + Postgres-specific tests run when `KYNETA_PG_URL` is set:
+Conformance suite + Postgres-specific tests run when `KYNETA_PG_URL` is set. `scripts/postgres.sh` (repository root) runs a disposable Postgres in Docker and prints the variable to export:
 
 ```sh
-KYNETA_PG_URL=postgres://localhost:5432/kyneta_test pnpm verify
+eval "$(scripts/postgres.sh up)" && pnpm verify
+scripts/postgres.sh down   # remove the container and its data
 ```
 
-Postgres-specific tests cover: `createPostgresStore` validation errors (missing tables, missing columns, wrong column types), range-scan correctness on doc IDs containing `%` and `_`, fault-injected atomicity, storage-domain isolation across two `tables` pairs.
+A database created by an earlier schema keeps its old tables, since the DDL is `CREATE TABLE IF NOT EXISTS`; `down` then `up` starts clean.
+
+**Each suite has a database of its own.** `pnpm verify` runs packages in parallel, and two suites sharing one database truncate each other's tables mid-test. `pgTestDatabase(name)` returns the URL of database `name` on the `KYNETA_PG_URL` server, creating it if missing, and `pgTestServer()` is that server or `null`, which is how a suite decides to skip: this suite uses `kyneta_postgres_store`, and `tests/integration` one per storage tier (`kyneta_it_server`, `kyneta_it_client`).
+
+**`KYNETA_PG_URL` is declared in `turbo.json`** (`env` on `verify` and `test`). Turbo 2 runs tasks in strict env mode, so an undeclared variable never reached them: `KYNETA_PG_URL=… pnpm verify` skipped every Postgres suite, and its cache could not tell the two runs apart.
+
+Postgres-specific tests cover: `createPostgresStore` validation errors (missing tables, missing columns, wrong column types, a `doc_id` without `COLLATE "C"`), range-scan correctness on doc IDs containing `%` and `_`, fault-injected atomicity, storage-domain isolation across two `tables` pairs.

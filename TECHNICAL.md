@@ -37,7 +37,10 @@ See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the 30,000-foot design — thesis
   in parallel as children of one `logic` task. Currently covers
   WebSocket sync (Node + Bun), SQLite-backed sync + restart over
   WebSocket, and Postgres-backed sync + restart over WebSocket
-  (gated by `KYNETA_PG_URL`).
+  (gated by `KYNETA_PG_URL`; `scripts/postgres.sh up` runs a disposable
+  Postgres in Docker and prints it). `turbo.json` declares the variable on
+  `verify` and `test`: in Turbo's strict env mode an undeclared variable
+  never reaches a task, and the cache would not tell the runs apart.
 - `examples/bumper-cars` — integration suite exercising the full ephemeral + collaborative sync stack.
 
 ---

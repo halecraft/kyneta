@@ -6,15 +6,24 @@
 -- the expected columns; it does not auto-DDL.
 --
 -- Default table names. To use different names, override via the
--- `tables` option and replace the names below to match.
+-- `tables` option, and generate the DDL for them with
+-- `postgresSchema(tables)` from this package: this file is its output for
+-- the defaults, and a test keeps the two equal.
+--
+-- `doc_id` is `COLLATE "C"`: document ids are compared byte by byte, which
+-- `listDocIds(prefix)`'s range scan requires. The store refuses a `doc_id`
+-- column without it. To migrate an existing deployment:
+--
+--   ALTER TABLE kyneta_doc_meta ALTER COLUMN doc_id TYPE TEXT COLLATE "C";
+--   ALTER TABLE kyneta_records  ALTER COLUMN doc_id TYPE TEXT COLLATE "C";
 
 CREATE TABLE IF NOT EXISTS kyneta_doc_meta (
-  doc_id TEXT  PRIMARY KEY,
+  doc_id TEXT COLLATE "C" PRIMARY KEY,
   data   JSONB NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS kyneta_records (
-  doc_id  TEXT    NOT NULL,
+  doc_id  TEXT COLLATE "C" NOT NULL,
   seq     INTEGER NOT NULL,
   kind    TEXT    NOT NULL,
   payload TEXT,

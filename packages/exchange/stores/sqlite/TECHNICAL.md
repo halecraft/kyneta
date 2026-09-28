@@ -35,7 +35,7 @@ The Cloudflare DO factory does not yet exist — only the design accommodates it
 | `compact` | `transaction(() => { iterate (meta); iterate (MAX(seq)); exec DELETE seq <= through; for each: exec INSERT from MAX + 1; exec meta upsert })`. |
 | `delete` | `transaction(() => { exec DELETE records; exec DELETE meta })`. |
 | `currentMeta` | `iterate("SELECT data FROM meta WHERE doc_id = ?")` → `JSON.parse`. |
-| `listDocIds(prefix)` | `iterate("SELECT doc_id FROM meta WHERE doc_id LIKE ? ESCAPE '\\'")` with `escapeLike`. |
+| `listDocIds(prefix)` | `iterate("SELECT doc_id FROM meta WHERE doc_id >= ? AND doc_id < ?")` over `[prefix, prefixSuccessor(prefix, "code-point"))`. |
 | `close` | `adapter.close()`. |
 
 ## Schema and the `tables` option
@@ -91,9 +91,11 @@ Several stores may open one database file: two processes, or two connections in 
 
 An earlier version cached the next `seq` per document in memory, seeded once from `MAX(seq)`. Two instances over one table then handed out the same `seq`, and the second insert failed on the primary key.
 
-## LIKE-pattern hazard handling
+## Prefix scans
 
-`listDocIds(prefix)` uses `LIKE prefix% ESCAPE '\'` with `escapeLike(prefix)` to escape `%`, `_`, and `\`. Doc IDs containing those characters are matched literally. (Postgres-store and Prisma-store use range scans instead — same end result, different mechanism.)
+`listDocIds(prefix)` scans the range `[prefix, prefixSuccessor(prefix, "code-point"))` (`@kyneta/exchange`). SQLite's default `BINARY` collation compares UTF-8 bytes, which is code-point order, so the range is exactly the ids starting with `prefix`, and it uses the primary-key index. `%` and `_` have no special meaning in a range.
+
+It used `LIKE prefix% ESCAPE '\'` with an `escapeLike` helper. SQLite's `LIKE` ignores ASCII case, so prefix `users/` also returned `Users/Bob`, and it cannot use the index.
 
 ## What this package is NOT
 
@@ -114,8 +116,8 @@ An earlier version cached the next `seq` per document in memory, seeded once fro
 
 | File | Role |
 |------|------|
-| `src/index.ts` | `SqliteStore`, `SqliteAdapter`, factory functions, `escapeLike` helper, schema DDL. |
-| `src/__tests__/sqlite-store.test.ts` | Conformance suite (with fault factory + isolation factory) plus SQLite-specific tests (close+reopen, adapter factory, LIKE-pattern handling, two-store isolation). |
+| `src/index.ts` | `SqliteStore`, `SqliteAdapter`, factory functions, schema DDL. |
+| `src/__tests__/sqlite-store.test.ts` | Conformance suite (with fault factory + isolation factory) plus SQLite-specific tests (close+reopen, adapter factory, two-store isolation). Prefix scans are covered by the conformance suite. |
 
 ## Testing
 

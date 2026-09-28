@@ -1019,8 +1019,9 @@ Earlier planning briefly considered adding a `Store.initialize?(): Promise<void>
 
 ### Shared store utilities
 
-A pattern common to all store backends is extracted into a shared utility in `src/store/`:
+Patterns common to all store backends are extracted into shared utilities in `src/store/`:
 
+- **`prefixSuccessor(prefix, order)`** (`src/store/store.ts`) — the upper bound of a prefix scan: the least string greater than every string starting with `prefix`, in the order the storage compares keys (`"code-point"` for UTF-8 bytes: Postgres under `COLLATE "C"`, SQLite's binary collation, LevelDB; `"code-unit"` for IndexedDB). `listDocIds(prefix)` scans `[prefix, prefixSuccessor(prefix, order))` on its key index. Every backend used to hand-write this, and most got it wrong: SQLite's `LIKE` ignored case, LevelDB's `prefix + "\xff"` (the bytes `C3 BF` in UTF-8) cut off ids continuing with any character from U+0100 on, IndexedDB's `prefix + "\uffff"` cut off a U+FFFF continuation, and Postgres depended on the database's collation. The store conformance suite now checks `listDocIds(prefix)` against `startsWith` over ids built to catch each of these.
 - **`validateAppend`** (`src/store/store.ts`) — shared meta-first invariant guard. Validates that an `entry` record is not appended before a `meta` record exists, and resolves metadata for `meta` records via `resolveMetaFromBatch`. Used by `InMemoryStore`, `LevelDBStore`, and `SqliteStore`. The IndexedDB store has its own inline variant that calls `tx.abort()` before throwing.
 
 ### The store-program

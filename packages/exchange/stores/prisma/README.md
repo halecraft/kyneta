@@ -38,7 +38,7 @@ model KynetaStoreMeta {
 }
 ```
 
-All models work on Postgres (`Json` → JSONB, `Bytes` → BYTEA), SQLite (`Json` → TEXT, `Bytes` → BLOB), and MySQL (`Json` → JSON, `Bytes` → LONGBLOB). `KynetaStoreMeta` holds store-global metadata (the on-disk format version), distinct from the per-document `KynetaDocMeta`.
+All models work on Postgres (`Json` → JSONB, `Bytes` → BYTEA), SQLite (`Json` → TEXT, `Bytes` → BLOB), and MySQL (`Json` → JSON, `Bytes` → LONGBLOB). **On MySQL, `doc_id` needs a binary collation.** MySQL's default collation compares text without regard to case, so two document ids differing only in case would be one primary key. Prisma cannot declare a column's collation, so edit the generated migration: `ALTER TABLE kyneta_doc_meta MODIFY doc_id VARCHAR(191) COLLATE utf8mb4_bin;`, and the same for `kyneta_records`. Postgres and SQLite need nothing: `listDocIds(prefix)` narrows with Prisma's `startsWith` and keeps only exact matches itself, whatever the database's collation. `KynetaStoreMeta` holds store-global metadata (the on-disk format version), distinct from the per-document `KynetaDocMeta`.
 
 ## Usage
 

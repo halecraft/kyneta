@@ -100,7 +100,7 @@ Eight methods, each of which is either a single IDB transaction or a single inde
 | `compact(docId, records, through)` | One `readwrite` transaction. Read existing meta, validate via `resolveMetaFromBatch`. Delete the doc's `RecordRow`s whose key is at or before `through` (none when `through` is `null`), `add` the new records, update `meta` store with resolved `StoreMeta`. Atomic. |
 | `delete(docId)` | One `readwrite` transaction. Delete from `meta` store, delete all `RecordRow`s for this doc via `byDoc` index keys. |
 | `currentMeta(docId)` → `StoreMeta \| null` | One `readonly` transaction. `meta.get(docId)` → `MetaRow \| undefined`. Return `row.meta` or `null`. |
-| `listDocIds(prefix?)` → `AsyncIterable<DocId>` | One `readonly` transaction on the `meta` store. If `prefix` is given, use `IDBKeyRange.bound(prefix, prefix + "\uffff")` to scope the scan. `getAllKeys(range)` returns matching `docId` strings. |
+| `listDocIds(prefix?)` → `AsyncIterable<DocId>` | One `readonly` transaction on the `meta` store. If `prefix` is given, scope the scan to `IDBKeyRange.bound(prefix, prefixSuccessor(prefix, "code-unit"), false, true)`: IndexedDB compares strings by UTF-16 code unit. (The `prefix + "\uffff"` bound it replaced cut off an id continuing with U+FFFF.) `getAllKeys(range)` returns matching `docId` strings. |
 | `close()` | `db.close()` — releases the IDB connection. Required before `deleteIndexedDBStore`. |
 
 Every method is `async`. All writes go through IDB's transaction guarantee — there is no in-memory write buffer to lose on crash.

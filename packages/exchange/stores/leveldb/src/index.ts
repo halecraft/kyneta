@@ -18,6 +18,7 @@ import {
   type DocId,
   decideStoreFormat,
   parseStoreFormat,
+  prefixSuccessor,
   resolveMetaFromBatch,
   STORE_META_FORMAT_KEY,
   type Store,
@@ -195,6 +196,18 @@ function docMetaKey(docId: DocId): string {
   return `${DOC_META_PREFIX}${docId}`
 }
 
+/**
+ * The key range holding exactly the keys that start with `prefix`. Keys are
+ * compared as UTF-8 bytes, which is code-point order. A sentinel such as
+ * `prefix + "\xff"` is not this range: it encodes as `C3 BF`, below every
+ * character from U+0100 on, so a document id continuing with one fell
+ * outside it.
+ */
+function keysWithPrefix(prefix: string): { gte: string; lt?: string } {
+  const lt = prefixSuccessor(prefix, "code-point")
+  return lt === null ? { gte: prefix } : { gte: prefix, lt }
+}
+
 function recordPrefix(docId: DocId): string {
   return `${RECORD_PREFIX}${docId}${SEP}`
 }
@@ -308,8 +321,7 @@ export class LevelDBStore implements Store {
   async *loadAll(docId: DocId): AsyncIterable<StoreRecord> {
     const prefix = recordPrefix(docId)
     for await (const value of this.#db.values({
-      gte: prefix,
-      lt: `${prefix}\xff`,
+      ...keysWithPrefix(prefix),
     })) {
       yield decodeStoreRecord(value)
     }
@@ -374,8 +386,7 @@ export class LevelDBStore implements Store {
   async #lastSeq(docId: DocId): Promise<number | null> {
     const prefix = recordPrefix(docId)
     for await (const key of this.#db.keys({
-      gte: prefix,
-      lt: `${prefix}\xff`,
+      ...keysWithPrefix(prefix),
       reverse: true,
       limit: 1,
     })) {
@@ -390,8 +401,7 @@ export class LevelDBStore implements Store {
     // Collect record keys to delete
     const keysToDelete: string[] = [docMetaKey(docId)]
     for await (const key of this.#db.keys({
-      gte: prefix,
-      lt: `${prefix}\xff`,
+      ...keysWithPrefix(prefix),
     })) {
       keysToDelete.push(key)
     }
@@ -405,12 +415,9 @@ export class LevelDBStore implements Store {
   }
 
   async *listDocIds(prefix?: string): AsyncIterable<DocId> {
-    const rangePrefix =
-      prefix !== undefined ? `${DOC_META_PREFIX}${prefix}` : DOC_META_PREFIX
-    for await (const key of this.#db.keys({
-      gte: rangePrefix,
-      lt: `${rangePrefix}\xff`,
-    })) {
+    for await (const key of this.#db.keys(
+      keysWithPrefix(`${DOC_META_PREFIX}${prefix ?? ""}`),
+    )) {
       yield parseDocIdFromDocMetaKey(key)
     }
   }
@@ -443,8 +450,7 @@ export class LevelDBStore implements Store {
     // Empty-store probe: does any doc-meta key exist?
     let hasData = false
     for await (const _key of this.#db.keys({
-      gte: DOC_META_PREFIX,
-      lt: `${DOC_META_PREFIX}\xff`,
+      ...keysWithPrefix(DOC_META_PREFIX),
       limit: 1,
     })) {
       hasData = true

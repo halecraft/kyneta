@@ -11,6 +11,7 @@ import {
   type DocId,
   decideStoreFormat,
   parseStoreFormat,
+  prefixSuccessor,
   STORE_META_FORMAT_KEY,
   type Store,
   StoreFormatVersionError,
@@ -377,15 +378,26 @@ export class SqliteStore implements Store {
   }
 
   async *listDocIds(prefix?: string): AsyncIterable<DocId> {
+    // A range scan, not LIKE: SQLite's LIKE ignores ASCII case and cannot
+    // use the primary-key index. The default BINARY collation compares UTF-8
+    // bytes, which is code-point order, the order the range assumes.
+    const upper =
+      prefix === undefined ? null : prefixSuccessor(prefix, "code-point")
     const rows =
-      prefix !== undefined
+      prefix === undefined
         ? this.#adapter.iterate<{ doc_id: string }>(
-            `SELECT doc_id FROM ${this.#tables.docMeta} WHERE doc_id LIKE ? ESCAPE '\\'`,
-            `${escapeLike(prefix)}%`,
-          )
-        : this.#adapter.iterate<{ doc_id: string }>(
             `SELECT doc_id FROM ${this.#tables.docMeta}`,
           )
+        : upper === null
+          ? this.#adapter.iterate<{ doc_id: string }>(
+              `SELECT doc_id FROM ${this.#tables.docMeta} WHERE doc_id >= ?`,
+              prefix,
+            )
+          : this.#adapter.iterate<{ doc_id: string }>(
+              `SELECT doc_id FROM ${this.#tables.docMeta} WHERE doc_id >= ? AND doc_id < ?`,
+              prefix,
+              upper,
+            )
     for (const row of rows) {
       yield row.doc_id
     }
@@ -399,15 +411,6 @@ export class SqliteStore implements Store {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/**
- * SQLite's LIKE treats `%` and `_` as wildcards. Escape them (and the
- * escape char itself) so doc IDs containing those characters are
- * matched literally. The query declares `ESCAPE '\'`.
- */
-function escapeLike(value: string): string {
-  return value.replace(/[%_\\]/g, ch => `\\${ch}`)
-}
 
 // ---------------------------------------------------------------------------
 // Factory function

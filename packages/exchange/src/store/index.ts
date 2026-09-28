@@ -8,8 +8,18 @@
 // Store interface, record types, and validation
 // ---------------------------------------------------------------------------
 
-export type { Store, StoreMark, StoreMeta, StoreRecord } from "./store.js"
-export { resolveMetaFromBatch, validateAppend } from "./store.js"
+export type {
+  KeyOrder,
+  Store,
+  StoreMark,
+  StoreMeta,
+  StoreRecord,
+} from "./store.js"
+export {
+  prefixSuccessor,
+  resolveMetaFromBatch,
+  validateAppend,
+} from "./store.js"
 
 // ---------------------------------------------------------------------------
 // Store-format gate — store-level on-disk format compatibility

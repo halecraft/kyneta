@@ -8,11 +8,13 @@
     },
     "verify": {
       "dependsOn": ["build"],
-      "outputs": []
+      "outputs": [],
+      "env": ["KYNETA_PG_URL"]
     },
     "test": {
       "dependsOn": ["build"],
-      "outputs": []
+      "outputs": [],
+      "env": ["KYNETA_PG_URL"]
     },
     "dev": {
       "cache": false,

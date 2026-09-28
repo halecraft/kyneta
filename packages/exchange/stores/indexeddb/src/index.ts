@@ -25,6 +25,7 @@ import {
   type DocId,
   decideStoreFormat,
   parseStoreFormat,
+  prefixSuccessor,
   resolveMetaFromBatch,
   STORE_META_FORMAT_KEY,
   type Store,
@@ -311,10 +312,7 @@ export class IndexedDBStore implements Store {
   async *listDocIds(prefix?: string): AsyncIterable<DocId> {
     const tx = this.#db.transaction(DOC_META_STORE, "readonly")
     const store = tx.objectStore(DOC_META_STORE)
-    const range =
-      prefix !== undefined
-        ? IDBKeyRange.bound(prefix, `${prefix}\uffff`, false, true)
-        : undefined
+    const range = prefix === undefined ? undefined : prefixRange(prefix)
     const keys = (await req(store.getAllKeys(range))) as string[]
     for (const key of keys) {
       yield key
@@ -346,6 +344,17 @@ export class IndexedDBStore implements Store {
  * })
  * ```
  */
+/**
+ * The key range holding exactly the keys that start with `prefix`.
+ * IndexedDB compares strings by UTF-16 code unit.
+ */
+function prefixRange(prefix: string): IDBKeyRange {
+  const upper = prefixSuccessor(prefix, "code-unit")
+  return upper === null
+    ? IDBKeyRange.lowerBound(prefix)
+    : IDBKeyRange.bound(prefix, upper, false, true)
+}
+
 export async function createIndexedDBStore(dbName: string): Promise<Store> {
   return IndexedDBStore.open(dbName)
 }

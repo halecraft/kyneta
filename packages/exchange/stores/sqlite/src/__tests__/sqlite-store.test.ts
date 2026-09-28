@@ -271,29 +271,6 @@ describe("SqliteStore — tables isolation", () => {
   })
 })
 
-describe("SqliteStore — listDocIds with LIKE-special characters", () => {
-  it("prefix containing % and _ matches literally, not as wildcards", async () => {
-    const db = new Database(":memory:")
-    const store = new SqliteStore(fromBetterSqlite3(db))
-
-    // Create docs with tricky names
-    await store.append("100%_done", makeMetaRecord())
-    await store.append("100_other", makeMetaRecord())
-    await store.append("100xyz", makeMetaRecord())
-    await store.append("other", makeMetaRecord())
-
-    // "100%" should match only "100%_done", not "100_other" or "100xyz"
-    const matched = await collectAll(store.listDocIds("100%"))
-    expect(matched).toEqual(["100%_done"])
-
-    // "100_" should match only "100_other", not "100%_done" or "100xyz"
-    const matched2 = await collectAll(store.listDocIds("100_"))
-    expect(matched2).toEqual(["100_other"])
-
-    await store.close()
-  })
-})
-
 // Capture the error thrown by a (synchronous) store open, for asserting its
 // typed `reason` discriminant — the class alone can't distinguish refusals.
 function captureError(open: () => unknown): unknown {

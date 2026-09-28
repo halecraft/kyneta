@@ -57,20 +57,19 @@ function makeMockClient(state: MockState): unknown {
       return { docId: args.where.docId, data }
     },
     async findMany(args: {
-      where?: { docId?: { gte?: string; lt?: string } }
+      where?: { docId?: { startsWith: string } }
       select: { docId: true }
     }) {
       const ids = Array.from(state.metas.keys())
       const docIdFilter = args.where?.docId
+      // Matches the way SQLite's LIKE does, and MySQL's default collation:
+      // wildcards literal (Prisma escapes them), case ignored.
       const filtered =
         docIdFilter === undefined
           ? ids
-          : ids.filter(id => {
-              const { gte, lt } = docIdFilter
-              if (gte !== undefined && id < gte) return false
-              if (lt !== undefined && id >= lt) return false
-              return true
-            })
+          : ids.filter(id =>
+              id.toLowerCase().startsWith(docIdFilter.startsWith.toLowerCase()),
+            )
       return filtered.map(docId => ({ docId }))
     },
     async upsert(args: {
@@ -313,18 +312,19 @@ describe("PrismaStore — structural mock", () => {
     expect(seqs).toEqual([0, 1, 2])
   })
 
-  it("listDocIds(prefix) range-scans, no LIKE-pattern surface", async () => {
+  it("listDocIds(prefix) keeps only exact matches, though LIKE ignores case", async () => {
+    // The mock's `startsWith` ignores case, as SQLite's LIKE and MySQL's
+    // default collation do. The store must still return exact matches only.
     const state = freshState()
     const store = new PrismaStore({ client: makeMockClient(state) })
 
-    await store.append("100%_done", { kind: "meta", meta: baseMeta })
-    await store.append("100_other", { kind: "meta", meta: baseMeta })
-    await store.append("100xyz", { kind: "meta", meta: baseMeta })
+    await store.append("users/alice", { kind: "meta", meta: baseMeta })
+    await store.append("Users/Bob", { kind: "meta", meta: baseMeta })
     await store.append("other", { kind: "meta", meta: baseMeta })
 
     const matched: string[] = []
-    for await (const id of store.listDocIds("100%")) matched.push(id)
-    expect(matched).toEqual(["100%_done"])
+    for await (const id of store.listDocIds("users/")) matched.push(id)
+    expect(matched).toEqual(["users/alice"])
   })
 
   it("custom model names override defaults", async () => {

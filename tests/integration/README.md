@@ -15,10 +15,10 @@ End-to-end integration tests covering combinations of `@kyneta/exchange`, transp
 pnpm verify
 ```
 
-Postgres-gated tests are skipped automatically when `KYNETA_PG_URL` is unset. To run them:
+Postgres-gated tests are skipped automatically when `KYNETA_PG_URL` is unset. To run them against a disposable Postgres in Docker (`scripts/postgres.sh` at the repository root):
 
 ```sh
-KYNETA_PG_URL=postgres://localhost:5432/kyneta_test pnpm verify
+eval "$(scripts/postgres.sh up)" && pnpm verify
 ```
 
 The target database must allow `CREATE TABLE`, `TRUNCATE`, and `DROP TABLE`. Tests truncate state between runs; they don't drop the canonical schema. Use a dedicated test database.

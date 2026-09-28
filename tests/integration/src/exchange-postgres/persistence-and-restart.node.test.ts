@@ -11,10 +11,14 @@
 //   fresh WebSocket transports, sync resumes correctly (Phase 2).
 //
 // Gated by `KYNETA_PG_URL`. To run:
-//   KYNETA_PG_URL=postgres://localhost:5432/kyneta_test pnpm verify
+//   eval "$(scripts/postgres.sh up)" && pnpm verify
 
 import { Exchange } from "@kyneta/exchange"
-import { createPostgresStore, fromPool } from "@kyneta/postgres-store"
+import {
+  createPostgresStore,
+  fromPool,
+  postgresSchema,
+} from "@kyneta/postgres-store"
 import { batch, Schema } from "@kyneta/schema"
 import type { EntryPayloadJson } from "@kyneta/sql-store-core"
 import { yjs } from "@kyneta/yjs-schema"
@@ -23,12 +27,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest"
 import { createTestLifecycle } from "../helpers/cleanup.js"
 import { drain } from "../helpers/drain.js"
 import { createConnectedPair } from "../helpers/exchange-pair.js"
-import {
-  openPgPool,
-  POSTGRES_SCHEMA_DDL,
-  pgEnabled,
-  truncateAll,
-} from "../helpers/postgres.js"
+import { openPgPool, pgEnabled, truncateAll } from "../helpers/postgres.js"
 
 const lifecycle = createTestLifecycle()
 afterEach(() => lifecycle.cleanup())
@@ -50,12 +49,13 @@ describeIfEnabled(
 
     beforeAll(async () => {
       // The "two exchanges" pattern uses two pools to model two
-      // independent server/client storage tiers. They both run the
-      // canonical schema; per-test truncation isolates state.
-      serverPool = openPgPool()
-      clientPool = openPgPool()
-      await serverPool.query(POSTGRES_SCHEMA_DDL)
-      await clientPool.query(POSTGRES_SCHEMA_DDL)
+      // independent server/client storage tiers, each in a database of its
+      // own. Both run the canonical schema; per-test truncation isolates
+      // state.
+      serverPool = await openPgPool("server")
+      clientPool = await openPgPool("client")
+      await serverPool.query(postgresSchema())
+      await clientPool.query(postgresSchema())
     })
 
     afterAll(async () => {
@@ -263,8 +263,19 @@ describeIfEnabled(
       })
       await exchange.flush()
 
-      // Transcribe rows: kyneta_doc_meta + kyneta_records → Postgres.
+      // Transcribe every table, the store-wide metadata included: it holds
+      // the format marker, and a store with documents but no marker is
+      // refused as unversioned.
       await truncateAll(serverPool)
+      const storeMetaRows = db
+        .prepare(`SELECT key, value FROM kyneta_store_meta`)
+        .all() as Array<{ key: string; value: string }>
+      for (const row of storeMetaRows) {
+        await serverPool.query(
+          `INSERT INTO kyneta_store_meta (key, value) VALUES ($1, $2::jsonb)`,
+          [row.key, row.value],
+        )
+      }
       const metaRows = db
         .prepare(`SELECT doc_id, data FROM kyneta_doc_meta`)
         .all() as Array<{ doc_id: string; data: string }>

@@ -50,11 +50,11 @@ Run [`schema.sql`](./schema.sql) once before constructing the store, or include 
 
 ```sql
 CREATE TABLE IF NOT EXISTS kyneta_doc_meta (
-  doc_id TEXT  PRIMARY KEY,
+  doc_id TEXT COLLATE "C" PRIMARY KEY,
   data   JSONB NOT NULL
 );
 CREATE TABLE IF NOT EXISTS kyneta_records (
-  doc_id  TEXT    NOT NULL,
+  doc_id  TEXT COLLATE "C" NOT NULL,
   seq     INTEGER NOT NULL,
   kind    TEXT    NOT NULL,
   payload TEXT,
@@ -70,6 +70,15 @@ CREATE TABLE IF NOT EXISTS kyneta_store_meta (
 ```
 
 `createPostgresStore` validates all three tables exist and runs the **store-format gate** on open: it stamps a `{ major, minor }` version into `kyneta_store_meta` (a one-row idempotent write — not DDL) and, on a later open, throws `StoreFormatVersionError` for an incompatible major or an unversioned store that already holds documents. No automatic migration is performed. Adding `kyneta_store_meta` (and the `kyneta_meta` → `kyneta_doc_meta` rename) to an existing deployment is an explicit migration step.
+
+For other table names, `postgresSchema(tables)` returns this DDL with those names.
+
+**`doc_id` is `COLLATE "C"`.** Document ids are compared byte by byte: `listDocIds(prefix)` scans a range that is exactly the ids with that prefix only in code-point order, and a locale collation such as `en_US.utf8` (the default almost everywhere) nearly ignores punctuation and returns nothing for a prefix like `users/`. The store refuses a `doc_id` column without `COLLATE "C"`. To migrate an existing deployment:
+
+```sql
+ALTER TABLE kyneta_doc_meta ALTER COLUMN doc_id TYPE TEXT COLLATE "C";
+ALTER TABLE kyneta_records  ALTER COLUMN doc_id TYPE TEXT COLLATE "C";
+```
 
 JSONB on `doc_meta.data` enables operator queryability for admin tooling (`data->>'syncMode'`, `data->>'replicaType'`). Round-trip through `loadAll` is structurally portable with `@kyneta/sqlite-store` (both consume `toRow`/`fromRow` from `@kyneta/sql-store-core`); JSONB normalizes whitespace and key order, so a byte-level dump comparison would diverge.
 

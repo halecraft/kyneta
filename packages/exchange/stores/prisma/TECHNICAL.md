@@ -58,7 +58,7 @@ Round-trip portability through `loadAll` works across all of these. Byte-level i
 | `compact` | `client.$transaction(async tx => { tx.<meta>.findUnique; tx.<record>.aggregate; planCompact; tx.<record>.deleteMany({ where: { docId, seq: { lte: through }}}); for each: tx.<record>.create; tx.<meta>.upsert })`, retried once on `P2002`. |
 | `delete` | `client.$transaction(async tx => { tx.<record>.deleteMany; tx.<meta>.deleteMany })`. |
 | `currentMeta` | `<meta>.findUnique({ where: { docId }})`. |
-| `listDocIds(prefix)` | Range filter: `<meta>.findMany({ where: { docId: { gte, lt }}, select: { docId: true }})`. |
+| `listDocIds(prefix)` | `<meta>.findMany({ where: { docId: { startsWith: prefix }}, select: { docId: true }})`, then keeps only ids that `startsWith(prefix)` exactly. |
 | `close` | No-op. Caller calls `prisma.$disconnect()`. |
 
 `Json` field handling: Postgres/MySQL Prisma returns parsed objects; SQLite returns strings. The store's `parseMetaData` helper handles both — a string falls through `JSON.parse`; an object passes through.
@@ -102,7 +102,7 @@ No conformance run reaches Prisma (it would need `prisma generate` against a sch
 
 | File | Role |
 |------|------|
-| `src/index.ts` | `PrismaStore` class, `createPrismaStore` factory, internal structural types, `parseMetaData`, `prefixUpperBound`. |
+| `src/index.ts` | `PrismaStore` class, `createPrismaStore` factory, internal structural types, `parseMetaData`. |
 | `schema.prisma.example` | Canonical model fragment — caller copies into their schema. |
 | `src/__tests__/prisma-store.test.ts` | Structural-mock unit tests covering translation and the retry after a lost `seq` race. No end-to-end run reaches Prisma. |
 
@@ -114,6 +114,8 @@ Per-package tests use a structural mock instead of spinning up a real `PrismaCli
 - Default model names (`kynetaDocMeta`, `kynetaRecord`, `kynetaStoreMeta`); overridable via options.
 - Each `Store` method calls the expected mock methods.
 - An append that loses its `seq` to another store retries, reading `MAX(seq)` afresh. The mock rolls back only what the failing transaction wrote, as a database does.
-- Range-scan `listDocIds` matches `%` and `_` literally.
+- `listDocIds(prefix)` returns exact matches only, though the mock's `startsWith` ignores case as SQLite's `LIKE` and MySQL's default collation do.
+
+**Why `startsWith` and then an exact filter.** Prisma serves several databases, and no single query is exact on all of them. A range scan assumes code-point order, which a locale collation (Postgres's default) breaks, so it misses ids. `startsWith` becomes `LIKE`, which Prisma escapes, and which SQLite and MySQL's default collation match without regard to case, so it can return extra ids but never fewer. The database narrows; the store decides. On MySQL, `doc_id` still needs a binary collation, since the default would make two ids differing only in case one primary key (see the README).
 
 No end-to-end run against a real Prisma+SQLite/Postgres setup exists: `tests/integration` lists the package as a dependency but does not exercise it, and the store conformance suite does not reach Prisma.

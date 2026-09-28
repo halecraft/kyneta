@@ -13,6 +13,7 @@ import {
   type DocId,
   decideStoreFormat,
   parseStoreFormat,
+  prefixSuccessor,
   STORE_META_FORMAT_KEY,
   type Store,
   StoreFormatVersionError,
@@ -30,6 +31,9 @@ import {
   type TableNames,
 } from "@kyneta/sql-store-core"
 import type { Client, Pool, PoolClient } from "pg"
+import { DOC_ID_COLLATION } from "./schema.js"
+
+export { postgresSchema } from "./schema.js"
 
 // ---------------------------------------------------------------------------
 // Options
@@ -294,8 +298,9 @@ export class PostgresStore implements Store {
     }
 
     // Range scan instead of LIKE — `%` and `_` in doc IDs are literal,
-    // not wildcards.
-    const upper = prefixUpperBound(prefix)
+    // not wildcards. `doc_id` is `COLLATE "C"`, so the column compares in
+    // code-point order, which the range assumes (see `schema.ts`).
+    const upper = prefixSuccessor(prefix, "code-point")
     const result =
       upper === null
         ? await this.#adapter.query<{ doc_id: string }>(
@@ -313,28 +318,6 @@ export class PostgresStore implements Store {
   async close(): Promise<void> {
     // Caller calls `pool.end()` / `client.end()`.
   }
-}
-
-// ---------------------------------------------------------------------------
-// Range-scan helper
-// ---------------------------------------------------------------------------
-
-/**
- * Returns null when no successor exists (e.g. all code units at U+10FFFF),
- * letting the caller fall back to an unbounded `>= prefix` scan.
- */
-function prefixUpperBound(prefix: string): string | null {
-  if (prefix.length === 0) return null
-  const codes = Array.from(prefix)
-  for (let i = codes.length - 1; i >= 0; i--) {
-    const ch = codes[i] as string
-    const code = ch.codePointAt(0) as number
-    if (code < 0x10ffff) {
-      const next = String.fromCodePoint(code + 1)
-      return codes.slice(0, i).join("") + next
-    }
-  }
-  return null
 }
 
 // ---------------------------------------------------------------------------
@@ -409,15 +392,18 @@ interface ColumnInfo {
   column_name: string
   data_type: string
   is_nullable: string
+  collation_name: string | null
 }
 
+// `collation` is checked only where it is named: the `doc_id` columns, whose
+// byte order `listDocIds(prefix)`'s range scan depends on (see `schema.ts`).
 const EXPECTED_COLUMNS = {
   docMeta: [
-    { name: "doc_id", types: ["text"] },
+    { name: "doc_id", types: ["text"], collation: DOC_ID_COLLATION },
     { name: "data", types: ["jsonb"] },
   ],
   records: [
-    { name: "doc_id", types: ["text"] },
+    { name: "doc_id", types: ["text"], collation: DOC_ID_COLLATION },
     { name: "seq", types: ["integer"] },
     { name: "kind", types: ["text"] },
     { name: "payload", types: ["text"] },
@@ -437,7 +423,7 @@ async function validateSchema(q: PgQuerier, tables: TableNames): Promise<void> {
   ]) {
     const tableName = tables[role]
     const result = await q.query<ColumnInfo>(
-      `SELECT column_name, data_type, is_nullable
+      `SELECT column_name, data_type, is_nullable, collation_name
        FROM information_schema.columns
        WHERE table_name = $1`,
       [tableName],
@@ -462,6 +448,16 @@ async function validateSchema(q: PgQuerier, tables: TableNames): Promise<void> {
           `@kyneta/postgres-store: table "${tableName}" column ` +
             `"${col.name}" has type "${found.data_type}", ` +
             `expected one of [${col.types.join(", ")}].`,
+        )
+      }
+      if ("collation" in col && found.collation_name !== col.collation) {
+        throw new Error(
+          `@kyneta/postgres-store: table "${tableName}" column ` +
+            `"${col.name}" has collation ` +
+            `${found.collation_name === null ? "(the database default)" : `"${found.collation_name}"`}, ` +
+            `expected "${col.collation}", which listDocIds(prefix) needs to ` +
+            `compare document ids byte by byte. Migrate with: ` +
+            `ALTER TABLE ${tableName} ALTER COLUMN ${col.name} TYPE TEXT COLLATE "${col.collation}";`,
         )
       }
     }
