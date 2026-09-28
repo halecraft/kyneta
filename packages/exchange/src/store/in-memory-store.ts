@@ -11,9 +11,16 @@ import {
   assertSeatHeld,
   freshPeerIds,
   type PooledSeat,
+  planWriter,
   type SeatPool,
 } from "./seats.js"
-import type { Store, StoreMark, StoreMeta, StoreRecord } from "./store.js"
+import type {
+  Store,
+  StoreMark,
+  StoreMeta,
+  StoreRecord,
+  WriteOptions,
+} from "./store.js"
 import { resolveMetaFromBatch, validateAppend } from "./store.js"
 import type { StoreFormatVersion } from "./store-format.js"
 import { planStoreOpen } from "./store-open.js"
@@ -35,6 +42,8 @@ export type InMemoryStoreData = {
    * would.
    */
   seats: { pool: SeatPool; held: Set<PeerId> }
+  /** Each claimed serialized document's writer seat. */
+  writers: Map<DocId, PeerId>
 }
 
 /** An empty `InMemoryStoreData`. */
@@ -44,6 +53,7 @@ export function createInMemoryStoreData(): InMemoryStoreData {
     metadata: new Map(),
     nextMark: 1,
     seats: { pool: { seats: [], fences: {} }, held: new Set() },
+    writers: new Map(),
   }
 }
 
@@ -113,12 +123,32 @@ export class InMemoryStore implements Store {
     this.#data.records.set(docId, stream)
   }
 
-  async append(docId: DocId, record: StoreRecord): Promise<void> {
+  async append(
+    docId: DocId,
+    record: StoreRecord,
+    options: WriteOptions,
+  ): Promise<void> {
     this.#writable()
+    const writer = this.#writer(docId, options)
     const existingMeta = this.#data.metadata.get(docId) ?? null
     const resolved = validateAppend(docId, record, existingMeta)
     if (resolved !== null) this.#data.metadata.set(docId, resolved)
     this.#push(docId, [record])
+    this.#recordWriter(docId, writer)
+  }
+
+  /** The writer to record after this write; throws if it is refused. */
+  #writer(docId: DocId, options: WriteOptions): PeerId | null {
+    return planWriter({
+      docId,
+      seat: this.seat,
+      recorded: this.#data.writers.get(docId) ?? null,
+      authored: options.authored,
+    })
+  }
+
+  #recordWriter(docId: DocId, writer: PeerId | null): void {
+    if (writer !== null) this.#data.writers.set(docId, writer)
   }
 
   async *loadAll(docId: DocId): AsyncIterable<StoreRecord> {
@@ -135,8 +165,10 @@ export class InMemoryStore implements Store {
     docId: DocId,
     records: StoreRecord[],
     through: StoreMark | null,
+    options: WriteOptions,
   ): Promise<void> {
     this.#writable()
+    const writer = this.#writer(docId, options)
     const existingMeta = this.#data.metadata.get(docId) ?? null
     const resolved = resolveMetaFromBatch(records, existingMeta)
 
@@ -147,12 +179,20 @@ export class InMemoryStore implements Store {
     this.#data.records.set(docId, kept)
     this.#push(docId, records)
     this.#data.metadata.set(docId, resolved)
+    this.#recordWriter(docId, writer)
   }
 
   async delete(docId: DocId): Promise<void> {
     this.#writable()
+    this.#writer(docId, { authored: true })
     this.#data.records.delete(docId)
     this.#data.metadata.delete(docId)
+    this.#data.writers.delete(docId)
+  }
+
+  async writerOf(docId: DocId): Promise<PeerId | null> {
+    this.#open()
+    return this.#data.writers.get(docId) ?? null
   }
 
   async currentMeta(docId: DocId): Promise<StoreMeta | null> {

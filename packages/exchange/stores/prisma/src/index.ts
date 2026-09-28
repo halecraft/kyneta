@@ -15,6 +15,7 @@
 import {
   type DocId,
   freshPeerIds,
+  type PeerId,
   planStoreOpen,
   type SessionSeat,
   STORE_META_FORMAT_KEY,
@@ -22,6 +23,7 @@ import {
   type StoreMark,
   type StoreMeta,
   type StoreRecord,
+  type WriteOptions,
 } from "@kyneta/exchange"
 import {
   fromRow,
@@ -176,7 +178,11 @@ export class PrismaStore implements Store {
   // Store interface
   // -------------------------------------------------------------------------
 
-  async append(docId: DocId, record: StoreRecord): Promise<void> {
+  async append(
+    docId: DocId,
+    record: StoreRecord,
+    _options: WriteOptions,
+  ): Promise<void> {
     await this.#writeAfterLast(docId, async (tx, existingMeta, nextSeq) => {
       const { meta, records } = this.#txModels(tx)
       const plan = planAppend(docId, record, existingMeta, nextSeq)
@@ -230,6 +236,7 @@ export class PrismaStore implements Store {
     docId: DocId,
     records: StoreRecord[],
     through: StoreMark | null,
+    _options: WriteOptions,
   ): Promise<void> {
     await this.#writeAfterLast(docId, async (tx, existingMeta, nextSeq) => {
       const { meta, records: recordsModel } = this.#txModels(tx)
@@ -309,6 +316,17 @@ export class PrismaStore implements Store {
       await records.deleteMany({ where: { docId } })
       await meta.deleteMany({ where: { docId } })
     })
+  }
+
+  /**
+   * Always `null`: a session seat is never held again, so a record naming it
+   * would lock the document for good. Prisma records no writer, and `append`
+   * and `compact` ignore their `WriteOptions`; route a serialized document's writes
+   * to one process.
+   */
+  async writerOf(_docId: DocId): Promise<PeerId | null> {
+    void this.#client // throws once the store is closed
+    return null
   }
 
   async currentMeta(docId: DocId): Promise<StoreMeta | null> {

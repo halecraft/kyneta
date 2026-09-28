@@ -1197,10 +1197,20 @@ export type HydrationHandle<V extends Version = Version> = {
   readonly substrate: Substrate<V>
   /**
    * The document's own history has loaded. Claims this peer's stable identity
-   * (Yjs, Loro) and allows authored writes (plain). Idempotent — safe to call
-   * twice.
+   * (Yjs, Loro), and lets authored writes through (plain) unless they have
+   * been refused. Idempotent — safe to call twice.
    */
   readonly adopt: () => void
+  /**
+   * From now on, authored writes throw `reason`, whether or not `adopt` has
+   * run or runs later. Merges and announcements are unaffected. A permission
+   * withdrawn, at any time, rather than an obligation of hydration: the
+   * exchange refuses a serialized document another writer holds.
+   *
+   * Only a serialized substrate (plain) implements it; a concurrent one has
+   * no single writer to refuse in favour of, and throws.
+   */
+  readonly refuse: (reason: string) => void
 }
 
 /**
@@ -1221,11 +1231,43 @@ export function beginHydration<V extends Version>(
     factory.createForHydration?.(schema) ?? {
       substrate: factory.create(schema),
       adopt: NOOP_ADOPT,
+      refuse: CANNOT_REFUSE,
+    }
+  )
+}
+
+/**
+ * Build a substrate over an already-loaded replica (a promotion), with the
+ * same handle `beginHydration` gives. Its history has loaded, so `adopt` may
+ * be called at once.
+ *
+ * Falls back to `upgrade()` plus a no-op `adopt` for backends that declare no
+ * {@link SubstrateFactory.upgradeForHydration}.
+ */
+export function beginUpgrade<V extends Version>(
+  factory: SubstrateFactory<V>,
+  replica: Replica<V>,
+  schema: SchemaNode,
+): HydrationHandle<V> {
+  return (
+    factory.upgradeForHydration?.(replica, schema) ?? {
+      substrate: factory.upgrade(replica, schema),
+      adopt: NOOP_ADOPT,
+      refuse: CANNOT_REFUSE,
     }
   )
 }
 
 const NOOP_ADOPT = (): void => {}
+
+/**
+ * `refuse` for a substrate that implements neither hook. A serialized
+ * substrate must implement both, so this only reaches one the exchange never
+ * refuses.
+ */
+const CANNOT_REFUSE = (): void => {
+  throw new Error("this substrate cannot refuse authored writes")
+}
 
 export interface SubstrateFactory<V extends Version = Version> {
   /**
@@ -1328,9 +1370,22 @@ export interface SubstrateFactory<V extends Version = Version> {
    * stored.
    *
    * The returned `adopt` is the obligation that comes with the substrate: call
-   * it once the imports are finished and no further ones are outstanding.
+   * it once the imports are finished and no further ones are outstanding. Its
+   * `refuse` withdraws the right to author, at any time.
    */
   createForHydration?(schema: SchemaNode): HydrationHandle<V>
+
+  /**
+   * `upgrade(replica, schema)`, returned with the handle `createForHydration`
+   * gives, for a document promoted from a relay: the exchange may still have
+   * to refuse its authored writes. **Optional**; {@link beginUpgrade} supplies
+   * `upgrade()` plus a no-op for backends that leave it out. A serialized
+   * substrate must implement it.
+   */
+  upgradeForHydration?(
+    replica: Replica<V>,
+    schema: SchemaNode,
+  ): HydrationHandle<V>
 
   /**
    * Construct a new substrate from a self-sufficient payload.

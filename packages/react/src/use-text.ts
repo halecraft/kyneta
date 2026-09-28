@@ -3,14 +3,16 @@
 // useText(textRef, options?) returns a React ref callback. When the callback
 // receives a non-null element, it binds it: at once with attach() if the
 // document has loaded, otherwise with attachWhenLoaded(), which keeps the
-// element read-only until the load completes. When it receives null
-// (unmount), it calls the detach function.
+// element read-only until the load completes. Either way the element is also
+// read-only while the document refuses this peer's writes (`writeRefusal`:
+// another tab of the same store writes it). When it receives null (unmount),
+// it calls the detach function.
 //
 // The hook does NOT cause re-renders on text changes. The textarea is an
 // uncontrolled element managed imperatively by the adapter. For reading
 // the text value reactively (e.g. character count), use useValue(textRef).
 
-import { hydrated, whenHydrated } from "@kyneta/exchange"
+import { hydrated, whenHydrated, writeRefusalFeed } from "@kyneta/exchange"
 import { useCallback, useRef } from "react"
 import { attach, attachWhenLoaded, type TextRefLike } from "./text-adapter.js"
 
@@ -44,6 +46,10 @@ export interface UseTextOptions {
  *
  * The element is bound once its document has loaded, and is read-only until
  * then: text typed before the load would be written over state not yet seen.
+ * It is also read-only while the document refuses this peer's writes, which a
+ * stored `json` document does when another tab of the same store writes it
+ * (`writeRefusal`); remote edits still arrive. To say why, read
+ * `useWriteRefusal`.
  *
  * The binding is model-as-source-of-truth:
  * - Local edits are captured on `input` events, diffed against the model,
@@ -83,9 +89,10 @@ export function useText(
       // Attach new binding. Checking `hydrated` first binds a loaded document
       // on this render, with no read-only phase.
       if (element) {
+        const options = { undo, refusal: writeRefusalFeed(textRef) }
         detachRef.current = hydrated(textRef)
-          ? attach(element, textRef, { undo })
-          : attachWhenLoaded(element, textRef, whenHydrated(textRef), { undo })
+          ? attach(element, textRef, options)
+          : attachWhenLoaded(element, textRef, whenHydrated(textRef), options)
       }
     },
     [textRef, undo],

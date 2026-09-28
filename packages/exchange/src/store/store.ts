@@ -21,7 +21,7 @@ import {
   replicaTypesCompatible,
   type SubstratePayload,
 } from "@kyneta/schema"
-import type { DocId } from "@kyneta/transport"
+import type { DocId, PeerId } from "@kyneta/transport"
 import type { Seat } from "./seats.js"
 
 // ---------------------------------------------------------------------------
@@ -92,6 +92,16 @@ export type StoreRecord =
 // Store — the persistence interface
 // ---------------------------------------------------------------------------
 
+/** How a write reaches the store. */
+export type WriteOptions = {
+  /**
+   * The write carries this seat's own operations on a serialized document,
+   * which claims it. Required: a claim that can be forgotten would let a
+   * second seat write.
+   */
+  readonly authored: boolean
+}
+
 /**
  * An opaque position in one document's record stream. Later records have
  * greater marks, in every instance over the same storage.
@@ -115,6 +125,15 @@ export type StoreMark = number
  *   read the pool inside their own transaction and call `assertSeatHeld`, so
  *   a write by an instance whose seat was claimed again throws
  *   `SeatLostError` and changes nothing.
+ * - **Of the seats sharing a pooled storage, at most one authors each
+ *   serialized document, and the storage records which one.** An authored
+ *   `append` or `compact` records the instance's seat as the document's
+ *   writer when none is recorded, in the same transaction, and throws
+ *   `WriterRefusedError`, changing nothing, when another seat is. A `delete`
+ *   is refused the same way when another seat is the writer. Checks run
+ *   fence first, then writer. Stores whose seat is `owned` (one writer by
+ *   construction) or `session` (a record naming a seat that never returns
+ *   would lock the document for good) record nothing.
  * - **A closed instance refuses every operation.**
  * - **`compact` removes only what its caller has read**: the records at or
  *   before a mark the caller took before reading.
@@ -139,8 +158,15 @@ export interface Store {
    * immutable fields (`replicaType`, `syncMode`) against any
    * existing metadata via `resolveMetaFromBatch` and updates the
    * materialized metadata index.
+   *
+   * With `options.authored`, the record carries this seat's own operations
+   * on a serialized document, which claims it (see `Store`).
    */
-  append(docId: DocId, record: StoreRecord): Promise<void>
+  append(
+    docId: DocId,
+    record: StoreRecord,
+    options: WriteOptions,
+  ): Promise<void>
 
   /**
    * Load all records for a document, yielding in insertion order.
@@ -163,19 +189,29 @@ export interface Store {
    * validated against existing metadata, and the materialized index is
    * updated from the resolved metadata. A concurrent reader sees either the
    * records before or after, never a document with neither.
+   *
+   * `options.authored` claims as for `append`.
    */
   compact(
     docId: DocId,
     records: StoreRecord[],
     through: StoreMark | null,
+    options: WriteOptions,
   ): Promise<void>
 
   /**
-   * Delete all records and metadata for a document.
+   * Delete all records and metadata for a document, and its writer record.
    * After this call, `currentMeta(docId)` returns `null` and
-   * `loadAll(docId)` yields nothing.
+   * `loadAll(docId)` yields nothing. Refused with `WriterRefusedError` when
+   * another seat is the document's writer.
    */
   delete(docId: DocId): Promise<void>
+
+  /**
+   * The seat recorded as the document's writer, or `null` when none is, and
+   * always on a store that records none (see `Store`).
+   */
+  writerOf(docId: DocId): Promise<PeerId | null>
 
   /**
    * Return the current metadata for a document, or `null` if the

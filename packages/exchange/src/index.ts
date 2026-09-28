@@ -231,7 +231,10 @@ export {
   persisted,
   persistedFeed,
   persistenceError,
+  type WriteRefusalFeed,
   whenPersisted,
+  writeRefusal,
+  writeRefusalFeed,
 } from "./persistence.js"
 export type { SettleTerm } from "./settle.js"
 export {
@@ -271,6 +274,7 @@ export {
   parseSeatPool,
   parseStoreFormat,
   planStoreOpen,
+  planWriter,
   prefixSuccessor,
   recordsOf,
   resolveMetaFromBatch,
@@ -290,6 +294,8 @@ export {
   type StoreOpenPlan,
   sessionSeat,
   validateAppend,
+  type WriteOptions,
+  WriterRefusedError,
 } from "./store/index.js"
 
 // ---------------------------------------------------------------------------

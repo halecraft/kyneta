@@ -566,6 +566,7 @@ export type {
 export {
   BACKING_DOC,
   beginHydration,
+  beginUpgrade,
   computeSchemaHash,
   DEVTOOLS_HISTORY,
   HASH_ALGORITHM_VERSION,

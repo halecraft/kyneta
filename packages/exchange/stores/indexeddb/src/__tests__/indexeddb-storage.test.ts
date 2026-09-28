@@ -7,6 +7,7 @@ import {
   makeEntryRecord,
   makeMetaRecord,
   plainMeta,
+  UNAUTHORED,
 } from "@kyneta/exchange/testing"
 import { afterAll, describe, expect, it } from "vitest"
 import { deleteIndexedDBStore, IndexedDBStore } from "../index.js"
@@ -85,9 +86,9 @@ describe("IndexedDBStore — close + reopen", () => {
 
     // Phase 1: write data then close
     const store1 = await IndexedDBStore.open(name)
-    await store1.append("doc-1", makeMetaRecord())
-    await store1.append("doc-1", makeEntryRecord("entirety", "v1"))
-    await store1.append("doc-1", makeEntryRecord("since", "v2"))
+    await store1.append("doc-1", makeMetaRecord(), UNAUTHORED)
+    await store1.append("doc-1", makeEntryRecord("entirety", "v1"), UNAUTHORED)
+    await store1.append("doc-1", makeEntryRecord("since", "v2"), UNAUTHORED)
     await store1.close()
 
     // Phase 2: reopen and verify
@@ -113,14 +114,14 @@ describe("IndexedDBStore — close + reopen", () => {
     dbNames.push(name)
 
     const store1 = await IndexedDBStore.open(name)
-    await store1.append("doc-1", makeMetaRecord())
-    await store1.append("doc-1", makeEntryRecord("entirety", "v1"))
-    await store1.append("doc-1", makeEntryRecord("since", "v2"))
+    await store1.append("doc-1", makeMetaRecord(), UNAUTHORED)
+    await store1.append("doc-1", makeEntryRecord("entirety", "v1"), UNAUTHORED)
+    await store1.append("doc-1", makeEntryRecord("since", "v2"), UNAUTHORED)
     await store1.close()
 
     // Reopen and append more
     const store2 = await IndexedDBStore.open(name)
-    await store2.append("doc-1", makeEntryRecord("since", "v3"))
+    await store2.append("doc-1", makeEntryRecord("since", "v3"), UNAUTHORED)
 
     const records = await collectAll(store2.loadAll("doc-1"))
     const entries = records.filter(r => r.kind === "entry")
@@ -142,13 +143,14 @@ describe("IndexedDBStore — close + reopen", () => {
     dbNames.push(name)
 
     const store1 = await IndexedDBStore.open(name)
-    await store1.append("doc-1", makeMetaRecord())
-    await store1.append("doc-1", makeEntryRecord("since", "v1"))
-    await store1.append("doc-1", makeEntryRecord("since", "v2"))
+    await store1.append("doc-1", makeMetaRecord(), UNAUTHORED)
+    await store1.append("doc-1", makeEntryRecord("since", "v1"), UNAUTHORED)
+    await store1.append("doc-1", makeEntryRecord("since", "v2"), UNAUTHORED)
     await store1.compact(
       "doc-1",
       [makeMetaRecord(), makeEntryRecord("entirety", "v3")],
       await store1.mark("doc-1"),
+      UNAUTHORED,
     )
     await store1.close()
 
@@ -168,9 +170,9 @@ describe("IndexedDBStore — close + reopen", () => {
     dbNames.push(name)
 
     const store1 = await IndexedDBStore.open(name)
-    await store1.append("alpha", makeMetaRecord())
-    await store1.append("beta", makeMetaRecord())
-    await store1.append("gamma", makeMetaRecord())
+    await store1.append("alpha", makeMetaRecord(), UNAUTHORED)
+    await store1.append("beta", makeMetaRecord(), UNAUTHORED)
+    await store1.append("gamma", makeMetaRecord(), UNAUTHORED)
     await store1.close()
 
     const store2 = await IndexedDBStore.open(name)
@@ -193,11 +195,19 @@ describe("IndexedDBStore — database isolation", () => {
     const storeA = await IndexedDBStore.open(nameA)
     const storeB = await IndexedDBStore.open(nameB)
 
-    await storeA.append("shared-id", makeMetaRecord())
-    await storeA.append("shared-id", makeEntryRecord("entirety", "from-a"))
+    await storeA.append("shared-id", makeMetaRecord(), UNAUTHORED)
+    await storeA.append(
+      "shared-id",
+      makeEntryRecord("entirety", "from-a"),
+      UNAUTHORED,
+    )
 
-    await storeB.append("shared-id", makeMetaRecord())
-    await storeB.append("shared-id", makeEntryRecord("entirety", "from-b"))
+    await storeB.append("shared-id", makeMetaRecord(), UNAUTHORED)
+    await storeB.append(
+      "shared-id",
+      makeEntryRecord("entirety", "from-b"),
+      UNAUTHORED,
+    )
 
     // Each store sees only its own data
     const recordsA = await collectAll(storeA.loadAll("shared-id"))
@@ -229,8 +239,8 @@ describe("deleteIndexedDBStore", () => {
     // Don't push to dbNames — we're explicitly deleting
 
     const store1 = await IndexedDBStore.open(name)
-    await store1.append("doc-1", makeMetaRecord())
-    await store1.append("doc-1", makeEntryRecord("entirety", "v1"))
+    await store1.append("doc-1", makeMetaRecord(), UNAUTHORED)
+    await store1.append("doc-1", makeEntryRecord("entirety", "v1"), UNAUTHORED)
     await store1.close()
 
     // Delete the database
@@ -261,7 +271,7 @@ describe("IndexedDBStore — store-format gate", () => {
 
     // The first open stamps the current format.
     const store1 = await IndexedDBStore.open(name)
-    await store1.append("doc-1", makeMetaRecord())
+    await store1.append("doc-1", makeMetaRecord(), UNAUTHORED)
     await store1.close()
 
     // Tamper the store_meta `format` row directly via a raw handle (DB is at

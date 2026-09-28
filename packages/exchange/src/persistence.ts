@@ -1,16 +1,25 @@
-// persistence — "has the store confirmed every write this peer made?"
+// persistence — "has the store confirmed every write this peer made?", and
+// "may this peer write at all?"
 //
 // With a store, an own write reaches peers only once the store has confirmed
 // it (§"Store-first" in TECHNICAL.md). These functions answer, for any ref
-// within a document, whether that has happened, and why not.
+// within a document, whether that has happened, and why not. A serialized
+// document another seat of the storage writes refuses authored writes
+// (§"Serialized documents: one writer seat per storage"); `writeRefusal` says
+// so.
 //
 // Not a settle term. `settled` asks whether every source has reported what it
 // holds; a write waiting on the store is not a source, and a document can be
 // settled with writes still unconfirmed.
 
-import { CHANGEFEED } from "@kyneta/changefeed"
+import { CHANGEFEED, type HasChangefeed } from "@kyneta/changefeed"
 import { createDocumentMap } from "./document-key.js"
-import { makeSettleTerm, type SettleTerm } from "./settle.js"
+import { makeFeed, makeSettleTerm, type SettleTerm } from "./settle.js"
+import type { WriterRefusedError } from "./store/seats.js"
+
+/** A document's refusal, readable and observable. */
+export type WriteRefusalFeed = (() => WriterRefusedError | undefined) &
+  HasChangefeed<WriterRefusedError | undefined>
 
 const persistence = createDocumentMap<{
   readonly term: SettleTerm
@@ -100,3 +109,47 @@ export function whenPersisted(ref: object): Promise<void> {
     })
   })
 }
+
+const refusals = createDocumentMap<WriteRefusalFeed>()
+
+/**
+ * Register a document's refusal.
+ *
+ * @internal Called by `Runtime` as it creates an interpreted document.
+ */
+export function registerWriteRefusal(
+  ref: object,
+  feed: WriteRefusalFeed,
+): void {
+  refusals.set(ref, feed)
+}
+
+/**
+ * Why this document's authored writes are refused, or `undefined` when they
+ * are not: another seat of its storage is the recorded writer of this
+ * serialized document. Set when the document loads, or when its first own
+ * write lost a race to another seat's, and kept for the session: writership
+ * moves only with the seat.
+ *
+ * Not a {@link persistenceError}: a refused document never failed a write
+ * when it was refused at load, and its unauthored writes (what the network
+ * sends) still succeed.
+ */
+export function writeRefusal(ref: object): WriterRefusedError | undefined {
+  return refusals.get(ref)?.()
+}
+
+/**
+ * Observable form of {@link writeRefusal}, for a UI that disables editing. A
+ * callable, so never put it in an `if`.
+ */
+export function writeRefusalFeed(ref: object): WriteRefusalFeed {
+  return refusals.get(ref) ?? NEVER_REFUSED
+}
+
+const NEVER_REFUSED: WriteRefusalFeed = makeFeed<
+  WriterRefusedError | undefined
+>(
+  () => undefined,
+  () => () => {},
+)

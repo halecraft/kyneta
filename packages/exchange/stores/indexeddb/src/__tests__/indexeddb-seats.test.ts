@@ -1,6 +1,11 @@
 // indexeddb-seats — seat allocation over Web Locks, against a model of an
 // origin's pages (`fake-locks.ts`) over fake-indexeddb.
 
+import {
+  AUTHORED,
+  makeEntryRecord,
+  makeMetaRecord,
+} from "@kyneta/exchange/testing"
 import { afterAll, describe, expect, it, vi } from "vitest"
 import { deleteIndexedDBStore, IndexedDBStore } from "../index.js"
 import { FakeLockManager, type FakePage } from "./fake-locks.js"
@@ -149,7 +154,7 @@ describe("IndexedDB seats", () => {
     release()
   })
 
-  it("without Web Locks, issues a session seat and writes no pool", async () => {
+  it("without Web Locks, issues a session seat, writes no pool, and records no writer", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
     const name = uniqueDbName()
     const first = await IndexedDBStore.open(name, { locks: null })
@@ -157,6 +162,9 @@ describe("IndexedDB seats", () => {
     expect(first.seat.kind).toBe("session")
     expect(second.seat.peerId).not.toBe(first.seat.peerId)
     expect(await storedPool(name)).toBeUndefined()
+    await first.append("doc", makeMetaRecord(), AUTHORED)
+    await second.append("doc", makeEntryRecord("since", "1"), AUTHORED)
+    expect(await second.writerOf("doc")).toBeNull()
     await first.close()
     await second.close()
     warn.mockRestore()

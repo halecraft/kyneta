@@ -20,6 +20,7 @@ import {
   makeEntryRecord,
   makeMetaRecord,
   plainMeta,
+  UNAUTHORED,
 } from "../testing/store-conformance.js"
 
 // ---------------------------------------------------------------------------
@@ -51,8 +52,8 @@ describe("InMemoryStore — shared state", () => {
     const backend2 = new InMemoryStore(sharedData)
 
     const metaRecord = makeMetaRecord()
-    await backend1.append("doc-1", metaRecord)
-    await backend1.append("doc-1", makeEntryRecord("entirety", "1"))
+    await backend1.append("doc-1", metaRecord, UNAUTHORED)
+    await backend1.append("doc-1", makeEntryRecord("entirety", "1"), UNAUTHORED)
 
     // Second instance sees metadata
     const meta: StoreMeta | null = await backend2.currentMeta("doc-1")
@@ -74,8 +75,8 @@ describe("InMemoryStore — shared state", () => {
   it("getStorage() returns data for late sharing across instances", async () => {
     const backend1 = new InMemoryStore()
     const metaRecord = makeMetaRecord()
-    await backend1.append("doc-1", metaRecord)
-    await backend1.append("doc-1", makeEntryRecord("entirety", "1"))
+    await backend1.append("doc-1", metaRecord, UNAUTHORED)
+    await backend1.append("doc-1", makeEntryRecord("entirety", "1"), UNAUTHORED)
 
     // Late sharing via getStorage()
     const backend2 = new InMemoryStore(backend1.getStorage())

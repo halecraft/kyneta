@@ -49,6 +49,15 @@ import {
 } from "./substrate.js"
 import { LoroVersion } from "./version.js"
 
+/**
+ * `refuse` for a concurrent substrate. The exchange refuses only serialized
+ * documents: concurrent writers each write under their own identity, so there
+ * is no single writer to refuse in favour of.
+ */
+const CONCURRENT_REFUSE = (): void => {
+  throw new Error("concurrent substrates have no single writer to refuse")
+}
+
 // ---------------------------------------------------------------------------
 // Peer id → Loro PeerID
 // ---------------------------------------------------------------------------
@@ -145,6 +154,7 @@ function createLoroFactory(
         adopt: () => {
           doc.setPeerId(numericPeerId)
         },
+        refuse: CONCURRENT_REFUSE,
       }
     },
 

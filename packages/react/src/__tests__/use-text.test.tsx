@@ -9,6 +9,7 @@ import {
   createInMemoryStoreData,
   Exchange,
   type InMemoryStoreData,
+  WriterRefusedError,
   whenHydrated,
 } from "@kyneta/exchange"
 import { json } from "@kyneta/schema"
@@ -17,6 +18,7 @@ import { act, renderHook } from "@testing-library/react"
 import { describe, expect, it } from "vitest"
 import type { TextRefLike } from "../text-adapter.js"
 import { useText } from "../use-text.js"
+import { useWriteRefusal } from "../use-write-refusal.js"
 
 // ---------------------------------------------------------------------------
 // Test schema
@@ -305,5 +307,119 @@ describe("useText on a document still loading", () => {
     expect(textarea.readOnly).toBe(false)
     expect(textarea.value).toBe("ready")
     await exchange.shutdown()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// useText on a document another tab writes
+// ---------------------------------------------------------------------------
+
+describe("useText on a document another tab of the store writes", () => {
+  const StoredDoc = json.bind(TextDocSchema)
+
+  /** Two live Exchanges over one storage: two tabs, two seats. */
+  function twoTabs(): { writer: Exchange; reader: Exchange } {
+    const sharedData = createInMemoryStoreData()
+    const tab = (principal: string) =>
+      new Exchange({
+        principal,
+        store: createInMemoryStore({ sharedData }),
+        onStoreError: () => {},
+      })
+    return { writer: tab("writer"), reader: tab("reader") }
+  }
+
+  it("is read-only once loaded, showing the writer's text", async () => {
+    const { writer, reader } = twoTabs()
+    const written = writer.get("doc", StoredDoc)
+    await whenHydrated(written)
+    batch(written, d => d.title.insert(0, "the writer's"))
+    await writer.flush()
+
+    const doc = reader.get("doc", StoredDoc)
+    const textarea = document.createElement("textarea")
+    const { result } = renderHook(() => useText(doc.title))
+    act(() => {
+      result.current(textarea)
+    })
+    await act(async () => {
+      await whenHydrated(doc)
+    })
+    expect(textarea.readOnly).toBe(true)
+    expect(textarea.value).toBe("the writer's")
+
+    // An input that reaches it anyway changes nothing, and throws nothing.
+    textarea.value = "typed"
+    expect(() => textarea.dispatchEvent(new Event("input"))).not.toThrow()
+    expect(textarea.value).toBe("the writer's")
+
+    act(() => {
+      result.current(null)
+    })
+    expect(textarea.readOnly).toBe(false)
+    await reader.shutdown()
+    await writer.shutdown()
+  })
+
+  it("becomes read-only, with its typing rolled back, when it loses the race to write first", async () => {
+    const { writer, reader } = twoTabs()
+    const written = writer.get("doc", StoredDoc)
+    const doc = reader.get("doc", StoredDoc)
+    await whenHydrated(written)
+    await whenHydrated(doc)
+    const textarea = document.createElement("textarea")
+    const { result } = renderHook(() => useText(doc.title))
+    act(() => {
+      result.current(textarea)
+    })
+    expect(textarea.readOnly).toBe(false)
+
+    batch(written, d => d.title.insert(0, "first"))
+    await writer.flush()
+    // Both loaded before either claimed, so this tab's typing is taken, and
+    // refused by the store.
+    textarea.value = "second"
+    textarea.selectionStart = textarea.selectionEnd = 6
+    textarea.dispatchEvent(new Event("input"))
+    expect(doc.title()).toBe("second")
+    await act(async () => {
+      await reader.flush()
+    })
+
+    expect(textarea.readOnly).toBe(true)
+    expect(textarea.value).toBe("first")
+    await reader.shutdown()
+    await writer.shutdown()
+  })
+})
+
+describe("useWriteRefusal", () => {
+  const StoredDoc = json.bind(TextDocSchema)
+
+  it("is undefined until the document loads refused, then names the writer", async () => {
+    const sharedData = createInMemoryStoreData()
+    const writer = new Exchange({
+      principal: "writer",
+      store: createInMemoryStore({ sharedData }),
+    })
+    const written = writer.get("doc", StoredDoc)
+    await whenHydrated(written)
+    batch(written, d => d.title.insert(0, "mine"))
+    await writer.flush()
+
+    const reader = new Exchange({
+      principal: "reader",
+      store: createInMemoryStore({ sharedData }),
+    })
+    const doc = reader.get("doc", StoredDoc)
+    const { result } = renderHook(() => useWriteRefusal(doc))
+    expect(result.current).toBeUndefined()
+    await act(async () => {
+      await whenHydrated(doc)
+    })
+    expect(result.current).toBeInstanceOf(WriterRefusedError)
+    expect(result.current?.writer).toBe(writer.peerId)
+    await reader.shutdown()
+    await writer.shutdown()
   })
 })

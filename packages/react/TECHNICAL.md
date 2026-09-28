@@ -4,7 +4,7 @@
 > **Role**: Thin React bindings over `@kyneta/schema` + `@kyneta/exchange`. Bridges the `[CHANGEFEED]` reactive protocol to React's rendering cycle via `useSyncExternalStore`, and provides a framework-agnostic text-adapter for binding native `<input>` / `<textarea>` elements to collaborative `TextRef`s.
 > **Depends on**: `@kyneta/schema` (peer), `@kyneta/changefeed` (peer), `@kyneta/exchange` (peer), `@kyneta/reactive` (peer), `react` (>=18, peer)
 > **Depended on by**: Application code that renders Kyneta documents in React.
-> **Canonical symbols**: `ExchangeProvider`, `useExchange`, `useDocument`, `useTracked`, `useSelector`, `useValue`, `useSyncState`, `useDocReady`, `useDocStatus`, `useInitialize`, `useText`, `ExchangeProviderProps`, `UseTextOptions`, `CallableRef`, `ExternalStore`, `createSyncStore`, `createNullishStore`, `attach`, `diffText`, `transformSelection`, `TextRefLike`, `AttachOptions`
+> **Canonical symbols**: `ExchangeProvider`, `useExchange`, `useDocument`, `useTracked`, `useSelector`, `useValue`, `useSyncState`, `useDocReady`, `useDocStatus`, `useInitialize`, `useText`, `useWriteRefusal`, `ExchangeProviderProps`, `UseTextOptions`, `CallableRef`, `ExternalStore`, `createSyncStore`, `createNullishStore`, `attach`, `diffText`, `transformSelection`, `TextRefLike`, `AttachOptions`
 > **Key invariant(s)**:
 > 1. The package is an **adapter**, not a renderer. Every hook is a ≤10-line `useSyncExternalStore` wrapper over a pure, React-agnostic store factory. Zero React imports in `store.ts` or `text-adapter.ts`.
 > 2. `useValue` returns the same object reference between renders when the underlying value has not changed — downstream `React.memo` and `useMemo` remain stable.
@@ -41,7 +41,8 @@ Consumed by application code. Not imported by any other Kyneta package.
 | `useValue(ref)` | Returns `Plain<S>`. Re-renders when the ref's changefeed fires. Memoized for referential stability. | `useDocument` |
 | `useDocReady(doc, opts?)` | Returns a monotonic `boolean` readiness latch (flicker-free scalar). The 90% gate. | `useSyncState(doc)` — raw per-peer array |
 | `useSyncState(doc)` | Returns `PeerSyncState[]` describing per-peer sync progress. Re-renders on per-peer sync changes. | `useValue(doc)` — `useSyncState` looks at the sync surface, not the doc's data |
-| `useText(textRef, options?)` | React ref callback that binds a native `<input>` / `<textarea>` to a `TextRef`. Does not re-render on text changes. | `useValue(textRef)` — use that if you want to *read* the text reactively (e.g., for a character count) |
+| `useText(textRef, options?)` | React ref callback that binds a native `<input>` / `<textarea>` to a `TextRef`. Does not re-render on text changes. Read-only while loading, and while the document refuses this peer's writes. | `useValue(textRef)` — use that if you want to *read* the text reactively (e.g., for a character count) |
+| `useWriteRefusal(doc)` | Why a stored `json` document refuses this peer's writes (a `WriterRefusedError`: another tab of the store writes it), or `undefined`. Re-renders when it changes. | `useDocReady(doc)` — whether the document has loaded, not whether it may be written |
 | `attach(element, textRef, options?)` | Imperative, framework-agnostic: bind an element to a text ref, return a detach function. The foundation of `useText`. | A React hook — `attach` has no React dependency |
 | `diffText(oldText, newText, cursorHint)` | Pure function: produce the `TextChange` describing a single contiguous edit from `oldText` to `newText`, disambiguated by cursor position. | A general-purpose string diff — `diffText` assumes a single contiguous edit |
 | `transformSelection(start, end, instructions)` | Pure function: rebase a selection range through text instructions. | `transformIndex` from `@kyneta/schema` — this is the two-index convenience |
@@ -475,6 +476,8 @@ If the document has loaded (`hydrated(textRef)`), the hook calls `attach` at onc
 
 Two reasons, and they apply to every substrate. Text typed before loading is written over a document nobody has seen, and on a stored plain document the write is refused outright — the refusal would throw inside the `input` handler after the element had already changed, leaving element and model apart. And binding early shows the pre-load (empty) text first.
 
+**A loaded document can still refuse writes.** A stored `json` document that another tab (another seat of the same store) writes is refused: at load, or later if this tab lost a race to write it first, and for the rest of the session. Every authored write then throws, so an input handler would throw on the first keystroke with the element already changed, leaving element and model apart — the failure the loading case avoids. So `useText` passes `writeRefusalFeed(textRef)` to `attach` as `AttachOptions.refusal`, and the adapter keeps the element read-only while the refusal is set. Unlike loading, the binding stays: the writer's edits must keep arriving, and a lost race's rollback reaches the element as a remote change. An input that reaches a refused element anyway (dispatched by a script) puts the model's text back rather than throwing. The adapter takes a changefeed, not a document, and so stays free of `@kyneta/exchange`. Other editors disable themselves with `useWriteRefusal`, sugar over `useChangefeed(changefeed(writeRefusalFeed(doc)))`. See §"Serialized documents: one writer seat per storage" in `packages/exchange/TECHNICAL.md`.
+
 `attachWhenLoaded` lives in the framework-agnostic adapter and takes a promise, not a document, so the adapter stays free of `@kyneta/exchange`; its tests use a deferred promise and no React. The synchronous `hydrated` check is what spares a loaded document a read-only flash: `whenHydrated` resolves in a microtask even when the load is long done. The textarea is an *uncontrolled* element — its value lives in the DOM, and the adapter keeps the DOM and the `TextRef` in sync imperatively.
 
 ### Why uncontrolled
@@ -636,6 +639,7 @@ This is a convenience, not a hard coupling — direct imports from the upstream 
 | `useSyncState` | `src/use-sync-state.ts` | `(doc) → PeerSyncState[]`. |
 | `useDocReady` | `src/use-doc-ready.ts` | `(doc, opts?) → boolean` monotonic latch. |
 | `useText` | `src/use-text.ts` | `(textRef, options?) → React.RefCallback`. |
+| `useWriteRefusal` | `src/use-write-refusal.ts` | `(doc) → WriterRefusedError \| undefined`. |
 | `UseTextOptions` | `src/use-text.ts` | `{ undo?: "prevent" \| "browser" }`. |
 
 ## File Map
@@ -652,6 +656,7 @@ This is a convenience, not a hard coupling — direct imports from the upstream 
 | `src/use-document.ts` | `useDocument` — memoized `exchange.get(docId, bound)`. |
 | `src/use-sync-state.ts` | `useSyncState` — `useSyncExternalStore` wrapper over `createSyncStore`. |
 | `src/use-doc-ready.ts` | `useDocReady` — sugar over `useDocStatus` (`status !== "pending"`). |
+| `src/use-write-refusal.ts` | `useWriteRefusal` — the document's `writeRefusalFeed`, through `useChangefeed`. |
 | `src/use-text.ts` | `useText` — ref callback wrapping `attach`. |
 | `src/__tests__/store.test.ts` | `createNullishStore` + `createSyncStore`. (The `createChangefeedStore` cases moved to `@kyneta/reactive`'s `reactive.test.ts`.) No React. |
 | `src/__tests__/use-selector.test.tsx` | `useSelector` — the todos parsimony scenario (text edit → no re-render; done flip → re-render) + no-deps + dispose. |

@@ -1,3 +1,4 @@
+import { CHANGEFEED, type HasChangefeed } from "@kyneta/changefeed"
 import { textChange } from "@kyneta/schema"
 import { batch, createDoc, Schema } from "@kyneta/schema/basic"
 import { describe, expect, it, vi } from "vitest"
@@ -619,5 +620,104 @@ describe("attachWhenLoaded", () => {
     load.resolve()
     await load.promise
     expect(textarea.readOnly).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// attach with a refusal
+// ---------------------------------------------------------------------------
+
+/** A refusal whose value the test sets. */
+function refusalSource(initial: unknown = undefined): {
+  feed: HasChangefeed<unknown>
+  set: (value: unknown) => void
+} {
+  let value = initial
+  const listeners = new Set<() => void>()
+  const feed: HasChangefeed<unknown> = {
+    [CHANGEFEED]: {
+      get current() {
+        return value
+      },
+      subscribe(callback) {
+        const listener = () => callback({ changes: [] })
+        listeners.add(listener)
+        return () => listeners.delete(listener)
+      },
+    },
+  }
+  return {
+    feed,
+    set: next => {
+      value = next
+      for (const listener of [...listeners]) listener()
+    },
+  }
+}
+
+describe("attach with a refusal", () => {
+  const TitleDoc = Schema.struct({ title: Schema.text() })
+
+  it("is read-only while refused, and still shows remote edits", () => {
+    const doc = createDoc(TitleDoc)
+    batch(doc, d => d.title.insert(0, "shared"))
+    const textarea = document.createElement("textarea")
+    const refusal = refusalSource("another seat writes it")
+
+    const detach = attach(textarea, doc.title, { refusal: refusal.feed })
+    expect(textarea.readOnly).toBe(true)
+    expect(textarea.value).toBe("shared")
+
+    batch(doc, d => d.title.insert(6, "!"))
+    expect(textarea.value).toBe("shared!")
+    detach()
+  })
+
+  it("becomes read-only when a refusal arrives, and editable when it lifts", () => {
+    const doc = createDoc(TitleDoc)
+    const textarea = document.createElement("textarea")
+    const refusal = refusalSource()
+
+    const detach = attach(textarea, doc.title, { refusal: refusal.feed })
+    expect(textarea.readOnly).toBe(false)
+    refusal.set("another seat writes it")
+    expect(textarea.readOnly).toBe(true)
+    refusal.set(undefined)
+    expect(textarea.readOnly).toBe(false)
+    detach()
+  })
+
+  it("puts the model's text back on an edit that reaches a refused element", () => {
+    const doc = createDoc(TitleDoc)
+    batch(doc, d => d.title.insert(0, "model"))
+    const textarea = document.createElement("textarea")
+    const refusal = refusalSource("another seat writes it")
+    attach(textarea, doc.title, { refusal: refusal.feed })
+
+    textarea.value = "typed"
+    textarea.dispatchEvent(new Event("input"))
+    expect(textarea.value).toBe("model")
+    expect(doc.title()).toBe("model")
+  })
+
+  it("keeps an element the application made read-only, and restores it on detach", () => {
+    const doc = createDoc(TitleDoc)
+    const textarea = document.createElement("textarea")
+    textarea.readOnly = true
+    const refusal = refusalSource()
+
+    const detach = attach(textarea, doc.title, { refusal: refusal.feed })
+    expect(textarea.readOnly).toBe(true)
+    refusal.set("refused")
+    detach()
+    expect(textarea.readOnly).toBe(true)
+
+    const other = document.createElement("textarea")
+    const again = attach(other, doc.title, { refusal: refusal.feed })
+    expect(other.readOnly).toBe(true)
+    again()
+    expect(other.readOnly).toBe(false)
+    refusal.set(undefined)
+    expect(other.readOnly).toBe(false)
   })
 })

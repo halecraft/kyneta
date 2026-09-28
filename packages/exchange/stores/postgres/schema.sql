@@ -16,10 +16,16 @@
 --
 --   ALTER TABLE kyneta_doc_meta ALTER COLUMN doc_id TYPE TEXT COLLATE "C";
 --   ALTER TABLE kyneta_records  ALTER COLUMN doc_id TYPE TEXT COLLATE "C";
+--
+-- `writer` is the seat that writes a serialized document; of the seats
+-- sharing one storage, at most one authors each. To migrate:
+--
+--   ALTER TABLE kyneta_doc_meta ADD COLUMN writer TEXT;
 
 CREATE TABLE IF NOT EXISTS kyneta_doc_meta (
   doc_id TEXT COLLATE "C" PRIMARY KEY,
-  data   JSONB NOT NULL
+  data   JSONB NOT NULL,
+  writer TEXT
 );
 
 CREATE TABLE IF NOT EXISTS kyneta_records (

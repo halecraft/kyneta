@@ -28,6 +28,7 @@ import { createLease, createObservableProgram } from "@kyneta/machine"
 import type {
   BoundSchema,
   DocRef,
+  HydrationHandle,
   NativeMap,
   Op,
   ProductSchema,
@@ -42,20 +43,26 @@ import type {
 } from "@kyneta/schema"
 import {
   beginHydration,
+  beginUpgrade,
   createRef,
   DEFAULT_LINEAGE,
   metadataOf,
   replicaTypesCompatible,
   subscribe,
 } from "@kyneta/schema"
-import type { DocId } from "@kyneta/transport"
+import type { DocId, PeerId } from "@kyneta/transport"
 import { registerDocSyncMode } from "./doc-meta.js"
 import { planInterpretation } from "./interpret.js"
-import { registerPersistenceTerm } from "./persistence.js"
+import { registerPersistenceTerm, registerWriteRefusal } from "./persistence.js"
 import { gateOpen } from "./publish-gate.js"
-import { makeSettleTerm, registerHydrationTerm } from "./settle.js"
-import { type Seat, SeatLostError, sessionSeat } from "./store/seats.js"
-import type { Store, StoreRecord } from "./store/store.js"
+import { makeFeed, makeSettleTerm, registerHydrationTerm } from "./settle.js"
+import {
+  type Seat,
+  SeatLostError,
+  sessionSeat,
+  WriterRefusedError,
+} from "./store/seats.js"
+import type { Store, StoreRecord, WriteOptions } from "./store/store.js"
 import {
   allDocsSettled,
   confirmedVersion,
@@ -97,16 +104,34 @@ async function writeRecords(
   docId: DocId,
   write: Exclude<Write, { kind: "compact" }>,
   records: StoreRecord[],
+  options: WriteOptions,
 ): Promise<void> {
   if (write.kind === "register") {
-    await store.compact(docId, records, null)
+    await store.compact(docId, records, null, options)
     return
   }
-  for (const record of records) await store.append(docId, record)
+  for (const record of records) await store.append(docId, record, options)
 }
 
-/** The obligation a no-store document has: none. */
-const NO_ADOPT = (): void => {}
+/**
+ * What the Runtime owes a document's substrate and may withdraw from it: its
+ * `HydrationHandle`, less the substrate.
+ */
+type Authorship = Omit<HydrationHandle, "substrate">
+
+/**
+ * The authorship of an interpreted document that loads nothing from a store
+ * (no store, or a transient document): `adopt` has nothing to wait for, and
+ * no stored writer can refuse it.
+ */
+const NO_AUTHORSHIP: Authorship = {
+  adopt: () => {},
+  refuse: () => {
+    throw new Error(
+      "[runtime] a document with no stored writer is never refused",
+    )
+  },
+}
 
 /** What a document that has not become ready has wired: nothing. */
 const NOTHING_WIRED = (): void => {}
@@ -124,7 +149,16 @@ export type LoadOutcome =
    *  whose replica already loaded. */
   | { readonly kind: "none" }
 
-const NOTHING_LOADED: LoadOutcome = { kind: "none" }
+/**
+ * What `#hydrate` gathers: the outcome, and the seat the store records as the
+ * document's writer (`null` when none is, or the store records none).
+ */
+type Loaded = {
+  readonly outcome: LoadOutcome
+  readonly writer: PeerId | null
+}
+
+const NOTHING_LOADED: Loaded = { outcome: { kind: "none" }, writer: null }
 
 /**
  * The store program's view of a load, or `null` when there is nothing to tell
@@ -256,6 +290,13 @@ export type Publication = {
   ownHigh: Version | undefined
   /** The error of the latest failed store write, until a write succeeds. */
   error: unknown
+  /**
+   * Why this document's authored writes are refused: another seat of the
+   * storage writes it. Set once, at load or after a lost race, and kept for
+   * the session.
+   */
+  refusal: WriterRefusedError | undefined
+  readonly refusalListeners: Set<() => void>
   /** What the persistence term last reported, so it reports changes only. */
   reported: { readonly persisted: boolean; readonly error: unknown }
   readonly listeners: Set<() => void>
@@ -265,6 +306,8 @@ function createPublication(): Publication {
   return {
     ownHigh: undefined,
     error: undefined,
+    refusal: undefined,
+    refusalListeners: new Set(),
     reported: { persisted: true, error: undefined },
     listeners: new Set(),
   }
@@ -295,6 +338,9 @@ export type DocCacheEntry =
       publication: Publication
       /** Undoes what `#becomeReady` wired; a no-op until then. */
       unwire: () => void
+      authorship: Authorship
+      /** The writer the store recorded when the document loaded. */
+      writer: PeerId | null
     }
   | {
       mode: "replicate"
@@ -302,6 +348,11 @@ export type DocCacheEntry =
       announced: boolean
       suspended?: boolean
       hydration: HydrationLatch
+      /**
+       * The writer the store recorded when the document loaded, so a
+       * promotion knows it without reading the store again.
+       */
+      writer: PeerId | null
     }
   | { mode: "deferred" }
 
@@ -367,6 +418,15 @@ export type RuntimeHooks = {
    * which broadcasts a wire `dismiss` but retains the doc runtime.
    */
   onDocSuspended?: (docId: DocId) => void
+
+  /**
+   * Called when an interpreted document's state was replaced locally by what
+   * its store holds (a lost writer race's rebuild). Peers may have sent
+   * operations the replacement discarded, and believe this replica holds
+   * them. The Exchange implements this to call
+   * `synchronizer.resetDocument()`, which asks each again.
+   */
+  onDocReset?: (docId: DocId) => void
 
   /**
    * Called when a document is resumed locally — re-enter the sync graph.
@@ -533,6 +593,19 @@ export class Runtime {
                   error instanceof SeatLostError
                     ? dispatch({ type: "seat-lost", docId, error })
                     : errorHandler(docId, "delete", error),
+              )
+              break
+            }
+            case "rebuild": {
+              this.#track(
+                this.#rebuild(
+                  store,
+                  effect.docId,
+                  effect.error,
+                  dispatch,
+                ).catch((error: unknown) =>
+                  errorHandler(effect.docId, "rebuild", error),
+                ),
               )
               break
             }
@@ -936,6 +1009,11 @@ export class Runtime {
    * requested. A write owed behind another therefore diffs from the version
    * that one confirmed, so no record repeats another's operations. A
    * compaction reads the store first ({@link Runtime.#compact}).
+   *
+   * Whether the write is authored is decided here too (see
+   * {@link Runtime.#authored}). A failure is reported by what it means: a
+   * lost seat ends every write of the store, a refused writer ends this
+   * document's authoring, and anything else is retried.
    */
   #persist(
     store: Store,
@@ -947,11 +1025,14 @@ export class Runtime {
       dispatch(
         error instanceof SeatLostError
           ? { type: "seat-lost", docId, error }
-          : { type: "write-failed", docId, error },
+          : error instanceof WriterRefusedError
+            ? { type: "writer-refused", docId, error }
+            : { type: "write-failed", docId, error },
       )
+    const options = this.#authored(docId)
 
     if (write.kind === "compact") {
-      this.#compact(store, docId).then(
+      this.#compact(store, docId, options).then(
         version => dispatch({ type: "write-succeeded", docId, version }),
         failed,
       )
@@ -973,10 +1054,29 @@ export class Runtime {
       return
     }
 
-    writeRecords(store, docId, write, records).then(
+    writeRecords(store, docId, write, records, options).then(
       () => dispatch({ type: "write-succeeded", docId, version }),
       failed,
     )
+  }
+
+  /**
+   * A write is authored when it carries this seat's own operations on a
+   * serialized document: own writes the store has not confirmed, which is
+   * exactly while `ownHigh` is set. It claims the document on a pooled store.
+   * A write that only persists what the network sent never claims, and
+   * neither does any write of a refused document: its own operations were
+   * discarded when it was rebuilt.
+   */
+  #authored(docId: DocId): WriteOptions {
+    const entry = this.#docCache.get(docId)
+    return {
+      authored:
+        entry?.mode === "interpret" &&
+        entry.readyInfo.syncMode.writerModel === "serialized" &&
+        entry.publication.ownHigh !== undefined &&
+        entry.publication.refusal === undefined,
+    }
   }
 
   /**
@@ -1001,7 +1101,11 @@ export class Runtime {
    * compaction only saves space, and a stray record must not surface as a
    * failed write on every compaction while every append succeeds.
    */
-  async #compact(store: Store, docId: DocId): Promise<string> {
+  async #compact(
+    store: Store,
+    docId: DocId,
+    options: WriteOptions,
+  ): Promise<string> {
     const held = this.#docCache.get(docId)
     const mark = await store.mark(docId)
     const entries: StoredEntry[] = []
@@ -1042,12 +1146,14 @@ export class Runtime {
           ? { kind: "register" }
           : { kind: "since", version: confirmed }
       const { records, version } = this.#prepareWrite(docId, write)
-      if (records.length > 0) await writeRecords(store, docId, write, records)
+      if (records.length > 0) {
+        await writeRecords(store, docId, write, records, options)
+      }
       return version
     }
 
     const { records, version } = this.#prepareWrite(docId, { kind: "compact" })
-    await store.compact(docId, records, mark)
+    await store.compact(docId, records, mark, options)
     return version
   }
 
@@ -1118,10 +1224,7 @@ export class Runtime {
    * Await all pending store operations.
    */
   async flush(): Promise<void> {
-    await this.#awaitPendingWork()
-    if (this.#storeHandle) {
-      await this.#storeHandle.waitForState(allDocsSettled)
-    }
+    await this.#quiesce()
   }
 
   /**
@@ -1129,11 +1232,8 @@ export class Runtime {
    * stop the tick clock.
    */
   async shutdown(): Promise<void> {
-    await this.#awaitPendingWork()
-    if (this.#storeHandle) {
-      await this.#storeHandle.waitForState(allDocsSettled)
-      this.#storeHandle.dispose()
-    }
+    await this.#quiesce()
+    this.#storeHandle?.dispose()
     this.#stopTick()
     this.#cancelAllRetries()
     for (const docId of [...this.#docCache.keys()]) this.#evict(docId)
@@ -1208,18 +1308,18 @@ export class Runtime {
     // All three arms end with this peer's identity claimed; they differ in
     // *when*, and each is right for what it can guarantee. `beginHydration`
     // defers, because an import is still coming. `create` claims at once,
-    // because none is. `upgrade` claims at once too, because the import has
-    // already finished — that is the two-phase construction contract every
+    // because none is. `beginUpgrade` claims at once too, because the import
+    // has already finished — that is the two-phase construction contract every
     // backend defines `create` in terms of. Making it defer to match the first
     // arm would leave the identity unclaimed with nothing left to claim it.
-    const { substrate, adopt } = promoting
-      ? {
-          substrate: factory.upgrade(promoting.readyInfo.replica, bound.schema),
-          adopt: NO_ADOPT,
-        }
+    //
+    // The two stored arms keep their handle's `refuse`: another seat of the
+    // storage may write the document, which withdraws the right to author it.
+    const { substrate, ...authorship } = promoting
+      ? beginUpgrade(factory, promoting.readyInfo.replica, bound.schema)
       : willHydrate
         ? beginHydration(factory, bound.schema)
-        : { substrate: factory.create(bound.schema), adopt: NO_ADOPT }
+        : { substrate: factory.create(bound.schema), ...NO_AUTHORSHIP }
 
     const ref: any = createRef(bound.schema, substrate, {
       lease: this.lease,
@@ -1247,6 +1347,8 @@ export class Runtime {
       hydration,
       publication,
       unwire: NOTHING_WIRED,
+      authorship,
+      writer: null,
       // Suspension survives promotion. The two say different things: which
       // tier holds the document, versus whether it is in the sync graph.
       // Dropping the flag here would let a `get()` silently re-announce a
@@ -1289,11 +1391,26 @@ export class Runtime {
       ),
       () => this.#persistenceError(entry),
     )
+    registerWriteRefusal(
+      ref,
+      makeFeed(
+        () => publication.refusal,
+        onChange => {
+          publication.refusalListeners.add(onChange)
+          return () => publication.refusalListeners.delete(onChange)
+        },
+      ),
+    )
 
     if (willHydrate) {
-      this.#loadThenBecomeReady(entry, adopt)
+      this.#loadThenBecomeReady(entry)
     } else {
-      this.#becomeReady(entry, NOTHING_LOADED, adopt)
+      // A promotion loads nothing more, and knows the writer its replica
+      // loaded with.
+      this.#becomeReady(entry, {
+        outcome: NOTHING_LOADED.outcome,
+        writer: promoting?.writer ?? null,
+      })
     }
 
     return ref
@@ -1337,13 +1454,14 @@ export class Runtime {
       readyInfo,
       announced: false,
       hydration,
+      writer: null,
     }
     this.#docCache.set(docId, entry)
 
     if (willHydrate) {
-      this.#loadThenBecomeReady(entry, NO_ADOPT)
+      this.#loadThenBecomeReady(entry)
     } else {
-      this.#becomeReady(entry, NOTHING_LOADED, NO_ADOPT)
+      this.#becomeReady(entry, NOTHING_LOADED)
     }
   }
 
@@ -1352,9 +1470,9 @@ export class Runtime {
    * marks the latch `failed` and nothing else: its state is unknown, so the
    * document is neither registered, announced, nor given a stable identity.
    */
-  #loadThenBecomeReady(entry: ReadyEntry, adopt: () => void): void {
+  #loadThenBecomeReady(entry: ReadyEntry): void {
     const loading = this.#hydrate(entry.readyInfo).then(
-      outcome => this.#becomeReady(entry, outcome, adopt),
+      loaded => this.#becomeReady(entry, loaded),
       (error: unknown) =>
         resolveHydration(entry.hydration, { ok: false, error }),
     )
@@ -1371,18 +1489,16 @@ export class Runtime {
    * 2. The store program learns what the store holds.
    * 3. `adopt` claims identity (Yjs, Loro) and the right to author (plain)
    *    before anyone is told the document has loaded, so a listener that
-   *    writes on that signal finds the document writable.
+   *    writes on that signal finds the document writable. A serialized
+   *    document another seat of the storage writes is refused instead, so
+   *    such a listener's write throws.
    * 4. The latch resolves `loaded`.
    * 5. `#register` publishes the document to the sync graph, and an
    *    interpreted document is wired: its local updates start leaving the
    *    process, and its changesets reach the observation hook. Both carry
    *    the identity claimed in step 3.
    */
-  #becomeReady(
-    entry: ReadyEntry,
-    outcome: LoadOutcome,
-    adopt: () => void,
-  ): void {
+  #becomeReady(entry: ReadyEntry, loaded: Loaded): void {
     const { docId } = entry.readyInfo
     if (this.#docCache.get(docId) !== entry) {
       resolveHydration(entry.hydration, {
@@ -1391,9 +1507,20 @@ export class Runtime {
       })
       return
     }
-    const input = storeInputFor(docId, outcome)
+    const input = storeInputFor(docId, loaded.outcome)
     if (input) this.#storeHandle?.dispatch(input)
-    adopt()
+    entry.writer = loaded.writer
+    if (entry.mode === "interpret") {
+      entry.authorship.adopt()
+      const { writerModel } = entry.readyInfo.syncMode
+      if (
+        writerModel === "serialized" &&
+        loaded.writer !== null &&
+        loaded.writer !== this.peerId
+      ) {
+        this.#refuse(entry, new WriterRefusedError(docId, loaded.writer))
+      }
+    }
     resolveHydration(entry.hydration, { ok: true })
     this.#register(entry)
     if (entry.mode === "interpret") entry.unwire = this.#wire(docId, entry)
@@ -1535,9 +1662,16 @@ export class Runtime {
     })
   }
 
-  async #awaitPendingWork(): Promise<void> {
-    while (this.#pendingWork.size > 0) {
+  /**
+   * Wait until no tracked work is running and every document is settled.
+   * Either can start the other: a write that settles can start a rebuild,
+   * which hands the document back to the store program with a write owed.
+   */
+  async #quiesce(): Promise<void> {
+    for (;;) {
       await Promise.all(this.#pendingWork)
+      await this.#storeHandle?.waitForState(allDocsSettled)
+      if (this.#pendingWork.size === 0) return
     }
   }
 
@@ -1561,11 +1695,14 @@ export class Runtime {
    * state has. Merging stored data deduplicates the structural ops and
    * applies application ops. No separate replica, no upgrade step.
    */
-  async #hydrate(readyInfo: DocReadyInfo): Promise<LoadOutcome> {
+  async #hydrate(readyInfo: DocReadyInfo): Promise<Loaded> {
     const { docId, replica, replicaFactory } = readyInfo
     const store = this.#store
     if (!store) return NOTHING_LOADED
-    const nothingStored: LoadOutcome = { kind: "empty" }
+    // Read with the records, whatever they turn out to hold: a store can
+    // record a writer for a document none of whose entries this replica takes.
+    const writer = await store.writerOf(docId)
+    const nothingStored: Loaded = { outcome: { kind: "empty" }, writer }
 
     // A read that throws is a failed load, not an empty document: reporting
     // it as empty is how defaults get written over data that exists.
@@ -1600,7 +1737,7 @@ export class Runtime {
     }
     return stored === undefined
       ? nothingStored
-      : { kind: "stored", version: stored }
+      : { outcome: { kind: "stored", version: stored }, writer }
   }
 
   // =========================================================================
@@ -1685,8 +1822,87 @@ export class Runtime {
   }
 
   /**
+   * Withdraw the right to author `entry`: another seat of its storage writes
+   * it. Authored writes throw from now on, and `writeRefusal` reports it.
+   */
+  #refuse(entry: InterpretEntry, refusal: WriterRefusedError): void {
+    entry.authorship.refuse(refusal.message)
+    const { publication } = entry
+    if (publication.refusal !== undefined) return
+    publication.refusal = refusal
+    for (const listener of [...publication.refusalListeners]) listener()
+  }
+
+  /**
+   * Recover from a lost writer race: another seat claimed the document before
+   * this one's first own write reached the store.
+   *
+   * 1. Refuse further authored writes.
+   * 2. Read the store, and take it into a fresh document of the same schema,
+   *    toward the latest stored lineage. Not into the live one: when both
+   *    seats extended one lineage from the same position, the live replica's
+   *    version reaches the winner's, and its entries would be skipped as held.
+   *    Not into a bare replica either: without the schema, its entirety omits
+   *    the fields at their defaults, and the reset would keep this seat's
+   *    values there.
+   * 3. Replace the live document with it, which discards this seat's refused
+   *    write. Nothing of it left the process (store-first).
+   * 4. Tell the Synchronizer, so peers are asked again from here: a merge
+   *    that arrived while the store was read was discarded with the rest.
+   * 5. Hand the document back to the store program as loaded. The write it
+   *    owes finds nothing new, and its confirmation reopens the gate, since
+   *    the rebuilt version reaches `ownHigh` or lies on another lineage.
+   *
+   * Stops at the read if the document is destroyed meanwhile.
+   */
+  async #rebuild(
+    store: Store,
+    docId: DocId,
+    refusal: WriterRefusedError,
+    dispatch: (msg: StoreInput) => void,
+  ): Promise<void> {
+    const entry = this.#docCache.get(docId)
+    if (entry?.mode !== "interpret") return
+    this.#refuse(entry, refusal)
+
+    const entries: StoredEntry[] = []
+    for await (const record of store.loadAll(docId)) {
+      if (record.kind === "entry") entries.push(record)
+    }
+    if (this.#docCache.get(docId) !== entry) return
+
+    // A fresh document of the same schema, not a bare replica: its entirety
+    // then names every field, so the reset replaces each one this seat wrote.
+    const { bound, readyInfo } = entry
+    const { substrate: fresh } = beginHydration(
+      bound.factory({ peerId: this.peerId, binding: bound.identityBinding }),
+      bound.schema,
+    )
+    const { stored } = takeStoredEntries(
+      fresh,
+      readyInfo.replicaFactory,
+      entries,
+      latestStoredLineage(readyInfo.replicaFactory, entries),
+    )
+    readyInfo.replica.resetFromEntirety(fresh.exportEntirety())
+    this.#hooks?.onDocReset?.(docId)
+
+    const input = storeInputFor(
+      docId,
+      stored === undefined
+        ? { kind: "empty" }
+        : { kind: "stored", version: stored },
+    )
+    if (input) dispatch(input)
+  }
+
+  /**
    * The store confirmed a write of `docId`. Called from the `persisted`
    * effect, which runs with the store model already updated.
+   *
+   * This is also how a rebuilt document's gate reopens: the write `hydrated`
+   * owes after a rebuild confirms at once, and the rebuilt version reaches
+   * `ownHigh` or lies on another lineage.
    */
   #confirmed(docId: DocId): void {
     const entry = this.#docCache.get(docId)

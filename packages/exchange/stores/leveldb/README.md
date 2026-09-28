@@ -57,7 +57,7 @@ await store.close() // release the directory, and with it the seat
 
 ### The peer's identity
 
-The store issues the exchange's `peerId`: one seat, kept in the database and reused on every open, so a restarted process is the same peer. `classic-level` locks the directory, so one open store owns it and nothing else can write under the seat.
+The store issues the exchange's `peerId`: one seat, kept in the database and reused on every open, so a restarted process is the same peer. `classic-level` locks the directory, so one open store owns it and nothing else can write under the seat. For the same reason a `json` document has one writer here by construction, and the store records none.
 
 ### Store-format check
 

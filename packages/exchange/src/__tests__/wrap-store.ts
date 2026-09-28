@@ -20,13 +20,14 @@ export function wrapStore(
 ): Store {
   return {
     seat: inner.seat,
-    append: (docId, record) => inner.append(docId, record),
+    append: (docId, record, options) => inner.append(docId, record, options),
     loadAll: docId => inner.loadAll(docId),
     mark: docId => inner.mark(docId),
-    compact: (docId, records, through) =>
-      inner.compact(docId, records, through),
+    compact: (docId, records, through, options) =>
+      inner.compact(docId, records, through, options),
     delete: docId => inner.delete(docId),
     currentMeta: docId => inner.currentMeta(docId),
+    writerOf: docId => inner.writerOf(docId),
     listDocIds: prefix => inner.listDocIds(prefix),
     close: () => inner.close(),
     ...overrides,

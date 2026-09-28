@@ -14,6 +14,8 @@ You also need a SQLite binding of your choice — this package has **zero opinio
 
 **A SQLite database has one owner.** The adapter owns it until it closes: `fromBetterSqlite3` and `fromBunSqlite` lock the file exclusively when they wrap the connection, and a second adapter over the same file waits `busyTimeout` (5 s by default) and is then refused, naming the reason. SQLite is an embedded database, owned by one process in nearly every deployment; a fleet of server processes over one database is what [`@kyneta/postgres-store`](../postgres/) is for.
 
+**A `json` document has one writer here by construction**: nothing else can open the database, so the store records no writer and checks none.
+
 **The owner keeps one identity.** The store issues the exchange's `peerId`, a seat kept in the database and reused on every open, so a restarted process is the same peer. Nothing else can write under it while the file is owned, so writes need no further check.
 
 ## Usage

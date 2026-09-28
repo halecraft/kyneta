@@ -15,7 +15,9 @@
 //     Binds an HTMLInputElement or HTMLTextAreaElement to a TextRef.
 //     Local edits flow into the CRDT via batch(); remote edits are
 //     surgically applied via setRangeText() with selection rebasing.
-//     IME composition is handled; undo is intercepted by default.
+//     IME composition is handled; undo is intercepted by default. With
+//     `options.refusal`, the element is read-only while the text refuses
+//     edits, and stays bound.
 //
 // No React imports — this module is framework-agnostic.
 
@@ -169,6 +171,14 @@ export interface AttachOptions {
    *   where CRDT undo is not wired).
    */
   undo?: "prevent" | "browser"
+
+  /**
+   * Why the text refuses edits, or `undefined` when it does not. While its
+   * current value is defined the element is read-only; the binding stays, so
+   * remote changes still arrive. `@kyneta/react`'s `useText` passes
+   * `writeRefusalFeed(textRef)` from `@kyneta/exchange`.
+   */
+  refusal?: HasChangefeed<unknown>
 }
 
 /**
@@ -205,6 +215,17 @@ export function attach(
 ): () => void {
   const undoMode = options?.undo ?? "prevent"
   let composing = false
+
+  // Read-only while refused, on top of whatever the element was already.
+  const ownReadOnly = element.readOnly
+  const refusal = options?.refusal?.[CHANGEFEED]
+  const refused = (): boolean =>
+    refusal !== undefined && refusal.current !== undefined
+  const showRefusal = (): void => {
+    element.readOnly = ownReadOnly || refused()
+  }
+  showRefusal()
+  const stopRefusal = refusal?.subscribe(showRefusal) ?? (() => {})
 
   // Per-attach() identity-typed echo token. Minted fresh per binding so
   // composed adapters / multiple textareas on the same ref don't collide.
@@ -273,6 +294,13 @@ export function attach(
     const oldText = textRef()
     const newText = element.value
     if (oldText === newText) return
+    // An edit that reached a refused element (programmatically, or before
+    // the refusal arrived) would throw in `batch`; put the model's text back
+    // instead, so element and model never disagree.
+    if (refused()) {
+      element.value = oldText
+      return
+    }
 
     const cursor = element.selectionStart ?? newText.length
     const delta = diffText(oldText, newText, cursor)
@@ -353,6 +381,8 @@ export function attach(
 
   return () => {
     unsubscribe()
+    stopRefusal()
+    element.readOnly = ownReadOnly
     element.removeEventListener("input", onInput)
     element.removeEventListener("compositionstart", onCompositionStart)
     element.removeEventListener("compositionend", onCompositionEnd)

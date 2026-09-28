@@ -13,6 +13,10 @@
 // primary-key index. Under a locale collation such as `en_US.utf8`,
 // punctuation is nearly ignored, `'users/alice' < 'users0'` is false, and the
 // scan returns nothing. `validateSchema` refuses a `doc_id` without it.
+//
+// `writer` is the seat that writes a serialized document, recorded by its
+// first authored write: of the seats sharing one storage, at most one authors
+// each serialized document. `NULL` while nobody has claimed it.
 
 import { resolveTables, type TableNames } from "@kyneta/sql-store-core"
 
@@ -28,7 +32,8 @@ export function postgresSchema(tables?: Partial<TableNames>): string {
   const { docMeta, records, storeMeta } = resolveTables({ tables })
   return `CREATE TABLE IF NOT EXISTS ${docMeta} (
   doc_id TEXT COLLATE "${DOC_ID_COLLATION}" PRIMARY KEY,
-  data   JSONB NOT NULL
+  data   JSONB NOT NULL,
+  writer TEXT
 );
 
 CREATE TABLE IF NOT EXISTS ${records} (

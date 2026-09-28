@@ -22,12 +22,23 @@
 
 import { SYNC_AUTHORITATIVE, SYNC_COLLABORATIVE } from "@kyneta/schema"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import { SeatLostError } from "../store/seats.js"
-import type { Store, StoreMeta, StoreRecord } from "../store/store.js"
+import { SeatLostError, WriterRefusedError } from "../store/seats.js"
+import type {
+  Store,
+  StoreMeta,
+  StoreRecord,
+  WriteOptions,
+} from "../store/store.js"
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/** A write that only persists: it claims no document. */
+export const UNAUTHORED: WriteOptions = { authored: false }
+
+/** A write carrying the seat's own operations: it claims the document. */
+export const AUTHORED: WriteOptions = { authored: true }
 
 export const plainMeta: StoreMeta = {
   replicaType: ["plain", 2, 0] as const,
@@ -203,7 +214,7 @@ export function describeStore(
 
     it("append of entry without prior meta throws", async () => {
       await expect(
-        backend.append("doc-1", makeEntryRecord("entirety", "1")),
+        backend.append("doc-1", makeEntryRecord("entirety", "1"), UNAUTHORED),
       ).rejects.toThrow()
     })
 
@@ -213,7 +224,7 @@ export function describeStore(
 
     it("append of meta → currentMeta returns it and listDocIds includes it", async () => {
       const metaRecord = makeMetaRecord()
-      await backend.append("doc-1", metaRecord)
+      await backend.append("doc-1", metaRecord, UNAUTHORED)
 
       const meta = await backend.currentMeta("doc-1")
       expect(meta).toEqual(plainMeta)
@@ -228,8 +239,12 @@ export function describeStore(
     // =======================================================================
 
     it("append of second meta with different schemaHash is last-writer-wins", async () => {
-      await backend.append("doc-1", makeMetaRecord())
-      await backend.append("doc-1", makeMetaRecord({ schemaHash: "00updated" }))
+      await backend.append("doc-1", makeMetaRecord(), UNAUTHORED)
+      await backend.append(
+        "doc-1",
+        makeMetaRecord({ schemaHash: "00updated" }),
+        UNAUTHORED,
+      )
 
       const meta = await backend.currentMeta("doc-1")
       expect(meta).not.toBeNull()
@@ -244,21 +259,23 @@ export function describeStore(
     // =======================================================================
 
     it("append of meta with mismatched replicaType throws", async () => {
-      await backend.append("doc-1", makeMetaRecord())
+      await backend.append("doc-1", makeMetaRecord(), UNAUTHORED)
       await expect(
         backend.append(
           "doc-1",
           makeMetaRecord({ replicaType: ["loro", 1, 0] as const }),
+          UNAUTHORED,
         ),
       ).rejects.toThrow(/replicaType/)
     })
 
     it("append of meta with mismatched syncMode throws", async () => {
-      await backend.append("doc-1", makeMetaRecord())
+      await backend.append("doc-1", makeMetaRecord(), UNAUTHORED)
       await expect(
         backend.append(
           "doc-1",
           makeMetaRecord({ syncMode: SYNC_COLLABORATIVE }),
+          UNAUTHORED,
         ),
       ).rejects.toThrow(/syncMode/)
     })
@@ -274,10 +291,10 @@ export function describeStore(
       const e2 = makeEntryRecord("since", "2")
       const e3 = makeEntryRecord("since", "3")
 
-      await backend.append("doc-1", meta)
-      await backend.append("doc-1", e1)
-      await backend.append("doc-1", e2)
-      await backend.append("doc-1", e3)
+      await backend.append("doc-1", meta, UNAUTHORED)
+      await backend.append("doc-1", e1, UNAUTHORED)
+      await backend.append("doc-1", e2, UNAUTHORED)
+      await backend.append("doc-1", e3, UNAUTHORED)
 
       const records = await collectAll(backend.loadAll("doc-1"))
       expect(records).toHaveLength(4)
@@ -300,9 +317,9 @@ export function describeStore(
 
     it("mark is null for a document with no records, and grows with appends", async () => {
       expect(await backend.mark("doc-1")).toBeNull()
-      await backend.append("doc-1", makeMetaRecord())
+      await backend.append("doc-1", makeMetaRecord(), UNAUTHORED)
       const first = await backend.mark("doc-1")
-      await backend.append("doc-1", makeEntryRecord("since", "1"))
+      await backend.append("doc-1", makeEntryRecord("since", "1"), UNAUTHORED)
       const second = await backend.mark("doc-1")
       expect(first).not.toBeNull()
       expect(second).not.toBeNull()
@@ -311,18 +328,18 @@ export function describeStore(
     })
 
     it("compact swaps only what is at or before the mark", async () => {
-      await backend.append("doc-1", makeMetaRecord())
-      await backend.append("doc-1", makeEntryRecord("since", "1"))
-      await backend.append("doc-1", makeEntryRecord("since", "2"))
+      await backend.append("doc-1", makeMetaRecord(), UNAUTHORED)
+      await backend.append("doc-1", makeEntryRecord("since", "1"), UNAUTHORED)
+      await backend.append("doc-1", makeEntryRecord("since", "2"), UNAUTHORED)
       const through = await backend.mark("doc-1")
       // Appended after the mark: another writer's, which the compaction never
       // read.
       const later = makeEntryRecord("since", "3")
-      await backend.append("doc-1", later)
+      await backend.append("doc-1", later, UNAUTHORED)
 
       const meta = makeMetaRecord()
       const collapsed = makeEntryRecord("entirety", "2")
-      await backend.compact("doc-1", [meta, collapsed], through)
+      await backend.compact("doc-1", [meta, collapsed], through, UNAUTHORED)
 
       const records = await collectAll(backend.loadAll("doc-1"))
       expect(records).toEqual([later, meta, collapsed])
@@ -330,10 +347,10 @@ export function describeStore(
 
     it("compact with no mark only appends", async () => {
       const first = makeMetaRecord()
-      await backend.compact("doc-1", [first], null)
+      await backend.compact("doc-1", [first], null, UNAUTHORED)
       const meta = makeMetaRecord()
       const entry = makeEntryRecord("entirety", "1")
-      await backend.compact("doc-1", [meta, entry], null)
+      await backend.compact("doc-1", [meta, entry], null, UNAUTHORED)
 
       const records = await collectAll(backend.loadAll("doc-1"))
       expect(records).toEqual([first, meta, entry])
@@ -341,18 +358,19 @@ export function describeStore(
     })
 
     it("compact without a meta record in the batch throws", async () => {
-      await backend.append("doc-1", makeMetaRecord())
+      await backend.append("doc-1", makeMetaRecord(), UNAUTHORED)
       await expect(
         backend.compact(
           "doc-1",
           [makeEntryRecord("entirety", "1")],
           await backend.mark("doc-1"),
+          UNAUTHORED,
         ),
       ).rejects.toThrow()
     })
 
     it("compact updates materialized index from last meta in batch", async () => {
-      await backend.append("doc-1", makeMetaRecord())
+      await backend.append("doc-1", makeMetaRecord(), UNAUTHORED)
 
       const metaA = makeMetaRecord({ schemaHash: "hash-a" })
       const metaB = makeMetaRecord({ schemaHash: "hash-b" })
@@ -362,6 +380,7 @@ export function describeStore(
         "doc-1",
         [metaA, entry, metaB],
         await backend.mark("doc-1"),
+        UNAUTHORED,
       )
 
       const meta = await backend.currentMeta("doc-1")
@@ -376,9 +395,13 @@ export function describeStore(
     // =======================================================================
 
     it("delete removes stream and index", async () => {
-      await backend.append("doc-1", makeMetaRecord())
-      await backend.append("doc-1", makeEntryRecord("entirety", "1"))
-      await backend.append("doc-1", makeEntryRecord("since", "2"))
+      await backend.append("doc-1", makeMetaRecord(), UNAUTHORED)
+      await backend.append(
+        "doc-1",
+        makeEntryRecord("entirety", "1"),
+        UNAUTHORED,
+      )
+      await backend.append("doc-1", makeEntryRecord("since", "2"), UNAUTHORED)
 
       await backend.delete("doc-1")
 
@@ -394,9 +417,9 @@ export function describeStore(
     // =======================================================================
 
     it("listDocIds(prefix) filters correctly", async () => {
-      await backend.append("users/alice", makeMetaRecord())
-      await backend.append("users/bob", makeMetaRecord())
-      await backend.append("posts/first", makeMetaRecord())
+      await backend.append("users/alice", makeMetaRecord(), UNAUTHORED)
+      await backend.append("users/bob", makeMetaRecord(), UNAUTHORED)
+      await backend.append("posts/first", makeMetaRecord(), UNAUTHORED)
 
       const userDocs = await collectAll(backend.listDocIds("users/"))
       expect(userDocs.sort()).toEqual(["users/alice", "users/bob"])
@@ -429,7 +452,8 @@ export function describeStore(
         "100_other",
         "100xyz",
       ]
-      for (const id of ids) await backend.append(id, makeMetaRecord())
+      for (const id of ids)
+        await backend.append(id, makeMetaRecord(), UNAUTHORED)
 
       for (const prefix of ["users/", "Users/", "100%", "100_", "users", ""]) {
         const listed = await collectAll(backend.listDocIds(prefix))
@@ -444,9 +468,9 @@ export function describeStore(
     // =======================================================================
 
     it("append after compact produces correct ordering", async () => {
-      await backend.append("doc-1", makeMetaRecord())
-      await backend.append("doc-1", makeEntryRecord("since", "1"))
-      await backend.append("doc-1", makeEntryRecord("since", "2"))
+      await backend.append("doc-1", makeMetaRecord(), UNAUTHORED)
+      await backend.append("doc-1", makeEntryRecord("since", "1"), UNAUTHORED)
+      await backend.append("doc-1", makeEntryRecord("since", "2"), UNAUTHORED)
 
       // Compaction collapses to meta + one entry
       const snapshot = makeMetaRecord()
@@ -455,12 +479,13 @@ export function describeStore(
         "doc-1",
         [snapshot, collapsed, makeEntryRecord("since", "3a")],
         await backend.mark("doc-1"),
+        UNAUTHORED,
       )
 
       // An append after the compaction must not overwrite what it wrote, even
       // when it wrote more records than it deleted.
       const delta = makeEntryRecord("since", "4")
-      await backend.append("doc-1", delta)
+      await backend.append("doc-1", delta, UNAUTHORED)
 
       const records = await collectAll(backend.loadAll("doc-1"))
       expect(
@@ -473,13 +498,17 @@ export function describeStore(
     // =======================================================================
 
     it("docs with overlapping name prefixes are isolated", async () => {
-      await backend.append("doc", makeMetaRecord())
-      await backend.append("doc-extra", makeMetaRecord())
-      await backend.append("doc2", makeMetaRecord())
+      await backend.append("doc", makeMetaRecord(), UNAUTHORED)
+      await backend.append("doc-extra", makeMetaRecord(), UNAUTHORED)
+      await backend.append("doc2", makeMetaRecord(), UNAUTHORED)
 
-      await backend.append("doc", makeEntryRecord("entirety", "a"))
-      await backend.append("doc-extra", makeEntryRecord("entirety", "b"))
-      await backend.append("doc2", makeEntryRecord("entirety", "c"))
+      await backend.append("doc", makeEntryRecord("entirety", "a"), UNAUTHORED)
+      await backend.append(
+        "doc-extra",
+        makeEntryRecord("entirety", "b"),
+        UNAUTHORED,
+      )
+      await backend.append("doc2", makeEntryRecord("entirety", "c"), UNAUTHORED)
 
       // loadAll for "doc" must not include records from "doc-extra" or "doc2"
       const docRecords = await collectAll(backend.loadAll("doc"))
@@ -502,11 +531,11 @@ export function describeStore(
     // =======================================================================
 
     it("append + loadAll round-trips binary (Uint8Array) payloads", async () => {
-      await backend.append("doc-1", makeMetaRecord())
+      await backend.append("doc-1", makeMetaRecord(), UNAUTHORED)
 
       const bytes = new Uint8Array([0x00, 0x01, 0x02, 0xff, 0xfe, 0xfd])
       const entry = makeBinaryEntryRecord("entirety", "bin-1", bytes)
-      await backend.append("doc-1", entry)
+      await backend.append("doc-1", entry, UNAUTHORED)
 
       const records = await collectAll(backend.loadAll("doc-1"))
       const entries = records.filter(r => r.kind === "entry")
@@ -525,7 +554,7 @@ export function describeStore(
     })
 
     it("append + loadAll round-trips mixed JSON and binary entries", async () => {
-      await backend.append("doc-1", makeMetaRecord())
+      await backend.append("doc-1", makeMetaRecord(), UNAUTHORED)
 
       const jsonEntry = makeEntryRecord("entirety", "v1")
       const binaryEntry = makeBinaryEntryRecord(
@@ -534,8 +563,8 @@ export function describeStore(
         new Uint8Array([10, 20, 30]),
       )
 
-      await backend.append("doc-1", jsonEntry)
-      await backend.append("doc-1", binaryEntry)
+      await backend.append("doc-1", jsonEntry, UNAUTHORED)
+      await backend.append("doc-1", binaryEntry, UNAUTHORED)
 
       const records = await collectAll(backend.loadAll("doc-1"))
       const entries = records.filter(r => r.kind === "entry")
@@ -561,8 +590,12 @@ export function describeStore(
     // `faultFactory` get the stronger property check below.
 
     it("atomic append — meta+record writes commit together", async () => {
-      await backend.append("doc-1", makeMetaRecord())
-      await backend.append("doc-1", makeEntryRecord("entirety", "v1"))
+      await backend.append("doc-1", makeMetaRecord(), UNAUTHORED)
+      await backend.append(
+        "doc-1",
+        makeEntryRecord("entirety", "v1"),
+        UNAUTHORED,
+      )
 
       const meta = await backend.currentMeta("doc-1")
       expect(meta).toEqual(plainMeta)
@@ -626,11 +659,11 @@ export function describeStore(
         try {
           const primer = makeMetaRecord({ schemaHash: "primer" })
           const injected = makeMetaRecord({ schemaHash: "injected" })
-          await fault.store.append("doc-1", primer)
+          await fault.store.append("doc-1", primer, UNAUTHORED)
 
           await sweep(
             fault,
-            () => fault.store.append("doc-1", injected),
+            () => fault.store.append("doc-1", injected, UNAUTHORED),
             () =>
               readFresh(fault, async fresh => {
                 expect((await fresh.currentMeta("doc-1"))?.schemaHash).toBe(
@@ -661,8 +694,8 @@ export function describeStore(
         try {
           const meta = makeMetaRecord({ schemaHash: "primer" })
           const entry = makeEntryRecord("since", "1")
-          await fault.store.append("doc-1", meta)
-          await fault.store.append("doc-1", entry)
+          await fault.store.append("doc-1", meta, UNAUTHORED)
+          await fault.store.append("doc-1", entry, UNAUTHORED)
           const through = await fault.store.mark("doc-1")
           const compacted = [
             makeMetaRecord({ schemaHash: "injected" }),
@@ -671,7 +704,7 @@ export function describeStore(
 
           await sweep(
             fault,
-            () => fault.store.compact("doc-1", compacted, through),
+            () => fault.store.compact("doc-1", compacted, through, UNAUTHORED),
             () =>
               readFresh(fault, async fresh => {
                 expect((await fresh.currentMeta("doc-1"))?.schemaHash).toBe(
@@ -731,19 +764,34 @@ export function describeStore(
     it("a closed store refuses every operation", async () => {
       await withStorage(async open => {
         const store = await open()
-        await store.append("doc-1", makeMetaRecord())
+        await store.append("doc-1", makeMetaRecord(), UNAUTHORED)
         await store.close()
-        await expect(store.append("doc-1", makeMetaRecord())).rejects.toThrow()
+        await expect(
+          store.append("doc-1", makeMetaRecord(), UNAUTHORED),
+        ).rejects.toThrow()
         await expect(collectAll(store.loadAll("doc-1"))).rejects.toThrow()
         await expect(store.mark("doc-1")).rejects.toThrow()
         await expect(
-          store.compact("doc-1", [makeMetaRecord()], null),
+          store.compact("doc-1", [makeMetaRecord()], null, UNAUTHORED),
         ).rejects.toThrow()
         await expect(store.delete("doc-1")).rejects.toThrow()
         await expect(store.currentMeta("doc-1")).rejects.toThrow()
+        await expect(store.writerOf("doc-1")).rejects.toThrow()
         await expect(collectAll(store.listDocIds())).rejects.toThrow()
       })
     })
+
+    if (seats.kind !== "pooled") {
+      it("records no writer, whether or not a write is authored", async () => {
+        await withStorage(async open => {
+          const store = await open()
+          await store.append("doc-1", makeMetaRecord(), AUTHORED)
+          await store.append("doc-1", makeEntryRecord("since", "1"), AUTHORED)
+          await store.compact("doc-1", [makeMetaRecord()], null, AUTHORED)
+          expect(await store.writerOf("doc-1")).toBeNull()
+        })
+      })
+    }
 
     if (seats.kind === "owned") {
       it("a reopen holds the same seat", async () => {
@@ -811,8 +859,8 @@ export function describeStore(
       it("a store whose seat was taken again cannot write, and changes nothing", async () => {
         await withStorage(async open => {
           const stale = await open()
-          await stale.append("doc-1", makeMetaRecord())
-          await stale.append("doc-1", makeEntryRecord("since", "1"))
+          await stale.append("doc-1", makeMetaRecord(), UNAUTHORED)
+          await stale.append("doc-1", makeEntryRecord("since", "1"), UNAUTHORED)
           const through = await stale.mark("doc-1")
 
           await abandon(stale)
@@ -821,13 +869,14 @@ export function describeStore(
           const before = await collectAll(next.loadAll("doc-1"))
 
           await expect(
-            stale.append("doc-1", makeEntryRecord("since", "2")),
+            stale.append("doc-1", makeEntryRecord("since", "2"), UNAUTHORED),
           ).rejects.toBeInstanceOf(SeatLostError)
           await expect(
             stale.compact(
               "doc-1",
               [makeMetaRecord(), makeEntryRecord("entirety", "2")],
               through,
+              UNAUTHORED,
             ),
           ).rejects.toBeInstanceOf(SeatLostError)
           await expect(stale.delete("doc-1")).rejects.toBeInstanceOf(
@@ -836,6 +885,122 @@ export function describeStore(
 
           expect(await collectAll(next.loadAll("doc-1"))).toEqual(before)
           expect(await next.currentMeta("doc-1")).toEqual(plainMeta)
+        })
+      })
+    }
+
+    // Of the seats sharing a pooled storage, at most one authors each
+    // serialized document, and the storage records which one.
+    if (seats.kind === "pooled") {
+      const { abandon } = seats
+
+      /** `store`'s write of `docId`'s first records, authored or not. */
+      const seed = async (store: Store, options = AUTHORED): Promise<void> => {
+        await store.append("doc-1", makeMetaRecord(), options)
+        await store.append("doc-1", makeEntryRecord("since", "1"), options)
+      }
+
+      it("an authored write claims the document for its seat", async () => {
+        await withStorage(async open => {
+          const writer = await open()
+          const other = await open()
+          expect(await other.writerOf("doc-1")).toBeNull()
+          await seed(writer)
+          expect(await writer.writerOf("doc-1")).toBe(writer.seat.peerId)
+          expect(await other.writerOf("doc-1")).toBe(writer.seat.peerId)
+        })
+      })
+
+      it("another seat's authored writes are refused and change nothing", async () => {
+        await withStorage(async open => {
+          const writer = await open()
+          const other = await open()
+          await seed(writer)
+          const before = await collectAll(writer.loadAll("doc-1"))
+
+          const refusal = await other
+            .append("doc-1", makeEntryRecord("since", "2"), AUTHORED)
+            .then(
+              () => undefined,
+              (error: unknown) => error,
+            )
+          expect(refusal).toBeInstanceOf(WriterRefusedError)
+          expect((refusal as WriterRefusedError).writer).toBe(
+            writer.seat.peerId,
+          )
+          await expect(
+            other.compact(
+              "doc-1",
+              [makeMetaRecord(), makeEntryRecord("entirety", "2")],
+              await other.mark("doc-1"),
+              AUTHORED,
+            ),
+          ).rejects.toBeInstanceOf(WriterRefusedError)
+
+          expect(await collectAll(writer.loadAll("doc-1"))).toEqual(before)
+          expect(await writer.writerOf("doc-1")).toBe(writer.seat.peerId)
+        })
+      })
+
+      it("another seat's unauthored writes succeed and keep the claim", async () => {
+        await withStorage(async open => {
+          const writer = await open()
+          const other = await open()
+          await seed(writer)
+          await other.append("doc-1", makeEntryRecord("since", "2"), UNAUTHORED)
+          await other.compact(
+            "doc-1",
+            [makeMetaRecord(), makeEntryRecord("entirety", "2")],
+            await other.mark("doc-1"),
+            UNAUTHORED,
+          )
+          expect(await writer.writerOf("doc-1")).toBe(writer.seat.peerId)
+          await writer.append("doc-1", makeEntryRecord("since", "3"), AUTHORED)
+        })
+      })
+
+      it("another seat cannot delete a claimed document; its writer can, which clears the claim", async () => {
+        await withStorage(async open => {
+          const writer = await open()
+          const other = await open()
+          await seed(writer)
+          await expect(other.delete("doc-1")).rejects.toBeInstanceOf(
+            WriterRefusedError,
+          )
+          expect(await writer.currentMeta("doc-1")).toEqual(plainMeta)
+
+          await writer.delete("doc-1")
+          expect(await other.writerOf("doc-1")).toBeNull()
+          await seed(other)
+          expect(await writer.writerOf("doc-1")).toBe(other.seat.peerId)
+        })
+      })
+
+      it("any seat can delete a document nobody claimed", async () => {
+        await withStorage(async open => {
+          const first = await open()
+          const other = await open()
+          await seed(first, UNAUTHORED)
+          await other.delete("doc-1")
+          expect(await first.currentMeta("doc-1")).toBeNull()
+        })
+      })
+
+      it("the writer seat, taken again after its holder died, may author", async () => {
+        await withStorage(async open => {
+          const writer = await open()
+          await seed(writer)
+          await abandon(writer)
+
+          const next = await open()
+          expect(next.seat.peerId).toBe(writer.seat.peerId)
+          expect(next.seat).toMatchObject({ kind: "pooled" })
+          if (next.seat.kind !== "pooled" || writer.seat.kind !== "pooled") {
+            return
+          }
+          expect(next.seat.fence).toBeGreaterThan(writer.seat.fence)
+          await next.append("doc-1", makeEntryRecord("since", "2"), AUTHORED)
+          expect(await next.writerOf("doc-1")).toBe(next.seat.peerId)
         })
       })
     }
@@ -851,11 +1016,19 @@ export function describeStore(
       await withStorage(async open => {
         const first = await open()
         const second = await open()
-        await first.append("doc-1", makeMetaRecord())
+        await first.append("doc-1", makeMetaRecord(), UNAUTHORED)
         await Promise.all(
           Array.from({ length: 10 }, (_, i) => [
-            first.append("doc-1", makeEntryRecord("since", `a${i}`)),
-            second.append("doc-1", makeEntryRecord("since", `b${i}`)),
+            first.append(
+              "doc-1",
+              makeEntryRecord("since", `a${i}`),
+              UNAUTHORED,
+            ),
+            second.append(
+              "doc-1",
+              makeEntryRecord("since", `b${i}`),
+              UNAUTHORED,
+            ),
           ]).flat(),
         )
         for (const store of [first, second]) {
@@ -874,15 +1047,20 @@ export function describeStore(
       await withStorage(async open => {
         const first = await open()
         const second = await open()
-        await first.append("doc-1", makeMetaRecord())
-        await first.append("doc-1", makeEntryRecord("since", "1"))
+        await first.append("doc-1", makeMetaRecord(), UNAUTHORED)
+        await first.append("doc-1", makeEntryRecord("since", "1"), UNAUTHORED)
         const through = await first.mark("doc-1")
-        await second.append("doc-1", makeEntryRecord("since", "theirs"))
+        await second.append(
+          "doc-1",
+          makeEntryRecord("since", "theirs"),
+          UNAUTHORED,
+        )
 
         await first.compact(
           "doc-1",
           [makeMetaRecord(), makeEntryRecord("entirety", "whole")],
           through,
+          UNAUTHORED,
         )
 
         const loaded = versions(await collectAll(second.loadAll("doc-1")))
@@ -894,19 +1072,21 @@ export function describeStore(
       await withStorage(async open => {
         const first = await open()
         const second = await open()
-        await first.append("doc-1", makeMetaRecord())
-        await first.append("doc-1", makeEntryRecord("since", "1"))
+        await first.append("doc-1", makeMetaRecord(), UNAUTHORED)
+        await first.append("doc-1", makeEntryRecord("since", "1"), UNAUTHORED)
         const through = await first.mark("doc-1")
 
         await first.compact(
           "doc-1",
           [makeMetaRecord(), makeEntryRecord("entirety", "first")],
           through,
+          UNAUTHORED,
         )
         await second.compact(
           "doc-1",
           [makeMetaRecord(), makeEntryRecord("entirety", "second")],
           through,
+          UNAUTHORED,
         )
 
         const loaded = versions(await collectAll(first.loadAll("doc-1")))
@@ -925,16 +1105,18 @@ export function describeStore(
       it("writes in one namespace are not visible in the other", async () => {
         const pair = await isolationFactory()
         try {
-          await pair.storeA.append("doc-1", makeMetaRecord())
+          await pair.storeA.append("doc-1", makeMetaRecord(), UNAUTHORED)
           await pair.storeA.append(
             "doc-1",
             makeEntryRecord("entirety", "from-A"),
+            UNAUTHORED,
           )
 
-          await pair.storeB.append("doc-1", makeMetaRecord())
+          await pair.storeB.append("doc-1", makeMetaRecord(), UNAUTHORED)
           await pair.storeB.append(
             "doc-1",
             makeEntryRecord("entirety", "from-B"),
+            UNAUTHORED,
           )
 
           const recordsA = await collectAll(pair.storeA.loadAll("doc-1"))

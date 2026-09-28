@@ -12,11 +12,14 @@
 //
 // Losing the store's seat (`seat-lost`) is final and store-wide: every later
 // write would fail the same way, so the model becomes terminal and asks for
-// nothing more.
+// nothing more. A write refused because another seat writes the document
+// (`writer-refused`) ends only that document's tracking, and asks the
+// executor to `rebuild` it from storage.
 //
 // Every transition is pure: new Map for each model, no mutation.
 
 import type { DocId } from "@kyneta/transport"
+import type { WriterRefusedError } from "./seats.js"
 
 // ---------------------------------------------------------------------------
 // Program — local definition matching @kyneta/machine's Program type.
@@ -104,6 +107,11 @@ export type StoreInput =
   | { type: "write-failed"; docId: DocId; error: unknown }
   /** A write of `docId` found the store's seat claimed by another writer. */
   | { type: "seat-lost"; docId: DocId; error: unknown }
+  /**
+   * An authored write of `docId` was refused: another seat of the storage is
+   * the serialized document's writer.
+   */
+  | { type: "writer-refused"; docId: DocId; error: WriterRefusedError }
 
 // ---------------------------------------------------------------------------
 // StoreEffect — data effects interpreted by the Runtime executor
@@ -133,6 +141,11 @@ export type StoreEffect =
   | { type: "persist-delete"; docId: DocId }
   /** The seat is lost: nothing more will be written, or retried. */
   | { type: "seat-lost" }
+  /**
+   * Replace the document with what the store holds, discarding the refused
+   * write, and report back with `hydrated` (or `register`).
+   */
+  | { type: "rebuild"; docId: DocId; error: WriterRefusedError }
   | {
       type: "store-error"
       docId: DocId
@@ -315,6 +328,24 @@ export const storeProgram: Program<StoreInput, StoreModel, StoreEffect> = {
           return [withDoc(model, msg.docId, phase), errorEffect, retry]
         }
         return [withDoc(model, msg.docId, phase), errorEffect, ...effects]
+      }
+
+      case "writer-refused": {
+        // Not a failed write: retrying it would retry a write that is not
+        // this seat's to make. The document stops being tracked, owed write
+        // included, until the rebuild reports what the store holds; a write
+        // still in flight then finds no phase and is ignored.
+        const errorEffect: StoreEffect = {
+          type: "store-error",
+          docId: msg.docId,
+          operation: "write",
+          error: msg.error,
+        }
+        return [
+          withDoc(model, msg.docId, null),
+          { type: "rebuild", docId: msg.docId, error: msg.error },
+          errorEffect,
+        ]
       }
 
       case "seat-lost": {

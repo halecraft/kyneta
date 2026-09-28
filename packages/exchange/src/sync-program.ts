@@ -184,6 +184,12 @@ export type SyncInput =
    * now.
    */
   | { type: "sync/doc-advanced"; docId: DocId; version: string }
+  /**
+   * The document's state was replaced locally by what its store holds, at
+   * `version`, discarding operations peers may have sent: what we told them
+   * we hold of theirs no longer stands.
+   */
+  | { type: "sync/doc-reset"; docId: DocId; version: string }
   | { type: "sync/doc-delete"; docId: DocId; event?: DocChange }
   | { type: "sync/doc-dismiss"; docId: DocId; event?: DocChange }
   | {
@@ -948,6 +954,8 @@ export function createSyncUpdate(
         return handleDocDefer(input, model, canShare)
       case "sync/doc-advanced":
         return handleDocAdvanced(input, model, canShare)
+      case "sync/doc-reset":
+        return handleDocReset(input, model, canShare)
       case "sync/doc-delete":
         return handleDocDelete(input, model)
       case "sync/doc-dismiss":
@@ -1246,6 +1254,43 @@ function handleDocAdvanced(
   // write through its drain and a compaction's merge by the compaction.
   // State-advanced reports what the network moved.
   return buildPush(msg.docId, { ...model, documents }, canShare)
+}
+
+/**
+ * Ask every peer of the document again, from the replaced state. The reset
+ * may have discarded operations a peer sent, and our next interest would
+ * quote `theirVersionWeHold`, claiming them, so the peer would answer from
+ * past them. Clearing it makes each interest quote only our version, and the
+ * peer answers with everything we lack.
+ */
+function handleDocReset(
+  msg: Extract<SyncInput, { type: "sync/doc-reset" }>,
+  model: SyncModel,
+  canShare: SyncPredicate,
+): [SyncModel, ...SyncEffect[]] {
+  const docEntry = model.documents.get(msg.docId)
+  if (!docEntry) return [model]
+  const entry: DocEntry = { ...docEntry, version: msg.version }
+  const documents = new Map(model.documents)
+  documents.set(msg.docId, entry)
+
+  let next: SyncModel = { ...model, documents }
+  for (const [peerId, peer] of model.peers) {
+    if (!peer.docSyncStates.has(msg.docId)) continue
+    next = setPeerDocState(next, peerId, msg.docId, {
+      theirVersionWeHold: undefined,
+    })
+  }
+  const asked = filterPeersByShare(
+    model,
+    getSyncedPeers(model, msg.docId),
+    msg.docId,
+    canShare,
+  )
+  return [
+    next,
+    ...asked.map(peerId => interestTo(next, peerId, msg.docId, entry, false)),
+  ]
 }
 
 function handleDocDelete(

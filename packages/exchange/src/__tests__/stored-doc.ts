@@ -9,6 +9,7 @@ import {
 import {
   makeMetaRecord,
   makePlainEntirety,
+  UNAUTHORED,
 } from "../testing/store-conformance.js"
 
 /** A store holding plain document `doc-1` as `state`, written whole. */
@@ -17,7 +18,7 @@ export async function seedStoredDoc(
 ): Promise<InMemoryStoreData> {
   const sharedData: InMemoryStoreData = createInMemoryStoreData()
   const backend = new InMemoryStore(sharedData)
-  await backend.append("doc-1", makeMetaRecord())
-  await backend.append("doc-1", makePlainEntirety(state))
+  await backend.append("doc-1", makeMetaRecord(), UNAUTHORED)
+  await backend.append("doc-1", makePlainEntirety(state), UNAUTHORED)
   return sharedData
 }

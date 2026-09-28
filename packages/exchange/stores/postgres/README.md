@@ -40,6 +40,8 @@ The store issues the exchange's `peerId`, a **seat** from a pool kept in `kyneta
 
 Each store holds its seat with a session-level advisory lock on a **connection of its own**, checked out of the pool (or, with `fromClient`, the client itself) and kept until `close()`. Postgres releases the lock when that connection ends, so a crashed process frees its seat. Size your pool for one extra connection per open store. Writes go through other connections, so each write checks, in its own transaction, that no other store has claimed the seat since; if one has (the seat's connection died while the process ran), every write fails with `SeatLostError` and nothing more is written or sent.
 
+**Only one process writes each `json` document.** The store records, in `kyneta_doc_meta.writer`, the seat whose write first carried its own changes, and refuses every other process's: a process that loads a document another writes throws on its first write, and `writeRefusal(doc)` from `@kyneta/exchange` says why. A restarted writer gets its seat back, so it stays the writer. Loro and Yjs documents are unaffected.
+
 Seat locks use Postgres's two-key advisory lock space, `(hashtext(<store-meta table>), hashtext(peerId))`, and the per-document write locks the one-key space. The two spaces do not overlap, and must not: a seat lock is held for its process's lifetime, so a document whose write lock collided with it would wait until that process ended. If your application takes advisory locks of its own, keep them out of the two-key space with the store-metadata table's `hashtext` as the first key.
 
 ## Schema
@@ -49,7 +51,8 @@ Run [`schema.sql`](./schema.sql) once before constructing the store, or include 
 ```sql
 CREATE TABLE IF NOT EXISTS kyneta_doc_meta (
   doc_id TEXT COLLATE "C" PRIMARY KEY,
-  data   JSONB NOT NULL
+  data   JSONB NOT NULL,
+  writer TEXT
 );
 CREATE TABLE IF NOT EXISTS kyneta_records (
   doc_id  TEXT COLLATE "C" NOT NULL,
@@ -70,6 +73,12 @@ CREATE TABLE IF NOT EXISTS kyneta_store_meta (
 `createPostgresStore` validates all three tables exist and checks the **store format** on open: it stamps a `{ major, minor }` version into `kyneta_store_meta` (row writes — not DDL) and, on a later open, throws `StoreFormatVersionError` for an incompatible major or an unversioned store that already holds documents. No automatic migration is performed. The format is 1.1: `kyneta_store_meta` holds the seat pool under `key = 'seats'`. A 1.0 database opens as one with an empty pool. Adding `kyneta_store_meta` (and the `kyneta_meta` → `kyneta_doc_meta` rename) to an existing deployment is an explicit migration step.
 
 For other table names, `postgresSchema(tables)` returns this DDL with those names.
+
+**`writer` is the seat that writes a serialized document.** The store refuses a doc-meta table without it, and its error gives the migration:
+
+```sql
+ALTER TABLE kyneta_doc_meta ADD COLUMN writer TEXT;
+```
 
 **`doc_id` is `COLLATE "C"`.** Document ids are compared byte by byte: `listDocIds(prefix)` scans a range that is exactly the ids with that prefix only in code-point order, and a locale collation such as `en_US.utf8` (the default almost everywhere) nearly ignores punctuation and returns nothing for a prefix like `users/`. The store refuses a `doc_id` column without `COLLATE "C"`. To migrate an existing deployment:
 

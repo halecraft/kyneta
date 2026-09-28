@@ -66,6 +66,8 @@ const exchange = new Exchange({
 
 The store issues the exchange's `peerId`. Other stores keep one across restarts, under a lock held for the store's lifetime; Prisma pools connections and pins one only inside an interactive transaction, so it cannot hold such a lock. **Every open of a Prisma store is therefore a new peer**: a fresh seat, unique and never reused. The cost is one version-vector entry per process start per CRDT document it writes, and a new peer in every peer list. A `Line` to a Prisma-backed server does not survive the server's restart. If that matters, use [`@kyneta/postgres-store`](../postgres/), which keeps seats across restarts.
 
+**A `json` document's writer is not enforced.** Other stores record the seat that writes each `json` document and refuse any other; a record naming a Prisma seat, which is never held again, would lock the document for good, so this store records nothing. Route each `json` document's writes to one process.
+
 The model accessors default to `prisma.kynetaDocMeta`, `prisma.kynetaRecord`, and `prisma.kynetaStoreMeta` (matching the model names above). To use different model names:
 
 ```ts

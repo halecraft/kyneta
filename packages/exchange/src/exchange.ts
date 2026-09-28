@@ -497,6 +497,9 @@ export class Exchange {
       onDocResumed: docId => {
         this.#synchronizer.resumeDocument(docId)
       },
+      onDocReset: docId => {
+        this.#synchronizer.resetDocument(docId)
+      },
     })
 
     // ── Wire Synchronizer → Runtime (store delta saves) ──

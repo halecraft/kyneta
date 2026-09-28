@@ -132,6 +132,8 @@ The seat lock's `request()` promise settles only when the lock is released, so t
 
 **Without Web Locks** (an insecure origin, an old browser, or `locks: null`), the store warns once and issues a session seat: unique, never stored, never fenced.
 
+**The writer of a serialized document** lives on its `doc_meta` row, as `writer` (absent while unclaimed). Each write transaction reads the row after the fence: an authored `append` or `compact` (`WriteOptions.authored`) records the store's seat when none is recorded, and aborts with `WriterRefusedError` when another seat is; an unauthored write keeps the record; `delete` aborts when another seat is the writer. `writerOf` reads the row. The same transaction serializes two tabs' first claims. Only a pooled seat records anything (see §"Serialized documents: one writer seat per storage" in `packages/exchange/TECHNICAL.md`).
+
 The lock manager is `createIndexedDBStore(name, { locks })`, `navigator.locks` by default: `SeatLocks` is the part of `LockManager` the store uses. The tests pass `FakeLockManager` pages (`src/__tests__/fake-locks.ts`), whose `terminate()` releases a page's locks as the browser does.
 
 ---

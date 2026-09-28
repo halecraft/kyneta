@@ -16,6 +16,7 @@ import {
   type DocId,
   freshPeerIds,
   type OwnedSeat,
+  type PeerId,
   planStoreOpen,
   prefixSuccessor,
   STORE_META_FORMAT_KEY,
@@ -24,6 +25,7 @@ import {
   type StoreMark,
   type StoreMeta,
   type StoreRecord,
+  type WriteOptions,
 } from "@kyneta/exchange"
 import {
   fromRow,
@@ -321,7 +323,11 @@ export class SqliteStore implements Store {
   // Store interface
   // -------------------------------------------------------------------------
 
-  async append(docId: DocId, record: StoreRecord): Promise<void> {
+  async append(
+    docId: DocId,
+    record: StoreRecord,
+    _options: WriteOptions,
+  ): Promise<void> {
     // The meta, the next sequence number and both writes in one transaction:
     // they commit together or not at all.
     this.#db.transaction(() => {
@@ -367,6 +373,7 @@ export class SqliteStore implements Store {
     docId: DocId,
     records: StoreRecord[],
     through: StoreMark | null,
+    _options: WriteOptions,
   ): Promise<void> {
     this.#db.transaction(() => {
       const plan = planCompact(
@@ -426,6 +433,15 @@ export class SqliteStore implements Store {
         docId,
       )
     })
+  }
+
+  /**
+   * Always `null`: an owned database has one writer by construction, so it
+   * records none, and `append` and `compact` ignore their `WriteOptions`.
+   */
+  async writerOf(_docId: DocId): Promise<PeerId | null> {
+    void this.#db // throws once the store is closed
+    return null
   }
 
   async currentMeta(docId: DocId): Promise<StoreMeta | null> {

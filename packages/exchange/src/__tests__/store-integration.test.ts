@@ -39,7 +39,7 @@ import {
 import { sessionSeat } from "../store/seats.js"
 import type { Store, StoreRecord } from "../store/store.js"
 import { whenSettled } from "../sync.js"
-import { collectAll } from "../testing/store-conformance.js"
+import { collectAll, UNAUTHORED } from "../testing/store-conformance.js"
 import { exchangesPerTest, sleep } from "./exchanges.js"
 import { wrapStore } from "./wrap-store.js"
 
@@ -201,9 +201,9 @@ function gatedAppend(inner: Store) {
     reject: (error: unknown) => void
   } | null = null
   const store = wrapStore(inner, {
-    append: async (docId, record) => {
+    append: async (docId, record, options) => {
       if (held) await held.promise
-      return inner.append(docId, record)
+      return inner.append(docId, record, options)
     },
   })
   return {
@@ -419,12 +419,12 @@ describe("a failed compaction", () => {
     const exchange1 = createExchange({
       principal: "server",
       store: wrapStore(gate.store, {
-        compact: async (docId, records, through) => {
+        compact: async (docId, records, through, options) => {
           if (failCompact) {
             failCompact = false
             throw new Error("disk full")
           }
-          return gate.store.compact(docId, records, through)
+          return gate.store.compact(docId, records, through, options)
         },
       }),
       onStoreError: () => {}, // expected here; keep it out of the test output
@@ -476,13 +476,13 @@ function failingFirstWrite(inner: Store): Store {
     return true
   }
   return wrapStore(inner, {
-    append: async (docId, record) => {
+    append: async (docId, record, options) => {
       if (fail()) throw new Error("disk full")
-      return inner.append(docId, record)
+      return inner.append(docId, record, options)
     },
-    compact: async (docId, records, through) => {
+    compact: async (docId, records, through, options) => {
       if (fail()) throw new Error("disk full")
-      return inner.compact(docId, records, through)
+      return inner.compact(docId, records, through, options)
     },
   })
 }
@@ -979,6 +979,9 @@ describe("onStoreError callback", () => {
     // The store-program emits `store-error`. The executor calls onStoreError.
     const failingStore: Store = {
       seat: sessionSeat(),
+      async writerOf() {
+        return null
+      },
       async append() {
         throw new Error("disk full")
       },
@@ -1086,7 +1089,6 @@ describe("several instances over one storage", () => {
   }[] = [
     { name: "yjs", get: r => r.get("doc", yjsLog) },
     { name: "loro", get: r => r.get("doc", loroLog) },
-    { name: "plain", get: r => r.get("doc", plainLog) },
   ]
 
   for (const { name, get } of BACKENDS) {
@@ -1115,6 +1117,29 @@ describe("several instances over one storage", () => {
     })
   }
 
+  it("a compaction by a reader keeps what the writer wrote after it loaded (plain)", async () => {
+    // A plain document has one writer per storage, so the other instance's
+    // records are the writer's, appended after the reader loaded.
+    const sharedData = createInMemoryStoreData()
+    const writer = open(sharedData)
+    const written = writer.get("doc", plainLog) as LogDoc
+    await whenHydrated(written)
+    append(written, "a")
+    await writer.flush()
+
+    const reader = open(sharedData)
+    await whenHydrated(reader.get("doc", plainLog))
+    append(written, "b")
+    await writer.flush()
+
+    await reader.compact("doc")
+
+    const c = open(sharedData)
+    const loaded = c.get("doc", plainLog) as LogDoc
+    await whenHydrated(loaded)
+    expect(loaded.log()).toBe("ab")
+  })
+
   it("a compaction that cannot take everything in appends instead", async () => {
     const sharedData = createInMemoryStoreData()
     const a = open(sharedData)
@@ -1123,11 +1148,15 @@ describe("several instances over one storage", () => {
     append(doc, "a")
     await a.flush()
     // A record this replica cannot read.
-    await createInMemoryStore({ sharedData }).append("doc", {
-      kind: "entry",
-      payload: { kind: "since", encoding: "json", data: "{}" },
-      version: "not a version",
-    })
+    await createInMemoryStore({ sharedData }).append(
+      "doc",
+      {
+        kind: "entry",
+        payload: { kind: "since", encoding: "json", data: "{}" },
+        version: "not a version",
+      },
+      UNAUTHORED,
+    )
     const before = recordsOf(sharedData, "doc")
 
     await a.compact("doc")
@@ -1152,11 +1181,15 @@ describe("several instances over one storage", () => {
     vi.setSystemTime(2_000)
     const later = createDoc(plainLog) as LogDoc
     append(later, "later")
-    await createInMemoryStore({ sharedData }).append("doc", {
-      kind: "entry",
-      payload: exportEntirety(later),
-      version: version(later).serialize(),
-    })
+    await createInMemoryStore({ sharedData }).append(
+      "doc",
+      {
+        kind: "entry",
+        payload: exportEntirety(later),
+        version: version(later).serialize(),
+      },
+      UNAUTHORED,
+    )
     const before = recordsOf(sharedData, "doc")
 
     await a.compact("doc")
@@ -1238,8 +1271,16 @@ describe("several instances over one storage", () => {
 
   it("a compaction pushes what it took in from another instance to peers", async () => {
     // An instance that stored its writes and crashed before sending them
-    // leaves them reachable only through the store.
+    // leaves them reachable only through the store. The writer here has no
+    // transport; the server over the same storage is a reader of the
+    // document, since a plain document has one writer per storage.
     const sharedData = createInMemoryStoreData()
+    const offline = open(sharedData)
+    const writer = offline.get("doc", plainLog) as LogDoc
+    await whenHydrated(writer)
+    append(writer, "a")
+    await offline.flush()
+
     const bridge = new Bridge()
     const server = createExchange({
       principal: "server",
@@ -1250,19 +1291,13 @@ describe("several instances over one storage", () => {
       principal: "peer",
       transports: [createBridgeTransport({ transportId: "peer", bridge })],
     })
-    const doc = server.get("doc", plainLog) as LogDoc
+    await whenHydrated(server.get("doc", plainLog))
     const seen = peer.get("doc", plainLog) as LogDoc
-    await whenHydrated(doc)
-    append(doc, "a")
-    await server.flush()
     await sleep(50)
     expect(seen.log()).toBe("a")
 
-    const crashed = open(sharedData)
-    const writer = crashed.get("doc", plainLog) as LogDoc
-    await whenHydrated(writer)
     append(writer, "b")
-    await crashed.flush()
+    await offline.flush()
 
     await server.compact("doc")
     await sleep(50)

@@ -23,6 +23,7 @@ import {
   type DocId,
   freshPeerIds,
   type OwnedSeat,
+  type PeerId,
   planStoreOpen,
   prefixSuccessor,
   resolveMetaFromBatch,
@@ -34,6 +35,7 @@ import {
   type StoreMeta,
   type StoreRecord,
   validateAppend,
+  type WriteOptions,
 } from "@kyneta/exchange"
 import { ClassicLevel } from "classic-level"
 import { SeqNoTracker } from "./seq-tracker.js"
@@ -302,6 +304,17 @@ export class LevelDBStore implements Store {
   // Store interface
   // -------------------------------------------------------------------------
 
+  /**
+   * Always `null`: an owned directory has one writer by construction, so it
+   * records none, and `append` and `compact` ignore their `WriteOptions`.
+   */
+  async writerOf(_docId: DocId): Promise<PeerId | null> {
+    if (this.#db.status !== "open") {
+      throw new Error("LevelDBStore: the store is closed")
+    }
+    return null
+  }
+
   async currentMeta(docId: DocId): Promise<StoreMeta | null> {
     try {
       const raw = await this.#db.get(docMetaKey(docId))
@@ -312,7 +325,11 @@ export class LevelDBStore implements Store {
     }
   }
 
-  async append(docId: DocId, record: StoreRecord): Promise<void> {
+  async append(
+    docId: DocId,
+    record: StoreRecord,
+    _options: WriteOptions,
+  ): Promise<void> {
     const existingMeta = await this.currentMeta(docId)
 
     const seq = await this.#nextSeq(docId)
@@ -340,6 +357,7 @@ export class LevelDBStore implements Store {
     docId: DocId,
     records: StoreRecord[],
     through: StoreMark | null,
+    _options: WriteOptions,
   ): Promise<void> {
     const existingMeta = await this.currentMeta(docId)
 

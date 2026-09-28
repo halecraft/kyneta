@@ -191,10 +191,10 @@ describe.each(backends)("durable seats (%s)", (_name, bound) => {
     let held: Promise<void> | undefined
     const late: Promise<unknown>[] = []
     const store = wrapStore(inner, {
-      append: async (docId, record) => {
-        if (held === undefined) return inner.append(docId, record)
+      append: async (docId, record, options) => {
+        if (held === undefined) return inner.append(docId, record, options)
         const waiting = held
-        const outcome = waiting.then(() => inner.append(docId, record))
+        const outcome = waiting.then(() => inner.append(docId, record, options))
         late.push(
           outcome.then(
             () => "stored",

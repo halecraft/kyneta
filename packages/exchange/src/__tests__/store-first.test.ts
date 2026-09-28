@@ -26,8 +26,10 @@ import {
 import { Runtime } from "../runtime.js"
 import { whenHydrated } from "../settle.js"
 import {
+  abandonSeat,
   createInMemoryStore,
   createInMemoryStoreData,
+  InMemoryStore,
   type InMemoryStoreData,
 } from "../store/in-memory-store.js"
 import type { Store } from "../store/store.js"
@@ -91,24 +93,31 @@ function open(
   return exchange
 }
 
-/** Stop `exchange` without flushing anything, as a crash would. */
-function crash(exchange: Exchange): void {
+/**
+ * Stop `exchange` without flushing anything, as a crash would, and release
+ * its store's seat, as the platform does when its holder dies.
+ */
+function crash(exchange: Exchange, store: InMemoryStore): void {
   createExchange.forget(exchange)
   exchange.reset()
+  abandonSeat(store)
 }
 
 /** A store whose appends can be held back until released. */
 class HeldStore {
   readonly store: Store
+  /** The store `store` wraps. */
+  readonly inner: InMemoryStore
   #waiting: (() => void)[] | undefined
 
   constructor(sharedData: InMemoryStoreData = freshData()) {
-    const inner = createInMemoryStore({ sharedData })
+    const inner = new InMemoryStore(sharedData)
+    this.inner = inner
     this.store = wrapStore(inner, {
-      append: async (docId, record) => {
+      append: async (docId, record, options) => {
         const waiting = this.#waiting
         if (waiting) await new Promise<void>(resolve => waiting.push(resolve))
-        await inner.append(docId, record)
+        await inner.append(docId, record, options)
       },
     })
   }
@@ -135,14 +144,14 @@ class FlakyStore {
   constructor(sharedData: InMemoryStoreData = freshData()) {
     const inner = createInMemoryStore({ sharedData })
     this.store = wrapStore(inner, {
-      append: async (docId, record) => {
+      append: async (docId, record, options) => {
         this.appends++
         const failing = this.#failing
         if (failing && failing.times > 0) {
           failing.times--
           throw failing.error
         }
-        await inner.append(docId, record)
+        await inner.append(docId, record, options)
       },
     })
   }
@@ -200,7 +209,7 @@ for (const { name, get } of BACKENDS) {
       held.hold()
       append(browser, "B")
       await sleep(30)
-      crash(before)
+      crash(before, held.inner)
 
       const after = createExchange({
         principal: "browser",
@@ -254,9 +263,9 @@ for (const { name, get } of BACKENDS) {
       const bridge = new Bridge()
       const inner = createInMemoryStore({ sharedData: freshData() })
       const slow = wrapStore(inner, {
-        append: async (docId, record) => {
+        append: async (docId, record, options) => {
           await new Promise(resolve => setTimeout(resolve, 20))
-          await inner.append(docId, record)
+          await inner.append(docId, record, options)
         },
       })
       const writerExchange = open("writer", [bridge], { store: slow })

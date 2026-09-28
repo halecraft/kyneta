@@ -273,6 +273,14 @@ batch(doc, (d) => {
 
 A plain (`json.bind`) document backed by stores refuses writes until it has loaded, so render its write controls once `useDocReady(doc)` is `true`. `useText` handles this itself: its element stays read-only until the document has loaded, then shows the loaded text.
 
+A stored `json` document also refuses writes when another tab of the same store writes it: of the tabs sharing a store, one writes each `json` document, and the others read it. `useText` handles this too: its element is read-only while the document refuses writes, and still shows the writer's edits. For any other editor, `useWriteRefusal(doc)` returns the refusal (a `WriterRefusedError` naming the writer) or `undefined`:
+
+<!-- ts-docs-verifier:ignore -->
+```tsx
+const refusal = useWriteRefusal(doc)
+return <input disabled={refusal !== undefined} value={title} onChange={onChange} />
+```
+
 ### Re-exports
 
 `@kyneta/react` re-exports a curated subset so most app code only needs one import:
@@ -298,7 +306,7 @@ const status = useInitialize(doc, d => d.set({ title: "Untitled" }))
 you only need a gate, and `useDocStatus` when you need to tell an empty
 document from one that already has data.
 
-From `@kyneta/exchange`: `Exchange`, `sync`, `whenSettled`, `docStatus`, `initialize`, and types `ExchangeParams`, `SyncRef`, `PeerSyncState`, `Connectivity`, `DocStatus`, `PeerIdentityDetails`, `DocId`.
+From `@kyneta/exchange`: `Exchange`, `WriterRefusedError`, `sync`, `whenSettled`, `docStatus`, `initialize`, and types `ExchangeParams`, `SyncRef`, `PeerSyncState`, `Connectivity`, `DocStatus`, `PeerIdentityDetails`, `DocId`.
 
 ## Architecture
 

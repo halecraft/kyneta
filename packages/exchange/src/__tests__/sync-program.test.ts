@@ -1017,6 +1017,50 @@ describe("sync-program", () => {
       expect(docState(model, "bob")?.theirVersionWeHold).toBe("bob-v7")
     })
 
+    it("a local reset voids what we hold of each peer's, and asks each again from our new version", () => {
+      // The reset discarded operations the peer may have sent. An interest
+      // quoting the old cursor would claim them, and the peer would answer
+      // from past them.
+      const { update, model: before } = importedFromBob()
+      expect(docState(before, "bob")?.theirVersionWeHold).toBe("bob-v7")
+
+      const [model, effects] = applyUpdate(
+        update,
+        { type: "sync/doc-reset", docId: "doc-1", version: "v9" },
+        before,
+      )
+
+      expect(docState(model, "bob")?.theirVersionWeHold).toBeUndefined()
+      expect(docState(model, "bob")?.status).toBe(
+        docState(before, "bob")?.status,
+      )
+      expect(model.documents.get("doc-1")?.version).toBe("v9")
+      expect(effects).toEqual([
+        {
+          type: "send-to-peer",
+          to: "bob",
+          message: {
+            type: "interest",
+            docId: "doc-1",
+            version: "v9",
+            reciprocate: false,
+          },
+        },
+      ])
+    })
+
+    it("a local reset of a document it does not hold changes nothing", () => {
+      const update = makeUpdate()
+      const model = initSync(alice)
+      const [next, effects] = applyUpdate(
+        update,
+        { type: "sync/doc-reset", docId: "doc-1", version: "v9" },
+        model,
+      )
+      expect(next).toBe(model)
+      expect(effects).toEqual([])
+    })
+
     it("an interest without a cursor records the peer's own version", () => {
       const { update, model: before } = importedFromBob()
 
@@ -2543,6 +2587,7 @@ describe("sync-program", () => {
       })
       drive({ type: "sync/doc-advanced", docId: VETOED_DOC, version: "v4" })
       drive({ type: "sync/doc-publishable", docId: VETOED_DOC })
+      drive({ type: "sync/doc-reset", docId: VETOED_DOC, version: "v4a" })
       drive({
         type: "sync/doc-imported",
         docId: VETOED_DOC,

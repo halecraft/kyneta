@@ -17,7 +17,7 @@ import {
   PostgresStore,
   postgresSchema,
 } from "../index.js"
-import { pgTestDatabase, pgTestServer } from "../testing.js"
+import { pgResetTables, pgTestDatabase, pgTestServer } from "../testing.js"
 
 const ENABLED = pgTestServer() !== null
 
@@ -31,7 +31,7 @@ const pool: Pool | null = ENABLED
 
 if (ENABLED && pool !== null) {
   beforeAll(async () => {
-    await pool.query(postgresSchema())
+    await pgResetTables(pool)
   })
 
   afterAll(async () => {
@@ -91,10 +91,7 @@ describeIfEnabled("PostgresStore", () => {
       seats: {
         kind: "pooled",
         storage: async () => {
-          await pool.query(postgresSchema(SEAT_TABLES))
-          await pool.query(
-            `TRUNCATE ${SEAT_TABLES.records}, ${SEAT_TABLES.docMeta}, ${SEAT_TABLES.storeMeta}`,
-          )
+          await pgResetTables(pool, SEAT_TABLES)
           return {
             open: () =>
               PostgresStore.open(fromPool(pool), { tables: SEAT_TABLES }),
@@ -136,12 +133,8 @@ describeIfEnabled("PostgresStore", () => {
           records: "iso_b_records",
           storeMeta: "iso_b_store_meta",
         }
-        await pool.query(postgresSchema(tablesA))
-        await pool.query(postgresSchema(tablesB))
-        await pool.query(`
-          TRUNCATE ${tablesA.records}, ${tablesA.docMeta}, ${tablesA.storeMeta},
-                   ${tablesB.records}, ${tablesB.docMeta}, ${tablesB.storeMeta};
-        `)
+        await pgResetTables(pool, tablesA)
+        await pgResetTables(pool, tablesB)
         const storeA = await PostgresStore.open(fromPool(pool), {
           tables: tablesA,
         })
@@ -180,7 +173,7 @@ describeIfEnabled("PostgresStore", () => {
     }
 
     beforeAll(async () => {
-      await pool.query(postgresSchema(tables))
+      await pgResetTables(pool, tables)
     })
 
     it("concurrent opens take distinct seats, and none waits on another's seat", async () => {
@@ -283,6 +276,31 @@ describeIfEnabled("PostgresStore", () => {
     })
   })
 
+  describe("createPostgresStore — writer column", () => {
+    it("refuses a doc-meta table without `writer`, naming the migration", async () => {
+      const tables = {
+        docMeta: "nowriter_meta",
+        records: "nowriter_records",
+        storeMeta: "nowriter_store_meta",
+      }
+      await pgResetTables(pool, tables)
+      await pool.query(`ALTER TABLE ${tables.docMeta} DROP COLUMN writer`)
+      try {
+        await expect(
+          createPostgresStore(fromPool(pool), { tables }),
+        ).rejects.toThrow(
+          /nowriter_meta.*"writer".*ALTER TABLE nowriter_meta ADD COLUMN writer TEXT;/,
+        )
+      } finally {
+        await pool.query(`
+          DROP TABLE IF EXISTS ${tables.records};
+          DROP TABLE IF EXISTS ${tables.docMeta};
+          DROP TABLE IF EXISTS ${tables.storeMeta};
+        `)
+      }
+    })
+  })
+
   describe("createPostgresStore — doc_id collation", () => {
     it('refuses a doc_id column without COLLATE "C", naming the migration', async () => {
       // Created as schema.sql was before `doc_id` had to be byte-ordered:
@@ -324,7 +342,6 @@ describeIfEnabled("PostgresStore", () => {
       records: "fmt_records",
       storeMeta: "fmt_store_meta",
     }
-    const ddl = postgresSchema(tables)
     const drop = `
       DROP TABLE IF EXISTS ${tables.records};
       DROP TABLE IF EXISTS ${tables.docMeta};
@@ -332,8 +349,7 @@ describeIfEnabled("PostgresStore", () => {
     `
 
     it("stamps a fresh store and refuses an incompatible major", async () => {
-      await pool.query(drop)
-      await pool.query(ddl)
+      await pgResetTables(pool, tables)
       try {
         // The first open stamps the current format.
         const store = await createPostgresStore(fromPool(pool), { tables })

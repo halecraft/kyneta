@@ -31,6 +31,7 @@ Imported by applications to construct the top-level sync graph; by `@kyneta/reac
 - How does compaction interact with sync? → [Compaction and lineage boundaries](#compaction-and-lineage-boundaries)
 - Why is `peerId` issued, and what is a principal? → [Seats and principals](#seats-and-principals)
 - Why does a stored peer keep its `peerId` across restarts, and what stops two tabs sharing one? → [Durable seats](#durable-seats)
+- Why can only one of two tabs write a `json` document? → [Serialized documents: one writer seat per storage](#serialized-documents-one-writer-seat-per-storage)
 - How do reactive `peers` / `documents` collections behave? → [Reactive collections](#reactive-collections)
 - How do I tell an empty document from one that has not loaded? → [Document readiness](#document-readiness--a-conjunction-over-layers)
 - How do I write a document's defaults exactly once? → [Document readiness](#document-readiness--a-conjunction-over-layers)
@@ -532,11 +533,37 @@ Each substrate translates the seat into whatever its CRDT uses to attribute oper
 
 The translation is a hash, `peerNumber` from `@kyneta/schema` (53 bits for Yjs, 64 for Loro), so two distinct seats can still collide after it. At 53 bits that takes about 13 million writing peers for a 1% chance. See §"Peer identity and when a substrate may claim it" in `packages/schema/TECHNICAL.md`.
 
-Because a CRDT addresses operations by `(peer, counter)` and the counter restarts at zero on a fresh document, a peer that claims an identity with stored history before loading that history writes to addresses the history already occupies. The merge deduplicates by address and one of the two operations is silently dropped. A session seat has no stored history, but a durable seat will.
+Because a CRDT addresses operations by `(peer, counter)` and the counter restarts at zero on a fresh document, a peer that claims an identity with stored history before loading that history writes to addresses the history already occupies. The merge deduplicates by address and one of the two operations is silently dropped. A session seat has no stored history, but a durable seat has.
 
 So a **store-backed document claims its substrate identity after hydration, not at construction**. `Runtime.createInterpretDoc` takes `beginHydration` from `@kyneta/schema` when a store is configured and calls the returned `adopt()` once the load resolves — before `registerDoc`, so peers never see the transient identity in an announcement. Without a store there is nothing to import and identity is claimed immediately.
 
 One consequence worth knowing: a document written to *before* it has hydrated contributes its early operations under a transient identity, which shows up as one extra version-vector entry that never grows. Waiting for the document to settle avoids it, which the readiness layer already asks for on independent grounds. See §"Peer identity and when a substrate may claim it" in `packages/schema/TECHNICAL.md` for the rule and which backends need it.
+
+## Serialized documents: one writer seat per storage
+
+Source: `src/store/seats.ts` → `planWriter`, `WriterRefusedError`; `src/runtime.ts` → `#becomeReady`, `#authored`, `#rebuild`; `src/persistence.ts` → `writeRefusal`; `src/sync-program.ts` → `handleDocReset`.
+
+A serialized document (`writerModel: "serialized"`: every `json.bind` document) has one identity, its **lineage**, minted by its first authored write, and every write extends it at `(lineage, n + 1)`. Seats give each CRDT writer an identity of its own; they do nothing here, because any writer extends the same lineage. Two seats over one storage that both write one plain document store two different operations at one position, and the next load keeps one of them. Across the network that is already out of contract (see "Plain lineage vectors" below): two peers authoring one authoritative document is misuse, settled by the reset machinery. The storage is new ground: several seats of one deployment share it, tabs of a browser profile or processes of a server fleet.
+
+> **Of the seats sharing one storage, at most one authors each serialized document. The storage records which one.**
+
+- **It only takes permission away.** It never makes a Runtime a writer, and decides only between seats that share a storage, which are the same deployment in the same role. A server and its clients never share one. Who may write across the network stays with governance (`canAccept`, `Authority`).
+- **Authorship claims the document, not loading.** The store write carrying a seat's first own operation (`WriteOptions.authored`, set by `#authored` while the document has own writes unconfirmed, `ownHigh`) records the seat as the writer if none is, and is refused (`WriterRefusedError`) if another is. A seat that only reads, or only persists what the network sends, never claims: claiming on load would make a reader tab own a document it never writes, and make a fleet's writer whichever process loaded first.
+- **Loading reads the claim.** `#hydrate` reads `store.writerOf(docId)`. If another seat writes the document, `#becomeReady` calls the substrate's `refuse` after `adopt`, and authored writes throw synchronously from then on. The document still receives and persists what the network sends. A document promoted from a relay is refused the same way: `beginUpgrade` gives it a handle too, and the writer read when the replica loaded stays on the cache entry.
+- **A lost race never leaves the process.** When two seats both loaded an unclaimed document and both wrote, the loser's store write is refused. Under [store-first](#store-first) nothing of it was sent. The executor maps `WriterRefusedError` to the store-program input `writer-refused`, never to `write-failed`, which would retry a write that is not this seat's to make. The program stops tracking the document, owed write included, emits `store-error` once and a `rebuild` effect. `#rebuild`:
+  1. refuses further authored writes;
+  2. reads the store and takes it into a fresh document of the same schema, toward the latest stored lineage. Not into the live replica, which, when both seats extended one lineage from one position, reaches the winner's version and would skip its entries as held. Not into a bare replica, whose entirety omits fields at their defaults, which the reset would then keep;
+  3. replaces the live document with it (`resetFromEntirety`), discarding the refused write;
+  4. calls `onDocReset`, which the Exchange forwards as `sync/doc-reset` (below);
+  5. hands the document back with `hydrated`. The write that owes finds nothing new and confirms at once, and its confirmation reopens the gate: the rebuilt version reaches `ownHigh`, or lies on another lineage. Offers owed meanwhile go out, carrying the winner's state.
+
+  It stops at the read if the document is destroyed meanwhile. The late refusal happens only when both seats wrote before either had claimed; otherwise the loser learns at load.
+- **`sync/doc-reset` voids what we told peers we hold.** A merge that arrived while the rebuild read the store went into the live replica, and the reset discarded it. The sending peer believes we hold it, and our next interest would quote `theirVersionWeHold`, claiming it, so the gap would stay. `sync/doc-reset` clears `theirVersionWeHold` for every peer of the document and sends each synced one an interest quoting only our new version, so each answers with what we lack.
+- **Writership moves only with the seat.** A live Runtime never takes a document over. When the writer seat's holder dies, the seat returns to the pool, and the next Runtime to open takes it (the oldest free seat) and so is the writer. Everything the previous holder sent had been confirmed first, and the fence rejects its late writes, so the new holder's state holds every operation under the lineage.
+- **A refusal is reported by `writeRefusal(doc)`**, and observed through `writeRefusalFeed(doc)`, so a UI can disable editing: `@kyneta/react`'s `useText` keeps its element read-only while it is set, and `useWriteRefusal` gives it to other editors. It is set at load or after a lost race, and kept for the session. It is not a `persistenceError`: a document refused at load never failed a write, and a refused document's unauthored writes succeed.
+- **Deleting is authoring.** `delete` is refused when another seat writes the document. A reader's `destroy()` still evicts the document locally and dismisses it from the sync graph; the writer's stored copy stays, and the refusal goes to `onStoreError`. A document nobody claimed, such as a `Line` inbox, stays deletable by any seat.
+- **Only pooled seats are recorded** (in-memory, IndexedDB, Postgres). An `owned` seat (SQLite, LevelDB) is the storage's only one, so the rule holds by construction. A `session` seat (Prisma, IndexedDB without Web Locks) is never held again, so a record naming it would lock the document for good; the rule is not enforced there, and serialized writes must be routed to one process.
+- **`Line`s never contend.** An outbox is written only by the seat its id names, and a later session on that seat is the same writer; an inbox is only persisted, never authored.
 
 ---
 
@@ -984,7 +1011,7 @@ Source: `src/store/*.ts`, `src/store/store-program.ts`, `src/exchange.ts` → st
 
 A `Store` is a persistence interface this package defines. A Runtime takes one (`ExchangeParams.store`, `RuntimeParams.store`), and an instance is owned by that Runtime, which calls it sequentially per document and writes under its `seat`. Several instances may open one storage: tabs over one IndexedDB database, processes over one Postgres schema. See [Several instances over one storage](#several-instances-over-one-storage).
 
-**`Store.seat`** is the identity the store issues its Runtime, taken when the store opens and released by `close()` or by the platform when the holder dies ([Durable seats](#durable-seats)). A **pooled** seat is fenced: `append`, `compact` and `delete` read the pool inside their own transaction and call `assertSeatHeld`, which throws `SeatLostError`, changing nothing, once another store has claimed the seat. **A closed store refuses every operation.**
+**`Store.seat`** is the identity the store issues its Runtime, taken when the store opens and released by `close()` or by the platform when the holder dies ([Durable seats](#durable-seats)). A **pooled** seat is fenced: `append`, `compact` and `delete` read the pool inside their own transaction and call `assertSeatHeld`, which throws `SeatLostError`, changing nothing, once another store has claimed the seat. A pooled store also records which seat writes each serialized document: an authored `append` or `compact` (`WriteOptions.authored`) claims an unclaimed one and is refused with `WriterRefusedError` for another seat's, checked after the fence, and `writerOf(docId)` reads the record ([Serialized documents](#serialized-documents-one-writer-seat-per-storage)). **A closed store refuses every operation.**
 
 ### How a document becomes ready
 
@@ -994,7 +1021,7 @@ A document's ref is returned at once; loading from the store runs afterwards. `#
 
 1. If the cache no longer holds this entry (destroyed, or destroyed and created again, while it loaded), the latch fails with "destroyed while loading" and nothing else happens. Otherwise the dismissed document would be registered with the Synchronizer again.
 2. The store program learns what the store holds: `storeInputFor(docId, outcome)`, a pure mapping (`stored` → `hydrated`, `empty` → `register`, `none` → nothing).
-3. `adopt()` claims the peer identity (Yjs, Loro) and the right to author (plain), before anyone is told the document has loaded — a listener that writes the moment it is told finds the document writable.
+3. `adopt()` claims the peer identity (Yjs, Loro) and the right to author (plain), before anyone is told the document has loaded — a listener that writes the moment it is told finds the document writable. A serialized document whose stored writer is another seat of the storage is refused instead (`refuse`), and such a listener's write throws; see [Serialized documents: one writer seat per storage](#serialized-documents-one-writer-seat-per-storage).
 4. The latch resolves `loaded`.
 5. `#register` publishes the document to the sync graph, and an interpreted document is wired (`#wire`): its local-update signal marks it dirty for the drain (see [The local-write path](#the-local-write-path)), and its changesets go to the observation hook. `#evict`, which `destroy`, `shutdown` and `reset` go through, unwires it first, so a ref that outlives its document cannot reach whatever is created under its id next.
 
@@ -1028,11 +1055,12 @@ type StoreMark = number
 
 interface Store {
   readonly seat: Seat  // SessionSeat | OwnedSeat | PooledSeat
-  append(docId: DocId, record: StoreRecord): Promise<void>
+  append(docId: DocId, record: StoreRecord, options: WriteOptions): Promise<void>
   loadAll(docId: DocId): AsyncIterable<StoreRecord>
   mark(docId: DocId): Promise<StoreMark | null>
-  compact(docId: DocId, records: StoreRecord[], through: StoreMark | null): Promise<void>
+  compact(docId: DocId, records: StoreRecord[], through: StoreMark | null, options: WriteOptions): Promise<void>
   delete(docId: DocId): Promise<void>
+  writerOf(docId: DocId): Promise<PeerId | null>
   currentMeta(docId: DocId): Promise<StoreMeta | null>
   listDocIds(prefix?: string): AsyncIterable<DocId>
   close(): Promise<void>
@@ -1052,7 +1080,7 @@ A Runtime takes one store. Several instances may open one storage, and the contr
 - **Compaction removes only what its caller has read.** `mark(docId)` is the position of the document's last record; `compact(docId, records, through)` deletes the records at or before `through` and appends `records` after every record that remains, atomically. A compaction takes the mark, reads, takes everything it read into its replica, and deletes through the mark (see [The store-program](#the-store-program)). A record another instance appended after the mark survives; one before it was read and is now held. Two compactions through one mark both append after it, so neither deletes the other's output.
 - **Readers do not depend on record order.** See [How a document becomes ready](#how-a-document-becomes-ready).
 
-The conformance suite's seat section (`describeStore`'s `seats`, one declaration per backend: `pooled` with an `abandon`, `owned` or `session`) checks that every store issues the declared kind; that pooled seats are exclusive, reused, and fenced; that an owned storage reopens with the same seat and refuses a second open; that a closed store refuses every operation; and, for pooled and session backends, interleaved appends and compactions from two instances.
+The conformance suite's seat section (`describeStore`'s `seats`, one declaration per backend: `pooled` with an `abandon`, `owned` or `session`) checks that every store issues the declared kind; that pooled seats are exclusive, reused, and fenced; that an owned storage reopens with the same seat and refuses a second open; that a closed store refuses every operation; for pooled backends, the writer record (an authored write claims, another seat's authored write and delete are refused and change nothing, unauthored writes succeed, and the writer seat taken again after its holder died may author); for owned and session backends, that no writer is recorded; and, for pooled and session backends, interleaved appends and compactions from two instances. `UNAUTHORED` and `AUTHORED` (`@kyneta/exchange/testing`) keep the suite's call sites short.
 
 **A destroyed docId must not be reused.** `destroy` deletes the stored operations, but peers keep theirs, so a document recreated under the id would restart its clocks at 0 under an identity peers still hold. Nothing enforces this yet: `Line.destroy` followed by a new `Line` to the same seat reuses its document ids, so a tombstone needs a design for that case first.
 
@@ -1183,6 +1211,8 @@ Recovery takes one of two shapes, and which one depends on whether anything was 
 | the document's first (`register`) | `unwritten` | a fresh `register` carrying the whole document |
 
 The second exists because a delta is defined relative to a version the store acknowledged, and a first write has none. Without the distinction there is nothing to recompute from, and the document would stay unpersisted until the process restarted — which is what `version: ""` used to cause, by making "no confirmed version" indistinguishable from "a confirmed version" at the type level.
+
+**A refused writer is not a failed write either.** A `WriterRefusedError` becomes `writer-refused`, which stops tracking the one document and asks the executor to `rebuild` it; see [Serialized documents: one writer seat per storage](#serialized-documents-one-writer-seat-per-storage).
 
 **Losing the seat is not a failed write.** A `SeatLostError` becomes `seat-lost`, which makes the model terminal (`seatLost`): it tracks no document and answers every later input with nothing, so no write and no retry follows, and `flush()` and `shutdown()` resolve. It emits `store-error` once, and the executor cancels every retry timer. See [Durable seats](#durable-seats).
 

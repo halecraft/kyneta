@@ -149,10 +149,10 @@ describe("two lineages of a plain document", () => {
     const inner = createInMemoryStore()
     let waiting: (() => void)[] | undefined = []
     const held = wrapStore(inner, {
-      append: async (docId, record) => {
+      append: async (docId, record, options) => {
         const w = waiting
         if (w) await new Promise<void>(resolve => w.push(resolve))
-        await inner.append(docId, record)
+        await inner.append(docId, record, options)
       },
     })
     const bridge = new Bridge()

@@ -21,7 +21,7 @@
 // and the session seats every open issues, though not a real database.
 
 import type { StoreMeta } from "@kyneta/exchange"
-import { describeStore } from "@kyneta/exchange/testing"
+import { describeStore, UNAUTHORED } from "@kyneta/exchange/testing"
 import { SYNC_AUTHORITATIVE } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import { createPrismaStore, PrismaStore } from "../index.js"
@@ -219,12 +219,16 @@ describe("PrismaStore — structural mock", () => {
     const state = freshState()
     const store = await PrismaStore.open({ client: makeMockClient(state) })
 
-    await store.append("doc-1", { kind: "meta", meta: baseMeta })
-    await store.append("doc-1", {
-      kind: "entry",
-      payload: { kind: "entirety", encoding: "json", data: '{"x":1}' },
-      version: "v1",
-    })
+    await store.append("doc-1", { kind: "meta", meta: baseMeta }, UNAUTHORED)
+    await store.append(
+      "doc-1",
+      {
+        kind: "entry",
+        payload: { kind: "entirety", encoding: "json", data: '{"x":1}' },
+        version: "v1",
+      },
+      UNAUTHORED,
+    )
 
     expect(state.txCalls).toBe(2)
     expect(state.metas.size).toBe(1)
@@ -245,7 +249,7 @@ describe("PrismaStore — structural mock", () => {
   it("currentMeta returns a parsed StoreMeta after append", async () => {
     const state = freshState()
     const store = await PrismaStore.open({ client: makeMockClient(state) })
-    await store.append("doc-1", { kind: "meta", meta: baseMeta })
+    await store.append("doc-1", { kind: "meta", meta: baseMeta }, UNAUTHORED)
 
     const meta = await store.currentMeta("doc-1")
     expect(meta).toEqual(baseMeta)
@@ -254,12 +258,16 @@ describe("PrismaStore — structural mock", () => {
   it("delete clears both meta and records", async () => {
     const state = freshState()
     const store = await PrismaStore.open({ client: makeMockClient(state) })
-    await store.append("doc-1", { kind: "meta", meta: baseMeta })
-    await store.append("doc-1", {
-      kind: "entry",
-      payload: { kind: "entirety", encoding: "json", data: "{}" },
-      version: "v1",
-    })
+    await store.append("doc-1", { kind: "meta", meta: baseMeta }, UNAUTHORED)
+    await store.append(
+      "doc-1",
+      {
+        kind: "entry",
+        payload: { kind: "entirety", encoding: "json", data: "{}" },
+        version: "v1",
+      },
+      UNAUTHORED,
+    )
 
     await store.delete("doc-1")
 
@@ -270,17 +278,25 @@ describe("PrismaStore — structural mock", () => {
   it("compact swaps what is at or before the mark, after what remains", async () => {
     const state = freshState()
     const store = await PrismaStore.open({ client: makeMockClient(state) })
-    await store.append("doc-1", { kind: "meta", meta: baseMeta })
-    await store.append("doc-1", {
-      kind: "entry",
-      payload: { kind: "since", encoding: "json", data: "{}" },
-      version: "v1",
-    })
-    await store.append("doc-1", {
-      kind: "entry",
-      payload: { kind: "since", encoding: "json", data: "{}" },
-      version: "v2",
-    })
+    await store.append("doc-1", { kind: "meta", meta: baseMeta }, UNAUTHORED)
+    await store.append(
+      "doc-1",
+      {
+        kind: "entry",
+        payload: { kind: "since", encoding: "json", data: "{}" },
+        version: "v1",
+      },
+      UNAUTHORED,
+    )
+    await store.append(
+      "doc-1",
+      {
+        kind: "entry",
+        payload: { kind: "since", encoding: "json", data: "{}" },
+        version: "v2",
+      },
+      UNAUTHORED,
+    )
 
     const through = await store.mark("doc-1")
     expect(through).toBe(2)
@@ -296,6 +312,7 @@ describe("PrismaStore — structural mock", () => {
         },
       ],
       through,
+      UNAUTHORED,
     )
 
     const records = state.records
@@ -307,7 +324,7 @@ describe("PrismaStore — structural mock", () => {
   it("an append that loses its sequence number to another instance retries", async () => {
     const state = freshState()
     const store = await PrismaStore.open({ client: makeMockClient(state) })
-    await store.append("doc-1", { kind: "meta", meta: baseMeta })
+    await store.append("doc-1", { kind: "meta", meta: baseMeta }, UNAUTHORED)
 
     // Another instance takes seq 1 after this append read the last seq (0).
     state.beforeCreate = () => {
@@ -319,11 +336,15 @@ describe("PrismaStore — structural mock", () => {
         blob: null,
       })
     }
-    await store.append("doc-1", {
-      kind: "entry",
-      payload: { kind: "since", encoding: "json", data: "{}" },
-      version: "v1",
-    })
+    await store.append(
+      "doc-1",
+      {
+        kind: "entry",
+        payload: { kind: "since", encoding: "json", data: "{}" },
+        version: "v1",
+      },
+      UNAUTHORED,
+    )
 
     const seqs = state.records
       .filter(r => r.docId === "doc-1")
@@ -338,9 +359,17 @@ describe("PrismaStore — structural mock", () => {
     const state = freshState()
     const store = await PrismaStore.open({ client: makeMockClient(state) })
 
-    await store.append("users/alice", { kind: "meta", meta: baseMeta })
-    await store.append("Users/Bob", { kind: "meta", meta: baseMeta })
-    await store.append("other", { kind: "meta", meta: baseMeta })
+    await store.append(
+      "users/alice",
+      { kind: "meta", meta: baseMeta },
+      UNAUTHORED,
+    )
+    await store.append(
+      "Users/Bob",
+      { kind: "meta", meta: baseMeta },
+      UNAUTHORED,
+    )
+    await store.append("other", { kind: "meta", meta: baseMeta }, UNAUTHORED)
 
     const matched: string[] = []
     for await (const id of store.listDocIds("users/")) matched.push(id)
@@ -369,7 +398,7 @@ describe("PrismaStore — structural mock", () => {
       storeMetaModel: "app_store_meta",
     })
 
-    await store.append("doc-1", { kind: "meta", meta: baseMeta })
+    await store.append("doc-1", { kind: "meta", meta: baseMeta }, UNAUTHORED)
     expect(state.metas.size).toBe(1)
   })
 
@@ -392,17 +421,25 @@ describe("PrismaStore — structural mock", () => {
     const store = await PrismaStore.open({ client: base })
 
     // First append: tx #1 — succeeds, schemaHash="primer" persists.
-    await store.append("doc-1", {
-      kind: "meta",
-      meta: { ...baseMeta, schemaHash: "primer" },
-    })
+    await store.append(
+      "doc-1",
+      {
+        kind: "meta",
+        meta: { ...baseMeta, schemaHash: "primer" },
+      },
+      UNAUTHORED,
+    )
 
     // Second append: tx #2 — rejects.
     await expect(
-      store.append("doc-1", {
-        kind: "meta",
-        meta: { ...baseMeta, schemaHash: "injected" },
-      }),
+      store.append(
+        "doc-1",
+        {
+          kind: "meta",
+          meta: { ...baseMeta, schemaHash: "injected" },
+        },
+        UNAUTHORED,
+      ),
     ).rejects.toThrow("fault")
 
     // No write happened in tx #2 → state still has the primer's meta.

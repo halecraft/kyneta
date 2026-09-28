@@ -38,6 +38,7 @@ The store issues the exchange's `peerId`, a **seat** from a pool kept in the dat
 - **Insecure origins and old browsers** have no Web Locks (they need a secure context: Chrome 69+, Firefox 96+, Safari 15.4+). The store warns once and issues a fresh seat per open: unique, but a new peer on every load.
 - **Back/forward cache**: a page holding a Web Lock is usually not eligible for it, as is one with an open IndexedDB connection in several engines.
 - **Workers** share an origin's Web Locks with its pages, so a store opened in a worker takes a seat like a tab.
+- **Only one tab writes each `json` document.** The store records, on the document's `doc_meta` row, the seat whose write first carried its own changes, and refuses every other tab's: a tab that loads a document another tab writes throws on its first write, and `writeRefusal(doc)` from `@kyneta/exchange` says why. The writer tab keeps its seat across reloads, so it stays the writer. Loro and Yjs documents are unaffected. Without Web Locks nothing is recorded or checked.
 - **If another tab takes this store's seat** while this page still runs (it happens only when the browser released the lock early), every write fails with `SeatLostError` and nothing more is written or sent. Reload.
 
 ## API

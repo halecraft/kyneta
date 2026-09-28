@@ -9,7 +9,7 @@
 
 import { randomPeerId } from "@kyneta/random"
 import { peerNumber } from "@kyneta/schema"
-import type { PeerId } from "@kyneta/transport"
+import type { DocId, PeerId } from "@kyneta/transport"
 
 /**
  * A fresh id: a Runtime's without a store, or one per open of a store that
@@ -156,4 +156,49 @@ export class SeatLostError extends Error {
     this.name = "SeatLostError"
     this.peerId = seat.peerId
   }
+}
+
+/**
+ * Thrown by a write to a serialized document another seat of the storage
+ * writes, and reported as the document's refusal: of the seats sharing one
+ * storage, at most one authors each serialized document.
+ */
+export class WriterRefusedError extends Error {
+  readonly docId: DocId
+  /** The seat recorded as the document's writer. */
+  readonly writer: PeerId
+
+  constructor(docId: DocId, writer: PeerId) {
+    super(
+      `Store: document '${docId}' is written by seat ${writer}; ` +
+        `a serialized document has one writer per storage`,
+    )
+    this.name = "WriterRefusedError"
+    this.docId = docId
+    this.writer = writer
+  }
+}
+
+/**
+ * The writer to record after a write of `docId` by `seat`, given the one
+ * `recorded`. An authored write claims an unclaimed document; any write keeps
+ * a recorded writer. Throws `WriterRefusedError` for an authored write when
+ * another seat is recorded. Only a pooled seat records a writer.
+ *
+ * A delete is authored: destroying a document is an act on its lineage. So
+ * another seat's document is refused, and an unclaimed one (a `Line` inbox)
+ * stays deletable by any seat.
+ */
+export function planWriter(input: {
+  readonly docId: DocId
+  readonly seat: Seat
+  readonly recorded: PeerId | null
+  readonly authored: boolean
+}): PeerId | null {
+  const { docId, seat, recorded, authored } = input
+  if (seat.kind !== "pooled" || !authored) return recorded
+  if (recorded !== null && recorded !== seat.peerId) {
+    throw new WriterRefusedError(docId, recorded)
+  }
+  return seat.peerId
 }

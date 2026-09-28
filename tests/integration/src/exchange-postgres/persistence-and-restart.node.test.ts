@@ -14,11 +14,8 @@
 //   eval "$(scripts/postgres.sh up)" && pnpm verify
 
 import { Exchange } from "@kyneta/exchange"
-import {
-  createPostgresStore,
-  fromPool,
-  postgresSchema,
-} from "@kyneta/postgres-store"
+import { createPostgresStore, fromPool } from "@kyneta/postgres-store"
+import { pgResetTables } from "@kyneta/postgres-store/testing"
 import { batch, Schema } from "@kyneta/schema"
 import type { EntryPayloadJson } from "@kyneta/sql-store-core"
 import { yjs } from "@kyneta/yjs-schema"
@@ -50,12 +47,12 @@ describeIfEnabled(
     beforeAll(async () => {
       // The "two exchanges" pattern uses two pools to model two
       // independent server/client storage tiers, each in a database of its
-      // own. Both run the canonical schema; per-test truncation isolates
-      // state.
+      // own. Both are recreated from the current canonical schema; per-test
+      // truncation isolates state.
       serverPool = await openPgPool("server")
       clientPool = await openPgPool("client")
-      await serverPool.query(postgresSchema())
-      await clientPool.query(postgresSchema())
+      await pgResetTables(serverPool)
+      await pgResetTables(clientPool)
     })
 
     afterAll(async () => {

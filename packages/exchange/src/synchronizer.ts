@@ -1081,6 +1081,21 @@ export class Synchronizer {
    * suspended version, so any drift accumulated during suspension is
    * reconciled rather than overwritten.
    */
+  /**
+   * The document's state was replaced locally by what its store holds. Ask
+   * every peer of it again from there: what we told them we hold of theirs
+   * may include operations the replacement discarded.
+   */
+  resetDocument(docId: DocId): void {
+    const doc = this.#docs.get(docId)
+    if (!doc) return
+    this.#dispatchSync({
+      type: "sync/doc-reset",
+      docId,
+      version: doc.replica.version().serialize(),
+    })
+  }
+
   resumeDocument(docId: DocId): void {
     const doc = this.#docs.get(docId)
     if (!doc) {

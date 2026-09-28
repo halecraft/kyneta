@@ -98,6 +98,8 @@ The store issues no pragma.
 
 **Sequence numbers come from the table.** Each write reads `MAX(seq)` for the document and inserts after it, inside one transaction. With one owner nothing can come between, so `SqliteAdapter.transaction` is a plain transaction. (store-contract once let several connections open one file, which needed `transaction` to take the write lock at its start with `BEGIN IMMEDIATE`; owning the file makes that pointless.) An earlier version cached the next `seq` per document in memory, seeded once from `MAX(seq)`; reading it from the table costs one indexed lookup per write and needs no cache.
 
+**Serialized documents** have one writer per storage (§"Serialized documents: one writer seat per storage" in `packages/exchange/TECHNICAL.md`), and here that holds by construction: the store records no writer, `writerOf` is `null`, and `append` and `compact` ignore `WriteOptions`.
+
 Several isolated stores may share one owned database, each with its own `tables` set: each is its own storage, with its own pool.
 
 ## Prefix scans

@@ -14,6 +14,7 @@ export type {
   StoreMark,
   StoreMeta,
   StoreRecord,
+  WriteOptions,
 } from "./store.js"
 export {
   prefixSuccessor,
@@ -47,11 +48,13 @@ export {
   type OwnedSeat,
   type PooledSeat,
   parseSeatPool,
+  planWriter,
   type Seat,
   SeatLostError,
   type SeatPool,
   type SessionSeat,
   sessionSeat,
+  WriterRefusedError,
 } from "./seats.js"
 export {
   type OwnedSeating,

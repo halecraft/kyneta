@@ -155,6 +155,9 @@ describe("settle — the storage term", () => {
     // and the document stays un-settled.
     const failing: Store = {
       seat: sessionSeat(),
+      async writerOf() {
+        return null
+      },
       async append() {},
       // biome-ignore lint/correctness/useYield: the point is that it throws
       async *loadAll() {
@@ -270,6 +273,9 @@ describe("whenSettled", () => {
     // defaults get written over data we could not read.
     const failing: Store = {
       seat: sessionSeat(),
+      async writerOf() {
+        return null
+      },
       async append() {},
       // biome-ignore lint/correctness/useYield: the point is that it throws
       async *loadAll() {
@@ -302,6 +308,9 @@ describe("whenSettled", () => {
     // into one timeout later.
     const stuck: Store = {
       seat: sessionSeat(),
+      async writerOf() {
+        return null
+      },
       async append() {},
       async *loadAll() {},
       async mark() {

@@ -33,6 +33,7 @@ import {
   type PeerId,
   parseSeatPool,
   planStoreOpen,
+  planWriter,
   prefixSuccessor,
   resolveMetaFromBatch,
   type Seat,
@@ -44,6 +45,7 @@ import {
   type StoreMark,
   type StoreMeta,
   type StoreRecord,
+  type WriteOptions,
 } from "@kyneta/exchange"
 
 // ---------------------------------------------------------------------------
@@ -139,6 +141,16 @@ function openDatabase(dbName: string): Promise<IDBDatabase> {
 interface MetaRow {
   readonly docId: string
   readonly meta: StoreMeta
+  /** The seat that writes this serialized document; absent while unclaimed. */
+  readonly writer?: PeerId
+}
+
+function metaRow(
+  docId: DocId,
+  meta: StoreMeta,
+  writer: PeerId | null,
+): MetaRow {
+  return writer === null ? { docId, meta } : { docId, meta, writer }
 }
 
 interface RecordRow {
@@ -256,7 +268,11 @@ export class IndexedDBStore implements Store {
   // Store interface
   // -----------------------------------------------------------------------
 
-  async append(docId: DocId, record: StoreRecord): Promise<void> {
+  async append(
+    docId: DocId,
+    record: StoreRecord,
+    options: WriteOptions,
+  ): Promise<void> {
     const tx = this.#writeTransaction()
     await this.#fence(tx)
     const metaStore = tx.objectStore(DOC_META_STORE)
@@ -264,6 +280,7 @@ export class IndexedDBStore implements Store {
 
     const existing = (await req(metaStore.get(docId))) as MetaRow | undefined
     const existingMeta: StoreMeta | null = existing ? existing.meta : null
+    const writer = this.#writer(tx, docId, existing, options)
 
     if (record.kind === "entry") {
       if (existingMeta === null) {
@@ -272,9 +289,12 @@ export class IndexedDBStore implements Store {
           `Store: first record for doc '${docId}' must be meta, got entry`,
         )
       }
+      if (writer !== (existing?.writer ?? null)) {
+        metaStore.put(metaRow(docId, existingMeta, writer))
+      }
     } else {
       const resolved = resolveMetaFromBatch([record], existingMeta)
-      metaStore.put({ docId, meta: resolved } satisfies MetaRow)
+      metaStore.put(metaRow(docId, resolved, writer))
     }
 
     recordsStore.add({ docId, record } satisfies RecordRow)
@@ -302,6 +322,7 @@ export class IndexedDBStore implements Store {
     docId: DocId,
     records: StoreRecord[],
     through: StoreMark | null,
+    options: WriteOptions,
   ): Promise<void> {
     const tx = this.#writeTransaction()
     await this.#fence(tx)
@@ -311,6 +332,7 @@ export class IndexedDBStore implements Store {
     // Read + validate + delete + write in one transaction — no TOCTOU race.
     const existing = (await req(metaStore.get(docId))) as MetaRow | undefined
     const existingMeta: StoreMeta | null = existing ? existing.meta : null
+    const writer = this.#writer(tx, docId, existing, options)
     const resolved = resolveMetaFromBatch(records, existingMeta)
 
     if (through !== null) {
@@ -323,7 +345,7 @@ export class IndexedDBStore implements Store {
     for (const record of records) {
       recordsStore.add({ docId, record } satisfies RecordRow)
     }
-    metaStore.put({ docId, meta: resolved } satisfies MetaRow)
+    metaStore.put(metaRow(docId, resolved, writer))
 
     await txDone(tx)
   }
@@ -334,6 +356,8 @@ export class IndexedDBStore implements Store {
     const metaStore = tx.objectStore(DOC_META_STORE)
     const recordsStore = tx.objectStore(RECORDS_STORE)
 
+    const existing = (await req(metaStore.get(docId))) as MetaRow | undefined
+    this.#writer(tx, docId, existing, { authored: true })
     metaStore.delete(docId)
 
     const index = recordsStore.index(BY_DOC_INDEX)
@@ -343,6 +367,37 @@ export class IndexedDBStore implements Store {
     }
 
     await txDone(tx)
+  }
+
+  async writerOf(docId: DocId): Promise<PeerId | null> {
+    const tx = this.#db.transaction(DOC_META_STORE, "readonly")
+    const row = (await req(tx.objectStore(DOC_META_STORE).get(docId))) as
+      | MetaRow
+      | undefined
+    return row?.writer ?? null
+  }
+
+  /**
+   * The writer to record after this write; aborts `tx` and throws
+   * `WriterRefusedError` when another seat writes the document.
+   */
+  #writer(
+    tx: IDBTransaction,
+    docId: DocId,
+    existing: MetaRow | undefined,
+    options: WriteOptions,
+  ): PeerId | null {
+    try {
+      return planWriter({
+        docId,
+        seat: this.seat,
+        recorded: existing?.writer ?? null,
+        authored: options.authored,
+      })
+    } catch (error) {
+      tx.abort()
+      throw error
+    }
   }
 
   async currentMeta(docId: DocId): Promise<StoreMeta | null> {

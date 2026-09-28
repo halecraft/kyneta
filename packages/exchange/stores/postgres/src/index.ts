@@ -23,6 +23,7 @@ import {
   type PooledSeat,
   parseSeatPool,
   planStoreOpen,
+  planWriter,
   prefixSuccessor,
   STORE_META_FORMAT_KEY,
   STORE_META_SEATS_KEY,
@@ -30,6 +31,7 @@ import {
   type StoreMark,
   type StoreMeta,
   type StoreRecord,
+  type WriteOptions,
 } from "@kyneta/exchange"
 import {
   fromRow,
@@ -272,22 +274,28 @@ export class PostgresStore implements Store {
   // Store interface
   // -------------------------------------------------------------------------
 
-  async append(docId: DocId, record: StoreRecord): Promise<void> {
+  async append(
+    docId: DocId,
+    record: StoreRecord,
+    options: WriteOptions,
+  ): Promise<void> {
     await this.#db.transaction(async q => {
       await this.#fence(q)
       await this.#lockDoc(q, docId)
+      const stored = await this.#readDoc(q, docId)
+      const writer = this.#writer(docId, stored, options)
       const plan = planAppend(
         docId,
         record,
-        await this.#readMeta(q, docId),
+        stored?.data ?? null,
         await this.#nextSeq(q, docId),
       )
       if (plan.upsertMeta !== null) {
+        await this.#upsertMeta(q, docId, plan.upsertMeta.data, writer)
+      } else if (writer !== (stored?.writer ?? null)) {
         await q.query(
-          `INSERT INTO ${this.#tables.docMeta} (doc_id, data)
-           VALUES ($1, $2::jsonb)
-           ON CONFLICT (doc_id) DO UPDATE SET data = EXCLUDED.data`,
-          [docId, plan.upsertMeta.data],
+          `UPDATE ${this.#tables.docMeta} SET writer = $2 WHERE doc_id = $1`,
+          [docId, writer],
         )
       }
       const { row } = plan.insertRecord
@@ -319,13 +327,16 @@ export class PostgresStore implements Store {
     docId: DocId,
     records: StoreRecord[],
     through: StoreMark | null,
+    options: WriteOptions,
   ): Promise<void> {
     await this.#db.transaction(async q => {
       await this.#fence(q)
       await this.#lockDoc(q, docId)
+      const stored = await this.#readDoc(q, docId)
+      const writer = this.#writer(docId, stored, options)
       const plan = planCompact(
         records,
-        await this.#readMeta(q, docId),
+        stored?.data ?? null,
         await this.#nextSeq(q, docId),
       )
       if (through !== null) {
@@ -344,13 +355,54 @@ export class PostgresStore implements Store {
         )
       }
 
-      await q.query(
-        `INSERT INTO ${this.#tables.docMeta} (doc_id, data)
-         VALUES ($1, $2::jsonb)
-         ON CONFLICT (doc_id) DO UPDATE SET data = EXCLUDED.data`,
-        [docId, plan.upsertMeta.data],
-      )
+      await this.#upsertMeta(q, docId, plan.upsertMeta.data, writer)
     })
+  }
+
+  /** The document's meta and writer, read inside the write transaction. */
+  async #readDoc(
+    q: PgQuerier,
+    docId: DocId,
+  ): Promise<{ data: StoreMeta; writer: PeerId | null } | null> {
+    const result = await q.query<{ data: StoreMeta; writer: PeerId | null }>(
+      `SELECT data, writer FROM ${this.#tables.docMeta} WHERE doc_id = $1`,
+      [docId],
+    )
+    return result.rows[0] ?? null
+  }
+
+  /**
+   * The writer to record after this write; throws `WriterRefusedError` when
+   * another seat writes the document. Checked after the fence and under the
+   * document lock, which serializes two seats' first claims.
+   */
+  #writer(
+    docId: DocId,
+    stored: { writer: PeerId | null } | null,
+    options: WriteOptions,
+  ): PeerId | null {
+    return planWriter({
+      docId,
+      seat: this.seat,
+      recorded: stored?.writer ?? null,
+      authored: options.authored,
+    })
+  }
+
+  /** Write the materialized meta, and the writer, which keeps a recorded one. */
+  async #upsertMeta(
+    q: PgQuerier,
+    docId: DocId,
+    data: string,
+    writer: PeerId | null,
+  ): Promise<void> {
+    await q.query(
+      `INSERT INTO ${this.#tables.docMeta} (doc_id, data, writer)
+       VALUES ($1, $2::jsonb, $3)
+       ON CONFLICT (doc_id)
+       DO UPDATE SET data = EXCLUDED.data, writer = EXCLUDED.writer`,
+      [docId, data, writer],
+    )
   }
 
   /**
@@ -395,6 +447,9 @@ export class PostgresStore implements Store {
   async delete(docId: DocId): Promise<void> {
     await this.#db.transaction(async q => {
       await this.#fence(q)
+      await this.#lockDoc(q, docId)
+      const stored = await this.#readDoc(q, docId)
+      this.#writer(docId, stored, { authored: true })
       await q.query(`DELETE FROM ${this.#tables.records} WHERE doc_id = $1`, [
         docId,
       ])
@@ -402,6 +457,14 @@ export class PostgresStore implements Store {
         docId,
       ])
     })
+  }
+
+  async writerOf(docId: DocId): Promise<PeerId | null> {
+    const result = await this.#db.query<{ writer: PeerId | null }>(
+      `SELECT writer FROM ${this.#tables.docMeta} WHERE doc_id = $1`,
+      [docId],
+    )
+    return result.rows[0]?.writer ?? null
   }
 
   async currentMeta(docId: DocId): Promise<StoreMeta | null> {
@@ -585,6 +648,7 @@ const EXPECTED_COLUMNS = {
   docMeta: [
     { name: "doc_id", types: ["text"], collation: DOC_ID_COLLATION },
     { name: "data", types: ["jsonb"] },
+    { name: "writer", types: ["text"], migration: "ADD COLUMN writer TEXT" },
   ],
   records: [
     { name: "doc_id", types: ["text"], collation: DOC_ID_COLLATION },
@@ -624,7 +688,10 @@ async function validateSchema(q: PgQuerier, tables: TableNames): Promise<void> {
       if (found === undefined) {
         throw new Error(
           `@kyneta/postgres-store: table "${tableName}" missing column ` +
-            `"${col.name}". See schema.sql for the canonical definition.`,
+            `"${col.name}". See schema.sql for the canonical definition.` +
+            ("migration" in col
+              ? ` Migrate with: ALTER TABLE ${tableName} ${col.migration};`
+              : ""),
         )
       }
       if (!(col.types as readonly string[]).includes(found.data_type)) {

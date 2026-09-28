@@ -3,7 +3,11 @@
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
-import { StoreFormatVersionError } from "@kyneta/exchange"
+import {
+  Runtime,
+  StoreFormatVersionError,
+  whenHydrated,
+} from "@kyneta/exchange"
 import {
   collectAll,
   describeStore,
@@ -11,7 +15,9 @@ import {
   makeEntryRecord,
   makeMetaRecord,
   plainMeta,
+  UNAUTHORED,
 } from "@kyneta/exchange/testing"
+import { json, Schema } from "@kyneta/schema"
 import Database from "better-sqlite3"
 import { afterAll, describe, expect, it } from "vitest"
 import { fromBetterSqlite3, type SqliteAdapter, SqliteStore } from "../index.js"
@@ -128,9 +134,9 @@ describe("SqliteStore — persistence across close + reopen", () => {
 
     const db1 = new Database(file)
     const store1 = new SqliteStore(fromBetterSqlite3(db1))
-    await store1.append("doc-1", makeMetaRecord())
-    await store1.append("doc-1", makeEntryRecord("entirety", "v1"))
-    await store1.append("doc-1", makeEntryRecord("since", "v2"))
+    await store1.append("doc-1", makeMetaRecord(), UNAUTHORED)
+    await store1.append("doc-1", makeEntryRecord("entirety", "v1"), UNAUTHORED)
+    await store1.append("doc-1", makeEntryRecord("since", "v2"), UNAUTHORED)
     await store1.close()
 
     // Reopen, verify persisted data, then append and verify seq continuity
@@ -138,7 +144,7 @@ describe("SqliteStore — persistence across close + reopen", () => {
     const store2 = new SqliteStore(fromBetterSqlite3(db2))
     expect(await store2.currentMeta("doc-1")).toEqual(plainMeta)
 
-    await store2.append("doc-1", makeEntryRecord("since", "v3"))
+    await store2.append("doc-1", makeEntryRecord("since", "v3"), UNAUTHORED)
 
     const records = await collectAll(store2.loadAll("doc-1"))
     expect(records).toHaveLength(4)
@@ -257,7 +263,7 @@ describe("SqliteStore — one owner per file", () => {
       close: () => {},
     }
     const store = new SqliteStore(adapter)
-    await store.append("doc-1", makeMetaRecord())
+    await store.append("doc-1", makeMetaRecord(), UNAUTHORED)
     expect(store.seat.kind).toBe("owned")
     expect(statements.filter(sql => /PRAGMA|BEGIN/i.test(sql))).toEqual([])
     db.close()
@@ -284,11 +290,19 @@ describe("SqliteStore — tables isolation", () => {
       },
     })
 
-    await store1.append("doc-1", makeMetaRecord())
-    await store1.append("doc-1", makeEntryRecord("entirety", "v1-app1"))
+    await store1.append("doc-1", makeMetaRecord(), UNAUTHORED)
+    await store1.append(
+      "doc-1",
+      makeEntryRecord("entirety", "v1-app1"),
+      UNAUTHORED,
+    )
 
-    await store2.append("doc-1", makeMetaRecord())
-    await store2.append("doc-1", makeEntryRecord("entirety", "v1-app2"))
+    await store2.append("doc-1", makeMetaRecord(), UNAUTHORED)
+    await store2.append(
+      "doc-1",
+      makeEntryRecord("entirety", "v1-app2"),
+      UNAUTHORED,
+    )
 
     const records1 = await collectAll(store1.loadAll("doc-1"))
     const records2 = await collectAll(store2.loadAll("doc-1"))
@@ -353,5 +367,23 @@ describe("SqliteStore — store-format gate", () => {
       "unversioned-existing-data",
     )
     db.close()
+  })
+})
+
+describe("SqliteStore — serialized documents", () => {
+  it("one owner writes them, so no writer is recorded or checked", async () => {
+    const file = makeTmpFile()
+    const Doc = json.bind(Schema.struct({ title: Schema.string() }))
+    const store = openFile(file)
+    const runtime = new Runtime({ store })
+    const doc = runtime.get("doc", Doc)
+    await whenHydrated(doc)
+    doc.title.set("owned")
+    await runtime.flush()
+
+    // No second writer can exist: a second store over the file is refused.
+    expect(() => openFile(file)).toThrow(/another connection owns/)
+    expect(await store.writerOf("doc")).toBeNull()
+    await runtime.shutdown()
   })
 })

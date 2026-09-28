@@ -34,6 +34,7 @@ import {
   collectAll,
   makeMetaRecord,
   makePlainEntirety,
+  UNAUTHORED,
 } from "../testing/store-conformance.js"
 import { exchangesPerTest, sleep } from "./exchanges.js"
 import { seedStoredDoc } from "./stored-doc.js"
@@ -77,8 +78,13 @@ describe("Exchange storage hydration", () => {
     await seedBackend.append(
       "doc-1",
       makeMetaRecord({ replicaType: ["plain", 1, 0] }),
+      UNAUTHORED,
     )
-    await seedBackend.append("doc-1", makePlainEntirety({ title: "old" }))
+    await seedBackend.append(
+      "doc-1",
+      makePlainEntirety({ title: "old" }),
+      UNAUTHORED,
+    )
 
     const exchange = createExchange({
       principal: "peer-1",
@@ -94,10 +100,11 @@ describe("Exchange storage hydration", () => {
     // Pre-populate storage with a document (meta + entry)
     const sharedData: InMemoryStoreData = createInMemoryStoreData()
     const seedBackend = new InMemoryStore(sharedData)
-    await seedBackend.append("doc-1", makeMetaRecord())
+    await seedBackend.append("doc-1", makeMetaRecord(), UNAUTHORED)
     await seedBackend.append(
       "doc-1",
       makePlainEntirety({ title: "stored", count: 42 }),
+      UNAUTHORED,
     )
 
     const exchange = createExchange({
@@ -136,10 +143,11 @@ describe("Exchange storage hydration", () => {
     // Pre-populate storage
     const sharedData: InMemoryStoreData = createInMemoryStoreData()
     const seedBackend = new InMemoryStore(sharedData)
-    await seedBackend.append("doc-1", makeMetaRecord())
+    await seedBackend.append("doc-1", makeMetaRecord(), UNAUTHORED)
     await seedBackend.append(
       "doc-1",
       makePlainEntirety({ title: "replicated", count: 7 }),
+      UNAUTHORED,
     )
 
     const exchange = createExchange({

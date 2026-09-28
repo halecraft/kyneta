@@ -16,6 +16,7 @@ import {
   makeEntryRecord,
   makeMetaRecord,
   plainMeta,
+  UNAUTHORED,
 } from "@kyneta/exchange/testing"
 import { ClassicLevel } from "classic-level"
 import { afterAll, describe, expect, it } from "vitest"
@@ -98,9 +99,13 @@ describe("LevelDBStore — close + reopen", () => {
 
     // Phase 1: write data then close
     const backend1 = await createLevelDBStore(dir)
-    await backend1.append("doc-1", makeMetaRecord())
-    await backend1.append("doc-1", makeEntryRecord("entirety", "v1"))
-    await backend1.append("doc-1", makeEntryRecord("since", "v2"))
+    await backend1.append("doc-1", makeMetaRecord(), UNAUTHORED)
+    await backend1.append(
+      "doc-1",
+      makeEntryRecord("entirety", "v1"),
+      UNAUTHORED,
+    )
+    await backend1.append("doc-1", makeEntryRecord("since", "v2"), UNAUTHORED)
     await backend1.close()
 
     // Phase 2: reopen and verify
@@ -125,14 +130,18 @@ describe("LevelDBStore — close + reopen", () => {
     const dir = makeTmpDir()
 
     const backend1 = await createLevelDBStore(dir)
-    await backend1.append("doc-1", makeMetaRecord())
-    await backend1.append("doc-1", makeEntryRecord("entirety", "v1"))
-    await backend1.append("doc-1", makeEntryRecord("since", "v2"))
+    await backend1.append("doc-1", makeMetaRecord(), UNAUTHORED)
+    await backend1.append(
+      "doc-1",
+      makeEntryRecord("entirety", "v1"),
+      UNAUTHORED,
+    )
+    await backend1.append("doc-1", makeEntryRecord("since", "v2"), UNAUTHORED)
     await backend1.close()
 
     // Reopen and append more
     const backend2 = await createLevelDBStore(dir)
-    await backend2.append("doc-1", makeEntryRecord("since", "v3"))
+    await backend2.append("doc-1", makeEntryRecord("since", "v3"), UNAUTHORED)
 
     const records = await collectAll(backend2.loadAll("doc-1"))
     const entries = records.filter(r => r.kind === "entry")
@@ -153,8 +162,8 @@ describe("LevelDBStore — close + reopen", () => {
     const dir = makeTmpDir()
 
     const backend1 = await createLevelDBStore(dir)
-    await backend1.append("doc-1", makeMetaRecord())
-    await backend1.append("doc-1", makeEntryRecord("since", "v1"))
+    await backend1.append("doc-1", makeMetaRecord(), UNAUTHORED)
+    await backend1.append("doc-1", makeEntryRecord("since", "v1"), UNAUTHORED)
     await backend1.compact(
       "doc-1",
       [
@@ -163,6 +172,7 @@ describe("LevelDBStore — close + reopen", () => {
         makeEntryRecord("since", "v3"),
       ],
       await backend1.mark("doc-1"),
+      UNAUTHORED,
     )
     await backend1.close()
 
@@ -170,7 +180,7 @@ describe("LevelDBStore — close + reopen", () => {
     // compaction that wrote more records than it deleted must not leave the
     // next append on top of one of them.
     const backend2 = await createLevelDBStore(dir)
-    await backend2.append("doc-1", makeEntryRecord("since", "v4"))
+    await backend2.append("doc-1", makeEntryRecord("since", "v4"), UNAUTHORED)
     const records = await collectAll(backend2.loadAll("doc-1"))
     expect(records.map(r => (r.kind === "entry" ? r.version : "meta"))).toEqual(
       ["meta", "v2", "v3", "v4"],
@@ -182,9 +192,9 @@ describe("LevelDBStore — close + reopen", () => {
     const dir = makeTmpDir()
 
     const backend1 = await createLevelDBStore(dir)
-    await backend1.append("alpha", makeMetaRecord())
-    await backend1.append("beta", makeMetaRecord())
-    await backend1.append("gamma", makeMetaRecord())
+    await backend1.append("alpha", makeMetaRecord(), UNAUTHORED)
+    await backend1.append("beta", makeMetaRecord(), UNAUTHORED)
+    await backend1.append("gamma", makeMetaRecord(), UNAUTHORED)
     await backend1.close()
 
     const backend2 = await createLevelDBStore(dir)
@@ -204,7 +214,7 @@ describe("LevelDBStore — store-format gate", () => {
 
     // First open stamps {major:1,minor:0}; then corrupt it to a future major.
     const backend1 = await createLevelDBStore(dir)
-    await backend1.append("doc-1", makeMetaRecord())
+    await backend1.append("doc-1", makeMetaRecord(), UNAUTHORED)
     await backend1.close()
 
     const raw = new ClassicLevel<string, Uint8Array>(dir, {

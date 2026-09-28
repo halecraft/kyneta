@@ -7,6 +7,7 @@
 export { abandonSeat } from "../store/in-memory-store.js"
 export { type ArmedFault, makeArmedFault } from "./fault-injection.js"
 export {
+  AUTHORED,
   collectAll,
   type DescribeStoreOptions,
   describeStore,
@@ -19,4 +20,5 @@ export {
   plainMeta,
   type SeatDeclaration,
   type SeatStorage,
+  UNAUTHORED,
 } from "./store-conformance.js"

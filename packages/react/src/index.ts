@@ -6,6 +6,7 @@
 //   useValue — reactive subscription to a ref's plain value
 //   useSyncState — reactive per-peer sync state (raw array)
 //   useDocReady — reactive monotonic readiness latch (the 90% gate)
+//   useWriteRefusal — why a document refuses this peer's writes
 //
 // Re-exports a curated subset of @kyneta/schema and @kyneta/exchange
 // so most app code only imports from @kyneta/react.
@@ -41,6 +42,7 @@ export type { UseTextOptions } from "./use-text.js"
 export { useText } from "./use-text.js"
 export { useTracked } from "./use-tracked.js"
 export { useValue } from "./use-value.js"
+export { useWriteRefusal } from "./use-write-refusal.js"
 
 // ---------------------------------------------------------------------------
 // Thin re-exports from @kyneta/changefeed
@@ -98,4 +100,5 @@ export {
   parseLineDocId,
   routeLine,
   sync,
+  WriterRefusedError,
 } from "@kyneta/exchange"

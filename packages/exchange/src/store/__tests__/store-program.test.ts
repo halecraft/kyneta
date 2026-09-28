@@ -6,6 +6,7 @@
 
 import type { DocId } from "@kyneta/transport"
 import { describe, expect, it } from "vitest"
+import { WriterRefusedError } from "../seats.js"
 import {
   allDocsSettled,
   confirmedVersion,
@@ -547,5 +548,57 @@ describe("storeProgram — a lost seat", () => {
       expect(next).toBe(model)
       expect(effects).toEqual([])
     }
+  })
+})
+
+describe("storeProgram — a refused writer", () => {
+  const refused = new WriterRefusedError("doc-1", "other-seat")
+  const writerRefused: StoreInput = {
+    type: "writer-refused",
+    docId: "doc-1",
+    error: refused,
+  }
+
+  it("stops tracking the document, owed write included, and asks for a rebuild", () => {
+    // A write in flight with another owed behind it.
+    const writing = step(writingFromV1(), advanced)[0]
+    const [model, ...effects] = step(writing, writerRefused)
+    expect(model.docs.has("doc-1")).toBe(false)
+    expect(allDocsSettled(model)).toBe(true)
+    expect(effects).toEqual([
+      { type: "rebuild", docId: "doc-1", error: refused },
+      {
+        type: "store-error",
+        docId: "doc-1",
+        operation: "write",
+        error: refused,
+      },
+    ])
+  })
+
+  it("ignores what the refused write's siblings report, until the rebuild hands it back", () => {
+    const [model] = step(writingFromV1(), writerRefused)
+    for (const msg of [succeeded("v2"), failed(), advanced, compact]) {
+      const [next, ...effects] = step(model, msg)
+      expect(next).toBe(model)
+      expect(effects).toEqual([])
+    }
+    const [tracked, ...effects] = step(model, hydrated("v3"))
+    expect(getPhase(tracked, "doc-1")).toEqual({
+      status: "writing",
+      revertTo: { status: "idle", version: "v3" },
+    })
+    expect(effects).toEqual([persist({ kind: "since", version: "v3" })])
+  })
+
+  it("does nothing once the seat is lost", () => {
+    const [lost] = step(writingFromV1(), {
+      type: "seat-lost",
+      docId: "doc-1",
+      error: new Error("lost"),
+    })
+    const [next, ...effects] = step(lost, writerRefused)
+    expect(next).toBe(lost)
+    expect(effects).toEqual([])
   })
 })

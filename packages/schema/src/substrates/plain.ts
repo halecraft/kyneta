@@ -41,6 +41,7 @@ import {
 import type { Schema as SchemaNode } from "../schema.js"
 import type {
   HasBackingDoc,
+  HydrationHandle,
   MergeOptions,
   RecordInverseFn,
   Replica,
@@ -270,8 +271,14 @@ export interface PlainHistory {
 
 export const EMPTY_HISTORY: PlainHistory = { log: [], baseOffset: 0 }
 
+/**
+ * Why authored writes are refused, or `null` when they are allowed. Read at
+ * every authored write.
+ */
+export type Authoring = () => string | null
+
 /** For a substrate that may author from the start. */
-export const ALWAYS_AUTHOR = (): boolean => true
+export const ALWAYS_AUTHOR: Authoring = () => null
 
 const STILL_LOADING =
   "This document is still loading from its store. " +
@@ -288,17 +295,18 @@ const STILL_LOADING =
  * `history` must describe `doc`: its log replayed onto the trimmed base
  * produces `doc`. `plainSubstrateFactory` is the schema-aware entry point.
  *
- * `canAuthor` is false while the document's own history is still loading.
- * A plain merge does not commute with a local write, so a write made then has
- * no well-defined result: the loaded state would overwrite it, and it would
- * mint a lineage the store does not know. Authored writes throw until it is
- * true; merges and announcements are unaffected.
+ * `authoring` gives the reason authored writes are refused, if any: while the
+ * document's own history is still loading (a plain merge does not commute with
+ * a local write, so a write made then has no well-defined result: the loaded
+ * state would overwrite it, and it would mint a lineage the store does not
+ * know), or once another writer holds the document. Authored writes throw the
+ * reason; merges and announcements are unaffected.
  */
 export function createPlainSubstrate(
   doc: PlainState,
   clock: PlainClock,
   history: PlainHistory,
-  canAuthor: () => boolean,
+  authoring: Authoring,
 ): Substrate<PlainVersion> {
   const reader = plainReader(doc)
   const core = createPlainCore(() => doc, clock, history)
@@ -352,7 +360,8 @@ export function createPlainSubstrate(
       change: ChangeBase,
       recordInverse: RecordInverseFn | null,
     ): void {
-      if (!canAuthor()) throw new Error(STILL_LOADING)
+      const refusal = authoring()
+      if (refusal !== null) throw new Error(refusal)
       if (recordInverse) {
         // Read, don't copy. `invert` snapshots whatever it retains — see
         // `invertReplace`, `invertMap`, `invertSequence` and the rich-text
@@ -927,6 +936,30 @@ function applyOps(state: PlainState, ops: readonly Op[]): void {
   }
 }
 
+/**
+ * A substrate over `replica` whose authored writes wait for `adopt` unless
+ * `loaded`, and stop for good at `refuse`.
+ */
+function refusable(
+  replica: Replica<PlainVersion>,
+  schema: SchemaNode,
+  loaded: boolean,
+): HydrationHandle<PlainVersion> {
+  let adopted = loaded
+  let refusal: string | null = null
+  return {
+    substrate: buildUpgrade(replica, schema, () =>
+      refusal !== null ? refusal : adopted ? null : STILL_LOADING,
+    ),
+    adopt: () => {
+      adopted = true
+    },
+    refuse: reason => {
+      refusal = reason
+    },
+  }
+}
+
 // ---------------------------------------------------------------------------
 // buildUpgrade — a replica gains a schema, σ and a changefeed
 // ---------------------------------------------------------------------------
@@ -943,7 +976,7 @@ function applyOps(state: PlainState, ops: readonly Op[]): void {
 function buildUpgrade(
   replica: Replica<PlainVersion>,
   schema: SchemaNode,
-  canAuthor: () => boolean,
+  authoring: Authoring,
 ): Substrate<PlainVersion> {
   const history = replicaHistories.get(replica)
   if (history === undefined || !hasBackingDoc<PlainState>(replica)) {
@@ -959,7 +992,7 @@ function buildUpgrade(
     doc,
     createPlainClock(replica.version().lineage),
     history(),
-    canAuthor,
+    authoring,
   )
 
   const defaults = Zero.structural(schema) as Record<string, unknown>
@@ -1032,7 +1065,9 @@ export const plainReplicaFactory: ReplicaFactory<PlainVersion> = {
  * - `upgrade(replica, schema)` → full substrate over the replica's state and log
  * - `create(schema)` = `upgrade(createReplica(), schema)`
  * - `createForHydration(schema)` — the same, refusing authored writes until
- *   `adopt()` says the document's stored history has loaded
+ *   `adopt()` says the document's stored history has loaded, and from
+ *   `refuse(reason)` on
+ * - `upgradeForHydration(replica, schema)` — `upgrade`, refusable
  * - `fromEntirety(payload, schema)` = `upgrade(replica.fromEntirety(payload), schema)`
  * - `parseVersion(serialized)` — deserialize a PlainVersion
  */
@@ -1053,15 +1088,14 @@ export const plainSubstrateFactory: SubstrateFactory<PlainVersion> = {
   },
 
   createForHydration(schema: SchemaNode) {
-    // A plain document's identity is its lineage, and authoring is what
-    // mints it; `adopt`, called once its history has loaded, is what lets it.
-    let loaded = false
-    return {
-      substrate: buildUpgrade(this.createReplica(), schema, () => loaded),
-      adopt: () => {
-        loaded = true
-      },
-    }
+    // A plain document's identity is its lineage, and authoring is what mints
+    // it. It may author once its history has loaded (`adopt`), unless the
+    // right to was withdrawn (`refuse`), which wins either way.
+    return refusable(this.createReplica(), schema, false)
+  },
+
+  upgradeForHydration(replica: Replica<PlainVersion>, schema: SchemaNode) {
+    return refusable(replica, schema, true)
   },
 
   fromEntirety(

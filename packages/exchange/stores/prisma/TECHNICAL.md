@@ -78,6 +78,8 @@ Renamed model accessors work via the `metaModel`, `recordModel`, and `storeMetaM
 
 `PrismaStore.open` reads the `format` row from the store-meta model, probes the doc-meta model's `count()`, and runs `@kyneta/exchange`'s `planStoreOpen` with `session` seating: it stamps a brand-new store, accepts a compatible major, or throws `StoreFormatVersionError`, and issues a **session seat**. The version value comes from `@kyneta/sql-store-core`'s `STORE_FORMAT_VERSION`, shared with sqlite/postgres, which bumped it to 1.1 for their seat pools; Prisma writes no pool, so 1.0 and 1.1 read alike. It is a compatibility check, **not** a migration.
 
+**Serialized documents are not enforced.** The exchange's rule that one seat of a storage writes each serialized document (§"Serialized documents: one writer seat per storage" in `packages/exchange/TECHNICAL.md`) needs a record naming a seat that returns; a session seat never does, so a record would lock the document for good. `writerOf` is `null`, and `append` and `compact` ignore `WriteOptions`. Route a serialized document's writes to one process.
+
 **Why a session seat.** A durable seat needs a lock held for the store's lifetime (see §"Durable seats" in `packages/exchange/TECHNICAL.md`). Prisma pools connections and pins one only inside an interactive transaction, so a session-level lock cannot outlive one call. Every open is therefore a fresh seat: unique, never reused, never fenced. The cost is one version-vector entry per process start per document written, and a `Line` to a Prisma-backed peer does not survive its restart.
 
 ## Sequence numbers come from the table

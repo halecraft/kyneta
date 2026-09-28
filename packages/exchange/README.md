@@ -544,6 +544,8 @@ const doc = exchange.get("my-doc", TodoDoc)
 
 **Several instances may open one storage** — tabs over one IndexedDB database, processes over one Postgres schema. Their writes interleave safely, and a compaction by one never deletes what another wrote without having read it.
 
+**Two tabs of one app over one store can both read a `json` document, but only one of them writes it.** The store records the seat whose write first carried its own changes, and refuses every other seat's: a tab that loads a document another tab writes throws on its first write, and `writeRefusal(doc)` says why (`writeRefusalFeed(doc)` to disable editing; `@kyneta/react`'s `useText` keeps its field read-only by itself, and `useWriteRefusal` serves other editors). If two tabs wrote before either had claimed it, the loser's write is rolled back before anything of it is sent. The writer tab keeps its seat across reloads, so it stays the writer; a reader stays a reader for its session. Loro and Yjs documents are unaffected: every tab writes them. Prisma stores record nothing, so route a `json` document's writes to one process there.
+
 **Store format gate.** On open, every persistent backend stamps a `{ major, minor }` on-disk format version into a dedicated store-metadata namespace (a `kyneta_store_meta` table, an IndexedDB `store_meta` object store, or a `store-meta\x00` key prefix — separate from the per-document `doc_meta` namespace). On a later open it refuses — throwing `StoreFormatVersionError` — a store whose stamped major is incompatible with the running build, or an unversioned store that already holds documents. The gate is a compatibility check only; it performs no automatic migration. Separately, a document whose stored records were written in a replica format the running build cannot read (a different `replicaType` major) fails to load: `whenHydrated` rejects rather than presenting an empty document.
 
 For testing, use `createInMemoryStore()` with shared state to simulate persist → restart → hydrate flows. `createInMemoryStoreData()` builds the shared storage, and `recordsOf(sharedData, docId)` reads what it holds:
@@ -924,6 +926,8 @@ Standalone functions, not members of `sync(doc)`. They divide by three questions
 | `persistedFeed(doc)` | Observable form of `persisted`. A callable, so never put it in an `if`. |
 | `whenPersisted(doc)` | Resolve once `persisted`. Rejects at once if a store write failed and none has succeeded since, and rejects if one fails while waiting. Writes are retried on their own, so a caller can check `persistenceError` and wait again. |
 | `persistenceError(doc)` | The error of the latest failed store write, cleared by the next write that succeeds. Covers every store write, including one that stores only operations imported from peers, so it can be set while `persisted` is true. After the seat is lost, the `SeatLostError`, for good. |
+| `writeRefusal(doc)` | A `WriterRefusedError` when another seat of the store writes this `json` document, so this one's writes throw; `undefined` otherwise. Kept for the session. |
+| `writeRefusalFeed(doc)` | Observable form of `writeRefusal`, e.g. to disable an editor. A callable, so never put it in an `if`. |
 
 `whenSettled` and `docStatus` resolve the authority the same way, so they cannot disagree: call-site `opts.authority` → the Exchange's `Policy.authority` → `"any"`.
 
@@ -972,7 +976,8 @@ Each binding target is a fixed `(substrate, sync-mode, supported-laws)` bundle. 
 
 | Export | Description |
 |--------|-------------|
-| `Store` | Interface for persistent storage backends: append, load, and compaction by mark (`StoreMark`). Several instances may open one storage. |
+| `Store` | Interface for persistent storage backends: append, load, and compaction by mark (`StoreMark`). Several instances may open one storage. Writes take `WriteOptions` (`authored`); a pooled store records each serialized document's writer (`writerOf`). |
+| `WriterRefusedError` | Thrown by a write to, or reported for, a `json` document another seat of the store writes. Carries `writer`. |
 | `StoreRecord` | A stored record: `{ kind: "meta", meta }` or `{ kind: "entry", payload, version }`. |
 | `createInMemoryStore(opts?)` | Map-backed store for testing. Pass `{ sharedData }` to open the same storage from several instances. |
 | `createInMemoryStoreData()` | An empty storage to share between in-memory stores. |
