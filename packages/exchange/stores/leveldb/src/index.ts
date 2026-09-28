@@ -5,7 +5,7 @@
 // Key-space design (FoundationDB convention — \x00 null-byte separator):
 //   doc-meta\x00{docId}                   → JSON-encoded StoreMeta (materialized index)
 //   record\x00{docId}\x00{seqNo}          → binary-encoded StoreRecord (unified stream)
-//   store-meta\x00{key}                   → store-global metadata (e.g. format version)
+//   store-meta\x00{key}                   → store-global metadata (format version, seat pool)
 //
 // The \x00 separator cannot appear in valid UTF-8 strings, so no docId
 // validation is needed — the key-space imposes zero constraints on callers.
@@ -13,17 +13,23 @@
 // SeqNo is a zero-padded 16-digit monotonic counter per doc, tracked in
 // memory. On reboot, the max seqNo for a doc is lazily discovered via a
 // single reverse-iterator seek on first append.
+//
+// `classic-level` locks the directory, so one open store owns it. Its seat is
+// `owned`: the pool's one seat, reused on every open, and unfenced, since the
+// handle that holds the lock is the one that writes (and a `batch` is
+// write-only, so it could not read a fence anyway).
 
 import {
   type DocId,
-  decideStoreFormat,
-  parseStoreFormat,
+  freshPeerIds,
+  type OwnedSeat,
+  planStoreOpen,
   prefixSuccessor,
   resolveMetaFromBatch,
   STORE_META_FORMAT_KEY,
+  STORE_META_SEATS_KEY,
   type Store,
   type StoreFormatVersion,
-  StoreFormatVersionError,
   type StoreMark,
   type StoreMeta,
   type StoreRecord,
@@ -45,16 +51,19 @@ const SEQ_PAD = 16
 // above `doc-meta\x00` ('d' < 's') and `record\x00` ('r' < 's'), so it is
 // outside every `doc-meta`/`record` iteration range and needs no filtering.
 // Do not relocate it into those ranges. The on-disk format version lives at
-// `store-meta\x00format`. This is read by a bootstrap reader on open, never
-// through the Store interface. Context: jj:uvssotsy.
+// `store-meta\x00format`, the seat pool at `store-meta\x00seats`. Both are
+// read on open, never through the Store interface. Context: jj:uvssotsy.
 const STORE_META_PREFIX = `store-meta${SEP}`
 const STORE_FORMAT_KEY = `${STORE_META_PREFIX}${STORE_META_FORMAT_KEY}`
+const STORE_SEATS_KEY = `${STORE_META_PREFIX}${STORE_META_SEATS_KEY}`
 
-// LevelDB owns its own on-disk format version (its binary envelope), gated on
-// open via `decideStoreFormat`. Distinct from the envelope's per-record bit-7
+// LevelDB owns its own on-disk format version (its binary envelope), checked
+// on open by `planStoreOpen`. Distinct from the envelope's per-record bit-7
 // guard (`decodeStoreRecord`): bit-7 guards one record's decode; this marker
 // guards opening the store at all.
-const STORE_FORMAT_VERSION: StoreFormatVersion = { major: 1, minor: 0 }
+// 1.1: `store-meta\x00seats` holds the seat pool. Older stores read as an
+// empty pool.
+const STORE_FORMAT_VERSION: StoreFormatVersion = { major: 1, minor: 1 }
 
 // ---------------------------------------------------------------------------
 // Binary envelope v2 — pure encode/decode for StoreRecord
@@ -280,17 +289,13 @@ function planAppend(
 // ---------------------------------------------------------------------------
 
 export class LevelDBStore implements Store {
+  readonly seat: OwnedSeat
   readonly #db: ClassicLevel<string, Uint8Array>
   readonly #seqNos = new SeqNoTracker()
 
-  // Accepts a path (constructs a ClassicLevel) or an already-built handle. The
-  // handle form is the test seam for fault injection — production callers pass
-  // a path via `createLevelDBStore` / `open`. jj:pzuytnvo
-  constructor(dbPathOrDb: string | ClassicLevel<string, Uint8Array>) {
-    this.#db =
-      typeof dbPathOrDb === "string"
-        ? new ClassicLevel(dbPathOrDb, { valueEncoding: "binary" })
-        : dbPathOrDb
+  private constructor(db: ClassicLevel<string, Uint8Array>, seat: OwnedSeat) {
+    this.#db = db
+    this.seat = seat
   }
 
   // -------------------------------------------------------------------------
@@ -426,72 +431,82 @@ export class LevelDBStore implements Store {
     await this.#db.close()
   }
 
-  // Bootstrap reader: consult the store-format marker before trusting any
-  // bytes. Stamps a brand-new store, accepts a compatible one, or throws.
-  // A `static open` reaches this private method so the gate stays internal.
-  async #assertFormat(): Promise<void> {
-    let parsed: StoreFormatVersion | "malformed" | null = null
-    try {
-      const raw = await this.#db.get(STORE_FORMAT_KEY)
-      parsed = parseStoreFormat(decoder.decode(raw))
-    } catch (error: any) {
-      if (error.code !== "LEVEL_NOT_FOUND") throw error
-      // absent → parsed stays null
-    }
-    if (parsed === "malformed") {
-      throw new StoreFormatVersionError({
-        reason: "malformed-version",
-        backend: "leveldb",
-        stored: null,
-        current: STORE_FORMAT_VERSION,
-      })
-    }
-
-    // Empty-store probe: does any doc-meta key exist?
-    let hasData = false
-    for await (const _key of this.#db.keys({
-      ...keysWithPrefix(DOC_META_PREFIX),
-      limit: 1,
-    })) {
-      hasData = true
-    }
-
-    const decision = decideStoreFormat({
-      current: STORE_FORMAT_VERSION,
-      stored: parsed,
-      storeHasData: hasData,
-    })
-
-    if (decision.action === "refuse") {
-      throw new StoreFormatVersionError({
-        reason: decision.reason,
-        backend: "leveldb",
-        stored: parsed,
-        current: STORE_FORMAT_VERSION,
-      })
-    }
-    if (decision.action === "stamp") {
-      await this.#db.put(
-        STORE_FORMAT_KEY,
-        encoder.encode(JSON.stringify(decision.value)),
-      )
-    }
-  }
-
-  /** Open the store and run the store-format gate. Used by `createLevelDBStore`. */
+  /**
+   * Open the store, holding the directory's seat. Throws
+   * `StoreFormatVersionError` for a store this build cannot read, and when
+   * another handle holds the directory.
+   *
+   * Accepts a path, or an already-built handle: the test seam for fault
+   * injection. jj:pzuytnvo
+   */
   static async open(
     dbPathOrDb: string | ClassicLevel<string, Uint8Array>,
-  ): Promise<Store> {
-    const store = new LevelDBStore(dbPathOrDb)
+  ): Promise<LevelDBStore> {
+    const db =
+      typeof dbPathOrDb === "string"
+        ? new ClassicLevel<string, Uint8Array>(dbPathOrDb, {
+            valueEncoding: "binary",
+          })
+        : dbPathOrDb
     try {
-      await store.#assertFormat()
+      return new LevelDBStore(db, await openSeat(db))
     } catch (error) {
       // A refused store must not leak its file handle / lock.
-      await store.#db.close()
+      await db.close()
       throw error
     }
-    return store
   }
+}
+
+/**
+ * Read the store-wide metadata, plan the open, and write what it says in one
+ * batch.
+ */
+async function openSeat(
+  db: ClassicLevel<string, Uint8Array>,
+): Promise<OwnedSeat> {
+  const read = async (key: string): Promise<string | undefined> => {
+    try {
+      return decoder.decode(await db.get(key))
+    } catch (error: any) {
+      if (error.code === "LEVEL_NOT_FOUND") return undefined
+      throw error
+    }
+  }
+  let hasData = false
+  for await (const _key of db.keys({
+    ...keysWithPrefix(DOC_META_PREFIX),
+    limit: 1,
+  })) {
+    hasData = true
+  }
+  const plan = planStoreOpen({
+    backend: "leveldb",
+    current: STORE_FORMAT_VERSION,
+    storedFormat: await read(STORE_FORMAT_KEY),
+    storeHasData: hasData,
+    storedPool: await read(STORE_SEATS_KEY),
+    seating: { kind: "owned" },
+    fresh: freshPeerIds(),
+  })
+  if (plan.action === "refuse") throw plan.error
+  const ops: BatchOp[] = []
+  if (plan.writeFormat !== undefined) {
+    ops.push({
+      type: "put",
+      key: STORE_FORMAT_KEY,
+      value: encoder.encode(JSON.stringify(plan.writeFormat)),
+    })
+  }
+  if (plan.writePool !== undefined) {
+    ops.push({
+      type: "put",
+      key: STORE_SEATS_KEY,
+      value: encoder.encode(JSON.stringify(plan.writePool)),
+    })
+  }
+  if (ops.length > 0) await db.batch(ops)
+  return plan.seat
 }
 
 // ---------------------------------------------------------------------------
@@ -501,9 +516,10 @@ export class LevelDBStore implements Store {
 /**
  * Create a LevelDB storage backend for server-side persistence.
  *
- * Async: it opens the database and runs the store-format gate (stamping a
- * brand-new store, accepting a compatible one, or throwing
- * `StoreFormatVersionError`). `await` it before passing to the `Exchange`.
+ * Async: it opens the database, checks its format (stamping a brand-new
+ * store, accepting a compatible one, or throwing `StoreFormatVersionError`)
+ * and takes its seat, the same on every open. `await` it before passing to
+ * the `Exchange`. A second open of the directory while one holds it throws.
  *
  * @param dbPath - Directory path where LevelDB stores its files
  *

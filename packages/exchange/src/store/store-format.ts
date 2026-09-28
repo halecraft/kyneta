@@ -11,8 +11,12 @@
 // This module is the shared *contract* — the version type, the typed error,
 // the pure decision, and the parser. The version *value* and the physical
 // store-metadata namespace (a table / object store / key-prefix) are owned
-// per backend; the format key name below is shared so tooling can locate the
-// version uniformly.
+// per backend; the key names below are shared so tooling can locate them
+// uniformly.
+//
+// The format decision is one half of opening a store; the other is taking a
+// seat, from the same namespace at the same moment. `planStoreOpen`
+// (`./store-open.ts`) makes both, and every backend opens through it.
 //
 // The gate is a compatibility gate, NOT a migration engine: it stamps,
 // accepts, or refuses. It deliberately performs no migration. Context and
@@ -23,6 +27,12 @@
  * on-disk format version is recorded.
  */
 export const STORE_META_FORMAT_KEY = "format"
+
+/**
+ * The key, within a backend's store-metadata namespace, under which the seat
+ * pool is recorded (see `./seats.ts`).
+ */
+export const STORE_META_SEATS_KEY = "seats"
 
 /**
  * A store's on-disk format revision.

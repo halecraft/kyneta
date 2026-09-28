@@ -19,6 +19,7 @@ import {
   settledFeed,
 } from "../settle.js"
 import { createInMemoryStore } from "../store/in-memory-store.js"
+import { sessionSeat } from "../store/seats.js"
 import type { Store } from "../store/store.js"
 import { sync, whenSettled } from "../sync.js"
 import { exchangesPerTest } from "./exchanges.js"
@@ -153,6 +154,7 @@ describe("settle — the storage term", () => {
     // the exact failure this layer exists to prevent. So the term stays false
     // and the document stays un-settled.
     const failing: Store = {
+      seat: sessionSeat(),
       async append() {},
       // biome-ignore lint/correctness/useYield: the point is that it throws
       async *loadAll() {
@@ -267,6 +269,7 @@ describe("whenSettled", () => {
     // alternative — resolving as though the document were empty — is how
     // defaults get written over data we could not read.
     const failing: Store = {
+      seat: sessionSeat(),
       async append() {},
       // biome-ignore lint/correctness/useYield: the point is that it throws
       async *loadAll() {
@@ -298,6 +301,7 @@ describe("whenSettled", () => {
     // were empty. This test is what stops the two waits being "simplified"
     // into one timeout later.
     const stuck: Store = {
+      seat: sessionSeat(),
       async append() {},
       async *loadAll() {},
       async mark() {

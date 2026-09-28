@@ -16,8 +16,11 @@ import { describe, expect, it, vi } from "vitest"
 import { Exchange } from "../exchange.js"
 import { Runtime, storeInputFor } from "../runtime.js"
 import { whenHydrated } from "../settle.js"
-import { createInMemoryStore } from "../store/in-memory-store.js"
-import type { Store } from "../store/store.js"
+import {
+  createInMemoryStore,
+  createInMemoryStoreData,
+  type InMemoryStoreData,
+} from "../store/in-memory-store.js"
 import { collectAll } from "../testing/store-conformance.js"
 import { wrapStore } from "./wrap-store.js"
 
@@ -59,10 +62,10 @@ describe("Runtime (standalone, no Exchange)", () => {
   })
 
   it("hydrates from stores on subsequent runs", async () => {
-    const store = createInMemoryStore()
+    const sharedData = createInMemoryStoreData()
 
     // First runtime: create and persist
-    const runtime1 = new Runtime({ store })
+    const runtime1 = new Runtime({ store: createInMemoryStore({ sharedData }) })
     const doc1 = runtime1.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
     // A stored plain document refuses writes until it has loaded.
     await whenHydrated(doc1)
@@ -71,7 +74,7 @@ describe("Runtime (standalone, no Exchange)", () => {
     await runtime1.shutdown()
 
     // Second runtime: hydrate from the same store
-    const runtime2 = new Runtime({ store })
+    const runtime2 = new Runtime({ store: createInMemoryStore({ sharedData }) })
     const doc2 = runtime2.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
 
     // Hydration is async — drain
@@ -82,9 +85,9 @@ describe("Runtime (standalone, no Exchange)", () => {
   })
 
   it("persists a mutation made after the initial flush (not just before it)", async () => {
-    const store = createInMemoryStore()
+    const sharedData = createInMemoryStoreData()
 
-    const runtime1 = new Runtime({ store })
+    const runtime1 = new Runtime({ store: createInMemoryStore({ sharedData }) })
     const doc1 = runtime1.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
 
     // Let initial registration/hydration fully settle FIRST — this is the
@@ -97,7 +100,7 @@ describe("Runtime (standalone, no Exchange)", () => {
     await runtime1.flush()
     await runtime1.shutdown()
 
-    const runtime2 = new Runtime({ store })
+    const runtime2 = new Runtime({ store: createInMemoryStore({ sharedData }) })
     const doc2 = runtime2.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
     await runtime2.flush()
 
@@ -106,10 +109,10 @@ describe("Runtime (standalone, no Exchange)", () => {
   })
 
   it("persists a mutation on a doc with genuine prior stored data (the 'hydrated' branch)", async () => {
-    const store = createInMemoryStore()
+    const sharedData = createInMemoryStoreData()
 
     // Generation 1: create + mutate + persist.
-    const runtime1 = new Runtime({ store })
+    const runtime1 = new Runtime({ store: createInMemoryStore({ sharedData }) })
     const doc1 = runtime1.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
     await whenHydrated(doc1)
     doc1.title.set("Buy milk")
@@ -118,7 +121,7 @@ describe("Runtime (standalone, no Exchange)", () => {
 
     // Generation 2: reopen (hydrates via the "hydrated" branch, since prior
     // stored data exists), mutate again, persist.
-    const runtime2 = new Runtime({ store })
+    const runtime2 = new Runtime({ store: createInMemoryStore({ sharedData }) })
     const doc2 = runtime2.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
     await whenHydrated(doc2)
     doc2.title.set("Buy milk and eggs")
@@ -126,7 +129,7 @@ describe("Runtime (standalone, no Exchange)", () => {
     await runtime2.shutdown()
 
     // Generation 3: reopen and assert both mutations survived.
-    const runtime3 = new Runtime({ store })
+    const runtime3 = new Runtime({ store: createInMemoryStore({ sharedData }) })
     const doc3 = runtime3.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
     await runtime3.flush()
 
@@ -617,20 +620,22 @@ describe("a document destroyed while it loads", () => {
 
 describe("writing to a stored plain document before it loads", () => {
   /** A store holding `todo-1`, written by an earlier session. */
-  async function storeWithTodo(): Promise<Store> {
-    const store = createInMemoryStore()
-    const runtime = new Runtime({ store })
+  async function storeWithTodo(): Promise<InMemoryStoreData> {
+    const storage = createInMemoryStoreData()
+    const runtime = new Runtime({
+      store: createInMemoryStore({ sharedData: storage }),
+    })
     const doc = runtime.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
     await whenHydrated(doc)
     doc.title.set("stored")
     await runtime.flush()
     await runtime.shutdown()
-    return store
+    return storage
   }
 
   it("throws for every authored write until loading completes", async () => {
-    const store = await storeWithTodo()
-    const runtime = new Runtime({ store })
+    const sharedData = await storeWithTodo()
+    const runtime = new Runtime({ store: createInMemoryStore({ sharedData }) })
     const doc = runtime.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
 
     expect(() => doc.title.set("early")).toThrow("still loading")
@@ -649,8 +654,8 @@ describe("writing to a stored plain document before it loads", () => {
   })
 
   it("keeps the store's lineage across its first write", async () => {
-    const store = await storeWithTodo()
-    const runtime = new Runtime({ store })
+    const sharedData = await storeWithTodo()
+    const runtime = new Runtime({ store: createInMemoryStore({ sharedData }) })
     const doc = runtime.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
     await whenHydrated(doc)
     const replica = () =>

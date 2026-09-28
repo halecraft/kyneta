@@ -36,6 +36,7 @@ import {
   type InMemoryStoreData,
   recordsOf,
 } from "../store/in-memory-store.js"
+import { sessionSeat } from "../store/seats.js"
 import type { Store, StoreRecord } from "../store/store.js"
 import { whenSettled } from "../sync.js"
 import { collectAll } from "../testing/store-conformance.js"
@@ -977,6 +978,7 @@ describe("onStoreError callback", () => {
     // which throws. The executor catches and dispatches `write-failed`.
     // The store-program emits `store-error`. The executor calls onStoreError.
     const failingStore: Store = {
+      seat: sessionSeat(),
       async append() {
         throw new Error("disk full")
       },

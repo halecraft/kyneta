@@ -2,8 +2,7 @@
 //
 // These tests exercise the PrismaStore's translation of Store calls
 // into Prisma model-accessor calls without depending on @prisma/client
-// at runtime (which would force a real schema generation step). No
-// conformance run reaches Prisma: these tests are its coverage. They
+// at runtime (which would force a real schema generation step). They
 // verify:
 //
 // 1. PrismaStore accepts a structurally-typed accessor object.
@@ -17,8 +16,12 @@
 // The structural-typing test is the load-bearing claim of the
 // `unknown`-with-internal-cast approach: any caller-supplied
 // PrismaClient with the right method signatures must work.
+//
+// The conformance suite runs over the same mock, which covers the contract
+// and the session seats every open issues, though not a real database.
 
 import type { StoreMeta } from "@kyneta/exchange"
+import { describeStore } from "@kyneta/exchange/testing"
 import { SYNC_AUTHORITATIVE } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import { createPrismaStore, PrismaStore } from "../index.js"
@@ -45,11 +48,27 @@ interface MockState {
    * this transaction's read of the last sequence number and its insert.
    */
   beforeCreate?: () => void
-  /** Records created by the transaction in progress, undone if it fails. */
-  createdInTx?: MockState["records"]
 }
 
-function makeMockClient(state: MockState): unknown {
+/**
+ * What one transaction wrote, to undo if it fails: the records it created,
+ * and each meta it set, with the value it replaced.
+ */
+interface Undo {
+  readonly records: MockState["records"]
+  readonly metas: Map<string, unknown>
+}
+
+/** The model accessors, recording writes into `undo` inside a transaction. */
+function makeModels(state: MockState, undo?: Undo): Record<string, unknown> {
+  const setMeta = (docId: string, data: unknown): void => {
+    if (undo && !undo.metas.has(docId)) {
+      undo.metas.set(docId, state.metas.get(docId))
+    }
+    if (data === undefined) state.metas.delete(docId)
+    else state.metas.set(docId, data)
+  }
+
   const metaModel = {
     async findUnique(args: { where: { docId: string } }) {
       const data = state.metas.get(args.where.docId)
@@ -77,15 +96,15 @@ function makeMockClient(state: MockState): unknown {
       create: { docId: string; data: unknown }
       update: { data: unknown }
     }) {
-      state.metas.set(args.where.docId, args.update.data)
+      setMeta(args.where.docId, args.update.data)
       return { docId: args.where.docId, data: args.update.data }
     },
     async delete(args: { where: { docId: string } }) {
-      state.metas.delete(args.where.docId)
+      setMeta(args.where.docId, undefined)
       return null
     },
     async deleteMany(args: { where: { docId: string } }) {
-      state.metas.delete(args.where.docId)
+      setMeta(args.where.docId, undefined)
       return null
     },
     async count() {
@@ -140,7 +159,7 @@ function makeMockClient(state: MockState): unknown {
         })
       }
       state.records.push(args.data)
-      state.createdInTx?.push(args.data)
+      undo?.records.push(args.data)
       return null
     },
     async deleteMany(args: {
@@ -160,33 +179,32 @@ function makeMockClient(state: MockState): unknown {
     },
   }
 
-  // The client's `$transaction` passes the same client object back as
-  // its `tx` argument. This means callers who wrap or rename outer
-  // model accessors (renamed model names; fault-injected methods) see
-  // those wrappings inside the transaction too, mirroring real Prisma's
-  // behavior where `tx` exposes the same model accessors as the client.
-  const client: Record<string, unknown> = {
+  return {
     kynetaDocMeta: metaModel,
     kynetaRecord: recordModel,
     kynetaStoreMeta: storeMetaModel,
   }
+}
+
+function makeMockClient(state: MockState): unknown {
+  // Each `$transaction` passes a `tx` exposing the same model accessors as
+  // the client, as real Prisma does, which record what it writes. A failed
+  // transaction undoes only its own writes: another's made meanwhile stand.
+  const client: Record<string, unknown> = makeModels(state)
   client.$transaction = async <R>(
     fn: (tx: unknown) => Promise<R>,
   ): Promise<R> => {
     state.txCalls += 1
-    // Roll back only what this transaction did: another instance's writes
-    // made meanwhile stand.
-    const metas = new Map(state.metas)
-    const created: MockState["records"] = []
-    state.createdInTx = created
+    const undo: Undo = { records: [], metas: new Map() }
     try {
-      return await fn(client)
+      return await fn(makeModels(state, undo))
     } catch (e) {
-      state.metas = metas
-      state.records = state.records.filter(r => !created.includes(r))
+      for (const [docId, data] of undo.metas) {
+        if (data === undefined) state.metas.delete(docId)
+        else state.metas.set(docId, data)
+      }
+      state.records = state.records.filter(r => !undo.records.includes(r))
       throw e
-    } finally {
-      state.createdInTx = undefined
     }
   }
   return client
@@ -199,7 +217,7 @@ function freshState(): MockState {
 describe("PrismaStore — structural mock", () => {
   it("append + loadAll round-trips a meta and an entry", async () => {
     const state = freshState()
-    const store = new PrismaStore({ client: makeMockClient(state) })
+    const store = await PrismaStore.open({ client: makeMockClient(state) })
 
     await store.append("doc-1", { kind: "meta", meta: baseMeta })
     await store.append("doc-1", {
@@ -218,13 +236,15 @@ describe("PrismaStore — structural mock", () => {
   })
 
   it("currentMeta returns null for nonexistent doc", async () => {
-    const store = new PrismaStore({ client: makeMockClient(freshState()) })
+    const store = await PrismaStore.open({
+      client: makeMockClient(freshState()),
+    })
     expect(await store.currentMeta("none")).toBeNull()
   })
 
   it("currentMeta returns a parsed StoreMeta after append", async () => {
     const state = freshState()
-    const store = new PrismaStore({ client: makeMockClient(state) })
+    const store = await PrismaStore.open({ client: makeMockClient(state) })
     await store.append("doc-1", { kind: "meta", meta: baseMeta })
 
     const meta = await store.currentMeta("doc-1")
@@ -233,7 +253,7 @@ describe("PrismaStore — structural mock", () => {
 
   it("delete clears both meta and records", async () => {
     const state = freshState()
-    const store = new PrismaStore({ client: makeMockClient(state) })
+    const store = await PrismaStore.open({ client: makeMockClient(state) })
     await store.append("doc-1", { kind: "meta", meta: baseMeta })
     await store.append("doc-1", {
       kind: "entry",
@@ -249,7 +269,7 @@ describe("PrismaStore — structural mock", () => {
 
   it("compact swaps what is at or before the mark, after what remains", async () => {
     const state = freshState()
-    const store = new PrismaStore({ client: makeMockClient(state) })
+    const store = await PrismaStore.open({ client: makeMockClient(state) })
     await store.append("doc-1", { kind: "meta", meta: baseMeta })
     await store.append("doc-1", {
       kind: "entry",
@@ -286,7 +306,7 @@ describe("PrismaStore — structural mock", () => {
 
   it("an append that loses its sequence number to another instance retries", async () => {
     const state = freshState()
-    const store = new PrismaStore({ client: makeMockClient(state) })
+    const store = await PrismaStore.open({ client: makeMockClient(state) })
     await store.append("doc-1", { kind: "meta", meta: baseMeta })
 
     // Another instance takes seq 1 after this append read the last seq (0).
@@ -316,7 +336,7 @@ describe("PrismaStore — structural mock", () => {
     // The mock's `startsWith` ignores case, as SQLite's LIKE and MySQL's
     // default collation do. The store must still return exact matches only.
     const state = freshState()
-    const store = new PrismaStore({ client: makeMockClient(state) })
+    const store = await PrismaStore.open({ client: makeMockClient(state) })
 
     await store.append("users/alice", { kind: "meta", meta: baseMeta })
     await store.append("Users/Bob", { kind: "meta", meta: baseMeta })
@@ -337,14 +357,16 @@ describe("PrismaStore — structural mock", () => {
     const renamed: Record<string, unknown> = {
       app_meta: base.kynetaDocMeta,
       app_record: base.kynetaRecord,
+      app_store_meta: base.kynetaStoreMeta,
     }
     renamed.$transaction = async (fn: (tx: unknown) => Promise<unknown>) =>
       fn(renamed)
 
-    const store = new PrismaStore({
+    const store = await PrismaStore.open({
       client: renamed,
       metaModel: "app_meta",
       recordModel: "app_record",
+      storeMetaModel: "app_store_meta",
     })
 
     await store.append("doc-1", { kind: "meta", meta: baseMeta })
@@ -367,7 +389,7 @@ describe("PrismaStore — structural mock", () => {
       return baseTx(fn)
     }
 
-    const store = new PrismaStore({ client: base })
+    const store = await PrismaStore.open({ client: base })
 
     // First append: tx #1 — succeeds, schemaHash="primer" persists.
     await store.append("doc-1", {
@@ -394,7 +416,7 @@ describe("PrismaStore — store-format gate", () => {
   it("createPrismaStore stamps a fresh store, then accepts it on reopen", async () => {
     const state = freshState()
     await createPrismaStore({ client: makeMockClient(state) })
-    expect(state.storeMetas.get("format")).toEqual({ major: 1, minor: 0 })
+    expect(state.storeMetas.get("format")).toEqual({ major: 1, minor: 1 })
 
     // Reopen against the same state: the marker round-trips, no throw.
     await expect(
@@ -415,3 +437,20 @@ describe("PrismaStore — store-format gate", () => {
     })
   })
 })
+
+describeStore(
+  "PrismaStore (structural mock)",
+  () => PrismaStore.open({ client: makeMockClient(freshState()) }),
+  {
+    seats: {
+      kind: "session",
+      storage: async () => {
+        const client = makeMockClient(freshState())
+        return {
+          open: () => PrismaStore.open({ client }),
+          cleanup: async () => {},
+        }
+      },
+    },
+  },
+)

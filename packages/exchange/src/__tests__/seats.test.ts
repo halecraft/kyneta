@@ -1,12 +1,13 @@
 // seats — the reproductions a caller-chosen peer id failed, through the
-// Exchange.
+// Exchange, and the durable seats a store issues.
 //
 // When the caller chose the peer id, a store-less page that reloaded, or a
 // duplicated tab, wrote again under an id whose history it did not hold. Its
 // operations took addresses the earlier writer's operations already occupied,
 // so both sides reached equal version vectors over different text and never
-// synced again. Each Runtime now issues its own seat, so every one of these
-// converges.
+// synced again. A Runtime without a store now issues itself a fresh seat, and
+// one with a store takes a seat from it that no other live writer holds and
+// whose history the store holds, so every one of these converges.
 
 import {
   Bridge,
@@ -18,7 +19,18 @@ import { type BoundSchema, batch, Schema } from "@kyneta/schema"
 import { yjs } from "@kyneta/yjs-schema"
 import { describe, expect, it } from "vitest"
 import type { Exchange } from "../exchange.js"
+import { persisted, persistenceError } from "../persistence.js"
+import { whenHydrated } from "../settle.js"
+import {
+  abandonSeat,
+  createInMemoryStoreData,
+  InMemoryStore,
+  recordsOf,
+} from "../store/in-memory-store.js"
+import { SeatLostError } from "../store/seats.js"
+import type { Store } from "../store/store.js"
 import { drain, exchangesPerTest } from "./exchanges.js"
+import { wrapStore } from "./wrap-store.js"
 
 const TextSchema = Schema.struct({ text: Schema.text() })
 
@@ -32,16 +44,18 @@ const backends: ReadonlyArray<readonly [string, Bound]> = [
 const createExchange = exchangesPerTest()
 
 /** An Exchange for `principal`, connected to `bridge` as `transportId` unless
- *  `offline`. */
+ *  `offline`, over `store` if given. */
 function open(
   principal: string,
   bridge: Bridge,
   transportId: string,
   offline = false,
+  store?: Store,
 ): Exchange {
   return createExchange({
     principal,
     transports: offline ? [] : [createBridgeTransport({ transportId, bridge })],
+    ...(store ? { store } : {}),
   })
 }
 
@@ -144,5 +158,147 @@ describe.each(backends)("seats (%s)", (_name, bound) => {
     for (const ex of [host, tabA, tabB]) {
       expect(textOf(ex, bound)).toBe("AAAhostBBB")
     }
+  })
+})
+
+describe.each(backends)("durable seats (%s)", (_name, bound) => {
+  it("two live Exchanges over one storage hold different seats, and a reload keeps one", async () => {
+    const bridge = new Bridge()
+    const storage = createInMemoryStoreData()
+    const a = open("user", bridge, "a", true, new InMemoryStore(storage))
+    const b = open("user", bridge, "b", true, new InMemoryStore(storage))
+    expect(a.peerId).not.toBe(b.peerId)
+
+    await a.shutdown()
+    const reloaded = open("user", bridge, "c", true, new InMemoryStore(storage))
+    expect(reloaded.peerId).toBe(a.peerId)
+  })
+
+  it("a crash that lost a write converges when the reload takes the same seat, and the lost write's late commit is refused", async () => {
+    // Store-first's reproduction, with the seat the crashed writer held
+    // issued again: the write the network never saw is lost, and the reload
+    // reissues its addresses. Nothing of it left the process, so no peer
+    // holds the old operations.
+    const bridge = new Bridge()
+    const host = open("host", bridge, "host")
+    textOf(host, bound)
+
+    const storage = createInMemoryStoreData()
+    const inner = new InMemoryStore(storage)
+    // Appends made while `held` is set wait for it, and each one's outcome
+    // is kept in `late`.
+    let release = () => {}
+    let held: Promise<void> | undefined
+    const late: Promise<unknown>[] = []
+    const store = wrapStore(inner, {
+      append: async (docId, record) => {
+        if (held === undefined) return inner.append(docId, record)
+        const waiting = held
+        const outcome = waiting.then(() => inner.append(docId, record))
+        late.push(
+          outcome.then(
+            () => "stored",
+            (error: unknown) => error,
+          ),
+        )
+        return outcome
+      },
+    })
+    const before = open("browser", bridge, "browser", false, store)
+    insert(before, bound, 0, "A")
+    await drain()
+    expect(textOf(host, bound)).toBe("A")
+
+    held = new Promise(resolve => {
+      release = resolve
+    })
+    append(before, bound, "B")
+    await drain()
+    expect(textOf(host, bound)).toBe("A")
+
+    // The crash: nothing is flushed, and the platform releases the seat.
+    createExchange.forget(before)
+    before.reset()
+    abandonSeat(inner)
+
+    const after = open(
+      "browser",
+      bridge,
+      "browser-2",
+      false,
+      new InMemoryStore(storage),
+    )
+    expect(after.peerId).toBe(before.peerId)
+    await whenHydrated(after.get("doc", bound))
+    append(after, bound, "C")
+    await drain()
+
+    // The crashed writer's held append lands late, and the fence refuses it.
+    const storedBefore = recordsOf(storage, "doc").length
+    release()
+    expect(late).toHaveLength(1)
+    for (const outcome of await Promise.all(late)) {
+      expect(outcome).toBeInstanceOf(SeatLostError)
+    }
+    expect(recordsOf(storage, "doc")).toHaveLength(storedBefore)
+    await drain()
+
+    expect(textOf(host, bound)).toBe("AC")
+    expect(textOf(after, bound)).toBe("AC")
+  })
+
+  it("a lost seat stops every write, reports itself on every document, and lets flush() resolve", async () => {
+    const bridge = new Bridge()
+    const host = open("host", bridge, "host")
+    textOf(host, bound)
+
+    const storage = createInMemoryStoreData()
+    const store = new InMemoryStore(storage)
+    const errors: unknown[] = []
+    const writer = createExchange({
+      principal: "writer",
+      transports: [createBridgeTransport({ transportId: "writer", bridge })],
+      store,
+      onStoreError: (_docId, _operation, error) => errors.push(error),
+    })
+    insert(writer, bound, 0, "A")
+    await drain()
+    expect(textOf(host, bound)).toBe("A")
+
+    // Another writer takes the seat, as a new tab does once this one's lock
+    // is released while it still runs.
+    abandonSeat(store)
+    const other = open(
+      "writer",
+      bridge,
+      "other",
+      true,
+      new InMemoryStore(storage),
+    )
+    expect(other.peerId).toBe(writer.peerId)
+
+    append(writer, bound, "X")
+    await drain()
+    const doc = writer.get("doc", bound)
+    expect(textOf(host, bound)).toBe("A")
+    expect(persisted(doc)).toBe(false)
+    expect(persistenceError(doc)).toBeInstanceOf(SeatLostError)
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toBeInstanceOf(SeatLostError)
+
+    // A document opened after the loss reports it too.
+    const later = writer.get("later", bound)
+    await whenHydrated(later)
+    expect(persistenceError(later)).toBeInstanceOf(SeatLostError)
+    batch(later, d => d.text.insert(0, "Y"))
+    await drain()
+    expect(persisted(later)).toBe(false)
+    expect(host.get("later", bound).text()).toBe("")
+
+    await writer.flush()
+    append(writer, bound, "Z")
+    await drain()
+    expect(textOf(host, bound)).toBe("A")
+    expect(errors).toHaveLength(1)
   })
 })

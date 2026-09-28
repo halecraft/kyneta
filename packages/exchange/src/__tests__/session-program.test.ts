@@ -931,7 +931,8 @@ describe("session-program", () => {
 
     it("a second channel for a connected seat is not a diagnostic", () => {
       // One peer over several transports, or a reconnect that overlaps its
-      // predecessor: seats are issued per Runtime, so it is never two peers.
+      // predecessor's dead connection: no two live Runtimes hold one seat, so
+      // it is never two peers.
       const update = makeUpdate()
       let model = initSession(alice)
       ;[model] = establishChannel(update, model, 1, bob)

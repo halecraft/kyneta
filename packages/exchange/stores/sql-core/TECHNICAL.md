@@ -17,7 +17,7 @@ A driver-agnostic foundation for the SQL-family `Store` implementations. Holds t
 
 ## Tables: `doc_meta`, `records`, `store_meta`
 
-A SQL-family backend owns three tables. `kyneta_doc_meta(doc_id, data)` is the per-document metadata map; `kyneta_records(doc_id, seq, …)` is the unified record stream; `kyneta_store_meta(key, value)` is **store-global** metadata keyed by an opaque `key`, not a `doc_id`. The on-disk format version lives in `store_meta` under `key = "format"` and is read by a bootstrap reader on open (see *Store-format gate*) — never through the `Store` interface. The `doc_meta` vs `store_meta` names disambiguate the two kinds (renamed from the former single `kyneta_meta`).
+A SQL-family backend owns three tables. `kyneta_doc_meta(doc_id, data)` is the per-document metadata map; `kyneta_records(doc_id, seq, …)` is the unified record stream; `kyneta_store_meta(key, value)` is **store-global** metadata keyed by an opaque `key`, not a `doc_id`. The on-disk format version lives in `store_meta` under `key = "format"`, and the seat pool under `key = "seats"`; both are read on open (see *Store-format gate*) — never through the `Store` interface. The `doc_meta` vs `store_meta` names disambiguate the two kinds (renamed from the former single `kyneta_meta`).
 
 ## The `(kind, payload, blob)` triple
 
@@ -47,7 +47,7 @@ The `kyneta_` prefix avoids collisions with application tables and signals the s
 
 ## Store-format gate
 
-`STORE_FORMAT_VERSION` (`{ major: 1, minor: 0 }`) is the SQL-family on-disk format version, shared by all three backends because they share `RowShape`/`EntryPayloadJson` — bumping it here revs them in lockstep. On open, each backend reads `store_meta.format`, probes whether `doc_meta` holds any rows, and runs `@kyneta/exchange`'s pure `decideStoreFormat`: a brand-new (empty) store is stamped with the current version; a same-major store is accepted (minor differences are backward-compatible); an incompatible major, or an unversioned store that already holds documents, throws `StoreFormatVersionError`. The gate is a compatibility check, **not** a migration engine — no rewrite is performed.
+`STORE_FORMAT_VERSION` (`{ major: 1, minor: 1 }`) is the SQL-family on-disk format version, shared by all three backends because they share `RowShape`/`EntryPayloadJson` and the store-metadata layout — bumping it here revs them in lockstep, even when a change touches only some of them. 1.1 added the seat pool, which SQLite and Postgres keep and Prisma does not; for Prisma the bump is harmless. On open, each backend reads `store_meta`'s `format` and `seats` rows, probes whether `doc_meta` holds any rows, and runs `@kyneta/exchange`'s pure `planStoreOpen`, whose format half is: a brand-new (empty) store is stamped with the current version; a same-major store is accepted (minor differences are backward-compatible); an incompatible major, or an unversioned store that already holds documents, throws `StoreFormatVersionError`. The gate is a compatibility check, **not** a migration engine — no rewrite is performed.
 
 ## Pure planning helpers
 

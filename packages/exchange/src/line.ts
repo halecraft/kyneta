@@ -32,6 +32,7 @@ import {
 import type { DocId, PeerIdentityDetails } from "@kyneta/transport"
 import { AsyncQueue } from "./async-queue.js"
 import type { Exchange } from "./exchange.js"
+import { hydrated, whenHydrated } from "./settle.js"
 
 // ---------------------------------------------------------------------------
 // Line doc schema factory
@@ -293,7 +294,12 @@ export class Line<SendMsg, RecvMsg>
   readonly #unsubscribeInbox: () => void
   #nextSeq = 1
   #lastProcessedSeq = 0
-  #inboxLineage: string
+  #inboxLineage = ""
+  /**
+   * Messages sent before the documents loaded, written once they have.
+   * `undefined` from then on: the Line has resumed.
+   */
+  #unsent: SendMsg[] | undefined = []
   #closed = false
   #refCount = 1
   #consumerAttached = false
@@ -319,24 +325,6 @@ export class Line<SendMsg, RecvMsg>
     this.#disposePolicy = disposePolicy
     this.#queue = new AsyncQueue<RecvMsg>()
 
-    this.#inboxLineage = version(inbox).lineage
-
-    // Resume persisted protocol state from the outbox document.
-    // Zero.structural defaults: Schema.number() → 0.
-    // nextSeq 0 means the Line has never sent — start at 1.
-    const persistedNextSeq = outbox.nextSeq() as number
-    this.#nextSeq = persistedNextSeq || 1
-
-    const ackLineage = outbox.ackLineage() as string
-    if (ackLineage === this.#inboxLineage) {
-      this.#lastProcessedSeq = outbox.ackSeq() as number
-    } else {
-      this.#lastProcessedSeq = 0
-    }
-
-    // Scan for any existing messages (handles reconnection / late open)
-    this.#processInbox()
-
     // Subscribe to inbox changes — dispatch to callbacks and queue.
     // The Line never writes to its own inbox locally; inbox changes are
     // delivered exclusively by merges from the sender.
@@ -344,6 +332,46 @@ export class Line<SendMsg, RecvMsg>
     this.#unsubscribeInbox = subscribe(inbox, () => {
       this.#processInbox()
     })
+
+    // A stored Line resumes from what its documents held when the process
+    // stopped, so it reads its cursors only once both have loaded. Read
+    // earlier, they would be the empty document's, and every stored message
+    // would be delivered again.
+    if (hydrated(outbox) && hydrated(inbox)) {
+      this.#resume()
+    } else {
+      Promise.all([whenHydrated(outbox), whenHydrated(inbox)]).then(
+        () => this.#resume(),
+        (error: unknown) => {
+          console.warn(
+            `[line] '${topic}' with ${remotePeerId} cannot resume: its documents did not load`,
+            error,
+          )
+        },
+      )
+    }
+  }
+
+  /** Take up the protocol state the documents hold, and start. */
+  #resume(): void {
+    if (this.#closed) return
+    this.#inboxLineage = version(this.#inbox).lineage
+
+    // Zero.structural defaults: Schema.number() → 0.
+    // nextSeq 0 means the Line has never sent — start at 1.
+    const persistedNextSeq = this.#outbox.nextSeq() as number
+    this.#nextSeq = persistedNextSeq || 1
+
+    const ackLineage = this.#outbox.ackLineage() as string
+    this.#lastProcessedSeq =
+      ackLineage === this.#inboxLineage ? (this.#outbox.ackSeq() as number) : 0
+
+    const unsent = this.#unsent ?? []
+    this.#unsent = undefined
+    for (const msg of unsent) this.#write(msg)
+
+    // Scan for any existing messages (handles reconnection / late open)
+    this.#processInbox()
   }
 
   /** The topic for this Line. */
@@ -371,12 +399,18 @@ export class Line<SendMsg, RecvMsg>
    * The message is type-checked against the send schema at compile time.
    * Internally appends `{ seq, payload }` to the outbox doc's `messages`
    * list. The Exchange's changefeed → synchronizer wiring pushes it to
-   * the remote peer.
+   * the remote peer. A message sent before the Line's stored documents have
+   * loaded is appended once they have.
    */
   send(msg: SendMsg): void {
     if (this.#closed) {
       throw new Error("Cannot send on a closed Line")
     }
+    if (this.#unsent) this.#unsent.push(msg)
+    else this.#write(msg)
+  }
+
+  #write(msg: SendMsg): void {
     batch(this.#outbox, (d: any) => {
       // Always read from doc to handle sync updates (e.g. restart recovery)
       const persistedNextSeq = (d.nextSeq() as number) || 1
@@ -460,7 +494,7 @@ export class Line<SendMsg, RecvMsg>
   // -----------------------------------------------------------------------
 
   #processInbox(): void {
-    if (this.#closed) return
+    if (this.#closed || this.#unsent) return
 
     const currentInboxLineage = version(this.#inbox).lineage
 

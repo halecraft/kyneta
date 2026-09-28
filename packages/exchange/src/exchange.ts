@@ -252,7 +252,10 @@ function rethrowErrors(errors: unknown[]): void {
 }
 
 export class Exchange {
-  /** This replica's seat, issued by its {@link Runtime}. */
+  /**
+   * This replica's seat: the one its store issued, or a fresh one without a
+   * store. See {@link Runtime.seat}.
+   */
   readonly peerId: string
   /** Who this Exchange says it is. */
   readonly principal: string

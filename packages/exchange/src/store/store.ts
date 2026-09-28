@@ -1,8 +1,9 @@
 // store — persistence contract for the Exchange.
 //
 // The Store interface defines document-level operations that concrete
-// backends implement. Backends need no knowledge of the wire protocol,
-// substrates, sync protocols, or schemas.
+// backends implement, and the seat the store issues its Runtime. Backends
+// need no knowledge of the wire protocol, substrates, sync protocols, or
+// schemas; they own their records, their seat pool and its fences.
 //
 // The contract is a unified record stream: both metadata and payload
 // entries are `StoreRecord` values in a single ordered sequence per doc.
@@ -21,6 +22,7 @@ import {
   type SubstratePayload,
 } from "@kyneta/schema"
 import type { DocId } from "@kyneta/transport"
+import type { Seat } from "./seats.js"
 
 // ---------------------------------------------------------------------------
 // StoreMeta — per-document metadata (storage type)
@@ -77,11 +79,12 @@ export type StoreRecord =
 // prefix, a `doc_meta` object store).
 //
 // Separately, a backend holds *store-global* metadata — facts about the store
-// as a whole, with no `docId`. The first such fact is the on-disk format
-// version (see `./store-format.ts`). It lives in a distinct "store_meta"
-// namespace, physically separate from the per-doc map, and is read by a
-// bootstrap reader on open — *before* the per-doc contract is trusted. It is
-// not a document and never transits this interface. Keeping the two kinds in
+// as a whole, with no `docId`: the on-disk format version
+// (see `./store-format.ts`) and the seat pool (see `./seats.ts`). It lives in
+// a distinct "store_meta" namespace, physically separate from the per-doc
+// map, and is read on open (`./store-open.ts`) — *before* the per-doc
+// contract is trusted — and by a pooled store's fence check. It is not a
+// document and never transits this interface. Keeping the two kinds in
 // separate, self-describing namespaces (doc_meta vs store_meta) is why a
 // store-global fact is never addressed by a `docId`. Context: jj:uvssotsy.
 
@@ -103,16 +106,29 @@ export type StoreMark = number
  * retrieve `StoreRecord` values faithfully.
  *
  * - **An instance is owned by one Runtime**, which calls it sequentially per
- *   document.
- * - **Several instances may open one storage.** Their appends to one document
- *   interleave, and each must succeed: a record's position comes from the
- *   storage, never from a counter one instance keeps.
+ *   document, and writes under the instance's `seat`.
+ * - **Several instances may open one storage**, unless the backend's seat is
+ *   `owned`, in which case a second open is refused. Their appends to one
+ *   document interleave, and each must succeed: a record's position comes
+ *   from the storage, never from a counter one instance keeps.
+ * - **A pooled seat fences every write.** `append`, `compact` and `delete`
+ *   read the pool inside their own transaction and call `assertSeatHeld`, so
+ *   a write by an instance whose seat was claimed again throws
+ *   `SeatLostError` and changes nothing.
+ * - **A closed instance refuses every operation.**
  * - **`compact` removes only what its caller has read**: the records at or
  *   before a mark the caller took before reading.
  * - **Readers must not depend on record order across instances.** Records of
  *   different instances reach a loader in an order no single writer chose.
  */
 export interface Store {
+  /**
+   * The identity this store's Runtime writes under, issued when the store
+   * opened and released by `close()`, or by the platform when the holder
+   * dies.
+   */
+  readonly seat: Seat
+
   /**
    * Append a record to a document's stream.
    *
@@ -179,8 +195,8 @@ export interface Store {
   listDocIds(prefix?: string): AsyncIterable<DocId>
 
   /**
-   * Release resources held by this backend (file handles, connections).
-   * Called by `Exchange.shutdown()`.
+   * Release the seat and the resources held by this backend (file handles,
+   * connections). Called by `Runtime.shutdown()`.
    */
   close(): Promise<void>
 }

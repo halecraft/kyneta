@@ -420,7 +420,7 @@ const exchange = new Exchange({
 })
 ```
 
-> **Peer identity:** you name a `principal`, who this exchange speaks for: a user, a service. Several exchanges may share one. The exchange issues its own `peerId`, its **seat**: a fresh id each session, which is the address its operations are written under. Key policies on `principal` when you mean *who*, and on `peerId` when you mean *which replica*. Input documents above are keyed by seat, one per tab.
+> **Peer identity:** you name a `principal`, who this exchange speaks for: a user, a service. Several exchanges may share one. The exchange issues its own `peerId`, its **seat**, which is the address its operations are written under. **A store makes the seat stable across restarts**: the store issues it, and a reload over the same storage gets it back, while two tabs or processes open at once hold different seats. Without a store, each session is a new peer. Key policies on `principal` when you mean *who*, and on `peerId` when you mean *which replica*. Input documents above are keyed by seat, one per tab.
 
 ### Heterogeneous Documents
 
@@ -533,6 +533,8 @@ const doc = exchange.get("my-doc", TodoDoc)
 ```
 
 **With a store, a local write reaches peers once it is stored.** The exchange holds a document's offers back while the store has not confirmed its own writes, so a crash can never leave peers holding writes this peer's next session does not know it made. That costs one store write of latency. `persisted(doc)` and `await whenPersisted(doc)` tell you when a document's writes are confirmed, and `persistenceError(doc)` why not. A failed store write is retried on its own, 250 ms after the failure and doubling to 30 s. Without a store, writes are sent at once.
+
+**If another writer takes this exchange's seat**, its store rejects every write with `SeatLostError`: `onStoreError` fires once, and `persistenceError(doc)` reports it for every stored document, including ones opened afterwards. Nothing more is written or sent. It happens when a browser released a page's Web Lock while the page was still running, or a Postgres server ended the store's connection. Recover by opening a new store: in a browser, reload.
 
 **A `json` document has one writer.** If two peers author one (or a writer restarts without its store and writes before it has synced), each mints its own lineage. When the lineages meet, every peer converges on the one minted later, the other's writes are gone, and both sides report a `lineage-collision` diagnostic (an error, on the console and the observation bus).
 
@@ -664,9 +666,7 @@ Chat.listen(exchange).onReceive((reply, receiver) => {
 })
 ```
 
-Two limitations, until stores can keep a seat across restarts:
-
-- **`Line`s do not survive a server restart.** A restarted server is a new seat. Clients find it with `whenPeer` and open new `Line`s; anything in flight to the old seat is lost.
+- **A `Line` to a stored server survives its restart.** The server returns with the same seat and resumes from its store, and the client's `Line` carries on, with nothing lost or delivered twice. A server without a store (or with Prisma, whose every open is a new seat) is a new seat after a restart: clients find it with `whenPeer` and open new `Line`s, and anything in flight to the old seat is lost.
 - **`Line` documents to a seat that never returns stay stored** on its peer, and every store-less session is a new seat. Nothing removes them yet.
 
 ### Escape Hatches
@@ -766,7 +766,7 @@ reply as the server's verdict.
 authority: p => p.principal === "my-server"   // recommended
 ```
 
-Not by `peerId` either: that is the server's seat, issued per process, and it changes when the server restarts.
+Not by `peerId` either: that is the server's seat. A server without a store gets a new one on every restart, and several server processes over one store hold one each.
 
 ### Reading the status directly
 
@@ -882,10 +882,10 @@ You only engage the next level when you need it. Each level is additive — it d
 
 | Option | Description |
 |--------|-------------|
-| `principal` | `string` — who this exchange speaks for. Required, non-empty. Several exchanges may share one. The exchange issues its own `peerId`. |
+| `principal` | `string` — who this exchange speaks for. Required, non-empty. Several exchanges may share one. The exchange issues its own `peerId`: its store's seat, or a fresh one without a store. |
 | `type` | `"user" \| "bot" \| "service"` — the peer's role. Default `"user"`. |
 | `transports` | `TransportFactory[]` — network connectivity. |
-| `store` | `Store` — the persistent storage backend. |
+| `store` | `Store` — the persistent storage backend. It issues the exchange's seat, which a restart over the same storage keeps. |
 | `schemas` | `BoundSchema[]` — upfront schema registration for auto-resolution. |
 | `replicas` | `BoundReplica[]` — replication modes for headless participation. E.g. `[loro.replica()]`. |
 | `canShare` | `(docId, peer) → boolean \| undefined` — outbound flow control. Default: allow. |
@@ -923,7 +923,7 @@ Standalone functions, not members of `sync(doc)`. They divide by three questions
 | `persisted(doc)` | `boolean` — has the store confirmed every write this peer made to the document? `true` without a store. Until it is, the exchange sends peers nothing of the document. |
 | `persistedFeed(doc)` | Observable form of `persisted`. A callable, so never put it in an `if`. |
 | `whenPersisted(doc)` | Resolve once `persisted`. Rejects at once if a store write failed and none has succeeded since, and rejects if one fails while waiting. Writes are retried on their own, so a caller can check `persistenceError` and wait again. |
-| `persistenceError(doc)` | The error of the latest failed store write, cleared by the next write that succeeds. Covers every store write, including one that stores only operations imported from peers, so it can be set while `persisted` is true. |
+| `persistenceError(doc)` | The error of the latest failed store write, cleared by the next write that succeeds. Covers every store write, including one that stores only operations imported from peers, so it can be set while `persisted` is true. After the seat is lost, the `SeatLostError`, for good. |
 
 `whenSettled` and `docStatus` resolve the authority the same way, so they cannot disagree: call-site `opts.authority` → the Exchange's `Policy.authority` → `"any"`.
 

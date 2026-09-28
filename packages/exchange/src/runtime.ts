@@ -25,7 +25,6 @@
 import type { Changeset } from "@kyneta/changefeed"
 import type { Lease, ObservableHandle } from "@kyneta/machine"
 import { createLease, createObservableProgram } from "@kyneta/machine"
-import { randomPeerId } from "@kyneta/random"
 import type {
   BoundSchema,
   DocRef,
@@ -55,6 +54,7 @@ import { planInterpretation } from "./interpret.js"
 import { registerPersistenceTerm } from "./persistence.js"
 import { gateOpen } from "./publish-gate.js"
 import { makeSettleTerm, registerHydrationTerm } from "./settle.js"
+import { type Seat, SeatLostError, sessionSeat } from "./store/seats.js"
 import type { Store, StoreRecord } from "./store/store.js"
 import {
   allDocsSettled,
@@ -384,11 +384,17 @@ export type RuntimeHooks = {
  * Options for creating a {@link Runtime}.
  */
 export type RuntimeParams = {
-  /** The store documents persist to and load from. */
+  /**
+   * The store documents persist to and load from. It also issues the
+   * Runtime's seat, which survives a restart over the same storage.
+   */
   store?: Store
 
   /**
-   * Called when a store operation fails. Default: `console.warn`.
+   * Called when a store operation fails. Default: `console.warn`. A
+   * `SeatLostError` is reported once: another writer holds this Runtime's
+   * seat, so it writes nothing more, and the application recovers by opening
+   * a new store (in a browser, by reloading).
    */
   onStoreError?: (docId: DocId, operation: string, error: unknown) => void
 
@@ -434,10 +440,15 @@ export type RuntimeParams = {
  */
 export class Runtime {
   /**
-   * This replica's seat: a fresh random id, never chosen by the caller, so no
-   * other writer holds it and no earlier writer's history is missing from it.
+   * This replica's seat, never chosen by the caller. With a store, it is the
+   * seat the store issued, which an earlier writer over the same storage may
+   * have held. A stored document claims it only once it has loaded, and the
+   * store holds every operation issued under it (store-first), so none is
+   * missing. Without a store, it is a fresh id per Runtime.
    */
-  readonly peerId: string = randomPeerId()
+  readonly seat: Seat
+  /** The seat's peer id. */
+  readonly peerId: string
   readonly lease: Lease
 
   readonly #store: Store | undefined
@@ -480,6 +491,8 @@ export class Runtime {
   }: RuntimeParams = {}) {
     this.lease = lease ?? createLease()
     this.#store = store
+    this.seat = store?.seat ?? sessionSeat()
+    this.peerId = this.seat.peerId
     this.#tickIntervalMs = tickInterval
 
     // ── Store-program — pure machine for store coordination ──
@@ -516,8 +529,18 @@ export class Runtime {
               this.#cancelRetry(docId)
               store.delete(docId).then(
                 () => {}, // No write-succeeded for destroy
-                error => errorHandler(docId, "delete", error),
+                error =>
+                  error instanceof SeatLostError
+                    ? dispatch({ type: "seat-lost", docId, error })
+                    : errorHandler(docId, "delete", error),
               )
+              break
+            }
+            case "seat-lost": {
+              this.#cancelAllRetries()
+              for (const entry of this.#docCache.values()) {
+                if (entry.mode === "interpret") this.#reportPersistence(entry)
+              }
               break
             }
             case "store-error": {
@@ -920,10 +943,17 @@ export class Runtime {
     write: Write,
     dispatch: (msg: StoreInput) => void,
   ): void {
+    const failed = (error: unknown): void =>
+      dispatch(
+        error instanceof SeatLostError
+          ? { type: "seat-lost", docId, error }
+          : { type: "write-failed", docId, error },
+      )
+
     if (write.kind === "compact") {
       this.#compact(store, docId).then(
         version => dispatch({ type: "write-succeeded", docId, version }),
-        error => dispatch({ type: "write-failed", docId, error }),
+        failed,
       )
       return
     }
@@ -932,7 +962,7 @@ export class Runtime {
     try {
       prepared = this.#prepareWrite(docId, write)
     } catch (error) {
-      dispatch({ type: "write-failed", docId, error })
+      failed(error)
       return
     }
     const { records, version } = prepared
@@ -945,7 +975,7 @@ export class Runtime {
 
     writeRecords(store, docId, write, records).then(
       () => dispatch({ type: "write-succeeded", docId, version }),
-      error => dispatch({ type: "write-failed", docId, error }),
+      failed,
     )
   }
 
@@ -1257,7 +1287,7 @@ export class Runtime {
           return () => publication.listeners.delete(onChange)
         },
       ),
-      () => publication.error,
+      () => this.#persistenceError(entry),
     )
 
     if (willHydrate) {
@@ -1692,12 +1722,22 @@ export class Runtime {
     return this.#gateOpen(entry)
   }
 
+  /**
+   * What `persistenceError` reports: the lost seat once the store program
+   * holds one, since it fails every document's writes, including a document
+   * opened afterwards; otherwise the document's own latest write error.
+   */
+  #persistenceError(entry: InterpretEntry): unknown | undefined {
+    if (!this.#usesStore(entry.readyInfo.syncMode)) return undefined
+    return this.#storeHandle?.getState().seatLost ?? entry.publication.error
+  }
+
   /** Tell the persistence term's subscribers, if what it reports moved. */
   #reportPersistence(entry: InterpretEntry): void {
     const publication = entry.publication
     const now = {
       persisted: this.#persisted(entry),
-      error: publication.error,
+      error: this.#persistenceError(entry),
     }
     const before = publication.reported
     if (before.persisted === now.persisted && before.error === now.error) {

@@ -5,6 +5,8 @@
 // The factory builder accepts { peerId } and returns a SubstrateFactory that
 // derives one deterministic PeerID from it via loroPeerId, so all of an
 // exchange's documents speak as its seat, the peer id its Runtime issued.
+// With a store, the store issues that seat, and it survives a restart over
+// the same storage; without one, every Runtime is a new seat.
 //
 // Every construction path claims that PeerID; they differ only in *when*.
 // A document that will first import its own stored history has to wait —

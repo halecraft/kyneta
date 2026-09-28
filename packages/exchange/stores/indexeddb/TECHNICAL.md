@@ -4,8 +4,8 @@
 > **Role**: IndexedDB persistence backend for `@kyneta/exchange` — implements the `Store` interface using the browser's native IndexedDB API, with two object stores (meta + records), structured clone serialization (no binary envelope), and transaction-based atomicity.
 > **Depends on**: `@kyneta/exchange` (peer), `@kyneta/schema` (peer)
 > **Depended on by**: Browser applications that want client-side persistent storage behind an `Exchange`.
-> **Canonical symbols**: `IndexedDBStore`, `createIndexedDBStore`, `deleteIndexedDBStore`
-> **Key invariant(s)**: Every mutating `Store` method executes within a single IDB `readwrite` transaction spanning both object stores — a crash or tab close mid-transaction leaves either the old state or the new state, never a partial write. `compact()` deletes a doc's records at or before a mark and writes the new ones in one transaction. Structured clone preserves `Uint8Array` and `string` natively, eliminating the binary envelope needed by LevelDB.
+> **Canonical symbols**: `IndexedDBStore`, `createIndexedDBStore`, `deleteIndexedDBStore`, `IndexedDBStoreOptions`, `SeatLocks`
+> **Key invariant(s)**: Every mutating `Store` method executes within a single IDB `readwrite` transaction spanning the document stores and `store_meta`, and checks its seat's fence there — a crash or tab close mid-transaction leaves either the old state or the new state, never a partial write, and a store whose seat was taken again writes nothing. A seat lock is only ever requested while holding the database's allocation lock. `compact()` deletes a doc's records at or before a mark and writes the new ones in one transaction. Structured clone preserves `Uint8Array` and `string` natively, eliminating the binary envelope needed by LevelDB.
 
 A browser-side implementation of `@kyneta/exchange`'s `Store` interface. Maps the exchange's per-doc append / compact / load API onto two IndexedDB object stores: `meta` (keyed by `docId`) and `records` (auto-increment primary key with a `byDoc` index). IDB's structured clone algorithm serializes `StoreRecord` values directly — no custom encoding step.
 
@@ -22,13 +22,14 @@ Consumed by browser applications wiring `store: await createIndexedDBStore("my-d
 - What are the IDB Promise wrappers? → [IDB Promise wrappers](#idb-promise-wrappers)
 - How does `compact()` avoid a partial write? → [`compact` is one transaction](#compact-is-one-transaction)
 - Can several tabs open one database? → [Why auto-increment keys replace zero-padded seqNo](#why-auto-increment-keys-replace-zero-padded-seqno)
+- Why does a reloaded page keep its `peerId`, and a duplicated tab not share it? → [Seats](#seats)
 - Can two tabs share one store? → [What `IndexedDBStore` is NOT](#what-indexeddbstore-is-not)
 
 ## Vocabulary
 
 | Term | Means | Not to be confused with |
 |------|-------|-------------------------|
-| `Store` | The interface defined in `@kyneta/exchange` — `append`, `loadAll`, `mark`, `compact`, `delete`, `currentMeta`, `listDocIds`, `close`. | A reactive store, a database with queries — this is an append log keyed by doc, compacted by mark |
+| `Store` | The interface defined in `@kyneta/exchange` — `seat`, `append`, `loadAll`, `mark`, `compact`, `delete`, `currentMeta`, `listDocIds`, `close`. | A reactive store, a database with queries — this is an append log keyed by doc, compacted by mark |
 | `IndexedDBStore` | The concrete class that implements `Store` over the browser's IndexedDB API. | IndexedDB itself — this is a thin mapping layer |
 | `StoreMeta` | JSON-serializable per-doc metadata from `@kyneta/exchange`. Stored as a row in the `meta` object store and also present as a `meta`-kind record in the `records` stream. | `StoreRecord`, which is the union of meta and entry records |
 | `StoreRecord` | Discriminated union: `{ kind: "meta", meta: StoreMeta }` or `{ kind: "entry", payload: SubstratePayload, version: string }` — one appended piece of doc state. Stored as a `RecordRow` value in the `records` object store. | `StoreMeta` — a `StoreRecord` *contains* a `StoreMeta` when `kind === "meta"` |
@@ -55,19 +56,20 @@ Object store "records":
   index "byDoc": keyPath "docId" (non-unique)
   value: RecordRow { id?, docId, record: StoreRecord }
 
-Object store "store_meta": (store-global metadata, e.g. format version)
+Object store "store_meta": (store-global metadata: format version, seat pool)
   keyPath: "key"
   value: { key, value }
 ```
 
-The `doc_meta` store is a **materialized index** — it stores the resolved `StoreMeta` for fast lookup via `currentMeta()` without scanning the record stream. Updated on every `meta`-kind `append` and during `compact`. (Renamed from `meta` to disambiguate from `store_meta`.) The `store_meta` store holds store-global facts keyed by an opaque `key` (the on-disk format version under `key = "format"`), read by a bootstrap reader on open — never through the `Store` interface. `DB_VERSION` was bumped 1 → 2 to introduce both via `onupgradeneeded`; that structural version is orthogonal to the data-format version held in `store_meta`.
+The `doc_meta` store is a **materialized index** — it stores the resolved `StoreMeta` for fast lookup via `currentMeta()` without scanning the record stream. Updated on every `meta`-kind `append` and during `compact`. (Renamed from `meta` to disambiguate from `store_meta`.) The `store_meta` store holds store-global facts keyed by an opaque `key` (the on-disk format version under `key = "format"`, the seat pool under `key = "seats"`), read on open and by each write's fence check — never through the `Store` interface. `DB_VERSION` was bumped 1 → 2 to introduce both via `onupgradeneeded`; that structural version is orthogonal to the data-format version held in `store_meta`.
 
 The entire package is one class plus two factories plus three IDB Promise wrappers:
 
 | Component | Role |
 |-----------|------|
-| `IndexedDBStore` | Implements `Store`. Owns one `IDBDatabase` handle. |
-| `createIndexedDBStore(dbName)` | Async factory — `IndexedDBStore.open(dbName)` behind a plain function signature. |
+| `IndexedDBStore` | Implements `Store`. Owns one `IDBDatabase` handle and one seat lock. |
+| `createIndexedDBStore(dbName, options?)` | Async factory — `IndexedDBStore.open(dbName, options)` behind a plain function signature. |
+| `openPooledSeat`, `openSeat`, `holdLock` | Seat allocation: see [Seats](#seats). |
 | `deleteIndexedDBStore(dbName)` | Deletes an IndexedDB database entirely. For test cleanup and development. |
 | `req(request)` | Wraps an `IDBRequest` in a `Promise`. |
 | `txDone(tx)` | Wraps an `IDBTransaction`'s completion in a `Promise`. |
@@ -77,8 +79,8 @@ The entire package is one class plus two factories plus three IDB Promise wrappe
 
 - **Not a reactive store.** There is no subscribe, no changefeed. The exchange wires its own reactive layer above the store.
 - **Not a query engine.** The only lookup primitive is "give me everything for this doc" (`loadAll`) or "give me the metadata for this doc" (`currentMeta`). No predicates, no ad-hoc secondary indexes beyond the built-in `byDoc` index.
-- **Not shared across tabs.** Each browser tab gets its own connection. Two tabs opening the same `dbName` will see the same data on disk, but concurrent writes from separate `IndexedDBStore` instances can interleave at the transaction boundary. Each tab should have its own `Exchange` with its own store instance, or use a `SharedWorker` / `BroadcastChannel` coordination pattern above this layer.
-- **Not a migration engine.** Schema migrations happen at the `@kyneta/schema` layer. The store-format gate run by `IndexedDBStore.open` is a *compatibility check*, not a migration: it stamps a `{ major, minor }` version into `store_meta` on a brand-new store, accepts a compatible one, or throws `StoreFormatVersionError` (releasing the connection so the refusal doesn't block `deleteDatabase`) — but never rewrites. This store just persists whatever `StoreRecord` values the substrate produced.
+- **Not shared across tabs as an instance.** Each browser tab opens its own store, with its own connection and its own seat. Several tabs over one `dbName` see the same data, and their writes interleave at transaction boundaries, which the store contract allows.
+- **Not a migration engine.** Schema migrations happen at the `@kyneta/schema` layer. The format check `IndexedDBStore.open` runs is a *compatibility check*, not a migration: it stamps a `{ major, minor }` version into `store_meta` on a brand-new store, accepts a compatible one, or throws `StoreFormatVersionError` (releasing the connection so the refusal doesn't block `deleteDatabase`) — but never rewrites. This store just persists whatever `StoreRecord` values the substrate produced.
 
 ### What "`Store`" means here (and does NOT mean)
 
@@ -90,7 +92,7 @@ The entire package is one class plus two factories plus three IDB Promise wrappe
 
 ## The `Store` contract
 
-Eight methods, each of which is either a single IDB transaction or a single index query:
+A `seat`, and eight methods, each of which is either a single IDB transaction or a single index query. Every `readwrite` transaction also covers `store_meta`, and first reads the pool and calls `assertSeatHeld` (aborting and throwing `SeatLostError` when the seat has been taken again):
 
 | Method | IDB mapping |
 |--------|-------------|
@@ -101,9 +103,36 @@ Eight methods, each of which is either a single IDB transaction or a single inde
 | `delete(docId)` | One `readwrite` transaction. Delete from `meta` store, delete all `RecordRow`s for this doc via `byDoc` index keys. |
 | `currentMeta(docId)` → `StoreMeta \| null` | One `readonly` transaction. `meta.get(docId)` → `MetaRow \| undefined`. Return `row.meta` or `null`. |
 | `listDocIds(prefix?)` → `AsyncIterable<DocId>` | One `readonly` transaction on the `meta` store. If `prefix` is given, scope the scan to `IDBKeyRange.bound(prefix, prefixSuccessor(prefix, "code-unit"), false, true)`: IndexedDB compares strings by UTF-16 code unit. (The `prefix + "\uffff"` bound it replaced cut off an id continuing with U+FFFF.) `getAllKeys(range)` returns matching `docId` strings. |
-| `close()` | `db.close()` — releases the IDB connection. Required before `deleteIndexedDBStore`. |
+| `close()` | `db.close()`, and releases the seat lock. Required before `deleteIndexedDBStore`. |
 
 Every method is `async`. All writes go through IDB's transaction guarantee — there is no in-memory write buffer to lose on crash.
+
+---
+
+## Seats
+
+Source: `packages/exchange/stores/indexeddb/src/index.ts` → `IndexedDBStore.open`, `openPooledSeat`, `openSeat`, `holdLock`.
+
+The store issues its Runtime's `peerId`: a **pooled** seat (see §"Durable seats" in `packages/exchange/TECHNICAL.md`). The pool, and each seat's fence, live in `store_meta` under `seats`, beside the format marker, so deleting the database deletes the seats that vouched for its history.
+
+Seats are held with Web Locks, which every page and worker of an origin shares and which the browser releases at a page's unloading-document cleanup, crash or close. Names start with `kyneta:`, clear of the specification's reserved `-` prefix:
+
+- `kyneta:${dbName}:alloc`, the allocation lock;
+- `kyneta:${dbName}:seat:${peerId}`, held for the store's lifetime.
+
+**A seat lock is only ever requested while holding `alloc`.** So while an open holds it, the set of held seats can shrink but not grow, and one snapshot is authoritative:
+
+1. **Gather**, under `alloc`: `store_meta`'s format marker and pool, and `navigator.locks.query()`, keeping this database's seat locks.
+2. **Plan**: `planStoreOpen` with `pooled` seating: the oldest seat not held, or a fresh one appended, with its fence incremented; or a format refusal.
+3. **Execute**, still under `alloc`: request the seat lock with `ifAvailable`. A `null` lock means the invariant was broken (a lock taken outside `alloc`), so the open rejects rather than return a seat another holder may have. Then write the marker and the pool in one `readwrite` transaction.
+
+The seat lock's `request()` promise settles only when the lock is released, so the `alloc` callback cannot await it; `holdLock` reports the grant through a promise of its own, and hands back the function that releases it.
+
+**Why the fence.** Nothing in the Web Locks or IndexedDB specifications orders a dying page's last transaction before its lock release. Every write transaction covers `store_meta` and checks the fence, so a late commit from the previous holder, landing after the new holder hydrated, fails instead of putting a second operation at one address. Write transactions over `store_meta` are serialized by IndexedDB, so the check and an allocation cannot interleave.
+
+**Without Web Locks** (an insecure origin, an old browser, or `locks: null`), the store warns once and issues a session seat: unique, never stored, never fenced.
+
+The lock manager is `createIndexedDBStore(name, { locks })`, `navigator.locks` by default: `SeatLocks` is the part of `LockManager` the store uses. The tests pass `FakeLockManager` pages (`src/__tests__/fake-locks.ts`), whose `terminate()` releases a page's locks as the browser does.
 
 ---
 
@@ -184,12 +213,13 @@ A crash or tab close during the transaction leaves either the old state (transac
 | Type | File | Role |
 |------|------|------|
 | `IndexedDBStore` | `src/index.ts` | The `Store` implementation. Owns one `IDBDatabase` handle. |
-| `createIndexedDBStore(dbName)` | `src/index.ts` | Async factory returning a `Store`. |
+| `createIndexedDBStore(dbName, options?)` | `src/index.ts` | Async factory returning a `Store`. |
+| `IndexedDBStoreOptions`, `SeatLocks` | `src/index.ts` | The lock manager seats come from. |
 | `deleteIndexedDBStore(dbName)` | `src/index.ts` | Deletes the named IndexedDB database. |
 | `MetaRow` | `src/index.ts` | Internal row shape: `{ docId, meta }`. Not exported. |
 | `RecordRow` | `src/index.ts` | Internal row shape: `{ id?, docId, record }`. Not exported. |
 
-Types imported (not defined here): `Store`, `StoreRecord`, `StoreMeta`, `DocId`, `resolveMetaFromBatch` from `@kyneta/exchange`.
+Types imported (not defined here): `Store`, `StoreRecord`, `StoreMeta`, `DocId`, `Seat`, `resolveMetaFromBatch`, `planStoreOpen`, `assertSeatHeld` from `@kyneta/exchange`.
 
 ## File Map
 
@@ -197,10 +227,12 @@ Types imported (not defined here): `Store`, `StoreRecord`, `StoreMeta`, `DocId`,
 |------|------|
 | `src/index.ts` | Entire public surface: IDB wrappers, row shapes, `IndexedDBStore`, `createIndexedDBStore`, `deleteIndexedDBStore`. |
 | `src/__tests__/indexeddb-storage.test.ts` | Conformance suite (`describeStore`) + IndexedDB-specific tests: close+reopen persistence, append-after-reopen ordering, compact+reopen, `listDocIds` after reopen, database isolation between separate `dbName`s, `deleteDatabase` cleanup. |
+| `src/__tests__/indexeddb-seats.test.ts` | Seat allocation against a model of an origin's pages: a duplicated tab, a reload, a crash, overlapping reloads, concurrent first opens, a lock taken outside `alloc`, and no Web Locks. |
+| `src/__tests__/fake-locks.ts` | `FakeLockManager`: exclusive named locks, `ifAvailable`, `query()`, and a page's `terminate()`. |
 | `src/__tests__/setup.ts` | Imports `fake-indexeddb/auto` to provide the `indexedDB` global in Node.js test environments. |
 
 ## Testing
 
-Tests run against `fake-indexeddb` — a spec-compliant in-memory IndexedDB implementation for Node.js, imported globally via the setup file. Each test creates a unique database name (`kyneta-test-{timestamp}-{counter}`) and all databases are deleted in `afterAll`. The reusable `describeStore` conformance suite validates the full `Store` contract, including two connections to one database (`secondInstance`); additional test blocks cover close+reopen persistence, append ordering across reopens, compact+reopen, `listDocIds` after reopen, two-store isolation, and `deleteDatabase` cleanup. There are no mocks beyond `fake-indexeddb` itself.
+Tests run against `fake-indexeddb` — a spec-compliant in-memory IndexedDB implementation for Node.js, imported globally via the setup file. Each test creates a unique database name (`kyneta-test-{timestamp}-{counter}`) and all databases are deleted in `afterAll`. The reusable `describeStore` conformance suite validates the full `Store` contract on Node's real `navigator.locks`, and its seat section (`pooled`) on `FakeLockManager` pages, since one process cannot make a page die: exclusive and reused seats, fenced writes after a page's locks are terminated, and two connections to one database. Additional test blocks cover close+reopen persistence, append ordering across reopens, compact+reopen, `listDocIds` after reopen, two-store isolation, and `deleteDatabase` cleanup. There are no mocks beyond `fake-indexeddb` and the lock model.
 
 **Run with**: `cd packages/exchange/stores/indexeddb && pnpm exec vitest run`

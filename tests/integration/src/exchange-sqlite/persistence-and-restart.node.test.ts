@@ -67,7 +67,8 @@ function openStore(filePath: string): SqliteStore {
 }
 
 /**
- * Inspect a SQLite file via a separate read-only handle. Returns the meta
+ * Inspect a SQLite file via a separate read-only handle, once no store owns
+ * it. Returns the meta
  * row count for `doc-1`, the raw entry rows, and the count of entry rows
  * whose `blob` column is non-null.
  */
@@ -166,10 +167,11 @@ describe("SQLite-backed exchanges: persistence + restart over WebSocket", () => 
     expect(docServer.title()).toBe("from server")
     expect(docServer.count()).toBe(42)
 
-    // Make sure all writes have landed on disk before opening read-only
-    // handles to inspect.
+    // Land every write, then shut down: each store owns its file until it
+    // closes, so the read-only handles below can open it only after.
     await serverExchange.flush()
     await clientExchange.flush()
+    await lifecycle.cleanupTransient()
 
     for (const filePath of [serverPath, clientPath]) {
       const inspection = inspectDb(filePath, "doc-1")

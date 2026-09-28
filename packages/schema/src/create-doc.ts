@@ -171,7 +171,8 @@ export const createDocAs: CreateDocAs =
  * each time — which is the right default when nothing will read this
  * document's operations but this process. When the identity matters, use
  * {@link createDocAs} and name it. (The exchange takes neither path: its
- * Runtime issues its own peerId and calls `createRef` directly.)
+ * Runtime takes its peerId from its store's seat, or mints one without a
+ * store, and calls `createRef` directly.)
  *
  * Supports an optional `payload` for hydrating from an exported entirety.
  *

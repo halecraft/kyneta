@@ -2,25 +2,27 @@
 //
 // Any conforming Store implementation must pass these tests.
 // The suite covers: currentMeta, append, loadAll, mark, compact, delete,
-// listDocIds, and both JSON and binary payload round-trips. Backends
-// that opt in via `faultFactory`, `isolationFactory` and `secondInstance`
-// get additional property-level tests (atomicity under fault injection;
-// storage-domain isolation across two stores sharing one physical resource;
-// two instances opening one storage).
+// listDocIds, both JSON and binary payload round-trips, and the seats a
+// store issues (declared by every backend through `seats`). Backends that opt
+// in via `faultFactory` and `isolationFactory` get additional property-level
+// tests (atomicity under fault injection at every step; storage-domain
+// isolation across two stores sharing one physical resource).
 //
 // Usage:
 //   import { describeStore, makeArmedFault } from "@kyneta/exchange/testing"
-//   describeStore("MyBackend", () => new MyBackend(), {
+//   describeStore("MyBackend", () => MyBackend.open(), {
+//     seats: { kind: "owned", storage: async () => ({ open, cleanup }) },
 //     cleanup: async (b) => { ... },
 //     faultFactory: async () => {
-//       const { proxy, arm } = makeArmedFault(backing, { write: 1 })
-//       return { store: new MyBackend(proxy), injectFault: arm, ... }
+//       const { proxy, arm, fired } = makeArmedFault(backing, { write: 1 })
+//       return { store: await MyBackend.open(proxy), injectFault: arm, fired, ... }
 //     },
 //     isolationFactory: async () => ({ ... }),
 //   })
 
 import { SYNC_AUTHORITATIVE, SYNC_COLLABORATIVE } from "@kyneta/schema"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { SeatLostError } from "../store/seats.js"
 import type { Store, StoreMeta, StoreRecord } from "../store/store.js"
 
 // ---------------------------------------------------------------------------
@@ -102,26 +104,43 @@ export async function collectAll<T>(iter: AsyncIterable<T>): Promise<T[]> {
  * non-faulting and is used to prime backing state. `injectFault(n)`
  * arms the harness so that the Nth subsequent call to the backend's
  * underlying write seam (adapter `exec` for sqlite, client `query`
- * for postgres, `$transaction` for prisma) throws. `freshStore()`
- * opens a separate non-faulting Store reading the same persistent
- * state — used to assert that no partial state leaked.
+ * for postgres, `$transaction` for prisma) throws, and `fired()` says
+ * whether it has. The suite sweeps `n = 1, 2, …` until a write completes
+ * without reaching the fault, so every step of it is covered.
+ * `freshStore()` reads the same persistent state as `store` — used to
+ * assert that no partial state leaked. For a backend whose seat is
+ * `owned`, it may return `store` itself, since a second open is refused.
  */
 export interface FaultInjection {
   readonly store: Store
   readonly injectFault: (n: number) => void
+  readonly fired: () => boolean
   readonly freshStore: () => Promise<Store>
   readonly cleanup: () => Promise<void>
 }
 
-/**
- * A first instance over a storage, and a way to open a second over the same
- * one, as a second tab or process would.
- */
-export interface TwoInstances {
-  readonly first: Store
-  readonly openSecond: () => Promise<Store>
+/** One storage, which the seat section opens stores over. */
+export interface SeatStorage {
+  /** Open a store over this storage, as another tab or process would. */
+  readonly open: () => Promise<Store>
+  /** Remove the storage, once the suite has closed every store it opened. */
   readonly cleanup: () => Promise<void>
 }
+
+/**
+ * The kind of seat a backend issues, with a fresh storage per test. A pooled
+ * backend also says how a holder dies without closing: `abandon` releases the
+ * store's seat lock as the platform would, and leaves its writes able to
+ * reach the storage.
+ */
+export type SeatDeclaration =
+  | {
+      readonly kind: "pooled"
+      readonly storage: () => Promise<SeatStorage>
+      readonly abandon: (store: Store) => Promise<void>
+    }
+  | { readonly kind: "owned"; readonly storage: () => Promise<SeatStorage> }
+  | { readonly kind: "session"; readonly storage: () => Promise<SeatStorage> }
 
 /** Two stores sharing a physical resource via distinct namespacing. */
 export interface IsolationPair {
@@ -133,23 +152,16 @@ export interface IsolationPair {
 /**
  * Options for the conformance suite.
  *
- * Backends supplying `faultFactory` get the atomicity property test;
- * backends supplying `isolationFactory` get the storage-domain
- * isolation test. Backends that opt out get those tests skipped.
+ * Every backend declares its `seats`. Backends supplying `faultFactory` get
+ * the atomicity property test; backends supplying `isolationFactory` get the
+ * storage-domain isolation test. Backends that opt out get those tests
+ * skipped.
  */
 export interface DescribeStoreOptions {
+  seats: SeatDeclaration
   cleanup?: (backend: Store) => Promise<void>
   faultFactory?: () => Promise<FaultInjection>
   isolationFactory?: () => Promise<IsolationPair>
-  /**
-   * Two instances over one storage. With `refused`, the backend refuses the
-   * second (LevelDB), and the suite asserts that its open fails instead of
-   * running the multi-instance section.
-   */
-  secondInstance?: {
-    readonly open: () => Promise<TwoInstances>
-    readonly refused: boolean
-  }
 }
 
 /**
@@ -162,9 +174,9 @@ export interface DescribeStoreOptions {
 export function describeStore(
   name: string,
   factory: () => Store | Promise<Store>,
-  options: DescribeStoreOptions = {},
+  options: DescribeStoreOptions,
 ): void {
-  const { cleanup, faultFactory, isolationFactory, secondInstance } = options
+  const { cleanup, faultFactory, isolationFactory, seats } = options
   describe(name, () => {
     let backend: Store
 
@@ -562,59 +574,89 @@ export function describeStore(
     })
   })
 
-  // Property test: a meta-record append performs two writes (meta
-  // upsert + record insert). If those aren't atomic, a mid-append
-  // failure leaves the meta column updated with no corresponding row.
-  // Each backend supplies the seam-counting harness; conformance only
-  // asserts the post-failure state.
+  // Property test: a write is atomic. A meta-record append performs two
+  // writes (meta upsert + record insert), a compaction several; if they are
+  // not atomic, a failure between them leaves partial state. Each backend
+  // supplies the seam-counting harness. The suite fails each step in turn,
+  // from the first until a write completes without reaching the fault, and
+  // asserts the state after every failure.
 
   if (faultFactory !== undefined) {
+    /**
+     * Fail `write` at step 1, 2, … until it completes without reaching the
+     * fault, checking `unchanged` after each failure.
+     */
+    async function sweep(
+      fault: FaultInjection,
+      write: () => Promise<void>,
+      unchanged: () => Promise<void>,
+    ): Promise<void> {
+      for (let n = 1; n <= 1000; n++) {
+        fault.injectFault(n)
+        const failed = await write().then(
+          () => false,
+          () => true,
+        )
+        if (!fault.fired()) {
+          expect(failed).toBe(false)
+          return
+        }
+        expect(failed).toBe(true)
+        await unchanged()
+      }
+      throw new Error("fault sweep: the write never completed")
+    }
+
+    /** Read `fault`'s storage through a fresh store. */
+    async function readFresh(
+      fault: FaultInjection,
+      read: (store: Store) => Promise<void>,
+    ): Promise<void> {
+      const fresh = await fault.freshStore()
+      try {
+        await read(fresh)
+      } finally {
+        if (fresh !== fault.store) await fresh.close()
+      }
+    }
+
     describe(`${name} — fault-injected atomicity`, () => {
-      it("a mid-append failure leaves no partial state observable", async () => {
+      it("a failure at any step of an append leaves no partial state", async () => {
         const fault = await faultFactory()
         try {
-          await fault.store.append(
-            "doc-1",
-            makeMetaRecord({ schemaHash: "primer" }),
+          const primer = makeMetaRecord({ schemaHash: "primer" })
+          const injected = makeMetaRecord({ schemaHash: "injected" })
+          await fault.store.append("doc-1", primer)
+
+          await sweep(
+            fault,
+            () => fault.store.append("doc-1", injected),
+            () =>
+              readFresh(fault, async fresh => {
+                expect((await fresh.currentMeta("doc-1"))?.schemaHash).toBe(
+                  "primer",
+                )
+                expect(await collectAll(fresh.loadAll("doc-1"))).toEqual([
+                  primer,
+                ])
+              }),
           )
 
-          // Arming with n=2 targets the 2nd write of the next append.
-          // For a meta record that's the record-insert step (1st was
-          // the meta-upsert), so the throw fires after one write has
-          // already happened — the case that catches non-atomic
-          // implementations.
-          fault.injectFault(2)
-
-          await expect(
-            fault.store.append(
-              "doc-1",
-              makeMetaRecord({ schemaHash: "injected" }),
-            ),
-          ).rejects.toThrow()
-
-          // Verify on a fresh non-faulting store: state must be the
-          // primer's, never the injected one.
-          const fresh = await fault.freshStore()
-          try {
-            const meta = await fresh.currentMeta("doc-1")
-            expect(meta?.schemaHash).toBe("primer")
-
-            const records = await collectAll(fresh.loadAll("doc-1"))
-            // Exactly one record (the primer's meta), no leaked second meta.
-            expect(records).toHaveLength(1)
-            expect(records[0]?.kind).toBe("meta")
-            if (records[0]?.kind === "meta") {
-              expect(records[0].meta.schemaHash).toBe("primer")
-            }
-          } finally {
-            await fresh.close()
-          }
+          await readFresh(fault, async fresh => {
+            expect((await fresh.currentMeta("doc-1"))?.schemaHash).toBe(
+              "injected",
+            )
+            expect(await collectAll(fresh.loadAll("doc-1"))).toEqual([
+              primer,
+              injected,
+            ])
+          })
         } finally {
           await fault.cleanup()
         }
       })
 
-      it("a mid-compaction failure leaves the records as they were", async () => {
+      it("a failure at any step of a compaction leaves the records as they were", async () => {
         const fault = await faultFactory()
         try {
           const meta = makeMetaRecord({ schemaHash: "primer" })
@@ -622,33 +664,29 @@ export function describeStore(
           await fault.store.append("doc-1", meta)
           await fault.store.append("doc-1", entry)
           const through = await fault.store.mark("doc-1")
+          const compacted = [
+            makeMetaRecord({ schemaHash: "injected" }),
+            makeEntryRecord("entirety", "2"),
+          ]
 
-          // The 2nd write of the compaction: after it has started deleting or
-          // writing, before it has finished.
-          fault.injectFault(2)
-          await expect(
-            fault.store.compact(
-              "doc-1",
-              [
-                makeMetaRecord({ schemaHash: "injected" }),
-                makeEntryRecord("entirety", "2"),
-              ],
-              through,
-            ),
-          ).rejects.toThrow()
+          await sweep(
+            fault,
+            () => fault.store.compact("doc-1", compacted, through),
+            () =>
+              readFresh(fault, async fresh => {
+                expect((await fresh.currentMeta("doc-1"))?.schemaHash).toBe(
+                  "primer",
+                )
+                expect(await collectAll(fresh.loadAll("doc-1"))).toEqual([
+                  meta,
+                  entry,
+                ])
+              }),
+          )
 
-          const fresh = await fault.freshStore()
-          try {
-            expect((await fresh.currentMeta("doc-1"))?.schemaHash).toBe(
-              "primer",
-            )
-            expect(await collectAll(fresh.loadAll("doc-1"))).toEqual([
-              meta,
-              entry,
-            ])
-          } finally {
-            await fresh.close()
-          }
+          await readFresh(fault, async fresh => {
+            expect(await collectAll(fresh.loadAll("doc-1"))).toEqual(compacted)
+          })
         } finally {
           await fault.cleanup()
         }
@@ -656,101 +694,226 @@ export function describeStore(
     })
   }
 
-  // Several instances may open one storage: two tabs over one IndexedDB
-  // database, several processes over one Postgres schema. Each must append
-  // safely, and a compaction by one must not lose what another wrote.
+  // Seats. Every store issues the seat kind its backend declares. Stores
+  // over one storage issue seats as that kind promises: pooled seats are
+  // exclusive, reused and fenced; an owned seat is the storage's one seat and
+  // a second open is refused; a session seat is fresh on every open.
 
-  if (secondInstance?.refused) {
-    describe(`${name} — a second instance`, () => {
-      it("is refused", async () => {
-        const pair = await secondInstance.open()
-        try {
-          await expect(pair.openSecond()).rejects.toThrow()
-        } finally {
-          await pair.cleanup()
+  describe(`${name} — seats`, () => {
+    /**
+     * Run `test` with a fresh storage, then close every store it opened and
+     * remove the storage. A store whose seat was abandoned may fail to close,
+     * as a dead holder's would.
+     */
+    async function withStorage(
+      test: (open: () => Promise<Store>) => Promise<void>,
+    ): Promise<void> {
+      const storage = await seats.storage()
+      const opened: Store[] = []
+      try {
+        await test(async () => {
+          const store = await storage.open()
+          opened.push(store)
+          return store
+        })
+      } finally {
+        for (const store of opened) await store.close().catch(() => {})
+        await storage.cleanup()
+      }
+    }
+
+    it(`issues ${seats.kind} seats`, async () => {
+      await withStorage(async open => {
+        expect((await open()).seat.kind).toBe(seats.kind)
+      })
+    })
+
+    it("a closed store refuses every operation", async () => {
+      await withStorage(async open => {
+        const store = await open()
+        await store.append("doc-1", makeMetaRecord())
+        await store.close()
+        await expect(store.append("doc-1", makeMetaRecord())).rejects.toThrow()
+        await expect(collectAll(store.loadAll("doc-1"))).rejects.toThrow()
+        await expect(store.mark("doc-1")).rejects.toThrow()
+        await expect(
+          store.compact("doc-1", [makeMetaRecord()], null),
+        ).rejects.toThrow()
+        await expect(store.delete("doc-1")).rejects.toThrow()
+        await expect(store.currentMeta("doc-1")).rejects.toThrow()
+        await expect(collectAll(store.listDocIds())).rejects.toThrow()
+      })
+    })
+
+    if (seats.kind === "owned") {
+      it("a reopen holds the same seat", async () => {
+        await withStorage(async open => {
+          const first = await open()
+          await first.close()
+          const second = await open()
+          expect(second.seat).toEqual(first.seat)
+        })
+      })
+
+      it("a second open while the first holds the storage is refused", async () => {
+        await withStorage(async open => {
+          await open()
+          await expect(open()).rejects.toThrow()
+        })
+      })
+      return
+    }
+
+    if (seats.kind === "session") {
+      it("every open issues a fresh seat", async () => {
+        await withStorage(async open => {
+          const first = await open()
+          const second = await open()
+          await first.close()
+          const third = await open()
+          const ids = [first, second, third].map(s => s.seat.peerId)
+          expect(new Set(ids).size).toBe(3)
+        })
+      })
+    }
+
+    if (seats.kind === "pooled") {
+      const { abandon } = seats
+
+      it("two open stores hold different seats, and a closed seat is reused", async () => {
+        await withStorage(async open => {
+          const first = await open()
+          const second = await open()
+          expect(second.seat.peerId).not.toBe(first.seat.peerId)
+          await first.close()
+          const third = await open()
+          expect(third.seat.peerId).toBe(first.seat.peerId)
+        })
+      })
+
+      it("the pool never grows past the most stores open at once", async () => {
+        await withStorage(async open => {
+          const opening = async (): Promise<Store[]> => [
+            await open(),
+            await open(),
+            await open(),
+          ]
+          const first = await opening()
+          for (const store of first) await store.close()
+          const second = await opening()
+          const ids = (stores: Store[]) =>
+            new Set(stores.map(store => store.seat.peerId))
+          expect(ids(first).size).toBe(3)
+          expect(ids(second)).toEqual(ids(first))
+        })
+      })
+
+      it("a store whose seat was taken again cannot write, and changes nothing", async () => {
+        await withStorage(async open => {
+          const stale = await open()
+          await stale.append("doc-1", makeMetaRecord())
+          await stale.append("doc-1", makeEntryRecord("since", "1"))
+          const through = await stale.mark("doc-1")
+
+          await abandon(stale)
+          const next = await open()
+          expect(next.seat.peerId).toBe(stale.seat.peerId)
+          const before = await collectAll(next.loadAll("doc-1"))
+
+          await expect(
+            stale.append("doc-1", makeEntryRecord("since", "2")),
+          ).rejects.toBeInstanceOf(SeatLostError)
+          await expect(
+            stale.compact(
+              "doc-1",
+              [makeMetaRecord(), makeEntryRecord("entirety", "2")],
+              through,
+            ),
+          ).rejects.toBeInstanceOf(SeatLostError)
+          await expect(stale.delete("doc-1")).rejects.toBeInstanceOf(
+            SeatLostError,
+          )
+
+          expect(await collectAll(next.loadAll("doc-1"))).toEqual(before)
+          expect(await next.currentMeta("doc-1")).toEqual(plainMeta)
+        })
+      })
+    }
+
+    // Several stores open one storage: two tabs over one IndexedDB database,
+    // several processes over one Postgres schema. Each must append safely,
+    // and a compaction by one must not lose what another wrote.
+
+    const versions = (records: StoreRecord[]): string[] =>
+      records.flatMap(r => (r.kind === "entry" ? [r.version] : []))
+
+    it("appends from two stores, interleaved, all load", async () => {
+      await withStorage(async open => {
+        const first = await open()
+        const second = await open()
+        await first.append("doc-1", makeMetaRecord())
+        await Promise.all(
+          Array.from({ length: 10 }, (_, i) => [
+            first.append("doc-1", makeEntryRecord("since", `a${i}`)),
+            second.append("doc-1", makeEntryRecord("since", `b${i}`)),
+          ]).flat(),
+        )
+        for (const store of [first, second]) {
+          const loaded = versions(await collectAll(store.loadAll("doc-1")))
+          expect(loaded.sort()).toEqual(
+            [
+              ...Array.from({ length: 10 }, (_, i) => `a${i}`),
+              ...Array.from({ length: 10 }, (_, i) => `b${i}`),
+            ].sort(),
+          )
         }
       })
     })
-  } else if (secondInstance !== undefined) {
-    const twoInstances = secondInstance.open
-    describe(`${name} — two instances over one storage`, () => {
-      const versions = (records: StoreRecord[]): string[] =>
-        records.flatMap(r => (r.kind === "entry" ? [r.version] : []))
 
-      it("appends from both, interleaved, all load", async () => {
-        const pair = await twoInstances()
-        try {
-          const second = await pair.openSecond()
-          await pair.first.append("doc-1", makeMetaRecord())
-          await Promise.all(
-            Array.from({ length: 10 }, (_, i) => [
-              pair.first.append("doc-1", makeEntryRecord("since", `a${i}`)),
-              second.append("doc-1", makeEntryRecord("since", `b${i}`)),
-            ]).flat(),
-          )
-          for (const store of [pair.first, second]) {
-            const loaded = versions(await collectAll(store.loadAll("doc-1")))
-            expect(loaded.sort()).toEqual(
-              [
-                ...Array.from({ length: 10 }, (_, i) => `a${i}`),
-                ...Array.from({ length: 10 }, (_, i) => `b${i}`),
-              ].sort(),
-            )
-          }
-        } finally {
-          await pair.cleanup()
-        }
-      })
+    it("a compaction by one keeps what the other appended after its mark", async () => {
+      await withStorage(async open => {
+        const first = await open()
+        const second = await open()
+        await first.append("doc-1", makeMetaRecord())
+        await first.append("doc-1", makeEntryRecord("since", "1"))
+        const through = await first.mark("doc-1")
+        await second.append("doc-1", makeEntryRecord("since", "theirs"))
 
-      it("a compaction by one keeps what the other appended after its mark", async () => {
-        const pair = await twoInstances()
-        try {
-          const second = await pair.openSecond()
-          await pair.first.append("doc-1", makeMetaRecord())
-          await pair.first.append("doc-1", makeEntryRecord("since", "1"))
-          const through = await pair.first.mark("doc-1")
-          await second.append("doc-1", makeEntryRecord("since", "theirs"))
+        await first.compact(
+          "doc-1",
+          [makeMetaRecord(), makeEntryRecord("entirety", "whole")],
+          through,
+        )
 
-          await pair.first.compact(
-            "doc-1",
-            [makeMetaRecord(), makeEntryRecord("entirety", "whole")],
-            through,
-          )
-
-          const loaded = versions(await collectAll(second.loadAll("doc-1")))
-          expect(loaded.sort()).toEqual(["theirs", "whole"])
-        } finally {
-          await pair.cleanup()
-        }
-      })
-
-      it("two compactions through one mark lose nothing either wrote", async () => {
-        const pair = await twoInstances()
-        try {
-          const second = await pair.openSecond()
-          await pair.first.append("doc-1", makeMetaRecord())
-          await pair.first.append("doc-1", makeEntryRecord("since", "1"))
-          const through = await pair.first.mark("doc-1")
-
-          await pair.first.compact(
-            "doc-1",
-            [makeMetaRecord(), makeEntryRecord("entirety", "first")],
-            through,
-          )
-          await second.compact(
-            "doc-1",
-            [makeMetaRecord(), makeEntryRecord("entirety", "second")],
-            through,
-          )
-
-          const loaded = versions(await collectAll(pair.first.loadAll("doc-1")))
-          expect(loaded.sort()).toEqual(["first", "second"])
-        } finally {
-          await pair.cleanup()
-        }
+        const loaded = versions(await collectAll(second.loadAll("doc-1")))
+        expect(loaded.sort()).toEqual(["theirs", "whole"])
       })
     })
-  }
+
+    it("two compactions through one mark lose nothing either wrote", async () => {
+      await withStorage(async open => {
+        const first = await open()
+        const second = await open()
+        await first.append("doc-1", makeMetaRecord())
+        await first.append("doc-1", makeEntryRecord("since", "1"))
+        const through = await first.mark("doc-1")
+
+        await first.compact(
+          "doc-1",
+          [makeMetaRecord(), makeEntryRecord("entirety", "first")],
+          through,
+        )
+        await second.compact(
+          "doc-1",
+          [makeMetaRecord(), makeEntryRecord("entirety", "second")],
+          through,
+        )
+
+        const loaded = versions(await collectAll(first.loadAll("doc-1")))
+        expect(loaded.sort()).toEqual(["first", "second"])
+      })
+    })
+  })
 
   // Two stores backed by the same physical resource (same DB file,
   // same Pool, same PrismaClient) but namespaced differently must not

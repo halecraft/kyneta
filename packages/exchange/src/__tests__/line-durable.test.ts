@@ -10,7 +10,10 @@ import { batch, json, Schema } from "@kyneta/schema"
 import type { DocId } from "@kyneta/transport"
 import { describe, expect, it } from "vitest"
 import { Line, type LineReceiver, lineDocId } from "../line.js"
-import { InMemoryStore } from "../store/in-memory-store.js"
+import {
+  createInMemoryStoreData,
+  InMemoryStore,
+} from "../store/in-memory-store.js"
 import { drain, exchangesPerTest } from "./exchanges.js"
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -730,5 +733,92 @@ describe("durable Line: regression — close/reopen does not trip incarnation re
 
     aliceSender2.close()
     bobReceiver2.close()
+  })
+})
+
+// ── A stored peer's restart ──────────────────────────────────────────────────
+
+describe("durable Line: a stored peer restarts", () => {
+  it("returns with the same seat, and the Line resumes with nothing lost or processed twice", async () => {
+    const bridge = new Bridge()
+    const storage = createInMemoryStoreData()
+    const openServer = (transportId: string) =>
+      createExchange({
+        principal: "server",
+        transports: [createBridgeTransport({ transportId, bridge })],
+        store: new InMemoryStore(storage),
+      })
+
+    const server1 = openServer("server-1")
+    const alice = createExchange({
+      principal: "alice",
+      transports: [createBridgeTransport({ transportId: "alice", bridge })],
+    })
+    await drain()
+
+    const P = Line.protocol({ topic: "server-restart", schema: SimpleSchema })
+    const aliceSender = P.sender(alice, server1.peerId)
+    const received1: { value: number }[] = []
+    const receiver1 = P.claimReceiver(server1, alice.peerId)
+    collect(receiver1, received1)
+
+    aliceSender.send({ value: 1 })
+    aliceSender.send({ value: 2 })
+    await drain()
+    expect(received1.map(m => m.value)).toEqual([1, 2])
+
+    receiver1.close()
+    await server1.shutdown()
+    await drain()
+
+    // Sent while the server is down.
+    aliceSender.send({ value: 3 })
+    await drain()
+
+    const server2 = openServer("server-2")
+    expect(server2.peerId).toBe(server1.peerId)
+    const received2: { value: number }[] = []
+    const receiver2 = P.claimReceiver(server2, alice.peerId)
+    collect(receiver2, received2)
+    await drain()
+
+    aliceSender.send({ value: 4 })
+    await drain()
+
+    expect(aliceSender.closed).toBe(false)
+    expect(received2.map(m => m.value)).toEqual([3, 4])
+
+    aliceSender.close()
+    receiver2.close()
+  })
+
+  it("a message sent before the stored documents load is sent once they have", async () => {
+    const bridge = new Bridge()
+    const storage = createInMemoryStoreData()
+    const server = createExchange({
+      principal: "server",
+      transports: [createBridgeTransport({ transportId: "server", bridge })],
+      store: new InMemoryStore(storage),
+    })
+    const alice = createExchange({
+      principal: "alice",
+      transports: [createBridgeTransport({ transportId: "alice", bridge })],
+    })
+    await drain()
+
+    const P = Line.protocol({ topic: "early-send", schema: SimpleSchema })
+    const received: { value: number }[] = []
+    const aliceReceiver = P.claimReceiver(alice, server.peerId)
+    collect(aliceReceiver, received)
+
+    // Opened and written on the same tick, while its outbox still loads.
+    const serverSender = P.sender(server, alice.peerId)
+    serverSender.send({ value: 1 })
+    serverSender.send({ value: 2 })
+    await drain()
+
+    expect(received.map(m => m.value)).toEqual([1, 2])
+    serverSender.close()
+    aliceReceiver.close()
   })
 })

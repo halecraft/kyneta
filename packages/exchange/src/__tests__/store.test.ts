@@ -8,6 +8,7 @@
 import { SYNC_COLLABORATIVE } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import {
+  abandonSeat,
   createInMemoryStoreData,
   InMemoryStore,
   type InMemoryStoreData,
@@ -26,16 +27,16 @@ import {
 // ---------------------------------------------------------------------------
 
 describeStore("InMemoryStore", () => new InMemoryStore(), {
-  secondInstance: {
-    refused: false,
-    open: async () => {
+  seats: {
+    kind: "pooled",
+    storage: async () => {
       const sharedData = createInMemoryStoreData()
       return {
-        first: new InMemoryStore(sharedData),
-        openSecond: async () => new InMemoryStore(sharedData),
+        open: async () => new InMemoryStore(sharedData),
         cleanup: async () => {},
       }
     },
+    abandon: async store => abandonSeat(store),
   },
 })
 

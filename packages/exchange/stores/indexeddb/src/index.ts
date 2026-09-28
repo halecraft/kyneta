@@ -12,7 +12,7 @@
 //     indexes: { "byDoc": keyPath "docId", unique: false }
 //     value: { docId: string, record: StoreRecord }
 //
-//   Object store "store_meta": (store-global metadata, e.g. format version)
+//   Object store "store_meta": (store-global metadata: format version, seat pool)
 //     keyPath: "key"
 //     value: { key: string, value: unknown }
 //
@@ -20,17 +20,27 @@
 // Auto-increment keys preserve insertion order without manual seqNo management,
 // and are the store's marks: the database assigns them, so appends from
 // several connections (tabs) over one database never collide.
+//
+// Seats are pooled through Web Locks: every page and worker of an origin
+// shares them, and the browser releases a page's locks when it unloads or
+// dies. The pool lives in `store_meta` under STORE_META_SEATS_KEY, and every
+// write checks its seat's fence there, inside its own transaction.
 
 import {
+  assertSeatHeld,
   type DocId,
-  decideStoreFormat,
-  parseStoreFormat,
+  freshPeerIds,
+  type PeerId,
+  parseSeatPool,
+  planStoreOpen,
   prefixSuccessor,
   resolveMetaFromBatch,
+  type Seat,
+  type Seating,
   STORE_META_FORMAT_KEY,
+  STORE_META_SEATS_KEY,
   type Store,
   type StoreFormatVersion,
-  StoreFormatVersionError,
   type StoreMark,
   type StoreMeta,
   type StoreRecord,
@@ -44,18 +54,19 @@ const DOC_META_STORE = "doc_meta"
 const RECORDS_STORE = "records"
 const BY_DOC_INDEX = "byDoc"
 // Store-global metadata object store, distinct from the per-doc `doc_meta`
-// map. Holds the on-disk format version (under STORE_META_FORMAT_KEY), read
-// by a bootstrap reader on open — never through the Store interface.
-// Context: jj:uvssotsy.
+// map. Holds the on-disk format version (under STORE_META_FORMAT_KEY) and the
+// seat pool (under STORE_META_SEATS_KEY), read on open and by each write's
+// fence check — never through the Store interface. Context: jj:uvssotsy.
 const STORE_META_STORE = "store_meta"
 // Bumped 1 → 2 to introduce the `doc_meta` (renamed) and `store_meta` object
 // stores via onupgradeneeded.
 const DB_VERSION = 2
 
-// IndexedDB owns its own on-disk format version (its row layout), gated on
-// open via `decideStoreFormat`. Independent of IDB's structural DB_VERSION,
+// IndexedDB owns its own on-disk format version (its row layout), checked on
+// open by `planStoreOpen`. Independent of IDB's structural DB_VERSION,
 // which versions object-store layout, not the data format.
-const STORE_FORMAT_VERSION: StoreFormatVersion = { major: 1, minor: 0 }
+// 1.1: `store_meta` holds the seat pool. Older stores read as an empty pool.
+const STORE_FORMAT_VERSION: StoreFormatVersion = { major: 1, minor: 1 }
 
 // ---------------------------------------------------------------------------
 // IDB promise wrappers
@@ -77,6 +88,17 @@ function txDone(tx: IDBTransaction): Promise<void> {
     tx.onabort = () => reject(tx.error ?? new Error("Transaction aborted"))
     tx.onerror = () => reject(tx.error ?? new Error("Transaction error"))
   })
+}
+
+/**
+ * The key range holding exactly the keys that start with `prefix`.
+ * IndexedDB compares strings by UTF-16 code unit.
+ */
+function prefixRange(prefix: string): IDBKeyRange {
+  const upper = prefixSuccessor(prefix, "code-unit")
+  return upper === null
+    ? IDBKeyRange.lowerBound(prefix)
+    : IDBKeyRange.bound(prefix, upper, false, true)
 }
 
 function openDatabase(dbName: string): Promise<IDBDatabase> {
@@ -129,77 +151,105 @@ interface RecordRow {
 // IndexedDBStore
 // ---------------------------------------------------------------------------
 
-export class IndexedDBStore implements Store {
-  readonly #db: IDBDatabase
+/**
+ * The part of the Web Locks `LockManager` seat allocation uses.
+ * `navigator.locks` is one.
+ */
+export interface SeatLocks {
+  request(
+    name: string,
+    options: { readonly ifAvailable?: boolean },
+    callback: (lock: unknown) => Promise<void>,
+  ): Promise<unknown>
+  request<T>(name: string, callback: () => Promise<T>): Promise<T>
+  query(): Promise<{
+    readonly held?: readonly { readonly name?: string | undefined }[]
+  }>
+}
 
-  private constructor(db: IDBDatabase) {
+export interface IndexedDBStoreOptions {
+  /**
+   * The lock manager seats are allocated through. Defaults to
+   * `navigator.locks`. `null`, or no `navigator.locks` (an insecure origin or
+   * an old browser), issues a session seat: unique, but new on every open.
+   */
+  readonly locks?: SeatLocks | null
+}
+
+let warnedNoLocks = false
+
+export class IndexedDBStore implements Store {
+  readonly seat: Seat
+  readonly #db: IDBDatabase
+  /** Releases the seat lock; a no-op for a session seat. */
+  readonly #releaseSeat: () => void
+
+  private constructor(db: IDBDatabase, seat: Seat, releaseSeat: () => void) {
     this.#db = db
+    this.seat = seat
+    this.#releaseSeat = releaseSeat
   }
 
   /**
-   * Open an IndexedDB-backed store.
+   * Open an IndexedDB-backed store, holding a seat from the database's pool.
    *
    * The database is created on first call; subsequent calls with the
    * same `dbName` reopen the existing database.
    */
-  static async open(dbName: string): Promise<IndexedDBStore> {
+  static async open(
+    dbName: string,
+    options: IndexedDBStoreOptions = {},
+  ): Promise<IndexedDBStore> {
+    const locks =
+      options.locks === undefined
+        ? ((globalThis.navigator?.locks as SeatLocks | undefined) ?? null)
+        : options.locks
     const db = await openDatabase(dbName)
-    const store = new IndexedDBStore(db)
     try {
-      await store.#assertFormat()
+      if (locks === null) {
+        if (!warnedNoLocks) {
+          warnedNoLocks = true
+          console.warn(
+            "[indexeddb-store] Web Locks are unavailable, so every open is a new peer. " +
+              "Serve the page from a secure context to keep one across reloads.",
+          )
+        }
+        const seat = await openSeat(db, { kind: "session" })
+        return new IndexedDBStore(db, seat, () => {})
+      }
+      const { seat, release } = await openPooledSeat(db, dbName, locks)
+      return new IndexedDBStore(db, seat, release)
     } catch (error) {
       // A refused store must not leak its connection — an open handle would
       // block `deleteDatabase` and future opens.
       db.close()
       throw error
     }
-    return store
   }
 
-  // Bootstrap reader: consult the store-format marker before trusting any
-  // bytes. Stamps a brand-new store, accepts a compatible one, or throws.
-  async #assertFormat(): Promise<void> {
-    const readTx = this.#db.transaction(
-      [STORE_META_STORE, DOC_META_STORE],
-      "readonly",
+  /**
+   * Throws `SeatLostError`, aborting `tx`, when this store's pooled seat has
+   * been claimed again. `tx` must cover `store_meta`.
+   */
+  async #fence(tx: IDBTransaction): Promise<void> {
+    if (this.seat.kind !== "pooled") return
+    const row = (await req(
+      tx.objectStore(STORE_META_STORE).get(STORE_META_SEATS_KEY),
+    )) as StoreMetaRow | undefined
+    try {
+      assertSeatHeld(parseSeatPool(row?.value), this.seat)
+    } catch (error) {
+      tx.abort()
+      throw error
+    }
+  }
+
+  /** A write transaction: the documents, and the fence in `store_meta`. */
+  #writeTransaction(): IDBTransaction {
+    return this.#db.transaction(
+      [DOC_META_STORE, RECORDS_STORE, STORE_META_STORE],
+      "readwrite",
     )
-    const markerRow = (await req(
-      readTx.objectStore(STORE_META_STORE).get(STORE_META_FORMAT_KEY),
-    )) as { key: string; value: unknown } | undefined
-    const docCount = await req(readTx.objectStore(DOC_META_STORE).count())
-
-    const parsed =
-      markerRow === undefined ? null : parseStoreFormat(markerRow.value)
-    if (parsed === "malformed") {
-      throw new StoreFormatVersionError({
-        reason: "malformed-version",
-        backend: "indexeddb",
-        stored: null,
-        current: STORE_FORMAT_VERSION,
-      })
-    }
-
-    const decision = decideStoreFormat({
-      current: STORE_FORMAT_VERSION,
-      stored: parsed,
-      storeHasData: docCount > 0,
-    })
-
-    if (decision.action === "refuse") {
-      throw new StoreFormatVersionError({
-        reason: decision.reason,
-        backend: "indexeddb",
-        stored: parsed,
-        current: STORE_FORMAT_VERSION,
-      })
-    }
-    if (decision.action === "stamp") {
-      const writeTx = this.#db.transaction(STORE_META_STORE, "readwrite")
-      writeTx
-        .objectStore(STORE_META_STORE)
-        .put({ key: STORE_META_FORMAT_KEY, value: decision.value })
-      await txDone(writeTx)
-    }
   }
 
   // -----------------------------------------------------------------------
@@ -207,10 +257,8 @@ export class IndexedDBStore implements Store {
   // -----------------------------------------------------------------------
 
   async append(docId: DocId, record: StoreRecord): Promise<void> {
-    const tx = this.#db.transaction(
-      [DOC_META_STORE, RECORDS_STORE],
-      "readwrite",
-    )
+    const tx = this.#writeTransaction()
+    await this.#fence(tx)
     const metaStore = tx.objectStore(DOC_META_STORE)
     const recordsStore = tx.objectStore(RECORDS_STORE)
 
@@ -255,10 +303,8 @@ export class IndexedDBStore implements Store {
     records: StoreRecord[],
     through: StoreMark | null,
   ): Promise<void> {
-    const tx = this.#db.transaction(
-      [DOC_META_STORE, RECORDS_STORE],
-      "readwrite",
-    )
+    const tx = this.#writeTransaction()
+    await this.#fence(tx)
     const metaStore = tx.objectStore(DOC_META_STORE)
     const recordsStore = tx.objectStore(RECORDS_STORE)
 
@@ -283,10 +329,8 @@ export class IndexedDBStore implements Store {
   }
 
   async delete(docId: DocId): Promise<void> {
-    const tx = this.#db.transaction(
-      [DOC_META_STORE, RECORDS_STORE],
-      "readwrite",
-    )
+    const tx = this.#writeTransaction()
+    await this.#fence(tx)
     const metaStore = tx.objectStore(DOC_META_STORE)
     const recordsStore = tx.objectStore(RECORDS_STORE)
 
@@ -321,7 +365,140 @@ export class IndexedDBStore implements Store {
 
   async close(): Promise<void> {
     this.#db.close()
+    this.#releaseSeat()
   }
+}
+
+// ---------------------------------------------------------------------------
+// Opening: the format and the seat
+// ---------------------------------------------------------------------------
+
+interface StoreMetaRow {
+  readonly key: string
+  readonly value: unknown
+}
+
+/** What opening reads: the store-wide metadata, and whether any doc exists. */
+async function readStoreMeta(db: IDBDatabase): Promise<{
+  format: unknown
+  pool: unknown
+  hasData: boolean
+}> {
+  const tx = db.transaction([STORE_META_STORE, DOC_META_STORE], "readonly")
+  const storeMeta = tx.objectStore(STORE_META_STORE)
+  const format = (await req(storeMeta.get(STORE_META_FORMAT_KEY))) as
+    | StoreMetaRow
+    | undefined
+  const pool = (await req(storeMeta.get(STORE_META_SEATS_KEY))) as
+    | StoreMetaRow
+    | undefined
+  const docCount = await req(tx.objectStore(DOC_META_STORE).count())
+  return { format: format?.value, pool: pool?.value, hasData: docCount > 0 }
+}
+
+/**
+ * Read the store-wide metadata, plan the open, and write what it says. Throws
+ * `StoreFormatVersionError` for a store this build cannot read.
+ */
+async function openSeat(
+  db: IDBDatabase,
+  seating: Seating,
+  claim: (seat: Seat) => Promise<void> = async () => {},
+): Promise<Seat> {
+  const stored = await readStoreMeta(db)
+  const plan = planStoreOpen({
+    backend: "indexeddb",
+    current: STORE_FORMAT_VERSION,
+    storedFormat: stored.format,
+    storeHasData: stored.hasData,
+    storedPool: stored.pool,
+    seating,
+    fresh: freshPeerIds(),
+  })
+  if (plan.action === "refuse") throw plan.error
+  await claim(plan.seat)
+  if (plan.writeFormat !== undefined || plan.writePool !== undefined) {
+    const tx = db.transaction(STORE_META_STORE, "readwrite")
+    const storeMeta = tx.objectStore(STORE_META_STORE)
+    if (plan.writeFormat !== undefined) {
+      storeMeta.put({
+        key: STORE_META_FORMAT_KEY,
+        value: plan.writeFormat,
+      } satisfies StoreMetaRow)
+    }
+    if (plan.writePool !== undefined) {
+      storeMeta.put({
+        key: STORE_META_SEATS_KEY,
+        value: plan.writePool,
+      } satisfies StoreMetaRow)
+    }
+    await txDone(tx)
+  }
+  return plan.seat
+}
+
+/**
+ * Take a seat from the database's pool, under its allocation lock.
+ *
+ * A seat lock is only ever requested while holding `alloc`, so while this
+ * holds it the set of held seats can shrink but not grow: the snapshot
+ * `query()` gives is authoritative, any seat it shows free stays free, and
+ * the one lock request cannot be refused.
+ */
+async function openPooledSeat(
+  db: IDBDatabase,
+  dbName: string,
+  locks: SeatLocks,
+): Promise<{ seat: Seat; release: () => void }> {
+  const seatPrefix = `kyneta:${dbName}:seat:`
+  let release: () => void = () => {}
+  const seat = await locks.request(`kyneta:${dbName}:alloc`, async () => {
+    const snapshot = await locks.query()
+    const held = new Set<PeerId>()
+    for (const lock of snapshot.held ?? []) {
+      if (lock.name?.startsWith(seatPrefix)) {
+        held.add(lock.name.slice(seatPrefix.length))
+      }
+    }
+    return openSeat(db, { kind: "pooled", held }, async chosen => {
+      const granted = await holdLock(locks, `${seatPrefix}${chosen.peerId}`)
+      if (granted === null) {
+        throw new Error(
+          `[indexeddb-store] seat ${chosen.peerId} of '${dbName}' was taken ` +
+            `outside its allocation lock; refusing a seat another holder may have`,
+        )
+      }
+      release = granted
+    }).catch((error: unknown) => {
+      release()
+      throw error
+    })
+  })
+  return { seat, release }
+}
+
+/**
+ * Request `name` without waiting, and hold it until the returned function is
+ * called. `null` when another holder has it.
+ *
+ * The request's own promise settles only once the lock is released, so the
+ * grant is reported through a promise of its own.
+ */
+function holdLock(
+  locks: SeatLocks,
+  name: string,
+): Promise<(() => void) | null> {
+  return new Promise((resolve, reject) => {
+    locks
+      .request(name, { ifAvailable: true }, lock => {
+        if (lock === null) {
+          resolve(null)
+          return Promise.resolve()
+        }
+        return new Promise<void>(release => resolve(() => release()))
+      })
+      .catch(reject)
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -331,9 +508,13 @@ export class IndexedDBStore implements Store {
 /**
  * Create an IndexedDB storage backend for browser-side persistence.
  *
- * Returns a `Store` — pass directly to `Exchange({ store: ... })`.
+ * Returns a `Store` — pass directly to `Exchange({ store: ... })`. The store
+ * holds a seat from the database's pool until it closes or the page unloads,
+ * so a page that reloads is the same peer.
  *
  * @param dbName - IndexedDB database name
+ * @param options.locks - The lock manager seats come from; see
+ *   `IndexedDBStoreOptions`
  *
  * @example
  * ```typescript
@@ -344,19 +525,11 @@ export class IndexedDBStore implements Store {
  * })
  * ```
  */
-/**
- * The key range holding exactly the keys that start with `prefix`.
- * IndexedDB compares strings by UTF-16 code unit.
- */
-function prefixRange(prefix: string): IDBKeyRange {
-  const upper = prefixSuccessor(prefix, "code-unit")
-  return upper === null
-    ? IDBKeyRange.lowerBound(prefix)
-    : IDBKeyRange.bound(prefix, upper, false, true)
-}
-
-export async function createIndexedDBStore(dbName: string): Promise<Store> {
-  return IndexedDBStore.open(dbName)
+export async function createIndexedDBStore(
+  dbName: string,
+  options: IndexedDBStoreOptions = {},
+): Promise<Store> {
+  return IndexedDBStore.open(dbName, options)
 }
 
 /**

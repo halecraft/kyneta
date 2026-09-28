@@ -27,22 +27,20 @@ const exchange = new Exchange({
   // ...
 })
 
-// On shutdown:
+// On shutdown (the store holds a connection until it closes):
 // await exchange.shutdown()
 // await pool.end()
 ```
 
-`createPostgresStore` takes a `PgAdapter` — wrap your connection with `fromPool(pool)` (pooled; each transaction checks out and releases a connection) or `fromClient(client)` (a single dedicated connection). This injection mirrors `@kyneta/sqlite-store`'s `fromBetterSqlite3` and keeps the store free of any runtime `pg`-class coupling. The factory queries `information_schema.columns` to validate that the canonical schema exists with compatible column types, then returns a ready Store; a curated error tells you which column is missing or has the wrong type.
+`createPostgresStore` takes a `PgAdapter` — wrap your connection with `fromPool(pool)` (pooled; each transaction checks out and releases a connection) or `fromClient(client)` (a single dedicated connection). This injection mirrors `@kyneta/sqlite-store`'s `fromBetterSqlite3` and keeps the store free of any runtime `pg`-class coupling. The factory queries `information_schema.columns` to validate that the canonical schema exists with compatible column types, takes the store's seat (below), then returns a ready Store; a curated error tells you which column is missing or has the wrong type. `PostgresStore.open(adapter, options)` is the same; the constructor is private, since a store is born holding its seat.
 
-### Sync constructor (advanced)
+### The peer's identity
 
-For callers that validate the schema separately at process start:
+The store issues the exchange's `peerId`, a **seat** from a pool kept in `kyneta_store_meta`. A restarted process gets its seat back, so it stays the same peer, and a `Line` to it survives the restart; several processes over one database hold different seats; the pool never grows past the most processes open at once.
 
-```ts
-import { PostgresStore, fromPool } from "@kyneta/postgres-store"
+Each store holds its seat with a session-level advisory lock on a **connection of its own**, checked out of the pool (or, with `fromClient`, the client itself) and kept until `close()`. Postgres releases the lock when that connection ends, so a crashed process frees its seat. Size your pool for one extra connection per open store. Writes go through other connections, so each write checks, in its own transaction, that no other store has claimed the seat since; if one has (the seat's connection died while the process ran), every write fails with `SeatLostError` and nothing more is written or sent.
 
-const store = new PostgresStore(fromPool(pool))
-```
+Seat locks use Postgres's two-key advisory lock space, `(hashtext(<store-meta table>), hashtext(peerId))`, and the per-document write locks the one-key space. The two spaces do not overlap, and must not: a seat lock is held for its process's lifetime, so a document whose write lock collided with it would wait until that process ended. If your application takes advisory locks of its own, keep them out of the two-key space with the store-metadata table's `hashtext` as the first key.
 
 ## Schema
 
@@ -69,7 +67,7 @@ CREATE TABLE IF NOT EXISTS kyneta_store_meta (
 );
 ```
 
-`createPostgresStore` validates all three tables exist and runs the **store-format gate** on open: it stamps a `{ major, minor }` version into `kyneta_store_meta` (a one-row idempotent write — not DDL) and, on a later open, throws `StoreFormatVersionError` for an incompatible major or an unversioned store that already holds documents. No automatic migration is performed. Adding `kyneta_store_meta` (and the `kyneta_meta` → `kyneta_doc_meta` rename) to an existing deployment is an explicit migration step.
+`createPostgresStore` validates all three tables exist and checks the **store format** on open: it stamps a `{ major, minor }` version into `kyneta_store_meta` (row writes — not DDL) and, on a later open, throws `StoreFormatVersionError` for an incompatible major or an unversioned store that already holds documents. No automatic migration is performed. The format is 1.1: `kyneta_store_meta` holds the seat pool under `key = 'seats'`. A 1.0 database opens as one with an empty pool. Adding `kyneta_store_meta` (and the `kyneta_meta` → `kyneta_doc_meta` rename) to an existing deployment is an explicit migration step.
 
 For other table names, `postgresSchema(tables)` returns this DDL with those names.
 
@@ -100,10 +98,10 @@ Default: `{ docMeta: "kyneta_doc_meta", records: "kyneta_records", storeMeta: "k
 
 The caller owns the connection lifecycle:
 
-- `fromPool(pool)`: each transaction checks out a connection via `pool.connect()` and `release()`s it; the caller calls `pool.end()` on shutdown.
-- `fromClient(client)`: transactions run against the one connection; the caller calls `client.end()` on shutdown.
+- `fromPool(pool)`: each transaction checks out a connection via `pool.connect()` and `release()`s it, and the store keeps one more checked out for its seat until `close()`; the caller calls `pool.end()` on shutdown, after the store has closed.
+- `fromClient(client)`: transactions, and the seat lock, run on the one connection; the caller calls `client.end()` on shutdown.
 
-`PostgresStore.close()` is a no-op.
+`PostgresStore.close()` releases the seat lock and returns its connection to the pool. A closed store refuses every operation.
 
 ### Runtime schema drift
 

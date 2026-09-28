@@ -6,15 +6,21 @@
 // ctx.storage.sql). Forcing async here would dilute that ergonomics for
 // no benefit, since postgres-store and prisma-store get their own
 // async-native packages.
+//
+// A SQLite database has one owner: the adapter. Its seat is `owned`, the one
+// seat the database's pool holds, reused on every open. The owner's writes go
+// through the connection that holds the ownership, so no write can outlive it
+// and none is fenced.
 
 import {
   type DocId,
-  decideStoreFormat,
-  parseStoreFormat,
+  freshPeerIds,
+  type OwnedSeat,
+  planStoreOpen,
   prefixSuccessor,
   STORE_META_FORMAT_KEY,
+  STORE_META_SEATS_KEY,
   type Store,
-  StoreFormatVersionError,
   type StoreMark,
   type StoreMeta,
   type StoreRecord,
@@ -34,6 +40,20 @@ import {
 // ---------------------------------------------------------------------------
 
 /**
+ * A SQLite database, owned.
+ *
+ * **One adapter is the one owner of its database** until it closes: no other
+ * connection, in this process or another, may write to it meanwhile. The
+ * store reuses one seat on every open, which is sound only because nothing
+ * else writes under it. How ownership is held belongs to the host:
+ *
+ * - over a file, the adapter takes it when it wraps the connection, with
+ *   `PRAGMA locking_mode = EXCLUSIVE` and a `BEGIN EXCLUSIVE; COMMIT` that
+ *   takes the lock at once, as `fromBetterSqlite3` and `fromBunSqlite` do. A
+ *   second adapter over the file is then refused;
+ * - a Cloudflare Durable Object is the sole owner of its storage by platform
+ *   guarantee, so its adapter does nothing.
+ *
  * `iterate` returns `Iterable<T>` rather than `T[]` so `loadAll` can
  * stream million-record stores without materializing them all in
  * memory. Cloudflare DO's `ctx.storage.sql.exec` returns a cursor for
@@ -45,15 +65,41 @@ export interface SqliteAdapter {
     sql: string,
     ...params: unknown[]
   ): Iterable<T>
-  /**
-   * Run `fn` in a transaction that takes the database's write lock when it
-   * begins (`BEGIN IMMEDIATE`), not at its first write. Several stores may
-   * open one database file; each reads a document's last sequence number
-   * inside the transaction and writes after it, which is sound only if no
-   * other writer can come between the read and the write.
-   */
+  /** Run `fn` in a transaction: commit if it returns, roll back if it throws. */
   transaction<R>(fn: () => R): R
   close(): void
+}
+
+/** Options for the built-in file adapters. */
+export interface SqliteFileOptions {
+  /**
+   * How long, in milliseconds, taking ownership waits for another owner of
+   * the file to close before it is refused. Default 5000.
+   */
+  readonly busyTimeout?: number
+}
+
+/**
+ * Take ownership of the database file behind `db`: hold its lock for as long
+ * as the connection is open. Throws, naming the reason, when another
+ * connection owns it.
+ */
+function own(
+  db: { exec(sql: string): unknown },
+  options: SqliteFileOptions,
+): void {
+  db.exec(`PRAGMA busy_timeout = ${options.busyTimeout ?? 5000}`)
+  db.exec("PRAGMA locking_mode = EXCLUSIVE")
+  try {
+    db.exec("BEGIN EXCLUSIVE; COMMIT")
+  } catch (error) {
+    if ((error as { code?: unknown }).code !== "SQLITE_BUSY") throw error
+    throw new Error(
+      "@kyneta/sqlite-store: another connection owns this database file. " +
+        "A SQLite database has one owner at a time; close the other first.",
+      { cause: error },
+    )
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -61,7 +107,8 @@ export interface SqliteAdapter {
 // ---------------------------------------------------------------------------
 
 /**
- * Wrap a `better-sqlite3` Database as a `SqliteAdapter`.
+ * Wrap a `better-sqlite3` Database as a `SqliteAdapter`, taking ownership of
+ * its file (see `SqliteAdapter`).
  *
  * @example
  * ```typescript
@@ -72,7 +119,11 @@ export interface SqliteAdapter {
  * const store = new SqliteStore(fromBetterSqlite3(db))
  * ```
  */
-export function fromBetterSqlite3(db: BetterSqlite3Database): SqliteAdapter {
+export function fromBetterSqlite3(
+  db: BetterSqlite3Database,
+  options: SqliteFileOptions = {},
+): SqliteAdapter {
+  own(db, options)
   return {
     exec(sql: string, ...params: unknown[]): void {
       db.prepare(sql).run(...params)
@@ -84,7 +135,7 @@ export function fromBetterSqlite3(db: BetterSqlite3Database): SqliteAdapter {
       return db.prepare(sql).iterate(...params) as IterableIterator<T>
     },
     transaction<R>(fn: () => R): R {
-      return db.transaction(fn).immediate()
+      return db.transaction(fn)()
     },
     close(): void {
       db.close()
@@ -93,7 +144,8 @@ export function fromBetterSqlite3(db: BetterSqlite3Database): SqliteAdapter {
 }
 
 /**
- * Wrap a `bun:sqlite` Database as a `SqliteAdapter`.
+ * Wrap a `bun:sqlite` Database as a `SqliteAdapter`, taking ownership of its
+ * file (see `SqliteAdapter`).
  *
  * @example
  * ```typescript
@@ -104,7 +156,11 @@ export function fromBetterSqlite3(db: BetterSqlite3Database): SqliteAdapter {
  * const store = new SqliteStore(fromBunSqlite(db))
  * ```
  */
-export function fromBunSqlite(db: BunSqliteDatabase): SqliteAdapter {
+export function fromBunSqlite(
+  db: BunSqliteDatabase,
+  options: SqliteFileOptions = {},
+): SqliteAdapter {
+  own(db, options)
   return {
     exec(sql: string, ...params: unknown[]): void {
       db.run(sql, ...params)
@@ -116,7 +172,7 @@ export function fromBunSqlite(db: BunSqliteDatabase): SqliteAdapter {
       return db.query(sql).iterate(...params) as IterableIterator<T>
     },
     transaction<R>(fn: () => R): R {
-      return db.transaction(fn).immediate()
+      return db.transaction(fn)()
     },
     close(): void {
       db.close()
@@ -130,21 +186,23 @@ export function fromBunSqlite(db: BunSqliteDatabase): SqliteAdapter {
 
 /** Structural type for a `better-sqlite3` Database instance. */
 interface BetterSqlite3Database {
+  exec(sql: string): unknown
   prepare(sql: string): {
     run(...params: unknown[]): unknown
     iterate(...params: unknown[]): IterableIterator<unknown>
   }
-  transaction<R>(fn: () => R): { immediate(): R }
+  transaction<R>(fn: () => R): () => R
   close(): void
 }
 
 /** Structural type for a `bun:sqlite` Database instance. */
 interface BunSqliteDatabase {
+  exec(sql: string): unknown
   run(sql: string, ...params: unknown[]): void
   query(sql: string): {
     iterate(...params: unknown[]): IterableIterator<unknown>
   }
-  transaction<R>(fn: () => R): { immediate(): R }
+  transaction<R>(fn: () => R): () => R
   close(): void
 }
 
@@ -169,18 +227,16 @@ export interface SqliteStoreOptions {
 // ---------------------------------------------------------------------------
 
 export class SqliteStore implements Store {
+  readonly seat: OwnedSeat
   readonly #adapter: SqliteAdapter
   readonly #tables: TableNames
+  #closed = false
 
   constructor(adapter: SqliteAdapter, options: SqliteStoreOptions = {}) {
     this.#adapter = adapter
     this.#tables = resolveTables(options)
-    // Wait for another connection's write lock rather than fail at once,
-    // whatever the driver's default. The pragma answers with a row, so it is
-    // read rather than run.
-    Array.from(adapter.iterate("PRAGMA busy_timeout = 5000"))
     this.#ensureSchema()
-    this.#assertFormat()
+    this.seat = this.#openSeat()
   }
 
   #ensureSchema(): void {
@@ -208,48 +264,57 @@ export class SqliteStore implements Store {
     `)
   }
 
-  // Bootstrap reader: consult the store-format marker before trusting any
-  // bytes. Stamps a brand-new store, accepts a compatible one, or throws.
-  #assertFormat(): void {
-    const [row] = this.#adapter.iterate<{ value: string }>(
-      `SELECT value FROM ${this.#tables.storeMeta} WHERE key = ?`,
+  /**
+   * Read the store-wide metadata, plan the open, and write what it says.
+   * Throws `StoreFormatVersionError` for a store this build cannot read.
+   */
+  #openSeat(): OwnedSeat {
+    const stored = new Map<string, string>()
+    for (const row of this.#adapter.iterate<{ key: string; value: string }>(
+      `SELECT key, value FROM ${this.#tables.storeMeta} WHERE key IN (?, ?)`,
       STORE_META_FORMAT_KEY,
-    )
-    const parsed = row === undefined ? null : parseStoreFormat(row.value)
-    if (parsed === "malformed") {
-      throw new StoreFormatVersionError({
-        reason: "malformed-version",
-        backend: "sqlite",
-        stored: null,
-        current: STORE_FORMAT_VERSION,
-      })
+      STORE_META_SEATS_KEY,
+    )) {
+      stored.set(row.key, row.value)
     }
-
     const [hasData] = this.#adapter.iterate<{ one: number }>(
       `SELECT 1 AS one FROM ${this.#tables.docMeta} LIMIT 1`,
     )
-
-    const decision = decideStoreFormat({
+    const plan = planStoreOpen({
+      backend: "sqlite",
       current: STORE_FORMAT_VERSION,
-      stored: parsed,
+      storedFormat: stored.get(STORE_META_FORMAT_KEY),
       storeHasData: hasData !== undefined,
+      storedPool: stored.get(STORE_META_SEATS_KEY),
+      seating: { kind: "owned" },
+      fresh: freshPeerIds(),
     })
-
-    if (decision.action === "refuse") {
-      throw new StoreFormatVersionError({
-        reason: decision.reason,
-        backend: "sqlite",
-        stored: parsed,
-        current: STORE_FORMAT_VERSION,
+    if (plan.action === "refuse") throw plan.error
+    const writes: [string, unknown][] = []
+    if (plan.writeFormat !== undefined) {
+      writes.push([STORE_META_FORMAT_KEY, plan.writeFormat])
+    }
+    if (plan.writePool !== undefined) {
+      writes.push([STORE_META_SEATS_KEY, plan.writePool])
+    }
+    if (writes.length > 0) {
+      this.#adapter.transaction(() => {
+        for (const [key, value] of writes) {
+          this.#adapter.exec(
+            `INSERT OR REPLACE INTO ${this.#tables.storeMeta} (key, value) VALUES (?, ?)`,
+            key,
+            JSON.stringify(value),
+          )
+        }
       })
     }
-    if (decision.action === "stamp") {
-      this.#adapter.exec(
-        `INSERT INTO ${this.#tables.storeMeta} (key, value) VALUES (?, ?)`,
-        STORE_META_FORMAT_KEY,
-        JSON.stringify(decision.value),
-      )
-    }
+    return plan.seat
+  }
+
+  /** The adapter, while the store is open. */
+  get #db(): SqliteAdapter {
+    if (this.#closed) throw new Error("SqliteStore: the store is closed")
+    return this.#adapter
   }
 
   // -------------------------------------------------------------------------
@@ -258,9 +323,8 @@ export class SqliteStore implements Store {
 
   async append(docId: DocId, record: StoreRecord): Promise<void> {
     // The meta, the next sequence number and both writes in one transaction:
-    // they commit together or not at all, and no other store over this file
-    // can take the same sequence number in between.
-    this.#adapter.transaction(() => {
+    // they commit together or not at all.
+    this.#db.transaction(() => {
       const plan = planAppend(
         docId,
         record,
@@ -268,14 +332,14 @@ export class SqliteStore implements Store {
         this.#nextSeq(docId),
       )
       if (plan.upsertMeta !== null) {
-        this.#adapter.exec(
+        this.#db.exec(
           `INSERT OR REPLACE INTO ${this.#tables.docMeta} (doc_id, data) VALUES (?, ?)`,
           docId,
           plan.upsertMeta.data,
         )
       }
       const { row } = plan.insertRecord
-      this.#adapter.exec(
+      this.#db.exec(
         `INSERT INTO ${this.#tables.records} (doc_id, seq, kind, payload, blob) VALUES (?, ?, ?, ?, ?)`,
         docId,
         plan.insertRecord.seq,
@@ -287,7 +351,7 @@ export class SqliteStore implements Store {
   }
 
   async *loadAll(docId: DocId): AsyncIterable<StoreRecord> {
-    for (const row of this.#adapter.iterate<RowShape>(
+    for (const row of this.#db.iterate<RowShape>(
       `SELECT kind, payload, blob FROM ${this.#tables.records} WHERE doc_id = ? ORDER BY seq`,
       docId,
     )) {
@@ -304,14 +368,14 @@ export class SqliteStore implements Store {
     records: StoreRecord[],
     through: StoreMark | null,
   ): Promise<void> {
-    this.#adapter.transaction(() => {
+    this.#db.transaction(() => {
       const plan = planCompact(
         records,
         this.#readMeta(docId),
         this.#nextSeq(docId),
       )
       if (through !== null) {
-        this.#adapter.exec(
+        this.#db.exec(
           `DELETE FROM ${this.#tables.records} WHERE doc_id = ? AND seq <= ?`,
           docId,
           through,
@@ -319,7 +383,7 @@ export class SqliteStore implements Store {
       }
 
       for (const { seq, row } of plan.records) {
-        this.#adapter.exec(
+        this.#db.exec(
           `INSERT INTO ${this.#tables.records} (doc_id, seq, kind, payload, blob) VALUES (?, ?, ?, ?, ?)`,
           docId,
           seq,
@@ -329,7 +393,7 @@ export class SqliteStore implements Store {
         )
       }
 
-      this.#adapter.exec(
+      this.#db.exec(
         `INSERT OR REPLACE INTO ${this.#tables.docMeta} (doc_id, data) VALUES (?, ?)`,
         docId,
         plan.upsertMeta.data,
@@ -339,7 +403,7 @@ export class SqliteStore implements Store {
 
   /** The document's last sequence number, read from the table. */
   #lastSeq(docId: DocId): number | null {
-    const [row] = this.#adapter.iterate<{ max_seq: number | null }>(
+    const [row] = this.#db.iterate<{ max_seq: number | null }>(
       `SELECT MAX(seq) AS max_seq FROM ${this.#tables.records} WHERE doc_id = ?`,
       docId,
     )
@@ -352,12 +416,12 @@ export class SqliteStore implements Store {
   }
 
   async delete(docId: DocId): Promise<void> {
-    this.#adapter.transaction(() => {
-      this.#adapter.exec(
+    this.#db.transaction(() => {
+      this.#db.exec(
         `DELETE FROM ${this.#tables.records} WHERE doc_id = ?`,
         docId,
       )
-      this.#adapter.exec(
+      this.#db.exec(
         `DELETE FROM ${this.#tables.docMeta} WHERE doc_id = ?`,
         docId,
       )
@@ -369,7 +433,7 @@ export class SqliteStore implements Store {
   }
 
   #readMeta(docId: DocId): StoreMeta | null {
-    const [row] = this.#adapter.iterate<{ data: string }>(
+    const [row] = this.#db.iterate<{ data: string }>(
       `SELECT data FROM ${this.#tables.docMeta} WHERE doc_id = ?`,
       docId,
     )
@@ -385,15 +449,15 @@ export class SqliteStore implements Store {
       prefix === undefined ? null : prefixSuccessor(prefix, "code-point")
     const rows =
       prefix === undefined
-        ? this.#adapter.iterate<{ doc_id: string }>(
+        ? this.#db.iterate<{ doc_id: string }>(
             `SELECT doc_id FROM ${this.#tables.docMeta}`,
           )
         : upper === null
-          ? this.#adapter.iterate<{ doc_id: string }>(
+          ? this.#db.iterate<{ doc_id: string }>(
               `SELECT doc_id FROM ${this.#tables.docMeta} WHERE doc_id >= ?`,
               prefix,
             )
-          : this.#adapter.iterate<{ doc_id: string }>(
+          : this.#db.iterate<{ doc_id: string }>(
               `SELECT doc_id FROM ${this.#tables.docMeta} WHERE doc_id >= ? AND doc_id < ?`,
               prefix,
               upper,
@@ -404,6 +468,8 @@ export class SqliteStore implements Store {
   }
 
   async close(): Promise<void> {
+    if (this.#closed) return
+    this.#closed = true
     this.#adapter.close()
   }
 }

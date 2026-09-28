@@ -120,7 +120,7 @@ Wire evolution is split across three mechanisms by how a peer must react to a di
 
 ### `EstablishMsg.identity`
 
-`identity: PeerIdentityDetails` is `{ peerId, principal, type }`. `peerId` is the peer's **seat**, the address of one replica, which the exchange issues fresh per Runtime; `principal` is who the peer says it is, chosen by the application and not verified, and several seats may share one; `type` is `"user" | "bot" | "service"`. On the wire they are `id`, `pr` and `y`. `pr` joined in protocol 2.0, replacing the optional `n` (name). By the invariant above a 1.x `establish` without `pr` must still parse, so the validator requires `pr` only when `pv` names 2.0 or later, and the inbound transform reads an absent one as the empty principal.
+`identity: PeerIdentityDetails` is `{ peerId, principal, type }`. `peerId` is the peer's **seat**, the address of one replica, which the exchange issues (from its store, which keeps it across restarts, or fresh per Runtime without one); `principal` is who the peer says it is, chosen by the application and not verified, and several seats may share one; `type` is `"user" | "bot" | "service"`. On the wire they are `id`, `pr` and `y`. `pr` joined in protocol 2.0, replacing the optional `n` (name). By the invariant above a 1.x `establish` without `pr` must still parse, so the validator requires `pr` only when `pv` names 2.0 or later, and the inbound transform reads an absent one as the empty principal.
 
 ---
 

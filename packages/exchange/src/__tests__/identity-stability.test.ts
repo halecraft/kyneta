@@ -1,5 +1,5 @@
-// identity-stability.test.ts — a peer keeps its data across a restart, and a
-// document speaks as its Runtime's seat.
+// identity-stability.test.ts — a peer keeps its data and its identity across
+// a restart with a store, and a document speaks as its Runtime's seat.
 //
 // A CRDT addresses each operation by (peer, counter), and the counter restarts
 // at zero on a fresh document. So a peer that claims its stable identity on an
@@ -7,9 +7,9 @@
 // produces operations at addresses that history already occupies. Merge
 // deduplicates by address, and one of the two is discarded silently.
 //
-// These tests pin that the data survives. The identity does not: every Runtime
-// issues itself a fresh seat. PLAN-2026-09-27-durable-seats lets a store keep
-// one across restarts, and restores the identity assertion.
+// A store issues its Runtime a seat that survives a restart over the same
+// storage. That is sound only because every document hydrates before it
+// writes under the seat, which these tests pin.
 
 import { loro } from "@kyneta/loro-schema"
 import {
@@ -22,8 +22,11 @@ import {
 import { yjs, yjsClientId } from "@kyneta/yjs-schema"
 import { describe, expect, it } from "vitest"
 import { Runtime } from "../runtime.js"
-import { createInMemoryStore } from "../store/in-memory-store.js"
-import type { Store } from "../store/store.js"
+import {
+  createInMemoryStore,
+  createInMemoryStoreData,
+  type InMemoryStoreData,
+} from "../store/in-memory-store.js"
 
 const ListSchema = Schema.struct({ items: Schema.list(Schema.string()) })
 
@@ -33,13 +36,18 @@ function identityOf(ref: unknown): string {
   return String(doc.clientID ?? doc.peerIdStr)
 }
 
-/** One session: open the document, do something with it, shut down. */
+/**
+ * One session: open a store over `storage`, open the document, do something
+ * with it, shut down.
+ */
 async function session<T>(
-  store: Store,
+  storage: InMemoryStoreData,
   bound: BoundSchema<typeof ListSchema, never>,
   use: (doc: any, runtime: Runtime) => Promise<T> | T,
 ): Promise<T> {
-  const runtime = new Runtime({ store })
+  const runtime = new Runtime({
+    store: createInMemoryStore({ sharedData: storage }),
+  })
   const doc = runtime.get("doc-1", bound)
   const result = await use(doc, runtime)
   await runtime.flush()
@@ -51,27 +59,35 @@ describe("stored data survives a write issued before hydration", () => {
   // The load-bearing test, and the symptom a user would report. `get()` returns
   // synchronously, so an application that writes on the same tick it opens a
   // document is inside the window where its stored state has not arrived yet.
+  // The second session holds the first one's seat, so its early write is
+  // under an identity whose history has not loaded.
   it.each([
     ["yjs", yjs.bind(ListSchema)],
     ["loro", loro.bind(ListSchema)],
   ])("%s", async (_name, bound) => {
-    const store = createInMemoryStore()
+    const storage = createInMemoryStoreData()
 
-    await session(store, bound as never, doc => {
+    const first = await session(storage, bound as never, (doc, runtime) => {
       batch(doc, (d: any) => {
         d.items.push("stored-1")
         d.items.push("stored-2")
       })
+      return runtime.peerId
     })
 
     // Second session writes immediately — no await, no settle check.
-    const after = await session(store, bound as never, async (doc, runtime) => {
-      batch(doc, (d: any) => {
-        d.items.push("early-write")
-      })
-      await runtime.flush()
-      return doc.items()
-    })
+    const after = await session(
+      storage,
+      bound as never,
+      async (doc, runtime) => {
+        expect(runtime.peerId).toBe(first)
+        batch(doc, (d: any) => {
+          d.items.push("early-write")
+        })
+        await runtime.flush()
+        return doc.items()
+      },
+    )
 
     expect(after).toContain("stored-1")
     expect(after).toContain("stored-2")
@@ -79,23 +95,27 @@ describe("stored data survives a write issued before hydration", () => {
   })
 })
 
-describe("stored data survives a restart", () => {
+describe("a restart with a store keeps the peer's identity and its data", () => {
   it.each([
     ["yjs", yjs.bind(ListSchema)],
     ["loro", loro.bind(ListSchema)],
   ])("%s", async (_name, bound) => {
-    const store = createInMemoryStore()
+    const storage = createInMemoryStoreData()
 
-    await session(store, bound as never, async (doc, runtime) => {
-      batch(doc, (d: any) => {
-        d.items.push("one")
-      })
-      await runtime.flush()
-    })
+    const first = await session(
+      storage,
+      bound as never,
+      async (doc, runtime) => {
+        batch(doc, (d: any) => {
+          d.items.push("one")
+        })
+        await runtime.flush()
+        return { peerId: runtime.peerId, identity: identityOf(doc) }
+      },
+    )
 
-    // The second session is a new seat, and waits for its stored state.
     const second = await session(
-      store,
+      storage,
       bound as never,
       async (doc, runtime) => {
         await runtime.flush()
@@ -103,11 +123,17 @@ describe("stored data survives a restart", () => {
           d.items.push("two")
         })
         await runtime.flush()
-        return doc.items()
+        return {
+          peerId: runtime.peerId,
+          identity: identityOf(doc),
+          items: doc.items(),
+        }
       },
     )
 
-    expect(second).toEqual(["one", "two"])
+    expect(second.peerId).toBe(first.peerId)
+    expect(second.identity).toBe(first.identity)
+    expect(second.items).toEqual(["one", "two"])
   })
 })
 

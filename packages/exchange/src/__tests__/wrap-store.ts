@@ -11,11 +11,15 @@ import type { Store } from "../store/store.js"
  * spelling — `{ ...store, append }` — copies the own properties and none of
  * the prototype methods. The result typechecks as a complete `Store` and then
  * fails at the first `currentMeta` or `loadAll`, a long way from the line that
- * caused it. Adding a method to `Store` now breaks this in one visible place
+ * caused it. Adding a member to `Store` now breaks this in one visible place
  * rather than silently in several.
  */
-export function wrapStore(inner: Store, overrides: Partial<Store>): Store {
+export function wrapStore(
+  inner: Store,
+  overrides: Partial<Omit<Store, "seat">>,
+): Store {
   return {
+    seat: inner.seat,
     append: (docId, record) => inner.append(docId, record),
     loadAll: docId => inner.loadAll(docId),
     mark: docId => inner.mark(docId),

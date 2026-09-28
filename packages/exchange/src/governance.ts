@@ -79,7 +79,8 @@ export type LineageBoundaryPredicate = (
  *   `principal`, as in `p => p.principal === "my-server"`, rather than by
  *   `type`: a server is a `"service"`, but so is any other service peer on
  *   the network, including a devtools inspector. Not by `peerId` either: a
- *   seat is issued per process and changes when the server restarts.
+ *   server without a store is a new seat on every restart, and several
+ *   server processes over one store hold different seats.
  */
 export type Authority =
   | "self"

@@ -4,8 +4,8 @@
 > **Role**: Universal SQL-family `Store` implementation for `@kyneta/exchange`. Wraps any SQLite binding behind a thin synchronous adapter (`SqliteAdapter`); ships factories for `better-sqlite3` and `bun:sqlite`. Designed to also fit Cloudflare DO `ctx.storage.sql` (cursor-yielding, sync) when a factory ships.
 > **Depends on**: `@kyneta/exchange` (peer), `@kyneta/schema` (peer), `@kyneta/sql-store-core` (peer). Optional driver dependency: `better-sqlite3` or `bun:sqlite`.
 > **Depended on by**: Server, Bun, Cloudflare DO, and embedded-database applications.
-> **Canonical symbols**: `SqliteStore`, `createSqliteStore`, `SqliteAdapter`, `SqliteStoreOptions`, `fromBetterSqlite3`, `fromBunSqlite`.
-> **Key invariant(s)**: `append`'s meta-upsert + record-insert run inside a single `transaction(...)` — atomic — and so does `compact`. Both read the meta and `MAX(seq)` inside that transaction, which takes the write lock when it begins, so several stores over one database file never take the same `seq`. The `SqliteAdapter` interface is deliberately synchronous to preserve compatibility with all SQLite-family drivers (better-sqlite3, bun:sqlite, Cloudflare DO).
+> **Canonical symbols**: `SqliteStore`, `createSqliteStore`, `SqliteAdapter`, `SqliteStoreOptions`, `SqliteFileOptions`, `fromBetterSqlite3`, `fromBunSqlite`.
+> **Key invariant(s)**: One `SqliteAdapter` is the one owner of its database until it closes; the file adapters lock the file exclusively when they wrap the connection. `append`'s meta-upsert + record-insert run inside a single `transaction(...)` — atomic — and so does `compact`. Both read the meta and `MAX(seq)` inside that transaction, which with one owner nothing can come between. The store's seat is `owned`: the pool's one seat, reused on every open, unfenced. The `SqliteAdapter` interface is deliberately synchronous to preserve compatibility with all SQLite-family drivers (better-sqlite3, bun:sqlite, Cloudflare DO).
 
 ## Architecture
 
@@ -36,7 +36,7 @@ The Cloudflare DO factory does not yet exist — only the design accommodates it
 | `delete` | `transaction(() => { exec DELETE records; exec DELETE meta })`. |
 | `currentMeta` | `iterate("SELECT data FROM meta WHERE doc_id = ?")` → `JSON.parse`. |
 | `listDocIds(prefix)` | `iterate("SELECT doc_id FROM meta WHERE doc_id >= ? AND doc_id < ?")` over `[prefix, prefixSuccessor(prefix, "code-point"))`. |
-| `close` | `adapter.close()`. |
+| `close` | `adapter.close()`, which releases ownership. A closed store refuses every operation. |
 
 ## Schema and the `tables` option
 
@@ -85,11 +85,20 @@ The named-table contract makes "prefix" a misframing — there is a fixed set of
 
 Pre-v2.0.0, `append` performed the meta upsert and the record insert as separate `exec` calls. A crash between them left the meta updated with no corresponding record — an atomicity bug. v2.0.0 wraps both writes in `transaction(() => …)`, exploiting the sync-by-default `transaction` method already implemented by both extant adapter factories. The conformance suite's fault-injected atomicity test catches the regression — the seam is `adapter.exec`, and arming "fail on the 2nd exec" forces the record-insert step to throw inside the transaction, which rolls back the meta upsert.
 
-## Sequence numbers come from the table
+## One owner per database
 
-Several stores may open one database file: two processes, or two connections in one. Each write reads `MAX(seq)` for the document and inserts after it, inside one transaction. That is sound only if no other writer comes between the read and the insert, so `SqliteAdapter.transaction` must take the write lock when it begins (`BEGIN IMMEDIATE`), not at its first write, as a deferred transaction would. The built-in adapters use `.immediate()`. The store sets `PRAGMA busy_timeout = 5000` on open, so a second writer waits for the lock rather than failing at once, whatever the driver's default.
+SQLite is an embedded database owned by one process in nearly every deployment, and server fleets use Postgres, which pools seats. So **one `SqliteAdapter` is the one owner of its database**, and ownership is part of the adapter contract rather than a store step, because how it is held belongs to the host:
 
-An earlier version cached the next `seq` per document in memory, seeded once from `MAX(seq)`. Two instances over one table then handed out the same `seq`, and the second insert failed on the primary key.
+- **Over a file**, the built-in adapters take it when they wrap the connection: `PRAGMA busy_timeout` (`SqliteFileOptions.busyTimeout`, default 5000 ms), then `PRAGMA locking_mode = EXCLUSIVE`, which keeps every lock the connection takes until it closes, then `BEGIN EXCLUSIVE; COMMIT`, which takes the exclusive lock at once. A second adapter over the file, in this process or another, waits `busy_timeout` and is refused with an error naming the reason; SQLite shares lock state between connections in one process, so the same holds within one.
+- **A Cloudflare Durable Object** is the sole owner of its storage by platform guarantee, and its SQL refuses `PRAGMA locking_mode` and `BEGIN EXCLUSIVE` anyway, so its adapter does nothing.
+
+The store issues no pragma.
+
+**The seat.** The store's seat is `owned` (see §"Durable seats" in `packages/exchange/TECHNICAL.md`): the store-metadata table's pool holds one seat, stored on the first open and reused on every open after (`planStoreOpen` with `owned` seating). The lock is held by the connection that writes, so no write can outlive it, and there is no per-write fence.
+
+**Sequence numbers come from the table.** Each write reads `MAX(seq)` for the document and inserts after it, inside one transaction. With one owner nothing can come between, so `SqliteAdapter.transaction` is a plain transaction. (store-contract once let several connections open one file, which needed `transaction` to take the write lock at its start with `BEGIN IMMEDIATE`; owning the file makes that pointless.) An earlier version cached the next `seq` per document in memory, seeded once from `MAX(seq)`; reading it from the table costs one indexed lookup per write and needs no cache.
+
+Several isolated stores may share one owned database, each with its own `tables` set: each is its own storage, with its own pool.
 
 ## Prefix scans
 
@@ -101,14 +110,15 @@ It used `LIKE prefix% ESCAPE '\'` with an `escapeLike` helper. SQLite's `LIKE` i
 
 - **Not opinionated about the SQLite binding.** Any object satisfying `SqliteAdapter` works. The two shipped factories cover the common cases.
 - **Not async-uniform.** The synchronous adapter is load-bearing; trying to unify it with the async Postgres/Prisma stores would dilute SQLite-family ergonomics.
-- **Not multi-process safe.** Use a separate `tables` pair per Exchange when sharing a database.
+- **Not multi-owner.** A second adapter over an owned file is refused. Several Exchanges may share one owned database through one adapter, each with its own `tables` set.
 
 ## Key Types
 
 | Type | Role |
 |------|------|
 | `SqliteStore` | The `Store` implementation. |
-| `SqliteAdapter` | Four-method synchronous database interface. |
+| `SqliteAdapter` | Four-method synchronous database interface; one adapter is one owner. |
+| `SqliteFileOptions` | `{ busyTimeout? }` for the file adapters. |
 | `SqliteStoreOptions` | `{ tables?: Partial<TableNames> }`. |
 | `fromBetterSqlite3` / `fromBunSqlite` | Adapter factories for the two production-supported drivers. |
 
@@ -117,8 +127,8 @@ It used `LIKE prefix% ESCAPE '\'` with an `escapeLike` helper. SQLite's `LIKE` i
 | File | Role |
 |------|------|
 | `src/index.ts` | `SqliteStore`, `SqliteAdapter`, factory functions, schema DDL. |
-| `src/__tests__/sqlite-store.test.ts` | Conformance suite (with fault factory + isolation factory) plus SQLite-specific tests (close+reopen, adapter factory, two-store isolation). Prefix scans are covered by the conformance suite. |
+| `src/__tests__/sqlite-store.test.ts` | Conformance suite (with seats, fault factory + isolation factory) plus SQLite-specific tests (close+reopen, one owner per file, a host-owned adapter, adapter factory, two-store isolation). Prefix scans are covered by the conformance suite. |
 
 ## Testing
 
-Conformance suite from `@kyneta/exchange/testing` runs against an in-memory `:memory:` database; the fault-injection test uses a tmpfile so a fresh non-faulting Store can verify rollback state. Run with: `cd packages/exchange/stores/sqlite && pnpm verify`.
+Conformance suite from `@kyneta/exchange/testing` runs against an in-memory `:memory:` database; the seat section and the fault-injection test use tmpfiles. The file has one owner, so the fault test reads rollback state back through the store that wrote it (reads go through `iterate`, which the fault seam does not count). Run with: `cd packages/exchange/stores/sqlite && pnpm verify`.

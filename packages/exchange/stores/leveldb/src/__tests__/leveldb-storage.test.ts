@@ -56,16 +56,22 @@ describeStore("LevelDBStore", () => createLevelDBStore(makeTmpDir()), {
   cleanup: async backend => {
     await backend.close()
   },
+  // `classic-level` locks the directory, so one store owns it.
+  seats: {
+    kind: "owned",
+    storage: async () => {
+      const dir = makeTmpDir()
+      return { open: () => createLevelDBStore(dir), cleanup: async () => {} }
+    },
+  },
   // Atomicity property: wrap the raw ClassicLevel so the Nth write op fails.
-  // Op-weighting (put = 1, batch = ops.length) makes the harness's
-  // injectFault(2) land inside the meta-append's 2-op batch, so the throw fires
-  // before the atomic batch commits — nothing leaks. jj:pzuytnvo
+  // Op-weighting (put = 1, batch = ops.length) puts every op of a batch in
+  // the sweep, and a batch commits all of its ops or none. jj:pzuytnvo
   faultFactory: async () => {
-    const dir = makeTmpDir()
-    const raw = new ClassicLevel<string, Uint8Array>(dir, {
+    const raw = new ClassicLevel<string, Uint8Array>(makeTmpDir(), {
       valueEncoding: "binary",
     })
-    const { proxy, arm } = makeArmedFault(raw, {
+    const { proxy, arm, fired } = makeArmedFault(raw, {
       put: 1,
       batch: ops => (ops as readonly unknown[]).length,
     })
@@ -73,35 +79,12 @@ describeStore("LevelDBStore", () => createLevelDBStore(makeTmpDir()), {
     return {
       store,
       injectFault: arm,
-      // LevelDB takes a single-process directory lock, so the fresh store
-      // cannot open a second handle on `dir` while `raw` is live — release it
-      // first, then reopen non-faulting on the same dir.
-      freshStore: async () => {
-        await raw.close()
-        return createLevelDBStore(dir)
-      },
-      cleanup: async () => {
-        try {
-          await raw.close()
-        } catch {
-          // already closed by freshStore
-        }
-      },
+      fired,
+      // The directory has one owner, so it is read back through the store
+      // that wrote it; reads are not counted.
+      freshStore: async () => store,
+      cleanup: () => store.close(),
     }
-  },
-  // `classic-level` locks the directory, so a second instance cannot open it
-  // and the store's in-memory sequence numbers are sound.
-  secondInstance: {
-    refused: true,
-    open: async () => {
-      const dir = makeTmpDir()
-      const first = await createLevelDBStore(dir)
-      return {
-        first,
-        openSecond: () => createLevelDBStore(dir),
-        cleanup: () => first.close(),
-      }
-    },
   },
 })
 

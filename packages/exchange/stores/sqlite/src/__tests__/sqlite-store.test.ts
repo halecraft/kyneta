@@ -14,7 +14,7 @@ import {
 } from "@kyneta/exchange/testing"
 import Database from "better-sqlite3"
 import { afterAll, describe, expect, it } from "vitest"
-import { fromBetterSqlite3, SqliteStore } from "../index.js"
+import { fromBetterSqlite3, type SqliteAdapter, SqliteStore } from "../index.js"
 
 // ---------------------------------------------------------------------------
 // Temp file management
@@ -43,6 +43,17 @@ afterAll(() => {
 // Conformance suite — validates the full Store contract
 // ---------------------------------------------------------------------------
 
+/** Open a store over `file`, refusing quickly when another owns it. */
+function openFile(file: string): SqliteStore {
+  const db = new Database(file)
+  try {
+    return new SqliteStore(fromBetterSqlite3(db, { busyTimeout: 50 }))
+  } catch (error) {
+    db.close()
+    throw error
+  }
+}
+
 describeStore(
   "SqliteStore",
   () => {
@@ -53,27 +64,28 @@ describeStore(
     cleanup: async backend => {
       await backend.close()
     },
+    // An owned database has one open store, so the file is read back through
+    // the store that wrote it.
+    seats: {
+      kind: "owned",
+      storage: async () => {
+        const file = makeTmpFile()
+        return { open: async () => openFile(file), cleanup: async () => {} }
+      },
+    },
     // The harness counts only after `arm(n)`, so schema DDL during
     // `SqliteStore` construction (a sequence of `exec` calls) doesn't
-    // trip the counter. A meta-record append issues 2 execs (meta
-    // upsert + record insert) inside one transaction; arming n=2 fires
-    // mid-transaction so rollback is observable.
+    // trip the counter. Reads go through `iterate`, which is not counted.
     faultFactory: async () => {
-      const file = makeTmpFile()
-      const db = new Database(file)
+      const db = new Database(makeTmpFile())
       const base = fromBetterSqlite3(db)
-      const { proxy, arm } = makeArmedFault(base, { exec: 1 })
+      const { proxy, arm, fired } = makeArmedFault(base, { exec: 1 })
       const store = new SqliteStore(proxy)
       return {
         store,
         injectFault: arm,
-        // freshStore opens a separate connection on the same file. The
-        // primary `db` connection is used by `store`; the fresh one is
-        // independent so its lifecycle is the caller's.
-        freshStore: async () => {
-          const freshDb = new Database(file)
-          return new SqliteStore(fromBetterSqlite3(freshDb))
-        },
+        fired,
+        freshStore: async () => store,
         cleanup: async () => {
           await store.close()
         },
@@ -102,29 +114,6 @@ describeStore(
           adapter.close()
         },
       }
-    },
-    // Two connections to one file: `:memory:` databases are private to
-    // their connection, so a second instance could not share one.
-    secondInstance: {
-      refused: false,
-      open: async () => {
-        const file = makeTmpFile()
-        const first = new SqliteStore(fromBetterSqlite3(new Database(file)))
-        const opened: SqliteStore[] = [first]
-        return {
-          first,
-          openSecond: async () => {
-            const second = new SqliteStore(
-              fromBetterSqlite3(new Database(file)),
-            )
-            opened.push(second)
-            return second
-          },
-          cleanup: async () => {
-            for (const store of opened) await store.close()
-          },
-        }
-      },
     },
   },
 )
@@ -229,6 +218,52 @@ describe("SqliteStore — adapter factory", () => {
   })
 })
 
+describe("SqliteStore — one owner per file", () => {
+  it("a second adapter over an owned file is refused, naming the reason", () => {
+    const file = makeTmpFile()
+    const owner = openFile(file)
+    const other = new Database(file)
+    expect(() => fromBetterSqlite3(other, { busyTimeout: 50 })).toThrow(
+      /another connection owns this database file/,
+    )
+    other.close()
+    void owner.close()
+  })
+
+  it("a file opens again once its owner has closed, with the same seat", async () => {
+    const file = makeTmpFile()
+    const first = openFile(file)
+    await first.close()
+    const second = openFile(file)
+    expect(second.seat).toEqual(first.seat)
+    await second.close()
+  })
+
+  it("an adapter whose host guarantees ownership takes no lock", async () => {
+    // A Durable Object's adapter: the platform makes it the only owner, and
+    // its SQL refuses `PRAGMA locking_mode` and `BEGIN EXCLUSIVE` anyway.
+    const db = new Database(":memory:")
+    const statements: string[] = []
+    const adapter: SqliteAdapter = {
+      exec: (sql, ...params) => {
+        statements.push(sql)
+        db.prepare(sql).run(...params)
+      },
+      iterate: (sql, ...params) => {
+        statements.push(sql)
+        return db.prepare(sql).iterate(...params) as IterableIterator<never>
+      },
+      transaction: fn => fn(),
+      close: () => {},
+    }
+    const store = new SqliteStore(adapter)
+    await store.append("doc-1", makeMetaRecord())
+    expect(store.seat.kind).toBe("owned")
+    expect(statements.filter(sql => /PRAGMA|BEGIN/i.test(sql))).toEqual([])
+    db.close()
+  })
+})
+
 describe("SqliteStore — tables isolation", () => {
   it("two stores with different table names coexist in the same database", async () => {
     const db = new Database(":memory:")
@@ -285,7 +320,7 @@ function captureError(open: () => unknown): unknown {
 describe("SqliteStore — store-format gate", () => {
   it("refuses a store whose stamped major is incompatible", () => {
     const db = new Database(":memory:")
-    // First open stamps {major:1,minor:0}. Keep the connection open — an
+    // The first open stamps the current format. Keep the connection open — an
     // in-memory db's data lives only while the connection is open.
     new SqliteStore(fromBetterSqlite3(db))
     // Tamper the marker to a future major.

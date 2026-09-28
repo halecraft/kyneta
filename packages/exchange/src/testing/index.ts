@@ -4,6 +4,7 @@
 // These utilities carry a vitest dependency and must NOT be
 // re-exported from the main "." barrel.
 
+export { abandonSeat } from "../store/in-memory-store.js"
 export { type ArmedFault, makeArmedFault } from "./fault-injection.js"
 export {
   collectAll,
@@ -16,5 +17,6 @@ export {
   makeMetaRecord,
   makePlainEntirety,
   plainMeta,
-  type TwoInstances,
+  type SeatDeclaration,
+  type SeatStorage,
 } from "./store-conformance.js"

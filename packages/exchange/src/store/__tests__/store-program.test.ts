@@ -504,3 +504,48 @@ describe("storeProgram", () => {
     }
   })
 })
+
+describe("storeProgram — a lost seat", () => {
+  const lost = new Error("seat lost")
+  const seatLost: StoreInput = {
+    type: "seat-lost",
+    docId: "doc-1",
+    error: lost,
+  }
+
+  it("is reported once, and makes every document settled", () => {
+    // doc-1 has a write in flight and another owed; doc-2 is loading.
+    const writing = run(writingFromV1(), advanced, {
+      type: "register",
+      docId: "doc-2",
+    })[0]
+    expect(allDocsSettled(writing)).toBe(false)
+
+    const [model, ...effects] = step(writing, seatLost)
+    expect(model.seatLost).toBe(lost)
+    expect(allDocsSettled(model)).toBe(true)
+    expect(effects).toEqual([
+      { type: "seat-lost" },
+      { type: "store-error", docId: "doc-1", operation: "write", error: lost },
+    ])
+  })
+
+  it("is terminal: every later input emits nothing", () => {
+    const [model] = step(writingFromV1(), seatLost)
+    const later: StoreInput[] = [
+      succeeded("v2"),
+      failed(),
+      advanced,
+      compact,
+      register,
+      hydrated("v1"),
+      { type: "destroy", docId: "doc-1" },
+      { type: "seat-lost", docId: "doc-2", error: new Error("again") },
+    ]
+    for (const msg of later) {
+      const [next, ...effects] = step(model, msg)
+      expect(next).toBe(model)
+      expect(effects).toEqual([])
+    }
+  })
+})

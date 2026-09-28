@@ -110,3 +110,44 @@ describe("fromPool", () => {
     expect(connect).not.toHaveBeenCalled()
   })
 })
+
+describe("dedicated connections", () => {
+  it("fromPool checks out a client, listens for its errors while held, and releases or ends it", async () => {
+    const release = vi.fn()
+    const on = vi.fn()
+    const off = vi.fn()
+    const poolClient = {
+      query: vi.fn(async () => ({ rows: [{ n: 1 }] })),
+      release,
+      on,
+      off,
+    }
+    const pool = {
+      connect: vi.fn(async () => poolClient),
+      query: vi.fn(),
+    } as unknown as Pool
+
+    const dedicated = await fromPool(pool).dedicated()
+    expect(on).toHaveBeenCalledWith("error", expect.any(Function))
+    expect((await dedicated.query("SELECT 1")).rows).toEqual([{ n: 1 }])
+    dedicated.release(false)
+    expect(off).toHaveBeenCalledWith("error", on.mock.calls[0]?.[1])
+    expect(release).toHaveBeenLastCalledWith(false)
+    dedicated.release(true)
+    expect(release).toHaveBeenLastCalledWith(true)
+  })
+
+  it("fromClient is its client, which the caller owns", async () => {
+    const client = {
+      query: vi.fn(async () => ({ rows: [] })),
+      release: vi.fn(),
+      end: vi.fn(),
+    }
+    const dedicated = await fromClient(client as unknown as Client).dedicated()
+    await dedicated.query("SELECT 1")
+    expect(client.query).toHaveBeenCalledWith("SELECT 1", undefined)
+    dedicated.release(true)
+    expect(client.release).not.toHaveBeenCalled()
+    expect(client.end).not.toHaveBeenCalled()
+  })
+})

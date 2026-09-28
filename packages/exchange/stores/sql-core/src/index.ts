@@ -131,8 +131,9 @@ export function fromRow(row: RowShape): StoreRecord {
  *
  * `docMeta` is the per-document metadata map (keyed by `doc_id`). `storeMeta`
  * is store-global metadata keyed by an opaque `key` (the on-disk format
- * version lives here, under `STORE_META_FORMAT_KEY`); it is read by a
- * bootstrap reader on open, never through the `Store` interface. The two are
+ * version under `STORE_META_FORMAT_KEY`, the seat pool under
+ * `STORE_META_SEATS_KEY`); it is read on open, and by Postgres's fence
+ * check, never through the `Store` interface. The two are
  * named distinctly (`doc_meta` vs `store_meta`) because they are different
  * kinds of metadata. Context: jj:uvssotsy.
  */
@@ -163,15 +164,18 @@ export function resolveTables(opts?: {
 // ---------------------------------------------------------------------------
 
 /**
- * The on-disk format version shared by every SQL-family backend. Because all
- * three (`sqlite`, `postgres`, `prisma`) serialize through the same
- * `RowShape`/`EntryPayloadJson`, this is the single place that revs them in
- * lockstep: bump it here when the SQL serialization changes incompatibly.
+ * The on-disk format version shared by every SQL-family backend. SQLite,
+ * Postgres and Prisma serialize through the same `RowShape`/`EntryPayloadJson`
+ * and share the store-metadata layout, so they bump together, here, even when
+ * a change touches only some of them.
  *
- * Gated on open via `@kyneta/exchange`'s `decideStoreFormat` (major mismatch
- * is refused; minor skew is backward-compatible). See `store-format.ts`.
+ * Checked on open by `@kyneta/exchange`'s `planStoreOpen` (a major mismatch
+ * is refused; minor skew is backward-compatible).
+ *
+ * 1.1: the store-metadata table holds the seat pool (SQLite, Postgres).
+ * Older stores read as an empty pool.
  */
-export const STORE_FORMAT_VERSION: StoreFormatVersion = { major: 1, minor: 0 }
+export const STORE_FORMAT_VERSION: StoreFormatVersion = { major: 1, minor: 1 }
 
 // ---------------------------------------------------------------------------
 // Pure planning helpers — gather/plan/execute split

@@ -10,6 +10,10 @@
 // write should be tried again (`retry`), as effects, so the executor acts on
 // them with the model already updated.
 //
+// Losing the store's seat (`seat-lost`) is final and store-wide: every later
+// write would fail the same way, so the model becomes terminal and asks for
+// nothing more.
+//
 // Every transition is pure: new Map for each model, no mutation.
 
 import type { DocId } from "@kyneta/transport"
@@ -73,6 +77,13 @@ export type DocPhase =
 
 export type StoreModel = {
   docs: Map<DocId, DocPhase>
+  /**
+   * Set once a write found the store's seat claimed by another writer: the
+   * `SeatLostError`. The model is then terminal. It tracks no document, so
+   * every document counts as settled, and it answers every input with
+   * nothing.
+   */
+  seatLost?: unknown
 }
 
 // ---------------------------------------------------------------------------
@@ -91,6 +102,8 @@ export type StoreInput =
   | { type: "destroy"; docId: DocId }
   | { type: "write-succeeded"; docId: DocId; version: string }
   | { type: "write-failed"; docId: DocId; error: unknown }
+  /** A write of `docId` found the store's seat claimed by another writer. */
+  | { type: "seat-lost"; docId: DocId; error: unknown }
 
 // ---------------------------------------------------------------------------
 // StoreEffect — data effects interpreted by the Runtime executor
@@ -118,6 +131,8 @@ export type StoreEffect =
   /** A write failed and none is owed: ask for one again after `afterMs`. */
   | { type: "retry"; docId: DocId; afterMs: number }
   | { type: "persist-delete"; docId: DocId }
+  /** The seat is lost: nothing more will be written, or retried. */
+  | { type: "seat-lost" }
   | {
       type: "store-error"
       docId: DocId
@@ -212,6 +227,7 @@ export const storeProgram: Program<StoreInput, StoreModel, StoreEffect> = {
   init: [{ docs: new Map() }],
 
   update(msg: StoreInput, model: StoreModel): [StoreModel, ...StoreEffect[]] {
+    if (model.seatLost !== undefined) return [model]
     switch (msg.type) {
       case "register": {
         // A document hydration found nowhere. It has nothing confirmed, so its
@@ -299,6 +315,22 @@ export const storeProgram: Program<StoreInput, StoreModel, StoreEffect> = {
           return [withDoc(model, msg.docId, phase), errorEffect, retry]
         }
         return [withDoc(model, msg.docId, phase), errorEffect, ...effects]
+      }
+
+      case "seat-lost": {
+        // Every document stops being tracked: nothing is in flight that could
+        // be confirmed, and nothing is owed that could be written.
+        const errorEffect: StoreEffect = {
+          type: "store-error",
+          docId: msg.docId,
+          operation: "write",
+          error: msg.error,
+        }
+        return [
+          { docs: new Map(), seatLost: msg.error },
+          { type: "seat-lost" },
+          errorEffect,
+        ]
       }
     }
   },

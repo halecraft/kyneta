@@ -1466,7 +1466,7 @@ describe("Exchange", () => {
       // module instance's teardown). When the caller chose the peer id, both
       // shared it: two writers of one Line outbox, a plain document, whose
       // lineages converged on one and lost the other's message in flight.
-      // Each Runtime now issues its own seat, so the two clients write two
+      // No two live Runtimes share a seat, so the two clients write two
       // outboxes and both messages arrive.
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
       const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})

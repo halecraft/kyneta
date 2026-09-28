@@ -33,7 +33,7 @@ That's it. The Exchange handles hydration (loading from storage on `get()` / `re
 
 ### `createLevelDBStore(dbPath)`
 
-Async factory that opens the database, runs the store-format gate (see below), and resolves to a `Store`. The `dbPath` is the directory where LevelDB stores its files. `await` it before passing to the `Exchange`.
+Async factory that opens the database, checks its format (see below), takes its seat, and resolves to a `Store`. The `dbPath` is the directory where LevelDB stores its files. `await` it before passing to the `Exchange`. A second open of the directory while one holds it throws.
 
 ```ts
 import { createLevelDBStore } from "@kyneta/leveldb-store"
@@ -43,7 +43,7 @@ const store = await createLevelDBStore("./data/exchange-db")
 
 ### `LevelDBStore`
 
-The class implementing the `Store` interface. Use `createLevelDBStore` (or `LevelDBStore.open(dbPath)`) for most cases — both are async and run the store-format gate. The bare `new LevelDBStore(dbPath)` constructor opens the database **without** the gate and is for advanced use only.
+The class implementing the `Store` interface. Open it with `createLevelDBStore` or `LevelDBStore.open(dbPath)`: a store is born holding its seat, so its constructor is private.
 
 ```ts
 import { LevelDBStore } from "@kyneta/leveldb-store"
@@ -52,12 +52,16 @@ const store = await LevelDBStore.open("./data/exchange-db")
 
 // ... use with Exchange ...
 
-await store.close() // release file handles
+await store.close() // release the directory, and with it the seat
 ```
 
-### Store-format gate
+### The peer's identity
 
-On open, the store stamps a `{ major, minor }` format version into a `store-meta\x00` key namespace (separate from the per-doc `doc-meta\x00` keys), and on subsequent opens refuses — with `StoreFormatVersionError` — a store whose stamped major is incompatible with the running build, or an unversioned store that already holds documents. No automatic migration is performed.
+The store issues the exchange's `peerId`: one seat, kept in the database and reused on every open, so a restarted process is the same peer. `classic-level` locks the directory, so one open store owns it and nothing else can write under the seat.
+
+### Store-format check
+
+On open, the store stamps a `{ major, minor }` format version into a `store-meta\x00` key namespace (separate from the per-doc `doc-meta\x00` keys), and on subsequent opens refuses — with `StoreFormatVersionError` — a store whose stamped major is incompatible with the running build, or an unversioned store that already holds documents. No automatic migration is performed. The format is 1.1: `store-meta\x00seats` holds the seat. A 1.0 store opens as one with no seat yet, and is given one.
 
 ### Binary Codec
 

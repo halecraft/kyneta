@@ -245,7 +245,7 @@ function SomeComponent() {
 
 ### Why the Exchange must survive React's lifecycle
 
-An Exchange is a participant in a distributed protocol — it manages persistent network connections, sync state, and a seat. Each Exchange's Runtime issues itself a fresh seat, so a second Exchange for the same principal corrupts nothing: it is another replica, with its own peer id and its own `Line` outboxes. It still costs a second connection and a second copy of every document, and the first keeps both until it is shut down.
+An Exchange is a participant in a distributed protocol — it manages persistent network connections, sync state, and a seat. No two live Exchanges hold one seat, whether their store issues it or their Runtime mints it, so a second Exchange for the same principal corrupts nothing: it is another replica, with its own peer id and its own `Line` outboxes. It still costs a second connection and a second copy of every document, and the first keeps both until it is shut down.
 
 React's component model expects components to be safe to tear down and reconstruct. An Exchange is expensive to. Create it once and let it live for the lifetime of the client.
 

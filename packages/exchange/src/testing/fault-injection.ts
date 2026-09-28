@@ -2,15 +2,13 @@
 //
 // The Store conformance suite's atomicity property (store-conformance.ts) arms
 // a fault *after* priming, via `injectFault(n)`, then asserts that no partial
-// state leaked. Each backend wraps its own write seam (LevelDB `put`/`batch`,
-// SQLite `exec`, Postgres `query`); this primitive handles the parts every
-// backend would otherwise hand-roll: latent (deferred) arming so construction
-// writes don't count, op-weighted counting (one `batch(ops)` counts as
-// `ops.length` ops), and sync-throw vs async-reject dispatch.
-//
-// Context: jj:pzuytnvo. Supersedes the per-backend wrappers and the
-// construction-armed `failOnNthCall` (sql-core); see that plan's Learnings for
-// the fast-follow that migrates the remaining backends.
+// state leaked, for every `n` until a write completes without reaching it.
+// Each backend wraps its own write seam (LevelDB `put`/`batch`, SQLite
+// `exec`, Postgres `query`); this primitive handles the parts every backend
+// would otherwise hand-roll: latent (deferred) arming so construction writes
+// don't count, op-weighted counting (one `batch(ops)` counts as `ops.length`
+// ops), sync-throw vs async-reject dispatch, and reporting whether the armed
+// fault fired. Context: jj:pzuytnvo.
 
 /** A target wrapped so the Nth weighted write fails, plus the arming handle. */
 export interface ArmedFault<T> {
@@ -21,6 +19,12 @@ export interface ArmedFault<T> {
    * made before `arm` (e.g. schema/format setup, priming) do not count.
    */
   readonly arm: (n: number) => void
+  /**
+   * Whether the fault armed by the latest `arm` has fired. A run that ends with
+   * it unfired had fewer than `n` weighted writes, which is how a sweep over
+   * `n = 1, 2, …` knows it has covered every step.
+   */
+  readonly fired: () => boolean
 }
 
 /** Op-weight for a seam method: a constant, or a function of the call args
@@ -40,11 +44,13 @@ export function makeArmedFault<T extends object>(
 ): ArmedFault<T> {
   let tick = 0
   let armed: number | null = null
+  let fired = false
 
   const arm = (n: number): void => {
     if (n < 1) throw new Error(`makeArmedFault: n must be >= 1, got ${n}`)
     tick = 0
     armed = n
+    fired = false
   }
 
   const proxy = new Proxy(target, {
@@ -65,6 +71,7 @@ export function makeArmedFault<T extends object>(
           tick += typeof weight === "function" ? weight(...args) : weight
           if (armed > start && armed <= tick) {
             armed = null
+            fired = true
             if (isAsync) return Promise.reject(error)
             throw error
           }
@@ -74,5 +81,5 @@ export function makeArmedFault<T extends object>(
     },
   })
 
-  return { proxy, arm }
+  return { proxy, arm, fired: () => fired }
 }

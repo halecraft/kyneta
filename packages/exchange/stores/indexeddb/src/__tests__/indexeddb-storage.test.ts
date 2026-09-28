@@ -1,5 +1,6 @@
 // indexeddb-storage — conformance + IndexedDB-specific tests.
 
+import type { Store } from "@kyneta/exchange"
 import {
   collectAll,
   describeStore,
@@ -9,6 +10,7 @@ import {
 } from "@kyneta/exchange/testing"
 import { afterAll, describe, expect, it } from "vitest"
 import { deleteIndexedDBStore, IndexedDBStore } from "../index.js"
+import { FakeLockManager, type FakePage } from "./fake-locks.js"
 
 // ---------------------------------------------------------------------------
 // Unique database name management
@@ -31,6 +33,11 @@ afterAll(async () => {
 // Conformance suite — validates the full Store contract
 // ---------------------------------------------------------------------------
 
+// The main suite runs on this process's real `navigator.locks` (Node 24 has
+// Web Locks). The seat section uses a model of an origin's pages, since one
+// process cannot make a page die.
+const pageOf = new WeakMap<Store, FakePage>()
+
 describeStore(
   "IndexedDBStore",
   async () => {
@@ -42,25 +49,26 @@ describeStore(
     cleanup: async backend => {
       await backend.close()
     },
-    // Two connections to one database, as two tabs have.
-    secondInstance: {
-      refused: false,
-      open: async () => {
+    seats: {
+      kind: "pooled",
+      storage: async () => {
         const name = uniqueDbName()
         dbNames.push(name)
-        const first = await IndexedDBStore.open(name)
-        const opened = [first]
+        const origin = new FakeLockManager()
         return {
-          first,
-          openSecond: async () => {
-            const second = await IndexedDBStore.open(name)
-            opened.push(second)
-            return second
+          open: async () => {
+            const page = origin.page()
+            const store = await IndexedDBStore.open(name, { locks: page })
+            pageOf.set(store, page)
+            return store
           },
-          cleanup: async () => {
-            for (const store of opened) await store.close()
-          },
+          cleanup: async () => {},
         }
+      },
+      // The page dies: the browser releases its locks. Its connection stays
+      // open, so a write it had in flight can still reach the database.
+      abandon: async store => {
+        pageOf.get(store)?.terminate()
       },
     },
   },
@@ -251,7 +259,7 @@ describe("IndexedDBStore — store-format gate", () => {
     const name = uniqueDbName()
     dbNames.push(name)
 
-    // First open stamps {major:1,minor:0}.
+    // The first open stamps the current format.
     const store1 = await IndexedDBStore.open(name)
     await store1.append("doc-1", makeMetaRecord())
     await store1.close()

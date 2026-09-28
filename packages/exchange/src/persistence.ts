@@ -58,6 +58,11 @@ export function persistedFeed(ref: object): SettleTerm {
  * the next write that succeeds. Covers every store write, including one that
  * only stores operations imported from peers, so it can be set while
  * {@link persisted} is true.
+ *
+ * Once the store's seat is lost to another writer, it is that
+ * `SeatLostError` for every stored document of the Runtime, including one
+ * opened afterwards, and it never clears: nothing more is written. The
+ * application recovers by opening a new store (in a browser, by reloading).
  */
 export function persistenceError(ref: object): unknown | undefined {
   return persistence.get(ref)?.readError()
@@ -71,7 +76,7 @@ export function persistenceError(ref: object): unknown | undefined {
  *
  * Failed writes are retried automatically, so a rejection may be transient: a
  * caller that wants to wait it out checks `persistenceError(ref)` and calls
- * again.
+ * again. A `SeatLostError` is final.
  */
 export function whenPersisted(ref: object): Promise<void> {
   const entry = persistence.get(ref)

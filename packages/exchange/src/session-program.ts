@@ -192,11 +192,11 @@ function peerTransition(
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
 /**
- * A remote peer presenting this exchange's own seat. Seats are random and
- * issued per Runtime, so this means a transport looped back to its own
- * Exchange. A second channel for an already-connected seat is not a problem:
- * it is one peer connected over several transports, or a reconnect that
- * overlaps its predecessor.
+ * A remote peer presenting this exchange's own seat. No two live Runtimes
+ * hold one seat, so this means a transport looped back to its own Exchange.
+ * A second channel for an already-connected seat is not a problem: it is one
+ * peer connected over several transports, or a reconnect that overlaps its
+ * predecessor's dead connection.
  */
 function detectSelfConnection(
   model: SessionModel,

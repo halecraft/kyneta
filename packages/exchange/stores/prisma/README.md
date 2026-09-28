@@ -60,7 +60,11 @@ const exchange = new Exchange({
 // await prisma.$disconnect()
 ```
 
-`createPrismaStore` runs the **store-format gate** on open: it stamps a `{ major, minor }` version into `KynetaStoreMeta` and, on a later open, throws `StoreFormatVersionError` for an incompatible major or an unversioned store that already holds documents. No automatic migration is performed. (The bare `new PrismaStore({ client })` constructor skips the gate.)
+`createPrismaStore` (or `PrismaStore.open`) checks the **store format** on open: it stamps a `{ major, minor }` version into `KynetaStoreMeta` and, on a later open, throws `StoreFormatVersionError` for an incompatible major or an unversioned store that already holds documents. No automatic migration is performed. The format is 1.1, shared with `sqlite-store` and `postgres-store`, which bumped it for their seat pools; a Prisma store writes no pool, and 1.0 and 1.1 read alike.
+
+## The peer's identity: a new one per open
+
+The store issues the exchange's `peerId`. Other stores keep one across restarts, under a lock held for the store's lifetime; Prisma pools connections and pins one only inside an interactive transaction, so it cannot hold such a lock. **Every open of a Prisma store is therefore a new peer**: a fresh seat, unique and never reused. The cost is one version-vector entry per process start per CRDT document it writes, and a new peer in every peer list. A `Line` to a Prisma-backed server does not survive the server's restart. If that matters, use [`@kyneta/postgres-store`](../postgres/), which keeps seats across restarts.
 
 The model accessors default to `prisma.kynetaDocMeta`, `prisma.kynetaRecord`, and `prisma.kynetaStoreMeta` (matching the model names above). To use different model names:
 
@@ -81,7 +85,7 @@ The user-facing call site retains full type safety: the caller passes their own 
 
 ## Lifecycle
 
-The caller owns the connection lifecycle. `PrismaStore.close()` is a no-op; the caller calls `prisma.$disconnect()` on shutdown.
+The caller owns the connection lifecycle: the caller calls `prisma.$disconnect()` on shutdown. `PrismaStore.close()` leaves the client alone; the closed store refuses every operation after it.
 
 ## See also
 

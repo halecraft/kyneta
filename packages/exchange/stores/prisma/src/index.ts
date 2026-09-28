@@ -6,14 +6,19 @@
 // trade is less compile-time safety inside this package (one cast to
 // the structural interfaces below) for version portability across
 // Prisma releases. Caller's call site stays fully typed.
+//
+// Seats: Prisma pools connections and pins one only inside an interactive
+// transaction, so it cannot hold a lock for a store's lifetime. Every open
+// issues a session seat: unique, never reused, never fenced. The cost is one
+// version-vector entry per process start per document written.
 
 import {
   type DocId,
-  decideStoreFormat,
-  parseStoreFormat,
+  freshPeerIds,
+  planStoreOpen,
+  type SessionSeat,
   STORE_META_FORMAT_KEY,
   type Store,
-  StoreFormatVersionError,
   type StoreMark,
   type StoreMeta,
   type StoreRecord,
@@ -126,28 +131,29 @@ export interface PrismaStoreOptions {
 // ---------------------------------------------------------------------------
 
 export class PrismaStore implements Store {
-  readonly #client: PrismaClientLike
+  readonly seat: SessionSeat
+  readonly #openClient: PrismaClientLike
   readonly #metaModelName: string
   readonly #recordModelName: string
-  readonly #storeMetaModelName: string
+  #closed = false
 
-  constructor(options: PrismaStoreOptions) {
-    this.#client = options.client as PrismaClientLike
+  private constructor(options: PrismaStoreOptions, seat: SessionSeat) {
+    this.#openClient = options.client as PrismaClientLike
     this.#metaModelName = options.metaModel ?? "kynetaDocMeta"
     this.#recordModelName = options.recordModel ?? "kynetaRecord"
-    this.#storeMetaModelName = options.storeMetaModel ?? "kynetaStoreMeta"
+    this.seat = seat
+  }
+
+  /** The client, while the store is open. */
+  get #client(): PrismaClientLike {
+    if (this.#closed) throw new Error("PrismaStore: the store is closed")
+    return this.#openClient
   }
 
   get #meta(): MetaModel {
     return (this.#client as unknown as Record<string, unknown>)[
       this.#metaModelName
     ] as MetaModel
-  }
-
-  get #storeMeta(): StoreMetaModel {
-    return (this.#client as unknown as Record<string, unknown>)[
-      this.#storeMetaModelName
-    ] as StoreMetaModel
   }
 
   get #records(): RecordModel {
@@ -262,8 +268,10 @@ export class PrismaStore implements Store {
    *
    * Several stores may open one database, and Prisma offers no portable
    * lock, so two may read the same last sequence number and both insert
-   * after it. The second insert then violates the `(docId, seq)` key, and
-   * the whole transaction is retried once, reading afresh.
+   * after it. The later insert then violates the `(docId, seq)` key, and the
+   * whole transaction is tried again, reading afresh. Every collision means
+   * another writer's transaction committed, so while writers are finite the
+   * retries end.
    */
   async #writeAfterLast(
     docId: DocId,
@@ -285,11 +293,13 @@ export class PrismaStore implements Store {
         })
         await write(tx, existingMeta, (last._max.seq ?? -1) + 1)
       })
-    try {
-      await attempt()
-    } catch (error) {
-      if (!isUniqueViolation(error)) throw error
-      await attempt()
+    for (;;) {
+      try {
+        await attempt()
+        return
+      } catch (error) {
+        if (!isUniqueViolation(error)) throw error
+      }
     }
   }
 
@@ -329,56 +339,42 @@ export class PrismaStore implements Store {
   }
 
   async close(): Promise<void> {
-    // Caller owns the lifecycle (`prisma.$disconnect()`).
+    // Caller owns the client's lifecycle (`prisma.$disconnect()`).
+    this.#closed = true
   }
 
-  // Bootstrap reader: stamp/accept/refuse the store-format marker on open.
-  // A `static open` reaches this private method so the gate stays internal.
-  async #assertFormat(): Promise<void> {
-    const row = await this.#storeMeta.findUnique({
+  /**
+   * Open a store: check the format (stamping a brand-new store, accepting a
+   * compatible one, or throwing `StoreFormatVersionError`), and issue a
+   * session seat. Used by `createPrismaStore`.
+   */
+  static async open(options: PrismaStoreOptions): Promise<PrismaStore> {
+    const client = options.client as Record<string, unknown>
+    const storeMeta = client[
+      options.storeMetaModel ?? "kynetaStoreMeta"
+    ] as StoreMetaModel
+    const docMeta = client[options.metaModel ?? "kynetaDocMeta"] as MetaModel
+    const format = await storeMeta.findUnique({
       where: { key: STORE_META_FORMAT_KEY },
     })
-    const parsed =
-      row === null ? null : parseStoreFormat(parseMetaData(row.value))
-    if (parsed === "malformed") {
-      throw new StoreFormatVersionError({
-        reason: "malformed-version",
-        backend: "prisma",
-        stored: null,
-        current: STORE_FORMAT_VERSION,
-      })
-    }
-
-    const docCount = await this.#meta.count()
-
-    const decision = decideStoreFormat({
+    const plan = planStoreOpen({
+      backend: "prisma",
       current: STORE_FORMAT_VERSION,
-      stored: parsed,
-      storeHasData: docCount > 0,
+      storedFormat: format === null ? undefined : parseMetaData(format.value),
+      storeHasData: (await docMeta.count()) > 0,
+      storedPool: undefined,
+      seating: { kind: "session" },
+      fresh: freshPeerIds(),
     })
-
-    if (decision.action === "refuse") {
-      throw new StoreFormatVersionError({
-        reason: decision.reason,
-        backend: "prisma",
-        stored: parsed,
-        current: STORE_FORMAT_VERSION,
-      })
-    }
-    if (decision.action === "stamp") {
-      await this.#storeMeta.upsert({
+    if (plan.action === "refuse") throw plan.error
+    if (plan.writeFormat !== undefined) {
+      await storeMeta.upsert({
         where: { key: STORE_META_FORMAT_KEY },
-        create: { key: STORE_META_FORMAT_KEY, value: decision.value },
-        update: { value: decision.value },
+        create: { key: STORE_META_FORMAT_KEY, value: plan.writeFormat },
+        update: { value: plan.writeFormat },
       })
     }
-  }
-
-  /** Construct + run the store-format gate. Used by `createPrismaStore`. */
-  static async open(options: PrismaStoreOptions): Promise<Store> {
-    const store = new PrismaStore(options)
-    await store.#assertFormat()
-    return store
+    return new PrismaStore(options, plan.seat)
   }
 }
 
@@ -409,8 +405,9 @@ function parseMetaData(value: unknown): unknown {
 /**
  * Does no schema validation (Prisma's typed accessors enforce model
  * presence at compile time; runtime failures surface on first call), but
- * does run the store-format gate on open: it stamps a brand-new store,
- * accepts a compatible one, or throws `StoreFormatVersionError`.
+ * does check the store format on open: it stamps a brand-new store, accepts
+ * a compatible one, or throws `StoreFormatVersionError`. Every open issues a
+ * new session seat, so each process start is a new peer.
  */
 export async function createPrismaStore(
   options: PrismaStoreOptions,

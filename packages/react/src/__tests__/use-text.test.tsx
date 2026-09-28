@@ -6,8 +6,9 @@
 
 import {
   createInMemoryStore,
+  createInMemoryStoreData,
   Exchange,
-  type Store,
+  type InMemoryStoreData,
   whenHydrated,
 } from "@kyneta/exchange"
 import { json } from "@kyneta/schema"
@@ -240,21 +241,27 @@ describe("useText", () => {
 describe("useText on a document still loading", () => {
   const StoredDoc = json.bind(TextDocSchema)
 
-  /** A store holding `doc` with `title` set, written by an earlier session. */
-  async function storeWithTitle(title: string): Promise<Store> {
-    const store = createInMemoryStore()
-    const exchange = new Exchange({ principal: "writer", store })
+  /** A storage holding `doc` with `title` set, written by an earlier session. */
+  async function storeWithTitle(title: string): Promise<InMemoryStoreData> {
+    const sharedData = createInMemoryStoreData()
+    const exchange = new Exchange({
+      principal: "writer",
+      store: createInMemoryStore({ sharedData }),
+    })
     const doc = exchange.get("doc", StoredDoc)
     await whenHydrated(doc)
     batch(doc, d => d.title.insert(0, title))
     await exchange.flush()
     await exchange.shutdown()
-    return store
+    return sharedData
   }
 
   it("is read-only until loaded, then shows the stored text and takes edits", async () => {
-    const store = await storeWithTitle("stored")
-    const exchange = new Exchange({ principal: "reader", store })
+    const sharedData = await storeWithTitle("stored")
+    const exchange = new Exchange({
+      principal: "reader",
+      store: createInMemoryStore({ sharedData }),
+    })
     const doc = exchange.get("doc", StoredDoc)
     const textarea = document.createElement("textarea")
     const { result } = renderHook(() => useText(doc.title))
@@ -282,8 +289,11 @@ describe("useText on a document still loading", () => {
   })
 
   it("binds a document that has already loaded on the first call", async () => {
-    const store = await storeWithTitle("ready")
-    const exchange = new Exchange({ principal: "reader", store })
+    const sharedData = await storeWithTitle("ready")
+    const exchange = new Exchange({
+      principal: "reader",
+      store: createInMemoryStore({ sharedData }),
+    })
     const doc = exchange.get("doc", StoredDoc)
     await whenHydrated(doc)
     const textarea = document.createElement("textarea")

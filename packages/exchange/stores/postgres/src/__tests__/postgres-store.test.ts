@@ -5,6 +5,7 @@
 // a disposable Postgres in Docker, from the repository root:
 //   eval "$(scripts/postgres.sh up)" && pnpm verify
 
+import type { Store } from "@kyneta/exchange"
 import { describeStore, makeArmedFault } from "@kyneta/exchange/testing"
 import { DEFAULT_TABLES } from "@kyneta/sql-store-core"
 import { Pool } from "pg"
@@ -40,6 +41,29 @@ if (ENABLED && pool !== null) {
 
 const describeIfEnabled = ENABLED ? describe : describe.skip
 
+/** The seat section's tables, apart from the canonical ones. */
+const SEAT_TABLES = {
+  docMeta: "seat_doc_meta",
+  records: "seat_records",
+  storeMeta: "seat_store_meta",
+}
+
+/**
+ * End the connection holding `store`'s seat lock, from another connection,
+ * as a crash would, and wait until its locks are gone. The store's writes
+ * still reach the database through its pool.
+ */
+async function terminateSeat(storeMeta: string, store: Store): Promise<void> {
+  if (pool === null) throw new Error("terminateSeat: no pool")
+  await pool.query(
+    `SELECT pg_terminate_backend(pid, 5000) FROM pg_locks
+     WHERE locktype = 'advisory' AND objsubid = 2
+       AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+       AND classid = hashtext($1)::oid AND objid = hashtext($2)::oid`,
+    [storeMeta, store.seat.peerId],
+  )
+}
+
 describeIfEnabled("PostgresStore", () => {
   if (!ENABLED || pool === null) return
 
@@ -47,65 +71,61 @@ describeIfEnabled("PostgresStore", () => {
   // Conformance suite — uses canonical tables + per-test truncation
   // -------------------------------------------------------------------------
 
+  // The seat pool lives in the store-metadata table, so it is truncated too:
+  // a pool left by one test would hand its seats to the next.
+  const truncateAll = () =>
+    pool.query(
+      `TRUNCATE ${DEFAULT_TABLES.records}, ${DEFAULT_TABLES.docMeta}, ${DEFAULT_TABLES.storeMeta}`,
+    )
+
   describeStore(
     "PostgresStore",
     async () => {
-      // Truncate before each test for a clean slate.
-      await pool.query(
-        `TRUNCATE ${DEFAULT_TABLES.records}, ${DEFAULT_TABLES.docMeta}`,
-      )
-      return new PostgresStore(fromPool(pool))
+      await truncateAll()
+      return PostgresStore.open(fromPool(pool))
     },
     {
       cleanup: async () => {
-        await pool.query(
-          `TRUNCATE ${DEFAULT_TABLES.records}, ${DEFAULT_TABLES.docMeta}`,
-        )
+        await truncateAll()
+      },
+      seats: {
+        kind: "pooled",
+        storage: async () => {
+          await pool.query(postgresSchema(SEAT_TABLES))
+          await pool.query(
+            `TRUNCATE ${SEAT_TABLES.records}, ${SEAT_TABLES.docMeta}, ${SEAT_TABLES.storeMeta}`,
+          )
+          return {
+            open: () =>
+              PostgresStore.open(fromPool(pool), { tables: SEAT_TABLES }),
+            cleanup: async () => {},
+          }
+        },
+        abandon: store => terminateSeat(SEAT_TABLES.storeMeta, store),
       },
       faultFactory: async () => {
-        await pool.query(
-          `TRUNCATE ${DEFAULT_TABLES.records}, ${DEFAULT_TABLES.docMeta}`,
-        )
+        await truncateAll()
         // Check out a single connection and wrap its `query` with the shared
         // op-weighted fault primitive. `fromClient` runs transactions inline
-        // on that one connection, so every query (BEGIN/COMMIT/inserts/reads)
-        // is counted — injectFault(2) fires mid-transaction → rollback.
+        // on that one connection, so every query (BEGIN/COMMIT/fence/inserts/
+        // reads) is counted, and the sweep fails each in turn.
         const client = await pool.connect()
-        const { proxy, arm } = makeArmedFault(client, { query: 1 })
-        const store = new PostgresStore(fromClient(proxy))
-
+        const { proxy, arm, fired } = makeArmedFault(client, { query: 1 })
+        const store = await PostgresStore.open(fromClient(proxy))
         return {
           store,
           injectFault: arm,
-          freshStore: async () => new PostgresStore(fromPool(pool)),
+          fired,
+          freshStore: () => PostgresStore.open(fromPool(pool)),
           cleanup: async () => {
+            await store.close()
             client.release()
           },
         }
       },
-      // Two stores over one schema, as two processes have. Each transaction
-      // checks out its own connection from the pool.
-      secondInstance: {
-        refused: false,
-        open: async () => {
-          await pool.query(
-            `TRUNCATE ${DEFAULT_TABLES.records}, ${DEFAULT_TABLES.docMeta}`,
-          )
-          return {
-            first: new PostgresStore(fromPool(pool)),
-            openSecond: async () => new PostgresStore(fromPool(pool)),
-            cleanup: async () => {
-              await pool.query(
-                `TRUNCATE ${DEFAULT_TABLES.records}, ${DEFAULT_TABLES.docMeta}`,
-              )
-            },
-          }
-        },
-      },
       isolationFactory: async () => {
         // Two distinct table-name sets sharing the same Pool, from the
-        // canonical DDL. These use the bare `PostgresStore` constructor (no
-        // store-format gate), so each set's store-metadata table goes unused.
+        // canonical DDL.
         const tablesA = {
           docMeta: "iso_a_meta",
           records: "iso_a_records",
@@ -119,13 +139,21 @@ describeIfEnabled("PostgresStore", () => {
         await pool.query(postgresSchema(tablesA))
         await pool.query(postgresSchema(tablesB))
         await pool.query(`
-          TRUNCATE ${tablesA.records}, ${tablesA.docMeta},
-                   ${tablesB.records}, ${tablesB.docMeta};
+          TRUNCATE ${tablesA.records}, ${tablesA.docMeta}, ${tablesA.storeMeta},
+                   ${tablesB.records}, ${tablesB.docMeta}, ${tablesB.storeMeta};
         `)
+        const storeA = await PostgresStore.open(fromPool(pool), {
+          tables: tablesA,
+        })
+        const storeB = await PostgresStore.open(fromPool(pool), {
+          tables: tablesB,
+        })
         return {
-          storeA: new PostgresStore(fromPool(pool), { tables: tablesA }),
-          storeB: new PostgresStore(fromPool(pool), { tables: tablesB }),
+          storeA,
+          storeB,
           cleanup: async () => {
+            await storeA.close()
+            await storeB.close()
             await pool.query(`
               DROP TABLE IF EXISTS ${tablesA.records};
               DROP TABLE IF EXISTS ${tablesA.docMeta};
@@ -139,6 +167,62 @@ describeIfEnabled("PostgresStore", () => {
       },
     },
   )
+
+  // -------------------------------------------------------------------------
+  // Postgres-specific: seat allocation
+  // -------------------------------------------------------------------------
+
+  describe("PostgresStore — seat allocation", () => {
+    const tables = {
+      docMeta: "alloc_doc_meta",
+      records: "alloc_records",
+      storeMeta: "alloc_store_meta",
+    }
+
+    beforeAll(async () => {
+      await pool.query(postgresSchema(tables))
+    })
+
+    it("concurrent opens take distinct seats, and none waits on another's seat", async () => {
+      await pool.query(`TRUNCATE ${tables.storeMeta}`)
+      const stores = await Promise.all(
+        Array.from({ length: 5 }, () =>
+          PostgresStore.open(fromPool(pool), { tables }),
+        ),
+      )
+      try {
+        const ids = new Set(stores.map(store => store.seat.peerId))
+        expect(ids.size).toBe(5)
+      } finally {
+        for (const store of stores) await store.close()
+      }
+    })
+
+    it("a seat whose connection was terminated is taken by the next open", async () => {
+      await pool.query(`TRUNCATE ${tables.storeMeta}`)
+      const crashed = await PostgresStore.open(fromPool(pool), { tables })
+      const other = await PostgresStore.open(fromPool(pool), { tables })
+      try {
+        await terminateSeat(tables.storeMeta, crashed)
+        const next = await PostgresStore.open(fromPool(pool), { tables })
+        expect(next.seat.peerId).toBe(crashed.seat.peerId)
+        expect(next.seat.fence).toBe(crashed.seat.fence + 1)
+        await next.close()
+      } finally {
+        await crashed.close()
+        await other.close()
+      }
+    })
+
+    it("a seat lock is released by close, and the seat reused", async () => {
+      await pool.query(`TRUNCATE ${tables.storeMeta}`)
+      const first = await PostgresStore.open(fromPool(pool), { tables })
+      await first.close()
+      const second = await PostgresStore.open(fromPool(pool), { tables })
+      expect(second.seat.peerId).toBe(first.seat.peerId)
+      await second.close()
+    })
+  })
 
   // -------------------------------------------------------------------------
   // Postgres-specific: createPostgresStore validation
@@ -251,7 +335,7 @@ describeIfEnabled("PostgresStore", () => {
       await pool.query(drop)
       await pool.query(ddl)
       try {
-        // First open stamps {major:1,minor:0}.
+        // The first open stamps the current format.
         const store = await createPostgresStore(fromPool(pool), { tables })
         await store.close()
         const stamped = await pool.query<{ value: { major: number } }>(

@@ -27,8 +27,9 @@ import {
   createInMemoryStoreData,
   InMemoryStore,
   type InMemoryStoreData,
+  recordsOf,
 } from "../store/in-memory-store.js"
-import type { Store, StoreRecord } from "../store/store.js"
+import type { StoreRecord } from "../store/store.js"
 import {
   collectAll,
   makeMetaRecord,
@@ -564,13 +565,18 @@ const baselineBindings = [
   ["loro", loro.bind(BaselineSchema)],
 ] as const
 
-/** Run one session on `store`: load `docId`, run `work`, persist, shut down. */
+/**
+ * Run one session over `storage`: open a store on it, load `docId`, run
+ * `work`, persist, shut down.
+ */
 async function session(
-  store: Store,
+  storage: InMemoryStoreData,
   bound: BoundSchema,
   work: (doc: any, runtime: Runtime) => unknown = () => {},
 ): Promise<{ doc: any; version: string }> {
-  const runtime = new Runtime({ store })
+  const runtime = new Runtime({
+    store: createInMemoryStore({ sharedData: storage }),
+  })
   const doc: any = runtime.createInterpretDoc("doc", bound)
   await whenHydrated(doc)
   await work(doc, runtime)
@@ -581,12 +587,10 @@ async function session(
   return { doc, version }
 }
 
-async function entryVersions(store: Store): Promise<string[]> {
-  const versions: string[] = []
-  for await (const record of store.loadAll("doc")) {
-    if (record.kind === "entry") versions.push(record.version)
-  }
-  return versions
+function entryVersions(storage: InMemoryStoreData): string[] {
+  return recordsOf(storage, "doc").flatMap(record =>
+    record.kind === "entry" ? [record.version] : [],
+  )
 }
 
 describe("writes made while a document loads", () => {
@@ -594,19 +598,21 @@ describe("writes made while a document loads", () => {
     ["yjs", yjs.bind(BaselineSchema)],
     ["loro", loro.bind(BaselineSchema)],
   ] as const)("are persisted (%s)", async (_name, bound) => {
-    const store = createInMemoryStore()
-    await session(store, bound, doc =>
+    const storage = createInMemoryStoreData()
+    await session(storage, bound, doc =>
       batch(doc, (d: any) => d.a.set("stored")),
     )
 
     // Written while the second session is still loading.
-    const runtime = new Runtime({ store })
+    const runtime = new Runtime({
+      store: createInMemoryStore({ sharedData: storage }),
+    })
     const doc: any = runtime.createInterpretDoc("doc", bound)
     batch(doc, (d: any) => d.b.set("during-load"))
     await runtime.flush()
     await runtime.shutdown()
 
-    const { doc: reloaded } = await session(store, bound)
+    const { doc: reloaded } = await session(storage, bound)
     expect(reloaded.a()).toBe("stored")
     expect(reloaded.b()).toBe("during-load")
   })
@@ -616,8 +622,8 @@ describe("a load with nothing new writes nothing", () => {
   for (const [name, bound] of baselineBindings) {
     for (const compacted of [false, true]) {
       it(`${name}${compacted ? ", after a compaction" : ""}`, async () => {
-        const store = createInMemoryStore()
-        await session(store, bound, async (doc, runtime) => {
+        const storage = createInMemoryStoreData()
+        await session(storage, bound, async (doc, runtime) => {
           batch(doc, (d: any) => {
             d.a.set("x")
             d.items.push("1")
@@ -631,13 +637,13 @@ describe("a load with nothing new writes nothing", () => {
             batch(doc, (d: any) => d.items.push("3"))
           }
         })
-        const stored = await entryVersions(store)
+        const stored = entryVersions(storage)
 
         // The reloaded replica stands exactly where the store does, so the
         // write owed on load has nothing to append.
-        const { doc, version } = await session(store, bound)
+        const { doc, version } = await session(storage, bound)
         expect(version).toBe(stored.at(-1))
-        expect(await entryVersions(store)).toEqual(stored)
+        expect(entryVersions(storage)).toEqual(stored)
         expect(doc.items()).toEqual(compacted ? ["2", "3"] : ["2"])
       })
     }
@@ -647,8 +653,8 @@ describe("a load with nothing new writes nothing", () => {
 describe("plain: reload, write, reload", () => {
   it("stores no delta twice", async () => {
     const bound = json.bind(BaselineSchema)
-    const store = createInMemoryStore()
-    await session(store, bound, async (doc, runtime) => {
+    const storage = createInMemoryStoreData()
+    await session(storage, bound, async (doc, runtime) => {
       batch(doc, (d: any) => {
         d.items.push("1")
         d.items.push("2")
@@ -657,10 +663,10 @@ describe("plain: reload, write, reload", () => {
       await runtime.flush()
       batch(doc, (d: any) => d.items.delete(0, 1))
     })
-    await session(store, bound, doc => batch(doc, (d: any) => d.a.set("y")))
+    await session(storage, bound, doc => batch(doc, (d: any) => d.a.set("y")))
 
     // A repeated delete would remove a second item on this load.
-    const { doc } = await session(store, bound)
+    const { doc } = await session(storage, bound)
     expect(doc.items()).toEqual(["2", "3"])
     expect(doc.a()).toBe("y")
   })

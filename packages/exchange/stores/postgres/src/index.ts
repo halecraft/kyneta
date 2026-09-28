@@ -8,15 +8,25 @@
 // round-trip through `loadAll` still yields a structurally equal
 // `StoreRecord`, which is what cross-backend portability actually
 // requires.
+//
+// Seats are pooled through session-level advisory locks, held on a
+// connection dedicated to the store for its lifetime: Postgres releases them
+// when that connection ends, so a dead process frees its seat. Writes go
+// through other connections, so each one checks its seat's fence in the
+// store-metadata table, inside its own transaction.
 
 import {
+  assertSeatHeld,
   type DocId,
-  decideStoreFormat,
-  parseStoreFormat,
+  freshPeerIds,
+  type PeerId,
+  type PooledSeat,
+  parseSeatPool,
+  planStoreOpen,
   prefixSuccessor,
   STORE_META_FORMAT_KEY,
+  STORE_META_SEATS_KEY,
   type Store,
-  StoreFormatVersionError,
   type StoreMark,
   type StoreMeta,
   type StoreRecord,
@@ -59,6 +69,18 @@ export interface PgQuerier {
 }
 
 /**
+ * A connection held by one store for its lifetime. The store's seat lock is
+ * session-level, so it belongs to this connection and ends with it.
+ */
+export interface PgDedicated extends PgQuerier {
+  /**
+   * Give the connection back. With `destroy`, end it instead of returning it
+   * to a pool: a connection that failed may still hold session state.
+   */
+  release(destroy: boolean): void
+}
+
+/**
  * The minimal Postgres capability `PostgresStore` needs, decoupled from any
  * specific pg surface — mirrors `SqliteAdapter`. `fromPool` / `fromClient`
  * supply it, so `PostgresStore` never discriminates connection types and `pg`
@@ -70,6 +92,27 @@ export interface PgAdapter extends PgQuerier {
    * BEGIN/COMMIT; ROLLBACK and rethrow on failure.
    */
   transaction<R>(fn: (q: PgQuerier) => Promise<R>): Promise<R>
+  /** A connection for the store's lifetime, which holds its seat lock. */
+  dedicated(): Promise<PgDedicated>
+}
+
+/**
+ * Run `fn` on `q` under BEGIN/COMMIT; ROLLBACK and rethrow on failure. `q`
+ * must be one connection.
+ */
+async function inTransaction<R>(
+  q: PgQuerier,
+  fn: (q: PgQuerier) => Promise<R>,
+): Promise<R> {
+  await q.query("BEGIN")
+  try {
+    const result = await fn(q)
+    await q.query("COMMIT")
+    return result
+  } catch (e) {
+    await q.query("ROLLBACK")
+    throw e
+  }
 }
 
 /**
@@ -77,7 +120,8 @@ export interface PgAdapter extends PgQuerier {
  * BEGIN..COMMIT share one physical connection (Postgres transactions are
  * connection-scoped — checking back out for COMMIT would target a different
  * connection), then releases it. Non-transactional queries go to the pool
- * directly (the pool checks out/in per query — fine for single reads).
+ * directly (the pool checks out/in per query — fine for single reads). The
+ * dedicated connection is a checked-out client, kept until the store closes.
  */
 export function fromPool(pool: Pool): PgAdapter {
   const direct = pool as unknown as PgQuerier
@@ -90,19 +134,32 @@ export function fromPool(pool: Pool): PgAdapter {
     },
     async transaction<R>(fn: (q: PgQuerier) => Promise<R>): Promise<R> {
       const poolClient: PoolClient = await pool.connect()
-      const q = poolClient as unknown as PgQuerier
       try {
-        await q.query("BEGIN")
-        try {
-          const result = await fn(q)
-          await q.query("COMMIT")
-          return result
-        } catch (e) {
-          await q.query("ROLLBACK")
-          throw e
-        }
+        return await inTransaction(poolClient as unknown as PgQuerier, fn)
       } finally {
         poolClient.release()
+      }
+    },
+    async dedicated(): Promise<PgDedicated> {
+      const poolClient: PoolClient = await pool.connect()
+      // A checked-out client that loses its connection emits `error`, which
+      // would crash the process unheard. Its seat lock is gone with it; the
+      // fence stops its store's writes once another store takes the seat.
+      const onError = (error: Error): void => {
+        console.warn(
+          "[postgres-store] a store's seat connection failed; its seat is no longer held",
+          error,
+        )
+      }
+      poolClient.on("error", onError)
+      const q = poolClient as unknown as PgQuerier
+      return {
+        query: <R = unknown>(text: string, values?: unknown[]) =>
+          q.query<R>(text, values),
+        release: destroy => {
+          poolClient.off("error", onError)
+          poolClient.release(destroy)
+        },
       }
     },
   }
@@ -110,8 +167,10 @@ export function fromPool(pool: Pool): PgAdapter {
 
 /**
  * Adapter over a single `Client` (or an already-checked-out `PoolClient`):
- * transactions run inline on the one connection. Re-throws on rollback so a
- * caller can place post-commit work lexically after the awaited call.
+ * transactions run inline on the one connection, which is also the dedicated
+ * one. Re-throws on rollback so a caller can place post-commit work lexically
+ * after the awaited call. The caller owns the client, so releasing it does
+ * nothing.
  */
 export function fromClient(client: Client | PoolClient): PgAdapter {
   const q = client as unknown as PgQuerier
@@ -122,15 +181,14 @@ export function fromClient(client: Client | PoolClient): PgAdapter {
     ): Promise<{ rows: R[] }> {
       return q.query<R>(text, values)
     },
-    async transaction<R>(fn: (q: PgQuerier) => Promise<R>): Promise<R> {
-      await q.query("BEGIN")
-      try {
-        const result = await fn(q)
-        await q.query("COMMIT")
-        return result
-      } catch (e) {
-        await q.query("ROLLBACK")
-        throw e
+    transaction<R>(fn: (q: PgQuerier) => Promise<R>): Promise<R> {
+      return inTransaction(q, fn)
+    },
+    async dedicated(): Promise<PgDedicated> {
+      return {
+        query: <R = unknown>(text: string, values?: unknown[]) =>
+          q.query<R>(text, values),
+        release: () => {},
       }
     },
   }
@@ -141,19 +199,73 @@ export function fromClient(client: Client | PoolClient): PgAdapter {
 // ---------------------------------------------------------------------------
 
 /**
- * Caller owns the connection lifecycle — `close()` is a no-op,
- * `pool.end()` is the caller's responsibility. Prefer
- * `createPostgresStore` over the bare constructor: it validates the
- * schema at construction time so misconfiguration fails loudly with a
+ * The caller owns the pool or client — `pool.end()` is the caller's
+ * responsibility. `close()` releases the store's seat and its dedicated
+ * connection. Open one with `PostgresStore.open` or `createPostgresStore`,
+ * which validate the schema first, so misconfiguration fails loudly with a
  * curated error rather than per-method `column does not exist` later.
  */
 export class PostgresStore implements Store {
+  readonly seat: PooledSeat
   readonly #adapter: PgAdapter
   readonly #tables: TableNames
+  readonly #dedicated: PgDedicated
+  #closed = false
 
-  constructor(adapter: PgAdapter, options: PostgresStoreOptions = {}) {
+  private constructor(
+    adapter: PgAdapter,
+    tables: TableNames,
+    dedicated: PgDedicated,
+    seat: PooledSeat,
+  ) {
     this.#adapter = adapter
-    this.#tables = resolveTables(options)
+    this.#tables = tables
+    this.#dedicated = dedicated
+    this.seat = seat
+  }
+
+  /**
+   * Validate the schema, check the store format, and take a seat from the
+   * pool on a connection held until `close()`.
+   *
+   * Validation runs once, here, not on every method call. A schema change
+   * applied while the Exchange is running won't be detected — restart after
+   * migrations.
+   */
+  static async open(
+    adapter: PgAdapter,
+    options: PostgresStoreOptions = {},
+  ): Promise<PostgresStore> {
+    const tables = resolveTables(options)
+    await validateSchema(adapter, tables)
+    const dedicated = await adapter.dedicated()
+    try {
+      const seat = await openSeat(dedicated, tables)
+      return new PostgresStore(adapter, tables, dedicated, seat)
+    } catch (error) {
+      dedicated.release(true)
+      throw error
+    }
+  }
+
+  /** The adapter, while the store is open. */
+  get #db(): PgAdapter {
+    if (this.#closed) throw new Error("PostgresStore: the store is closed")
+    return this.#adapter
+  }
+
+  /**
+   * Throws `SeatLostError` when this store's seat has been claimed again.
+   * `FOR SHARE` makes an allocation that updates the pool wait for this
+   * transaction, and this transaction wait for an allocation in flight and
+   * then read its fence: no write lands after a new holder has taken the seat.
+   */
+  async #fence(q: PgQuerier): Promise<void> {
+    const result = await q.query<{ value: unknown }>(
+      `SELECT value FROM ${this.#tables.storeMeta} WHERE key = $1 FOR SHARE`,
+      [STORE_META_SEATS_KEY],
+    )
+    assertSeatHeld(parseSeatPool(result.rows[0]?.value), this.seat)
   }
 
   // -------------------------------------------------------------------------
@@ -161,7 +273,8 @@ export class PostgresStore implements Store {
   // -------------------------------------------------------------------------
 
   async append(docId: DocId, record: StoreRecord): Promise<void> {
-    await this.#adapter.transaction(async q => {
+    await this.#db.transaction(async q => {
+      await this.#fence(q)
       await this.#lockDoc(q, docId)
       const plan = planAppend(
         docId,
@@ -188,7 +301,7 @@ export class PostgresStore implements Store {
   }
 
   async *loadAll(docId: DocId): AsyncIterable<StoreRecord> {
-    const result = await this.#adapter.query<RowShape>(
+    const result = await this.#db.query<RowShape>(
       `SELECT kind, payload, blob FROM ${this.#tables.records}
        WHERE doc_id = $1 ORDER BY seq`,
       [docId],
@@ -199,7 +312,7 @@ export class PostgresStore implements Store {
   }
 
   async mark(docId: DocId): Promise<StoreMark | null> {
-    return this.#lastSeq(this.#adapter, docId)
+    return this.#lastSeq(this.#db, docId)
   }
 
   async compact(
@@ -207,7 +320,8 @@ export class PostgresStore implements Store {
     records: StoreRecord[],
     through: StoreMark | null,
   ): Promise<void> {
-    await this.#adapter.transaction(async q => {
+    await this.#db.transaction(async q => {
+      await this.#fence(q)
       await this.#lockDoc(q, docId)
       const plan = planCompact(
         records,
@@ -245,6 +359,11 @@ export class PostgresStore implements Store {
    * number and writes after it, so two writers of one document take turns.
    * Released at commit or rollback. `hashtext` collisions only make two
    * documents take turns too.
+   *
+   * The lock is in the one-key advisory space; seat locks are in the two-key
+   * space, which the manual says does not overlap it. They must not share
+   * one: a seat lock is held for its connection's lifetime, so a document
+   * whose key equalled a held seat's would wait for that process to end.
    */
   async #lockDoc(q: PgQuerier, docId: DocId): Promise<void> {
     await q.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [
@@ -274,7 +393,8 @@ export class PostgresStore implements Store {
   }
 
   async delete(docId: DocId): Promise<void> {
-    await this.#adapter.transaction(async q => {
+    await this.#db.transaction(async q => {
+      await this.#fence(q)
       await q.query(`DELETE FROM ${this.#tables.records} WHERE doc_id = $1`, [
         docId,
       ])
@@ -285,12 +405,12 @@ export class PostgresStore implements Store {
   }
 
   async currentMeta(docId: DocId): Promise<StoreMeta | null> {
-    return this.#readMeta(this.#adapter, docId)
+    return this.#readMeta(this.#db, docId)
   }
 
   async *listDocIds(prefix?: string): AsyncIterable<DocId> {
     if (prefix === undefined) {
-      const result = await this.#adapter.query<{ doc_id: string }>(
+      const result = await this.#db.query<{ doc_id: string }>(
         `SELECT doc_id FROM ${this.#tables.docMeta}`,
       )
       for (const row of result.rows) yield row.doc_id
@@ -303,11 +423,11 @@ export class PostgresStore implements Store {
     const upper = prefixSuccessor(prefix, "code-point")
     const result =
       upper === null
-        ? await this.#adapter.query<{ doc_id: string }>(
+        ? await this.#db.query<{ doc_id: string }>(
             `SELECT doc_id FROM ${this.#tables.docMeta} WHERE doc_id >= $1`,
             [prefix],
           )
-        : await this.#adapter.query<{ doc_id: string }>(
+        : await this.#db.query<{ doc_id: string }>(
             `SELECT doc_id FROM ${this.#tables.docMeta}
              WHERE doc_id >= $1 AND doc_id < $2`,
             [prefix, upper],
@@ -315,8 +435,22 @@ export class PostgresStore implements Store {
     for (const row of result.rows) yield row.doc_id
   }
 
+  /**
+   * Release the seat lock and the dedicated connection. A connection that
+   * has already failed held nothing more, and is ended rather than reused.
+   */
   async close(): Promise<void> {
-    // Caller calls `pool.end()` / `client.end()`.
+    if (this.#closed) return
+    this.#closed = true
+    try {
+      await this.#dedicated.query(
+        `SELECT pg_advisory_unlock(hashtext($1), hashtext($2))`,
+        [this.#tables.storeMeta, this.seat.peerId],
+      )
+      this.#dedicated.release(false)
+    } catch {
+      this.#dedicated.release(true)
+    }
   }
 }
 
@@ -325,67 +459,117 @@ export class PostgresStore implements Store {
 // ---------------------------------------------------------------------------
 
 /**
- * Validation runs once at factory time, not on every method call. A
- * schema change applied while the Exchange is running won't be
- * detected — restart after migrations. Polling or a `revalidate()`
- * API would be over-engineering for a failure mode that fails loudly
- * on the next write anyway.
+ * Open a Postgres store: see `PostgresStore.open`. The store holds a
+ * connection of its own until it closes, so close it before ending the pool.
  */
 export async function createPostgresStore(
   adapter: PgAdapter,
   options: PostgresStoreOptions = {},
 ): Promise<Store> {
-  const tables = resolveTables(options)
-  await validateSchema(adapter, tables)
-  await assertFormat(adapter, tables)
-  return new PostgresStore(adapter, options)
+  return PostgresStore.open(adapter, options)
 }
 
 /**
- * Bootstrap reader: stamp/accept/refuse the store-format marker on open.
- * Writes at most one idempotent row (`ON CONFLICT DO NOTHING`) — not DDL,
- * so the "no auto-DDL" invariant holds; the operator still owns the table.
+ * Take a seat from the pool, on `dedicated`, and check the store format.
+ *
+ * The pool's row is the allocation lock: `FOR UPDATE` holds it until commit,
+ * and a seat lock is only ever taken while holding it. So the snapshot of
+ * held seat locks read under it is authoritative — held seats can be released
+ * meanwhile, never taken — and the one seat lock requested cannot be refused.
+ * A row lock cannot collide with any advisory lock, as a lock in the
+ * advisory space could with a seat whose key happened to equal it.
+ *
+ * Writes at most the format marker and the pool rows — not DDL, so the "no
+ * auto-DDL" invariant holds; the operator still owns the table.
  */
-async function assertFormat(q: PgQuerier, tables: TableNames): Promise<void> {
-  const markerResult = await q.query<{ value: unknown }>(
-    `SELECT value FROM ${tables.storeMeta} WHERE key = $1`,
-    [STORE_META_FORMAT_KEY],
-  )
-  const raw = markerResult.rows[0]?.value
-  const parsed = raw === undefined ? null : parseStoreFormat(raw)
-  if (parsed === "malformed") {
-    throw new StoreFormatVersionError({
-      reason: "malformed-version",
-      backend: "postgres",
-      stored: null,
-      current: STORE_FORMAT_VERSION,
-    })
-  }
-
-  const dataResult = await q.query(`SELECT 1 FROM ${tables.docMeta} LIMIT 1`)
-
-  const decision = decideStoreFormat({
-    current: STORE_FORMAT_VERSION,
-    stored: parsed,
-    storeHasData: dataResult.rows.length > 0,
-  })
-
-  if (decision.action === "refuse") {
-    throw new StoreFormatVersionError({
-      reason: decision.reason,
-      backend: "postgres",
-      stored: parsed,
-      current: STORE_FORMAT_VERSION,
-    })
-  }
-  if (decision.action === "stamp") {
+async function openSeat(
+  dedicated: PgQuerier,
+  tables: TableNames,
+): Promise<PooledSeat> {
+  let locked: PeerId | undefined
+  return inTransaction(dedicated, async q => {
     await q.query(
-      `INSERT INTO ${tables.storeMeta} (key, value)
-       VALUES ($1, $2::jsonb)
+      `INSERT INTO ${tables.storeMeta} (key, value) VALUES ($1, $2::jsonb)
        ON CONFLICT (key) DO NOTHING`,
-      [STORE_META_FORMAT_KEY, JSON.stringify(decision.value)],
+      [STORE_META_SEATS_KEY, JSON.stringify({ seats: [], fences: {} })],
     )
-  }
+    const pool = await q.query<{ value: unknown }>(
+      `SELECT value FROM ${tables.storeMeta} WHERE key = $1 FOR UPDATE`,
+      [STORE_META_SEATS_KEY],
+    )
+    const format = await q.query<{ value: unknown }>(
+      `SELECT value FROM ${tables.storeMeta} WHERE key = $1`,
+      [STORE_META_FORMAT_KEY],
+    )
+    const hasData = await q.query(`SELECT 1 FROM ${tables.docMeta} LIMIT 1`)
+    const storedPool = pool.rows[0]?.value
+
+    // Two-key advisory locks show in `pg_locks` with the keys as `classid`
+    // and `objid` and `objsubid = 2`. A seat whose key collides with another's
+    // reads as held too, which only passes it over.
+    const held = await q.query<{ peer_id: PeerId }>(
+      `SELECT peer_id FROM unnest($2::text[]) AS peer_id
+       WHERE EXISTS (
+         SELECT 1 FROM pg_locks
+         WHERE locktype = 'advisory' AND objsubid = 2
+           AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+           AND classid = hashtext($1)::oid AND objid = hashtext(peer_id)::oid
+       )`,
+      [tables.storeMeta, parseSeatPool(storedPool).seats],
+    )
+
+    const plan = planStoreOpen({
+      backend: "postgres",
+      current: STORE_FORMAT_VERSION,
+      storedFormat: format.rows[0]?.value,
+      storeHasData: hasData.rows.length > 0,
+      storedPool,
+      seating: {
+        kind: "pooled",
+        held: new Set(held.rows.map(row => row.peer_id)),
+      },
+      fresh: freshPeerIds(),
+    })
+    if (plan.action === "refuse") throw plan.error
+
+    const granted = await q.query<{ locked: boolean }>(
+      `SELECT pg_try_advisory_lock(hashtext($1), hashtext($2)) AS locked`,
+      [tables.storeMeta, plan.seat.peerId],
+    )
+    if (granted.rows[0]?.locked !== true) {
+      throw new Error(
+        `@kyneta/postgres-store: seat ${plan.seat.peerId} was locked outside ` +
+          `its allocation lock; refusing a seat another holder may have`,
+      )
+    }
+
+    locked = plan.seat.peerId
+
+    if (plan.writeFormat !== undefined) {
+      await q.query(
+        `INSERT INTO ${tables.storeMeta} (key, value) VALUES ($1, $2::jsonb)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+        [STORE_META_FORMAT_KEY, JSON.stringify(plan.writeFormat)],
+      )
+    }
+    await q.query(
+      `UPDATE ${tables.storeMeta} SET value = $2::jsonb WHERE key = $1`,
+      [STORE_META_SEATS_KEY, JSON.stringify(plan.writePool)],
+    )
+    return plan.seat
+  }).catch(async (error: unknown) => {
+    // The seat lock is session-level, so the rollback left it held. Released
+    // after the rollback: an aborted transaction runs no statement.
+    if (locked !== undefined) {
+      await dedicated
+        .query(`SELECT pg_advisory_unlock(hashtext($1), hashtext($2))`, [
+          tables.storeMeta,
+          locked,
+        ])
+        .catch(() => {})
+    }
+    throw error
+  })
 }
 
 interface ColumnInfo {

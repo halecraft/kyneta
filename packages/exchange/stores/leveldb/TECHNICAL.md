@@ -49,14 +49,14 @@ The entire package is one class plus one factory plus a pair of pure envelope fu
 |-----------|------|
 | `LevelDBStore` | Implements `Store`. Owns one `ClassicLevel` handle and an in-memory `Map<DocId, number>` seqNo cache. |
 | `encodeStoreRecord` / `decodeStoreRecord` | Pure functions: `StoreRecord ↔ Uint8Array`. No LevelDB imports. Independently testable. |
-| `createLevelDBStore(dbPath)` | **Async** factory (`LevelDBStore.open`) — opens the DB and runs the store-format gate, resolving to a `Store`. The bare `new LevelDBStore(dbPath)` constructor skips the gate (advanced use). |
+| `createLevelDBStore(dbPath)` | **Async** factory (`LevelDBStore.open`) — opens the DB, checks the format and takes the seat, resolving to a `Store`. The constructor is private: a store is born holding its seat. |
 
 ### What `LevelDBStore` is NOT
 
 - **Not a reactive store.** There is no subscribe, no changefeed. The exchange wires its own reactive layer above the store.
 - **Not a query engine.** The only lookup primitive is "give me everything for this doc" (`loadAll`) or "give me the metadata for this doc" (`currentMeta`). No predicates, no secondary indexes.
-- **Not thread-safe across processes.** LevelDB is single-process. Two processes opening the same `dbPath` will conflict; the exchange assumes one-writer semantics.
-- **Not a migration engine.** Schema migrations happen at the `@kyneta/schema` layer. The store-format gate (below) is a *compatibility check*, not a migration: on open it stamps/accepts/refuses, but never rewrites. This store just persists whatever payload bytes the substrate produced.
+- **Not multi-owner.** `classic-level` locks the directory, so a second open, in this process or another, throws. The store relies on it: its seqNo cache and its unfenced seat are sound only with one writer.
+- **Not a migration engine.** Schema migrations happen at the `@kyneta/schema` layer. The store-format check (below) is a *compatibility check*, not a migration: on open it stamps/accepts/refuses, but never rewrites. This store just persists whatever payload bytes the substrate produced.
 
 ### What "`Store`" means here (and does NOT mean)
 
@@ -68,7 +68,7 @@ The entire package is one class plus one factory plus a pair of pure envelope fu
 
 ## The `Store` contract
 
-Eight methods, each of which is either a single LevelDB op or a single prefix iteration:
+A `seat`, and eight methods, each of which is either a single LevelDB op or a single prefix iteration:
 
 | Method | LevelDB mapping |
 |--------|-----------------|
@@ -79,7 +79,7 @@ Eight methods, each of which is either a single LevelDB op or a single prefix it
 | `delete(docId)` | Collect `[metaKey, ...recordKeys]`, one `batch` of `del`s — atomic |
 | `currentMeta(docId)` → `StoreMeta \| null` | `db.get(metaKey)`; `LEVEL_NOT_FOUND` → `null` |
 | `listDocIds(prefix?)` → `AsyncIterable<DocId>` | Iterate `keysWithPrefix("doc-meta\x00" + prefix)`, slice the namespace off |
-| `close()` | `db.close()` — required, releases file handles |
+| `close()` | `db.close()` — required, releases the directory lock and so the seat. A closed store refuses every operation. |
 
 Every method is `async`. All writes go through LevelDB's single-writer guarantee — there is no in-memory write buffer to lose on crash.
 
@@ -92,10 +92,10 @@ Source: `packages/exchange/stores/leveldb/src/index.ts` → `META_PREFIX`, `RECO
 ```
 doc-meta\x00{docId}                    → StoreMeta (JSON-encoded, materialized index)
 record\x00{docId}\x00{seqNo-padded}   → StoreRecord (binary envelope v2)
-store-meta\x00{key}                    → store-global metadata (e.g. format version)
+store-meta\x00{key}                    → store-global metadata (format version, seat pool)
 ```
 
-The three namespaces sort `doc-meta` < `record` < `store-meta` (`d` < `r` < `s`), so `store-meta\x00…` lies outside every `doc-meta`/`record` iteration range and needs no filtering. `store-meta` holds store-global facts keyed by an opaque `key` (the on-disk format version under `key = "format"`), read by a bootstrap reader on open — never through the `Store` interface. (The per-doc namespace was renamed `meta\x00` → `doc-meta\x00` to disambiguate from `store-meta\x00`.)
+The three namespaces sort `doc-meta` < `record` < `store-meta` (`d` < `r` < `s`), so `store-meta\x00…` lies outside every `doc-meta`/`record` iteration range and needs no filtering. `store-meta` holds store-global facts keyed by an opaque `key` (the on-disk format version under `key = "format"`, the seat pool under `key = "seats"`), read on open — never through the `Store` interface. (The per-doc namespace was renamed `meta\x00` → `doc-meta\x00` to disambiguate from `store-meta\x00`.)
 
 Two observations drove this layout:
 
@@ -131,7 +131,7 @@ Sixteen digits is enough for 10^16 appends per doc — far beyond any conceivabl
 
 Source: `packages/exchange/stores/leveldb/src/index.ts` → `#nextSeq`, `#lastSeq`; `src/seq-tracker.ts` → `SeqNoTracker`.
 
-The store keeps a `SeqNoTracker` (`#seqNos`) — an in-memory `Map<DocId, number>` of the most recently used seqNo per doc. A cache is sound only because `classic-level` refuses a second open of a directory, so this instance is the only writer; the stores whose storage several instances open (IndexedDB, the SQL family) take positions from the storage instead, and the conformance suite checks that a second LevelDB open fails. Two phases:
+The store keeps a `SeqNoTracker` (`#seqNos`) — an in-memory `Map<DocId, number>` of the most recently used seqNo per doc. A cache is sound only because `classic-level` refuses a second open of a directory, so this instance is the only writer; the stores whose storage several instances open (IndexedDB, Postgres, Prisma) take positions from the storage instead, and the conformance suite's `owned` seat section checks that a second LevelDB open fails. Two phases:
 
 | Phase | Mechanism |
 |-------|-----------|
@@ -252,11 +252,14 @@ Bit 2 exists independently of bit 1 because `encoding: "binary"` describes the *
 
 ### What the envelope is NOT
 
-- **Not unversioned.** Bit 7 (future-format flag) provides a forward-compatibility escape hatch. A future format can set bit 7 and use a different layout; current decoders will reject it with a clear error instead of silently misinterpreting. This is a *per-record* guard, distinct from the *store-level* format marker (see *Store-format gate*): bit 7 guards decoding a single record; the marker guards opening the store at all.
+- **Not unversioned.** Bit 7 (future-format flag) provides a forward-compatibility escape hatch. A future format can set bit 7 and use a different layout; current decoders will reject it with a clear error instead of silently misinterpreting. This is a *per-record* guard, distinct from the *store-level* format marker (see *Opening: the format and the seat*): bit 7 guards decoding a single record; the marker guards opening the store at all.
 
-## Store-format gate
+## Opening: the format and the seat
 
-`STORE_FORMAT_VERSION` (`{ major: 1, minor: 0 }`) is LevelDB's own on-disk format version, stored at `store-meta\x00format`. `createLevelDBStore` / `LevelDBStore.open` reads it, probes whether any `doc-meta\x00` key exists, and runs `@kyneta/exchange`'s pure `decideStoreFormat`: a brand-new (empty) store is stamped; a same-major store is accepted (minor differences are backward-compatible); an incompatible major, or an unversioned store that already holds documents, throws `StoreFormatVersionError` (and the file handle is released so the refusal does not leak a lock). No migration is performed.
+`STORE_FORMAT_VERSION` (`{ major: 1, minor: 1 }`) is LevelDB's own on-disk format version, stored at `store-meta\x00format`; the seat pool is at `store-meta\x00seats`. `createLevelDBStore` / `LevelDBStore.open` reads both, probes whether any `doc-meta\x00` key exists, and runs `@kyneta/exchange`'s pure `planStoreOpen` with `owned` seating, then writes what it says in one `batch`:
+
+- **The format**: a brand-new (empty) store is stamped; a same-major store is accepted (minor differences are backward-compatible); an incompatible major, or an unversioned store that already holds documents, throws `StoreFormatVersionError` (and the file handle is released so the refusal does not leak a lock). No migration is performed. 1.1 added the seat pool; a 1.0 store reads as one with an empty pool.
+- **The seat** is `owned` (see §"Durable seats" in `packages/exchange/TECHNICAL.md`): the pool's one seat, stored on the first open and reused on every open after. The directory lock is held by the handle that writes, so no write can outlive it, and a `batch` is write-only, so it could not read a fence anyway: there is none.
 - **Not CBOR or Protobuf.** Those tools solve structured, extensible, self-describing encoding. This envelope solves only "one known discriminated-union record type, packed as tightly as possible." The scope is why the code is ~80 lines.
 - **Not exposed to the exchange.** The exchange sees `StoreRecord`; the envelope is this package's internal representation.
 
@@ -280,7 +283,7 @@ Types imported (not defined here): `Store`, `StoreRecord`, `StoreMeta`, `DocId` 
 | `src/index.ts` | Entire public surface: envelope v2, key helpers, `LevelDBStore`, `createLevelDBStore`. |
 | `src/seq-tracker.ts` | `SeqNoTracker`: the in-memory seqNo cache. LevelDB's alone, since only a store with one writer may keep one. |
 | `src/__tests__/seq-tracker.test.ts` | `SeqNoTracker`'s discovery and increments. |
-| `src/__tests__/leveldb-storage.test.ts` | Full integration tests: conformance suite (a second open refused), close+reopen persistence, `currentMeta` lookup, append ordering, `loadAll` iteration order, cold-start seqNo discovery, `compact` then reopen then append, `delete`, `listDocIds` with prefix, envelope round-trips (meta + entry kinds, edge cases, flags-byte assertions). |
+| `src/__tests__/leveldb-storage.test.ts` | Full integration tests: conformance suite (`owned` seats: a reopen holds the same seat, a second open is refused; fault sweep over every op of a `batch`), close+reopen persistence, `currentMeta` lookup, append ordering, `loadAll` iteration order, cold-start seqNo discovery, `compact` then reopen then append, `delete`, `listDocIds` with prefix, envelope round-trips (meta + entry kinds, edge cases, flags-byte assertions). |
 
 ## Testing
 

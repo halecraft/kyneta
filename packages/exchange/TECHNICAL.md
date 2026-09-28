@@ -30,6 +30,7 @@ Imported by applications to construct the top-level sync graph; by `@kyneta/reac
 - What is a `Line` and when should I use it? → [`Line` — reliable message streams](#line--reliable-message-streams)
 - How does compaction interact with sync? → [Compaction and lineage boundaries](#compaction-and-lineage-boundaries)
 - Why is `peerId` issued, and what is a principal? → [Seats and principals](#seats-and-principals)
+- Why does a stored peer keep its `peerId` across restarts, and what stops two tabs sharing one? → [Durable seats](#durable-seats)
 - How do reactive `peers` / `documents` collections behave? → [Reactive collections](#reactive-collections)
 - How do I tell an empty document from one that has not loaded? → [Document readiness](#document-readiness--a-conjunction-over-layers)
 - How do I write a document's defaults exactly once? → [Document readiness](#document-readiness--a-conjunction-over-layers)
@@ -101,7 +102,7 @@ Plus cross-cutting facilities:
 | Governance | `src/governance.ts` | Composable policies (`canShare` / `canAccept` / `canConnect` / `canReset` / `resolve`). |
 | Capabilities | `src/capabilities.ts` | Replica-type + schema registry keyed by `ReplicaKey`. |
 | Line | `src/line.ts` | Reliable bidirectional message stream built above `exchange.get`. |
-| Seats | `src/runtime.ts`, `src/when-peer.ts` | Each Runtime issues its own `peerId`; `whenPeer` finds a peer's seat by predicate. |
+| Seats | `src/store/seats.ts`, `src/store/store-open.ts`, `src/runtime.ts`, `src/when-peer.ts` | A store issues its Runtime's seat from a locked, fenced pool, or the Runtime mints a session seat without one; `whenPeer` finds a peer's seat by predicate. |
 | Storage | `src/store/*.ts` | `Store` interface, in-memory implementation, shared utilities (`validateAppend`, `resolveMetaFromBatch`); production impls in `@kyneta/leveldb-store`, `@kyneta/indexeddb-store`, `@kyneta/sqlite-store`, `@kyneta/postgres-store`, `@kyneta/prisma-store`. SQL-family stores share pure helpers (`toRow`, `fromRow`, `planAppend`, `planCompact`) via `@kyneta/sql-store-core`. |
 
 ### What the exchange is NOT
@@ -323,7 +324,9 @@ Each capability handle's `close()` decrements the reference count. The underlyin
 
 ### Writer restarts and lineage
 
-`Line`'s outbox/inbox documents are ordinary `json.bind()` (`SYNC_AUTHORITATIVE`) docs, so they're backed by `PlainVersion` — which carries an `lineage` (see `@kyneta/schema`'s [`PlainVersion`](../schema/TECHNICAL.md#plainversion); `lineage` is a universal `Version` property, not Plain-specific). An outbox gets a fresh lineage when its side of the `Line` is destroyed and reopened, restarting at `seq` 1. A process restart does not do it: the restarted process is a new seat and writes a new outbox. `Line` reads the lineage via the substrate-agnostic `version(doc).lineage` — no knowledge of `PlainVersion` or any concrete substrate, and no `as any` casts.
+`Line`'s outbox/inbox documents are ordinary `json.bind()` (`SYNC_AUTHORITATIVE`) docs, so they're backed by `PlainVersion` — which carries an `lineage` (see `@kyneta/schema`'s [`PlainVersion`](../schema/TECHNICAL.md#plainversion); `lineage` is a universal `Version` property, not Plain-specific). An outbox gets a fresh lineage when its side of the `Line` is destroyed and reopened, restarting at `seq` 1. A process restart does not do it. A stored process returns with its seat and resumes its outbox from the store; a store-less one is a new seat and writes a new outbox.
+
+**A `Line` resumes only once its documents have loaded.** Its cursors (`nextSeq`, `ackSeq`, `ackLineage`) live in its stored documents, so a `Line` opened on a stored Exchange reads them after `whenHydrated` of both. Read earlier, they would be an empty document's, and every stored message would be delivered again. A message sent before then is appended once they have loaded. `Line` reads the lineage via the substrate-agnostic `version(doc).lineage` — no knowledge of `PlainVersion` or any concrete substrate, and no `as any` casts.
 
 `Line`'s own envelope schema carries its sequence cursor paired with the lineage it was computed against: `ackSeq: number` + `ackLineage: string` (replacing the bare `ack: number`, and renamed from `ackIncarnation`). This is necessary because `Line`'s hand-rolled `seq`/`ack` counters are well-ordered *only within one lineage* of the doc they're stamped on — exactly the same category error `PlainVersion` itself avoids by carrying lineage alongside value. Both comparison sites that trusted a bare counter — `#processInbox`'s dedup guard (`msg.seq <= #lastProcessedSeq`) and `#pruneOutbox`'s prune guard (`msg.seq <= remoteAck`) — detect a peer-lineage mismatch and reset safely: the receiver's `#lastProcessedSeq` resets to `0` when the inbox's lineage changes (a fresh lineage has no history to have "already processed"), and the sender's `#pruneOutbox` refuses to prune anything unless `ackLineage` matches its own outbox's current lineage (an ack from before the sender's own restart cannot certify anything about messages minted after it). The `""` structural default for `ackLineage` is the "never acked" sentinel — real lineages are always non-empty. This fix is entirely contained within `Line` and `packages/exchange/src/line.ts`; the sync layer above needs no changes.
 
@@ -450,27 +453,78 @@ The two exist because "I'm done with this doc" has two distinct flavours — int
 
 ## Seats and principals
 
-Source: `src/runtime.ts` → `Runtime.peerId`; `src/exchange.ts` → `ExchangeParams.principal`, `validatePrincipal`; `src/when-peer.ts`.
+Source: `src/runtime.ts` → `Runtime.seat`, `Runtime.peerId`; `src/store/seats.ts`, `src/store/store-open.ts`; `src/exchange.ts` → `ExchangeParams.principal`, `validatePrincipal`; `src/when-peer.ts`.
 
 A peer's identity does two jobs, and each has its own field.
 
 | Field | Job | Chosen by |
 |-------|-----|-----------|
-| `peerId`, the **seat** | The address of one replica. It keys the session and sync peer tables and the transports' connection maps, and the Yjs and Loro bindings hash it into the CRDT peer number, so it decides which addresses the replica's operations occupy. | The Runtime: `randomPeerId()`, 128 bits, fresh per Runtime. |
+| `peerId`, the **seat** | The address of one replica. It keys the session and sync peer tables and the transports' connection maps, and the Yjs and Loro bindings hash it into the CRDT peer number, so it decides which addresses the replica's operations occupy. | The store, which issues `Store.seat` when it opens. Without a store, the Runtime: `randomPeerId()`, 128 bits, fresh per Runtime. Never the caller. |
 | `principal` | Who the peer says it is: a user, a service, a server fleet. Policies key on it. Several seats may share one. Carried in `establish`; not verified. | The application: `new Exchange({ principal })`. |
 
 The seat carries an invariant a CRDT depends on:
 
 > A replica may issue operations under identity `c` only if (1) it is the only live writer holding `c`, and (2) its state contains every operation ever issued under `c` for that document.
 
-When the caller chose the peer id, callers broke it in ordinary use. A store-less page that reloaded kept its id but not its documents, so it wrote at addresses its earlier session had already used; a duplicated tab copied the id through `sessionStorage`, so two live pages wrote under one. Either way the replicas reached equal version vectors over different contents, and never synced again. A caller cannot check the invariant, so the caller no longer chooses: every Runtime issues itself a **session seat**, a fresh random id that no one has written under. A fresh id has no history, so it satisfies both halves with no coordination. The cost is one version-vector entry per writing session per CRDT document, bounded by sessions. PLAN-2026-09-27-durable-seats will let a store issue a **durable seat** that survives restarts, under a lock that keeps the invariant.
+When the caller chose the peer id, callers broke it in ordinary use. A store-less page that reloaded kept its id but not its documents, so it wrote at addresses its earlier session had already used; a duplicated tab copied the id through `sessionStorage`, so two live pages wrote under one. Either way the replicas reached equal version vectors over different contents, and never synced again. A caller cannot check the invariant, so the caller never chooses.
+
+A Runtime without a store issues itself a **session seat**, a fresh random id that no one has written under. A fresh id has no history, so it satisfies both halves with no coordination. The cost is one version-vector entry per writing session per CRDT document, and a new peer in every peer list. That is the lower bound for state that dies with the process: a replica that writes before it can prove (2) for an existing id must write under a fresh one.
+
+A Runtime with a store takes its seat from the store: `this.seat = store?.seat ?? sessionSeat()`. The store holds the state that proves (2), so its seat can outlive the process. See [Durable seats](#durable-seats).
 
 Which one to read:
 
 - **Who** (governance, authority, display): `principal`. `p => p.principal === "my-server"`.
-- **Which replica** (`exchange.peers` keys, `sync(doc).peerStates`, a `Line`'s remote): `peerId`. A seat changes when its process restarts; to find one by principal, use `whenPeer(exchange, p => p.principal === "server")`, which resolves with the first matching peer in `exchange.peers`, including one in its grace period.
+- **Which replica** (`exchange.peers` keys, `sync(doc).peerStates`, a `Line`'s remote): `peerId`. A stored peer keeps its seat across restarts over the same storage; a store-less one does not, and several processes over one store hold different seats. To find one by principal, use `whenPeer(exchange, p => p.principal === "server")`, which resolves with the first matching peer in `exchange.peers`, including one in its grace period.
 
-Two different peers can no longer share a seat, so a second channel for a connected seat is one peer connected over several transports (or a reconnect overlapping its predecessor), which the session model supports. `self-connection` remains: a remote peer presenting this exchange's own seat means a transport looped back to its own Exchange. One Runtime cannot back two Exchanges either: `Runtime.setHooks` refuses a second owner, before the second Exchange starts any transport.
+Two live peers never share a seat, so a second channel for a connected seat is one peer connected over several transports (or a reconnect overlapping its predecessor's dead connection), which the session model supports. `self-connection` remains: a remote peer presenting this exchange's own seat means a transport looped back to its own Exchange. One Runtime cannot back two Exchanges either: `Runtime.setHooks` refuses a second owner, before the second Exchange starts any transport.
+
+### Durable seats
+
+A **durable seat** is an identity together with the lifetime of the storage that proves it. Each half of the invariant has its own mechanism:
+
+- **(2) holds by store-first.** An own operation leaves the process only once the store has confirmed it ([Store-first](#store-first)). So a Runtime that hydrates a document from the storage and then claims the seat (`beginHydration` → `adopt()`, in `#becomeReady`) holds every operation ever issued under it. **Reuse is sound only because of store-first**: without it, a crashed writer's unconfirmed operation could be on a peer but not in the storage, and the next holder would reissue its address.
+- **(1) needs exclusivity per storage.** Several writers can open one storage at once: tabs, server processes, Runtimes over one `sharedData`. So the storage keeps a **pool** of seats in its store-wide metadata (`store_meta`, key `seats`, beside the format marker), and each open store holds one seat exclusively for its lifetime. Deleting the database deletes the ids that vouched for its history; a pool kept anywhere else (such as `localStorage`) would vouch for history held in a different place.
+
+**The seat model.** Ids are seats, and holding a seat's lock is sitting in it. The pool is every seat the storage has issued. A writer sits in the oldest free seat, and adds a seat only when all are taken. Nobody can sit in an occupied seat, and the platform clears a seat when its holder dies. Which writer sat there last does not matter: reuse is safe for any writer that hydrates first. A single-tab user keeps one seat across reloads, and the pool never exceeds the peak number of writers open at once (a reload that overlaps its predecessor counts twice).
+
+**Three kinds of seat.** How a storage makes a seat exclusive decides what it needs:
+
+| kind | stores | exclusivity | fence |
+|---|---|---|---|
+| `session` | Prisma, and IndexedDB without Web Locks | a fresh id per open | none: a fresh id has no history |
+| `owned` | SQLite, LevelDB | a file lock held by the connection that writes | none: a write cannot outlive the lock |
+| `pooled` | in-memory, IndexedDB, Postgres | a lock the platform releases when its holder dies | yes |
+
+A pooled lock and the writes are separate things: a Web Lock is released at unload while the page's IndexedDB transaction may still commit; a Postgres seat lock lives on a dedicated connection while writes go through pooled ones. An owned lock is the writing connection itself, so a fence would check nothing (and LevelDB's write-only `batch` could not read one).
+
+**Governing invariant, for pooled seats: a seat lock is only ever acquired while holding the pool's allocation lock.** While one writer holds it, the set of held seats can shrink but not grow, so a snapshot of held seats taken under it is authoritative: a seat it shows free stays free until taken. Allocation is then one gather, one pure decision, and one lock request that cannot be refused. Every pooled backend allocates this way:
+
+1. **Gather**, under the allocation lock: the store-wide metadata (format marker, pool) and the held seat locks (`navigator.locks.query()` for IndexedDB, `pg_locks` for Postgres, the `held` set in `sharedData` for in-memory).
+2. **Plan**: `planStoreOpen` (`src/store/store-open.ts`), which makes the format decision and the seat decision (`allocateSeat` in `src/store/seats.ts`) together. It refuses a fresh id whose 53-bit peer number an existing seat shares, and takes the next.
+3. **Execute**: take the chosen seat's lock without waiting (a refusal means the invariant was broken, so the open fails rather than return a seat another holder may have), then write the marker and the pool.
+
+Session and owned stores run the same `planStoreOpen`, with `session` or `owned` seating, so every backend's open is one read of its store-wide metadata, one plan, one write.
+
+**Fencing.** Each pooled claim increments the seat's **fence** in the pool, and every pooled write (`append`, `compact`, `delete`) reads the pool inside its own transaction and calls `assertSeatHeld`, which throws `SeatLostError` when the stored fence is not the seat's. Nothing in the Web Locks or IndexedDB specifications orders a dying page's last transaction before its lock release; without the fence, a late commit from the previous holder could land after the new holder hydrated, and the storage would hold two different operations at one address. With it, the stale write fails and changes nothing.
+
+**Per backend:**
+
+- **In-memory**: `InMemoryStoreData.seats` holds the pool and the `held` set; the constructor allocates synchronously, `close()` releases, and `abandonSeat` (from `@kyneta/exchange/testing`) releases without closing, as a dying holder's platform would. A closed store refuses every operation.
+- **IndexedDB**: Web Locks, shared by every page and worker of an origin, named `kyneta:${dbName}:alloc` and `kyneta:${dbName}:seat:${peerId}`. The seat lock's `request()` promise settles only on release, so the grant is reported through a promise of its own. `createIndexedDBStore(name, { locks })` takes the lock manager; the default is `navigator.locks`.
+- **Postgres**: session-level advisory locks in the two-key space, `(hashtext(<store-meta table>), hashtext(peerId))`, on a connection the store holds for its lifetime (`PgAdapter.dedicated()`). Postgres releases them when that connection ends, so a dead process frees its seat. The allocation lock is the pool's row, `SELECT … FOR UPDATE`; writers read it `FOR SHARE`, so an allocation and a stale write cannot interleave.
+- **SQLite**: one owner per database. The built-in file adapters take `PRAGMA locking_mode = EXCLUSIVE` and `BEGIN EXCLUSIVE; COMMIT` when they wrap the connection; a Durable Object's adapter needs nothing, since the platform makes it the only owner.
+- **LevelDB**: `classic-level` refuses a second open of a directory.
+- **Prisma**: Prisma pins a connection only inside an interactive transaction, so it cannot hold a lock for a store's lifetime. Every open issues a session seat: one version-vector entry per process start per document written.
+
+**Losing the seat is final, and store-wide.** A `SeatLostError` means another writer now holds this Runtime's identity, so every later write of every document would fail the same way. The executor turns it into the store-program input `seat-lost`; the model becomes terminal (`StoreModel.seatLost`): no writes, no retries, every document settled, so `flush()` and `shutdown()` resolve. `onStoreError` fires once. `persistenceError(doc)` is derived from the model, so every stored document reports the `SeatLostError`, including one opened after the loss. Own writes made afterwards are under an identity another Runtime holds; the store never confirms them, so the publish gate never opens and none leaves the process. **The application recovers by opening a new store — in a browser, by reloading.**
+
+**Gotchas:**
+
+- **Back/forward cache.** A page holding a Web Lock is usually not eligible for the bfcache. Pages with an open IndexedDB connection already pay this in several engines.
+- **Insecure origins.** Web Locks exist only in secure contexts (Chrome 69+, Firefox 96+, Safari 15.4+). Without them, IndexedDB warns once and issues a session seat: unique, not stable.
+- **Workers.** Web Locks are shared by an origin's pages and workers, so a store opened in a worker takes a seat like a tab.
+- **`sessionStorage` is never used**: browsers copy it into duplicated tabs.
 
 ### The substrate's own copy of the invariant
 
@@ -879,7 +933,8 @@ the tempting check. It is too loose for anything gating a write: the multi-peer
 devtools inspector described in `PRODUCT.md` is itself an Exchange peer and
 would very likely identify as a service. Prefer
 `p => p.principal === "my-server"`. Not `peerId`: that is the server's seat,
-issued per process, and it changes when the server restarts.
+which a store-less server changes on every restart, and which several server
+processes over one store hold one each of.
 
 ### When a seed must be positional
 
@@ -927,7 +982,9 @@ not gate the executor.
 
 Source: `src/store/*.ts`, `src/store/store-program.ts`, `src/exchange.ts` → store-program executor.
 
-A `Store` is a persistence interface this package defines. A Runtime takes one (`ExchangeParams.store`, `RuntimeParams.store`), and an instance is owned by that Runtime, which calls it sequentially per document. Several instances may open one storage: tabs over one IndexedDB database, processes over one Postgres schema. See [Several instances over one storage](#several-instances-over-one-storage).
+A `Store` is a persistence interface this package defines. A Runtime takes one (`ExchangeParams.store`, `RuntimeParams.store`), and an instance is owned by that Runtime, which calls it sequentially per document and writes under its `seat`. Several instances may open one storage: tabs over one IndexedDB database, processes over one Postgres schema. See [Several instances over one storage](#several-instances-over-one-storage).
+
+**`Store.seat`** is the identity the store issues its Runtime, taken when the store opens and released by `close()` or by the platform when the holder dies ([Durable seats](#durable-seats)). A **pooled** seat is fenced: `append`, `compact` and `delete` read the pool inside their own transaction and call `assertSeatHeld`, which throws `SeatLostError`, changing nothing, once another store has claimed the seat. **A closed store refuses every operation.**
 
 ### How a document becomes ready
 
@@ -970,6 +1027,7 @@ type StoreRecord =
 type StoreMark = number
 
 interface Store {
+  readonly seat: Seat  // SessionSeat | OwnedSeat | PooledSeat
   append(docId: DocId, record: StoreRecord): Promise<void>
   loadAll(docId: DocId): AsyncIterable<StoreRecord>
   mark(docId: DocId): Promise<StoreMark | null>
@@ -989,11 +1047,12 @@ The `StoreRecord` tagged union carries either document metadata (`"meta"`) or a 
 
 A Runtime takes one store. Several instances may open one storage, and the contract (`src/store/store.ts`) says what that asks:
 
-- **Interleaved appends each succeed.** A record's position comes from the storage, never from a counter one instance keeps: IndexedDB's autoincrement key; SQL's `MAX(seq) + 1`, read inside the write transaction under a per-document lock (a Postgres advisory lock, SQLite's `BEGIN IMMEDIATE`, and for Prisma, which has no portable lock, one retry on a `(docId, seq)` violation). LevelDB keeps an in-memory counter, which is sound because `classic-level` refuses a second open of a directory.
+- **Interleaved appends each succeed.** A record's position comes from the storage, never from a counter one instance keeps: IndexedDB's autoincrement key; SQL's `MAX(seq) + 1`, read inside the write transaction (under a Postgres advisory lock per document; for Prisma, which has no portable lock, by trying again on a `(docId, seq)` violation, each of which means another writer committed).
+- **Owned storages have one instance.** SQLite and LevelDB refuse a second open while one holds the storage, so their instance is the only writer: SQLite's `MAX(seq)` needs no lock, and LevelDB keeps its counter in memory.
 - **Compaction removes only what its caller has read.** `mark(docId)` is the position of the document's last record; `compact(docId, records, through)` deletes the records at or before `through` and appends `records` after every record that remains, atomically. A compaction takes the mark, reads, takes everything it read into its replica, and deletes through the mark (see [The store-program](#the-store-program)). A record another instance appended after the mark survives; one before it was read and is now held. Two compactions through one mark both append after it, so neither deletes the other's output.
 - **Readers do not depend on record order.** See [How a document becomes ready](#how-a-document-becomes-ready).
 
-The conformance suite's two-instance section (`describeStore`'s `secondInstance`) checks interleaved appends and compactions on every backend that can open a second instance, and that LevelDB refuses one.
+The conformance suite's seat section (`describeStore`'s `seats`, one declaration per backend: `pooled` with an `abandon`, `owned` or `session`) checks that every store issues the declared kind; that pooled seats are exclusive, reused, and fenced; that an owned storage reopens with the same seat and refuses a second open; that a closed store refuses every operation; and, for pooled and session backends, interleaved appends and compactions from two instances.
 
 **A destroyed docId must not be reused.** `destroy` deletes the stored operations, but peers keep theirs, so a document recreated under the id would restart its clocks at 0 under an identity peers still hold. Nothing enforces this yet: `Line.destroy` followed by a new `Line` to the same seat reuses its document ids, so a tombstone needs a design for that case first.
 
@@ -1007,13 +1066,13 @@ Five production implementations exist:
 
 The three SQL-family backends share pure helpers (`toRow`, `fromRow`, `planAppend`, `planCompact`) via `@kyneta/sql-store-core` — preserving round-trip portability of a `StoreRecord` stream across SQL backends. The in-memory store in `src/store/in-memory-store.ts` is used for tests and browser-ephemeral cases.
 
-For the conformance suite's fault-injection atomicity property, `@kyneta/exchange/testing` exports `makeArmedFault` — a shared op-weighted, deferred-arm write-fault primitive that a backend's `faultFactory` wraps around its write seam (LevelDB `put`/`batch` weighted by op count; the SQLite adapter's `exec`; a checked-out Postgres client's `query` via `fromClient`). Every store backend consumes it; it replaced the per-backend hand-rolled wrappers and the construction-armed `failOnNthCall`.
+For the conformance suite's fault-injection atomicity property, `@kyneta/exchange/testing` exports `makeArmedFault` — a shared op-weighted, deferred-arm write-fault primitive that a backend's `faultFactory` wraps around its write seam (LevelDB `put`/`batch` weighted by op count; the SQLite adapter's `exec`; a checked-out Postgres client's `query` via `fromClient`). Its `fired()` says whether the armed fault was reached, and the suite sweeps `n = 1, 2, …` until a write completes without reaching it, so every step of a write — the fence read included — is failed in turn on every backend, with no step numbers to keep in sync.
 
 ### Async-factory pattern for stores requiring async setup
 
-`Store` instances handed to `Exchange` must be ready by construction — the eight `Store` methods are all that the Exchange knows about; there is no lifecycle hook and no orchestration of readiness. Backends needing async setup (open a connection, validate a schema, probe connectivity) expose **async factory functions** returning `Promise<Store>`. The Exchange takes ready stores; readiness is a per-backend concern, surfacing curated errors at the right altitude.
+`Store` instances handed to `Exchange` must be ready by construction, holding their seat — the `Store` members are all that the Exchange knows about; there is no lifecycle hook and no orchestration of readiness. Backends needing async setup (open a connection, validate a schema, probe connectivity) expose **async factory functions** returning `Promise<Store>`. The Exchange takes ready stores; readiness is a per-backend concern, surfacing curated errors at the right altitude.
 
-Canonical async factories: `createIndexedDBStore` (opens the IDB database), `createPostgresStore` (validates schema via `information_schema.columns`). Sync constructors are kept where they're honest: `SqliteStore` does fast local DDL in its constructor; `PrismaStore` defers to the caller-supplied client. `createSqliteStore` and `createPrismaStore` exist for ergonomic symmetry but do no async work.
+A store is born holding its seat, so every backend whose open is asynchronous opens only through its factory: `createIndexedDBStore` / `IndexedDBStore.open` (opens the IDB database, allocates under Web Locks), `createPostgresStore` / `PostgresStore.open` (validates the schema via `information_schema.columns`, allocates on a dedicated connection), `createLevelDBStore` / `LevelDBStore.open`, `createPrismaStore` / `PrismaStore.open`. Their constructors are private. `SqliteStore` keeps a public constructor because SQLite is synchronous: it does its DDL and takes its seat in the constructor, and `createSqliteStore` exists for symmetry.
 
 Earlier planning briefly considered adding a `Store.initialize?(): Promise<void>` lifecycle hook to the Exchange. Rejected: the Exchange's effect interpreter only handles writes; reads (`loadAll`, `currentMeta`, `listDocIds`) are called imperatively during hydration and bypass the executor entirely. Gating writes only leaves reads racing pre-init; gating both invasively introduces an `#initReady` mechanism whose purpose duplicates what an async factory already does cleanly. The honest factoring is "async factory, ready stores in." See the SQL-store-family plan's Learnings for the full reasoning.
 
@@ -1023,6 +1082,8 @@ Patterns common to all store backends are extracted into shared utilities in `sr
 
 - **`prefixSuccessor(prefix, order)`** (`src/store/store.ts`) — the upper bound of a prefix scan: the least string greater than every string starting with `prefix`, in the order the storage compares keys (`"code-point"` for UTF-8 bytes: Postgres under `COLLATE "C"`, SQLite's binary collation, LevelDB; `"code-unit"` for IndexedDB). `listDocIds(prefix)` scans `[prefix, prefixSuccessor(prefix, order))` on its key index. Every backend used to hand-write this, and most got it wrong: SQLite's `LIKE` ignored case, LevelDB's `prefix + "\xff"` (the bytes `C3 BF` in UTF-8) cut off ids continuing with any character from U+0100 on, IndexedDB's `prefix + "\uffff"` cut off a U+FFFF continuation, and Postgres depended on the database's collation. The store conformance suite now checks `listDocIds(prefix)` against `startsWith` over ids built to catch each of these.
 - **`validateAppend`** (`src/store/store.ts`) — shared meta-first invariant guard. Validates that an `entry` record is not appended before a `meta` record exists, and resolves metadata for `meta` records via `resolveMetaFromBatch`. Used by `InMemoryStore`, `LevelDBStore`, and `SqliteStore`. The IndexedDB store has its own inline variant that calls `tx.abort()` before throwing.
+- **`planStoreOpen`** (`src/store/store-open.ts`) — the one pure decision every backend's open makes, from one read of its store-wide metadata: the format (stamp, accept or refuse, through `decideStoreFormat`) and the seat (`session`, `owned` or `pooled` seating). The backend writes what it says in one step.
+- **`parseSeatPool`, `allocateSeat`, `assertSeatHeld`, `sessionSeat`, `freshPeerIds`, `SeatLostError`** (`src/store/seats.ts`) — the seat pool, decoded totally; the oldest free seat or a fresh one, refusing a fresh id whose 53-bit peer number a seat shares; the fence check a pooled write runs in its transaction.
 
 ### The store-program
 
@@ -1123,11 +1184,13 @@ Recovery takes one of two shapes, and which one depends on whether anything was 
 
 The second exists because a delta is defined relative to a version the store acknowledged, and a first write has none. Without the distinction there is nothing to recompute from, and the document would stay unpersisted until the process restarted — which is what `version: ""` used to cause, by making "no confirmed version" indistinguishable from "a confirmed version" at the type level.
 
+**Losing the seat is not a failed write.** A `SeatLostError` becomes `seat-lost`, which makes the model terminal (`seatLost`): it tracks no document and answers every later input with nothing, so no write and no retry follows, and `flush()` and `shutdown()` resolve. It emits `store-error` once, and the executor cancels every retry timer. See [Durable seats](#durable-seats).
+
 A failed write is retried. If a write is owed it starts at once and is the retry; otherwise the program emits `retry` with `retryDelay(failures)`: 250 ms, doubling with each failure in a row, up to 30 s. The Runtime keeps one timer per document, which dispatches `state-advanced` when it fires, and any write that starts cancels it. Under store-first a failed write stops the document syncing as well as persisting, so a retry that waited for the next mutation would leave an idle user's last write stranded on this peer. The bound is the backoff: one attempt per 30 s against a persistently failing store. A failed compaction is retried as an ordinary write (`state-advanced`), not as a compaction; compaction only saves space, so nothing is lost. A document waiting to retry is settled, so `flush()` and `shutdown()` do not wait on a failing store. Applications that want to act on failures have `onStoreError` and `persistenceError`.
 
 ### `onStoreError` callback
 
-`ExchangeParams.onStoreError` is an optional callback invoked for any store operation failure. Signature: `(docId: DocId, operation: string, error: unknown) => void`. Default: `console.warn`. This allows applications to surface persistence failures to monitoring or user-facing error states; the store program retries failed writes itself. `persistenceError(doc)` reports the same failures per document.
+`ExchangeParams.onStoreError` is an optional callback invoked for any store operation failure. Signature: `(docId: DocId, operation: string, error: unknown) => void`. Default: `console.warn`. This allows applications to surface persistence failures to monitoring or user-facing error states; the store program retries failed writes itself. `persistenceError(doc)` reports the same failures per document. A `SeatLostError` is reported once, and `persistenceError` then reports it for every stored document, including those opened later; the application recovers by opening a new store (in a browser, by reloading).
 
 ### Unified persistence via `state-advanced`
 
@@ -1146,7 +1209,7 @@ Because each drain's dirty set coalesces multiple advances per doc, and the stor
 - **Not a sync primitive.** Stores do not announce themselves on `present`, receive `offer`, or emit `interest`. They are local to the exchange instance.
 - **Not a cache.** Every record is durable on return.
 - **Not reactive.** No `subscribe`; reactivity lives at the `Ref<S>` / `ReactiveMap` layer.
-- **Not shared between Runtimes as an instance.** An instance is owned by one Runtime, which calls it sequentially per document. A *storage* may be shared: open one instance over it per Runtime.
+- **Not shared between Runtimes as an instance.** An instance is owned by one Runtime, which calls it sequentially per document and writes under its one seat. A *storage* may be shared, unless its seat is owned: open one instance over it per Runtime.
 
 ---
 
@@ -1221,9 +1284,10 @@ Properties:
 
 **Addressed by seat.** Each outbox is written only by the seat its id names (`lineDocId(topic, from, to)`). Addressed by principal, a user's two tabs would share one outbox and the second could not send. Pass a `peerId`, never a principal.
 
-Two limitations, until PLAN-2026-09-27-durable-seats and a retention policy:
+**A `Line` to a stored peer survives its restart.** The peer returns with the same seat and resumes its documents from its store, so a client's `Line` carries on: nothing sent is lost or processed twice. A store-less peer is a new seat after a restart; clients find it with `whenPeer` and open new `Line`s, and anything in flight to the old seat is lost. So is one whose store issues session seats (Prisma).
 
-- **`Line`s do not survive a server restart.** A restarted server is a new seat. Clients keep their `Line`s to the old seat, which never returns; they find the new seat with `whenPeer` and open new `Line`s, and anything in flight to the old seat is lost.
+One limitation, until a retention policy:
+
 - **`Line` documents to a seat that never returns stay stored** on its peer, and every store-less session is a new seat. A server cannot observe a session seat's end: a crashed process, a killed tab and a sleeping laptop all look like silence. A leftover `Line` loses nothing and takes storage, so removing it is a retention policy, designed separately.
 
 ### `LineProtocol`: reified protocol objects
@@ -1337,7 +1401,7 @@ For durability guarantees, use the `cohort` predicate to prevent compaction past
 | `src/types.ts` | `DocChange`, `DocInfo`, `PeerChange`, `PeerDocSyncState`, `PeerState`, `PeerSyncState`, `Connectivity`. |
 | `src/observe.ts` | — | DevTools observation protocol (`ObsEvent`), bus (`createObservationBus`), and pure effect/msg/changeset/frame mappers. Experimental. |
 | `src/utils.ts` | `validatePrincipal`. |
-| `src/store/` | — | `Store` interface, in-memory implementation, the store program, shared utilities (`validateAppend` in `store.ts`). |
+| `src/store/` | — | `Store` interface, in-memory implementation, the store program, shared utilities (`validateAppend` in `store.ts`), seats and the seat pool (`seats.ts`), and the open plan every backend runs (`store-open.ts`). |
 | `src/transport/` | — | Transport-manager glue. |
 | `src/testing/` | — | Test-only helpers exported from `@kyneta/exchange/testing`. |
 | `src/__tests__/` | — | Full dispatch-loop, governance, capabilities, line, seats, storage, compaction, classification, and end-to-end tests. |
