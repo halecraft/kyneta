@@ -13,6 +13,7 @@
 // - Differential equivalence with batch buildStructureIndex
 // - All-permutation differential tests
 
+import { lookup } from "@kyneta/datalog"
 import {
   type ZSet,
   type ZSetEntry,
@@ -20,7 +21,7 @@ import {
   zsetFromEntries,
   zsetSingleton,
 } from "@kyneta/zset"
-import { describe, expect, it } from "vitest"
+import { assert, describe, expect, it } from "vitest"
 import { cnIdKey, createCnId } from "../../../src/kernel/cnid.js"
 import { createIncrementalStructureIndex } from "../../../src/kernel/incremental/structure-index.js"
 import { structureIndexDeltaEmpty } from "../../../src/kernel/incremental/types.js"
@@ -168,9 +169,9 @@ function assertIndexEquals(
   )
   for (const [sid, expectedGroup] of expected.slotGroups) {
     const actualGroup = actual.slotGroups.get(sid)
-    expect(actualGroup, `${prefix}slotGroups has ${sid}`).toBeDefined()
+    assert.exists(actualGroup, `${prefix}slotGroups has ${sid}`)
     assertSlotGroupEquals(
-      actualGroup!,
+      actualGroup,
       expectedGroup,
       `${prefix}slotGroup[${sid}]`,
     )
@@ -191,8 +192,8 @@ function assertIndexEquals(
   expect(actual.roots.size, `${prefix}roots.size`).toBe(expected.roots.size)
   for (const [cid, expectedGroup] of expected.roots) {
     const actualGroup = actual.roots.get(cid)
-    expect(actualGroup, `${prefix}roots has ${cid}`).toBeDefined()
-    assertSlotGroupEquals(actualGroup!, expectedGroup, `${prefix}root[${cid}]`)
+    assert.exists(actualGroup, `${prefix}roots has ${cid}`)
+    assertSlotGroupEquals(actualGroup, expectedGroup, `${prefix}root[${cid}]`)
   }
 
   // Compare childrenOf
@@ -207,12 +208,9 @@ function assertIndexEquals(
     )
     for (const [sid, expectedGroup] of expectedChildren) {
       const actualGroup = actualChildren?.get(sid)
-      expect(
-        actualGroup,
-        `${prefix}childrenOf[${parentKey}] has ${sid}`,
-      ).toBeDefined()
+      assert.exists(actualGroup, `${prefix}childrenOf[${parentKey}] has ${sid}`)
       assertSlotGroupEquals(
-        actualGroup!,
+        actualGroup,
         expectedGroup,
         `${prefix}childrenOf[${parentKey}][${sid}]`,
       )
@@ -245,10 +243,10 @@ function assertSlotGroupEquals(
 function permutations<T>(arr: T[]): T[][] {
   if (arr.length <= 1) return [arr]
   const result: T[][] = []
-  for (let i = 0; i < arr.length; i++) {
+  for (const [i, head] of arr.entries()) {
     const rest = [...arr.slice(0, i), ...arr.slice(i + 1)]
     for (const perm of permutations(rest)) {
-      result.push([arr[i]!, ...perm])
+      result.push([head, ...perm])
     }
   }
   return result
@@ -293,7 +291,7 @@ describe("IncrementalStructureIndex", () => {
 
       expect(delta.isEmpty).toBe(false)
       const sid = slotId(root)
-      const group = delta.updates.get(sid)!
+      const group = lookup(delta.updates, sid)
       expect(group.policy).toBe("seq")
       expect(group.childKey).toBe("list")
     })
@@ -350,7 +348,7 @@ describe("IncrementalStructureIndex", () => {
       expect(delta.updates.size).toBe(1)
 
       const sid = slotId(child)
-      const group = delta.updates.get(sid)!
+      const group = lookup(delta.updates, sid)
       expect(group.slotId).toBe(sid)
       expect(group.policy).toBe("map")
       expect(group.childKey).toBe("name")
@@ -398,7 +396,7 @@ describe("IncrementalStructureIndex", () => {
 
       const index = stage.current()
       const parentKey = cnIdKey(root.id)
-      const children = index.childrenOf.get(parentKey)!
+      const children = lookup(index.childrenOf, parentKey)
       expect(children.size).toBe(2)
       expect(children.has(slotId(child1))).toBe(true)
       expect(children.has(slotId(child2))).toBe(true)
@@ -417,12 +415,12 @@ describe("IncrementalStructureIndex", () => {
       expect(index.slotGroups.size).toBe(3)
 
       // Root → child
-      const rootChildren = index.childrenOf.get(cnIdKey(root.id))!
+      const rootChildren = lookup(index.childrenOf, cnIdKey(root.id))
       expect(rootChildren.size).toBe(1)
       expect(rootChildren.has(slotId(child))).toBe(true)
 
       // Child → grandchild
-      const childChildren = index.childrenOf.get(cnIdKey(child.id))!
+      const childChildren = lookup(index.childrenOf, cnIdKey(child.id))
       expect(childChildren.size).toBe(1)
       expect(childChildren.has(slotId(grandchild))).toBe(true)
     })
@@ -454,7 +452,7 @@ describe("IncrementalStructureIndex", () => {
 
       // Same slot ID — the group was modified, not a new group
       expect(slotId(child2)).toBe(sid)
-      const updatedGroup = d2.updates.get(sid)!
+      const updatedGroup = lookup(d2.updates, sid)
       expect(updatedGroup.structures.length).toBe(2)
       expect(updatedGroup.structureKeys.size).toBe(2)
       expect(updatedGroup.structureKeys.has(cnIdKey(child1.id))).toBe(true)
@@ -463,9 +461,9 @@ describe("IncrementalStructureIndex", () => {
       // Current index has one slot group with two structures
       const index = stage.current()
       const parentKey = cnIdKey(root.id)
-      const children = index.childrenOf.get(parentKey)!
+      const children = lookup(index.childrenOf, parentKey)
       expect(children.size).toBe(1) // still one slot
-      const group = children.get(sid)!
+      const group = lookup(children, sid)
       expect(group.structures.length).toBe(2)
     })
 
@@ -526,7 +524,7 @@ describe("IncrementalStructureIndex", () => {
 
       const index = stage.current()
       const parentKey = cnIdKey(root.id)
-      const children = index.childrenOf.get(parentKey)!
+      const children = lookup(index.childrenOf, parentKey)
       expect(children.size).toBe(2)
     })
 
@@ -553,7 +551,7 @@ describe("IncrementalStructureIndex", () => {
       stage.step(csetMany(root, elem))
 
       const index = stage.current()
-      const group = index.slotGroups.get(slotId(elem))!
+      const group = lookup(index.slotGroups, slotId(elem))
       expect(group.policy).toBe("seq")
     })
 
@@ -565,7 +563,7 @@ describe("IncrementalStructureIndex", () => {
       stage.step(csetMany(root, elem))
 
       const index = stage.current()
-      const group = index.slotGroups.get(slotId(elem))!
+      const group = lookup(index.slotGroups, slotId(elem))
       expect(group.childKey).toBe(cnIdKey(elem.id))
     })
   })
@@ -1012,7 +1010,7 @@ describe("IncrementalStructureIndex", () => {
 
       // The group in the delta should have all 3 structures
       const sid = slotId(child1)
-      const group = delta.updates.get(sid)!
+      const group = lookup(delta.updates, sid)
       expect(group.structures.length).toBe(3)
       expect(group.structureKeys.size).toBe(3)
     })

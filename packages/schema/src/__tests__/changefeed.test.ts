@@ -1,6 +1,6 @@
 import type { Changeset } from "@kyneta/changefeed"
 import { CHANGEFEED, hasChangefeed } from "@kyneta/changefeed"
-import { describe, expect, it } from "vitest"
+import { assert, describe, expect, it } from "vitest"
 import type {
   IncrementChange,
   MapChange,
@@ -567,8 +567,9 @@ describe("changefeed: unsubscribe cleanup", () => {
     const { doc } = createChatDoc()
     const cf = getChangefeed(doc.settings)
     const events: Op[] = []
-    // biome-ignore lint/style/noNonNullAssertion: subscribeDescendants is guaranteed present on composed changefeeds
-    const unsub = cf.subscribeDescendants!(changeset => {
+    const subscribeDescendants = cf.subscribeDescendants
+    assert.exists(subscribeDescendants)
+    const unsub = subscribeDescendants(changeset => {
       for (const event of changeset.changes) events.push(event)
     })
 

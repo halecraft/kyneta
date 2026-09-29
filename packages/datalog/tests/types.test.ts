@@ -15,6 +15,7 @@
 
 import { describe, expect, it } from "vitest"
 import { evaluateAggregation } from "../src/aggregate.js"
+import { nth } from "../src/checked.js"
 import type { FactTuple, Probe, Value } from "../src/types.js"
 import {
   ALL_POSITIONS,
@@ -98,17 +99,15 @@ describe("serializeTuple", () => {
       if (typeof v === "string") return `s:${v.length}:${v}`
       if (v instanceof Uint8Array) {
         let hex = "b:"
-        for (let j = 0; j < v.length; j++) {
-          hex += (v[j]! < 16 ? "0" : "") + v[j]?.toString(16)
-        }
+        for (const byte of v) hex += (byte < 16 ? "0" : "") + byte.toString(16)
         return hex
       }
       return `r:${v.ref.peer}:${v.ref.counter}`
     }
     const referenceTuple = (tuple: FactTuple, mask: number): string => {
       const parts: string[] = []
-      for (let i = 0; i < tuple.length; i++) {
-        if ((mask & (1 << i)) !== 0) parts.push(referenceValue(tuple[i]!))
+      for (const [i, value] of tuple.entries()) {
+        if ((mask & (1 << i)) !== 0) parts.push(referenceValue(value))
       }
       return parts.join("|")
     }
@@ -173,7 +172,7 @@ describe("factKey", () => {
 // ---------------------------------------------------------------------------
 // Aggregation grouping — the unbound vs bound-to-null distinction
 //
-// `resolveGroupValues` is private, so these exercise it through the only
+// `resolveGroupBindings` is private, so these exercise it through the only
 // caller. The distinction matters: an *unbound* grouping variable means the
 // substitution cannot form a group at all, while a variable *bound to null*
 // forms a perfectly good group keyed on null.
@@ -530,8 +529,8 @@ describe("Relation keyed operations", () => {
     const byKey = new Relation()
     const weights = [1, 2, -1, -1]
     tuples.forEach((t, i) => {
-      byTuple.addWeighted(t, weights[i]!)
-      byKey.addWeightedByKey(serializeTuple(t), t, weights[i]!)
+      byTuple.addWeighted(t, nth(weights, i))
+      byKey.addWeightedByKey(serializeTuple(t), t, nth(weights, i))
     })
 
     expect(byKey.tuples()).toEqual(byTuple.tuples())

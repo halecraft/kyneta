@@ -240,9 +240,7 @@ export function planRuleEvaluation(
   const steps: EvalStep[] = []
   const bound = new Set<string>()
 
-  for (const i of order) {
-    const element = rule.body[i]!
-
+  for (const { element, index: i } of order) {
     steps.push({
       element,
       source: sourceFor(element, i, deltaIdx, deltaPreds),
@@ -277,48 +275,57 @@ const COST_FILTER = 0
 /** Cost of an atom with a known position: an indexed lookup, not a scan. */
 const COST_LOOKUP = 1
 
-/** Body element indices, in the order they should be evaluated. */
+/** A body element and its position in the rule as written. */
+interface Positioned {
+  readonly element: BodyElement
+  readonly index: number
+}
+
+/** Body elements, in the order they should be evaluated. */
 function planOrder(
   rule: Rule,
   deltaIdx: number,
   sizes: PlanSizes | undefined,
-): readonly number[] {
-  const n = rule.body.length
-  const sourceOrder = (): number[] => Array.from({ length: n }, (_v, i) => i)
+): readonly Positioned[] {
+  const elements = rule.body.map((element, index) => ({ element, index }))
 
   // No estimates, or an aggregation in the body (which cannot move): the
   // order is the order it was written in.
-  if (sizes === undefined) return sourceOrder()
-  if (rule.body.some(b => b.kind === "aggregation")) return sourceOrder()
+  if (sizes === undefined) return elements
+  if (rule.body.some(b => b.kind === "aggregation")) return elements
 
-  const order: number[] = []
-  const planned = new Array<boolean>(n).fill(false)
+  const order: Positioned[] = []
+  const pending = [...elements]
   const bound = new Set<string>()
 
-  for (let step = 0; step < n; step++) {
-    let best = -1
+  while (pending.length > 0) {
+    let best: Positioned | undefined
     let bestCost = Number.POSITIVE_INFINITY
 
-    for (let i = 0; i < n; i++) {
-      if (planned[i]) continue
-      const cost = estimateCost(rule.body[i]!, i === deltaIdx, bound, sizes)
+    for (const candidate of pending) {
+      const cost = estimateCost(
+        candidate.element,
+        candidate.index === deltaIdx,
+        bound,
+        sizes,
+      )
       if (cost < bestCost) {
         bestCost = cost
-        best = i
+        best = candidate
       }
     }
 
     // Nothing left is safely evaluable — a negation or guard whose variables
     // nothing binds. Fall back to source order for the remainder and let
     // evaluation handle it exactly as it did before.
-    if (best === -1 || bestCost === Number.POSITIVE_INFINITY) {
-      for (let i = 0; i < n; i++) if (!planned[i]) order.push(i)
+    if (best === undefined) {
+      order.push(...pending)
       return order
     }
 
-    planned[best] = true
+    pending.splice(pending.indexOf(best), 1)
     order.push(best)
-    bindVariables(rule.body[best]!, bound, best === deltaIdx)
+    bindVariables(best.element, bound, best.index === deltaIdx)
   }
 
   return order
@@ -861,10 +868,11 @@ export function evaluateComputeElement(
   // Reading the values is fine; keeping the array is not.
   const args: Value[] = new Array(element.args.length)
   rows: for (const sub of subs) {
-    for (let i = 0; i < element.args.length; i++) {
-      const value = resolveGuardTerm(element.args[i]!, sub)
+    let i = 0
+    for (const term of element.args) {
+      const value = resolveGuardTerm(term, sub)
       if (value === undefined) continue rows
-      args[i] = value
+      args[i++] = value
     }
     const value = fn.apply(args)
     if (value === undefined) continue

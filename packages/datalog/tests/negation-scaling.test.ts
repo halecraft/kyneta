@@ -118,30 +118,38 @@ function supersededFacts(total: number): Fact[] {
   return facts
 }
 
-/** Median of three, after a warm run, so one hiccup cannot decide the result. */
-function medianMs(rules: readonly Rule[], facts: readonly Fact[]): number {
+/** Milliseconds one evaluation takes. */
+function timeMs(rules: readonly Rule[], facts: readonly Fact[]): number {
+  const started = performance.now()
   evaluate(rules, facts)
-  const runs: number[] = []
-  for (let i = 0; i < 3; i++) {
-    const started = performance.now()
-    evaluate(rules, facts)
-    runs.push(performance.now() - started)
-  }
-  return runs.sort((a, b) => a - b)[1]!
+  return performance.now() - started
 }
 
 /**
  * Cost of 4x the facts, as a multiple of the cost of the baseline.
  *
- * Linear lands near 4, quadratic near 16. The floor on the denominator keeps a
- * fast machine measuring the small case as ~0 from producing a huge ratio.
+ * Linear lands near 4, quadratic near 16. The two sizes are timed in
+ * alternation, so a load that arrives mid-measurement slows both rather than
+ * only the second, and each keeps its fastest run: load only ever adds time.
+ * Timing all the small runs first let a busy machine (every package verifying
+ * at once) land on the large ones alone and report 10x for linear code. The
+ * floor on the denominator keeps a fast machine measuring the small case as ~0
+ * from producing a huge ratio.
  */
 function growthOver4x(
   rules: readonly Rule[],
   build: (n: number) => Fact[],
 ): number {
-  const small = medianMs(rules, build(2000))
-  const large = medianMs(rules, build(8000))
+  const smallFacts = build(2000)
+  const largeFacts = build(8000)
+  evaluate(rules, smallFacts)
+  evaluate(rules, largeFacts)
+  let small = Number.POSITIVE_INFINITY
+  let large = Number.POSITIVE_INFINITY
+  for (let i = 0; i < 5; i++) {
+    small = Math.min(small, timeMs(rules, smallFacts))
+    large = Math.min(large, timeMs(rules, largeFacts))
+  }
   return large / Math.max(small, 0.5)
 }
 

@@ -148,12 +148,9 @@ export function resolveLWW(
 export function resolveLWWSlot(
   entries: readonly LWWEntry[],
 ): LWWEntry | undefined {
-  if (entries.length === 0) return undefined
-
-  let winner = entries[0]!
-  for (let i = 1; i < entries.length; i++) {
-    const candidate = entries[i]!
-    if (lwwCompare(candidate, winner) > 0) {
+  let winner: LWWEntry | undefined
+  for (const candidate of entries) {
+    if (winner === undefined || lwwCompare(candidate, winner) > 0) {
       winner = candidate
     }
   }

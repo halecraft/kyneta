@@ -40,24 +40,24 @@ describe("diffValueMaps (functional core)", () => {
   it("add-only → [insert]", () => {
     const events = diffValueMaps(m([]), m([["a", 1]]), eq)
     expect(events).toHaveLength(1)
-    expect([...events[0]!.delta]).toEqual([["a", 1]])
-    expect(events[0]!.values.get("a")).toBe(1)
+    expect([...events[0].delta]).toEqual([["a", 1]])
+    expect(events[0].values.get("a")).toBe(1)
   })
 
   it("remove-only → [retract]", () => {
     const events = diffValueMaps(m([["a", 1]]), m([]), eq)
     expect(events).toHaveLength(1)
-    expect([...events[0]!.delta]).toEqual([["a", -1]])
-    expect(events[0]!.values.size).toBe(0)
+    expect([...events[0].delta]).toEqual([["a", -1]])
+    expect(events[0].values.size).toBe(0)
   })
 
   it("value change (eq false) → [retract, insert], key at -1 then +1(newV)", () => {
     const events = diffValueMaps(m([["a", 1]]), m([["a", 2]]), eq)
     expect(events).toHaveLength(2)
-    expect([...events[0]!.delta]).toEqual([["a", -1]]) // retract precedes
-    expect(events[0]!.values.size).toBe(0)
-    expect([...events[1]!.delta]).toEqual([["a", 1]])
-    expect(events[1]!.values.get("a")).toBe(2) // new value
+    expect([...events[0].delta]).toEqual([["a", -1]]) // retract precedes
+    expect(events[0].values.size).toBe(0)
+    expect([...events[1].delta]).toEqual([["a", 1]])
+    expect(events[1].values.get("a")).toBe(2) // new value
   })
 
   it("value unchanged (eq true) → []", () => {
@@ -79,23 +79,23 @@ describe("diffValueMaps (functional core)", () => {
     expect(events).toHaveLength(2)
     const [retract, insert] = events
     // retract: drop (removed) + upd (changed); never `keep` (unchanged)
-    expect(new Map(retract!.delta)).toEqual(
+    expect(new Map(retract.delta)).toEqual(
       new Map([
         ["drop", -1],
         ["upd", -1],
       ]),
     )
-    expect(retract!.values.size).toBe(0)
+    expect(retract.values.size).toBe(0)
     // insert: add (new) + upd (new value); never `keep`
-    expect(new Map(insert!.delta)).toEqual(
+    expect(new Map(insert.delta)).toEqual(
       new Map([
         ["upd", 1],
         ["add", 1],
       ]),
     )
-    expect(insert!.values.get("add")).toBe(3)
-    expect(insert!.values.get("upd")).toBe(99)
-    expect(insert!.values.has("keep")).toBe(false)
+    expect(insert.values.get("add")).toBe(3)
+    expect(insert.values.get("upd")).toBe(99)
+    expect(insert.values.has("keep")).toBe(false)
   })
 })
 

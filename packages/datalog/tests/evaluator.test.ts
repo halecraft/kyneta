@@ -26,7 +26,7 @@ import {
   zsetSingleton,
   zsetSize,
 } from "@kyneta/zset"
-import { describe, expect, it } from "vitest"
+import { assert, describe, expect, it } from "vitest"
 import {
   evaluateDifferentialNegation,
   evaluatePositiveAtom,
@@ -1816,7 +1816,9 @@ describe("mixed retract+insert steps with negation over a derived predicate", ()
         // One step carrying a retraction and an insertion together: an entity
         // leaves a tile and arrives at another, exactly as a move does.
         const entity = pick(2) === 0 ? "hero" : "murk"
-        const [ox, oy] = pos[entity]!
+        const from = pos[entity]
+        assert.exists(from)
+        const [ox, oy] = from
         const nx = pick(WIDTH)
         const ny = pick(HEIGHT)
         pos[entity] = [nx, ny]

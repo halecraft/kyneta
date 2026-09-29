@@ -9,7 +9,7 @@
 // the one decision that is a genuine judgement call, and the only one that
 // changes the order facts come out in.
 
-import { describe, expect, it } from "vitest"
+import { assert, describe, expect, it } from "vitest"
 import { evaluatePositiveAtom, planRuleEvaluation } from "../src/evaluate.js"
 import type { Rule } from "../src/types.js"
 import {
@@ -131,8 +131,9 @@ describe("planRuleEvaluation — the asymmetric join", () => {
 
     expect(plan[0]?.isDeltaSource).toBe(true) // reordered to the front
     const nonDelta = plan.find(s => !s.isDeltaSource)
-    expect(selfJoin.body.indexOf(nonDelta!.element)).toBe(0)
-    expect(nonDelta?.source).toBe("new")
+    assert.exists(nonDelta)
+    expect(selfJoin.body.indexOf(nonDelta.element)).toBe(0)
+    expect(nonDelta.source).toBe("new")
   })
 
   it("reads P_old for a predicate the delta does not touch", () => {

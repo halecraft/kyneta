@@ -58,7 +58,8 @@ export function runtime<Msg, Model>(
     isDispatching = true
     try {
       while (pending.length > 0) {
-        const next = pending.shift()!
+        // Not `next !== undefined`: a program's Msg may itself include undefined.
+        const next = pending.shift() as Msg
         const [newModel, ...effects] = program.update(next, state)
         state = newModel
         for (const effect of effects) {

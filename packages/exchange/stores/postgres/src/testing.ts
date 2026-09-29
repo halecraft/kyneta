@@ -18,7 +18,7 @@ const DUPLICATE_DATABASE = "42P04"
  * Postgres suites should skip.
  */
 export function pgTestServer(): string | null {
-  const url = process.env["KYNETA_PG_URL"]
+  const url = process.env.KYNETA_PG_URL
   return url === undefined || url.length === 0 ? null : url
 }
 

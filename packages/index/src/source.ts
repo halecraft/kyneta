@@ -140,6 +140,19 @@ function createSourceEvent<V>(
   return { delta, values }
 }
 
+/**
+ * The value `event` carries for `key`, which it inserts: every positive key
+ * has one (the invariant `createSourceEvent` checks).
+ */
+function insertedValue<V>(event: SourceEvent<V>, key: string): V {
+  if (!event.values.has(key)) {
+    throw new Error(
+      `[source] Representational invariant violated: key "${key}" has positive weight but no value`,
+    )
+  }
+  return event.values.get(key) as V
+}
+
 // ---------------------------------------------------------------------------
 // createSourceEmitter — shared subscriber management
 // ---------------------------------------------------------------------------
@@ -309,13 +322,11 @@ function fromList<V>(listRef: any, keyFn: (itemRef: V) => any): Source<V> {
   }
 
   const listUnsub = subscribeNode(listRef, () => {
-    const currentKeys = new Set<string>()
     const currentByKey = new Map<string, V>()
 
     for (const itemRef of listRef) {
       const keyRef = keyFn(itemRef as V)
       const key: string = keyRef()
-      currentKeys.add(key)
       currentByKey.set(key, itemRef as V)
     }
 
@@ -326,16 +337,15 @@ function fromList<V>(listRef: any, keyFn: (itemRef: V) => any): Source<V> {
 
     // Removed
     for (const key of knownKeySet) {
-      if (!currentKeys.has(key)) {
+      if (!currentByKey.has(key)) {
         delta = add(delta, single(key, -1))
         items.remove(key)
       }
     }
 
     // Added
-    for (const key of currentKeys) {
+    for (const [key, itemRef] of currentByKey) {
       if (!knownKeySet.has(key)) {
-        const itemRef = currentByKey.get(key)!
         delta = add(delta, single(key, 1))
         values.set(key, itemRef)
         items.add(key, itemRef)
@@ -723,7 +733,7 @@ function filter<V>(
 
     for (const [key, weight] of event.delta) {
       if (weight > 0) {
-        const value = event.values.get(key)!
+        const value = insertedValue(event, key)
         if (pred(key, value)) {
           // Install before emit: a subscriber that synchronously mutates the
           // value in response to `added` must find the watcher already armed.
@@ -834,7 +844,7 @@ function map<V>(
           if (newKey === null) continue
           delta = add(delta, single(newKey, weight))
           if (weight > 0) {
-            const value = event.values.get(key)!
+            const value = insertedValue(event, key)
             values.set(newKey, value)
           }
         }
@@ -893,7 +903,7 @@ function remapEvent<V>(
     const flatKey = keyFn(outerKey, innerKey)
     delta = add(delta, single(flatKey, weight))
     if (weight > 0) {
-      const value = event.values.get(innerKey)!
+      const value = insertedValue(event, innerKey)
       values.set(flatKey, value)
     }
   }
@@ -971,7 +981,7 @@ function flatMap<Outer, Inner>(
   const outerUnsub = outer.subscribe(event => {
     for (const [outerKey, weight] of event.delta) {
       if (weight > 0) {
-        const outerValue = event.values.get(outerKey)!
+        const outerValue = insertedValue(event, outerKey)
         addInner(outerKey, outerValue)
       } else if (weight < 0) {
         removeInner(outerKey)

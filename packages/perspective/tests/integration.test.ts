@@ -10,6 +10,7 @@
 // - Multi-container: reality with both map and seq containers resolves correctly
 // - Constraint auditability: invalid constraints remain in store, queryable but excluded
 
+import { nth } from "@kyneta/datalog"
 import { describe, expect, it } from "vitest"
 import { BOOTSTRAP_CONSTRAINT_COUNT, createReality } from "../src/bootstrap.js"
 import {
@@ -53,15 +54,18 @@ function getNode(reality: Reality, ...path: string[]): RealityNode | undefined {
   return current
 }
 
-function getSeqValues(reality: Reality, ...containerPath: string[]): Value[] {
+function getSeqValues(
+  reality: Reality,
+  ...containerPath: string[]
+): (Value | undefined)[] {
   const container = getNode(reality, ...containerPath)
   if (container === undefined) return []
-  const values: Value[] = []
+  const values: (Value | undefined)[] = []
   // Seq children are keyed by index string ("0", "1", "2", ...)
   for (let i = 0; ; i++) {
     const child = container.children.get(String(i))
     if (child === undefined) break
-    values.push(child.value!)
+    values.push(child.value)
   }
   return values
 }
@@ -102,7 +106,7 @@ describe("bootstrap", () => {
   it("first constraint is an admin grant to the creator", () => {
     const { constraints } = createReality({ creator: "alice" })
 
-    const first = constraints[0]!
+    const first = nth(constraints, 0)
     expect(first.type).toBe("authority")
     if (first.type !== "authority") return
     expect(first.payload.targetPeer).toBe("alice")

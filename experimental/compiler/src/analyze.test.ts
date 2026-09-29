@@ -223,11 +223,10 @@ describe("ComponentFactory detection", () => {
       { overwrite: true },
     )
 
-    const myComponentDecl = sourceFile.getVariableDeclaration("MyComponent")
-    expect(myComponentDecl).toBeDefined()
+    const myComponentDecl =
+      sourceFile.getVariableDeclarationOrThrow("MyComponent")
 
-    // biome-ignore lint/style/noNonNullAssertion: type is guaranteed after getType()
-    const type = myComponentDecl!.getType()
+    const type = myComponentDecl.getType()
     expect(isComponentFactoryType(type)).toBe(true)
   })
 
@@ -242,13 +241,11 @@ describe("ComponentFactory detection", () => {
       { overwrite: true },
     )
 
-    const regularDecl = sourceFile.getVariableDeclaration("regularFunc")
-    const stringDecl = sourceFile.getVariableDeclaration("stringFunc")
+    const regularDecl = sourceFile.getVariableDeclarationOrThrow("regularFunc")
+    const stringDecl = sourceFile.getVariableDeclarationOrThrow("stringFunc")
 
-    // biome-ignore lint/style/noNonNullAssertion: type is guaranteed after getType()
-    expect(isComponentFactoryType(regularDecl!.getType())).toBe(false)
-    // biome-ignore lint/style/noNonNullAssertion: type is guaranteed after getType()
-    expect(isComponentFactoryType(stringDecl!.getType())).toBe(false)
+    expect(isComponentFactoryType(regularDecl.getType())).toBe(false)
+    expect(isComponentFactoryType(stringDecl.getType())).toBe(false)
   })
 
   it("should recognize component usage in analyzeElementCall", () => {

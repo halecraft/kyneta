@@ -3,6 +3,7 @@
 // safe-integer validation, set union merge properties, generation
 // counter, and version vector maintenance.
 
+import { nth } from "@kyneta/datalog"
 import { describe, expect, it } from "vitest"
 import { createCnId } from "../../src/kernel/cnid.js"
 import { STUB_SIGNATURE } from "../../src/kernel/signature.js"
@@ -521,7 +522,7 @@ describe("Constraint Store", () => {
 
       const structures = constraintsByType(store, "structure")
       // TypeScript should narrow this to StructureConstraint[]
-      const first = structures[0]!
+      const first = nth(structures, 0)
       expect(first.payload.kind).toBe("root")
       // If narrowing works, we can access StructurePayload fields directly
       if (first.payload.kind === "root") {

@@ -19,6 +19,8 @@
 // matches. `matchedAtom` stays module-internal; it has no consumer out here.
 export type { ArityAnalysis } from "./arity.js"
 export { analyzeArity } from "./arity.js"
+// --- Result ---
+export { lookup, nth } from "./checked.js"
 // --- The engine ---
 export type { Evaluator } from "./evaluator.js"
 export {
@@ -37,7 +39,6 @@ export type {
   HostFunction,
 } from "./host.js"
 export { declarationErrors, hostErrors } from "./host.js"
-// --- Result ---
 export type { Result } from "./result.js"
 export { err, ok } from "./result.js"
 // --- Stratification ---

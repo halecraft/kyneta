@@ -16,9 +16,11 @@ import {
   eq,
   fact,
   gt,
+  lookup,
   rule as makeRule,
   negation,
   neq,
+  nth,
   positiveAtom,
   rule,
   varTerm,
@@ -173,7 +175,7 @@ const structures = [root, child1]
 function buildSlotId(): string {
   const all: Constraint[] = [...structures]
   const index = buildStructureIndex(all)
-  return index.structureToSlot.get(cnIdKey(child1.id))!
+  return lookup(index.structureToSlot, cnIdKey(child1.id))
 }
 
 const slotId = buildSlotId()
@@ -185,13 +187,13 @@ const slotId = buildSlotId()
 describe("extractRuleDeltasFromActive", () => {
   it("extracts rule constraints from active delta", () => {
     const lwwRules = buildDefaultLWWRules()
-    const rc = makeRuleConstraint("alice", 10, 1, lwwRules[0]!)
+    const rc = makeRuleConstraint("alice", 10, 1, nth(lwwRules, 0))
     const activeDelta: ZSet<Constraint> = zsetSingleton(cnIdKey(rc.id), rc, 1)
 
     const ruleDeltas = extractRuleDeltasFromActive(activeDelta)
     expect(zsetSize(ruleDeltas)).toBe(1)
 
-    const entry = [...ruleDeltas.values()][0]!
+    const entry = nth([...ruleDeltas.values()], 0)
     expect(entry.weight).toBe(1)
     expect(entry.element.head.predicate).toBe(lwwRules[0]?.head.predicate)
   })
@@ -206,19 +208,19 @@ describe("extractRuleDeltasFromActive", () => {
 
   it("preserves weight for retracted rules", () => {
     const lwwRules = buildDefaultLWWRules()
-    const rc = makeRuleConstraint("alice", 10, 1, lwwRules[0]!)
+    const rc = makeRuleConstraint("alice", 10, 1, nth(lwwRules, 0))
     const activeDelta: ZSet<Constraint> = zsetSingleton(cnIdKey(rc.id), rc, -1)
 
     const ruleDeltas = extractRuleDeltasFromActive(activeDelta)
     expect(zsetSize(ruleDeltas)).toBe(1)
-    const entry = [...ruleDeltas.values()][0]!
+    const entry = nth([...ruleDeltas.values()], 0)
     expect(entry.weight).toBe(-1)
   })
 
   it("extracts multiple rules from mixed delta", () => {
     const lwwRules = buildDefaultLWWRules()
-    const rc1 = makeRuleConstraint("alice", 10, 1, lwwRules[0]!)
-    const rc2 = makeRuleConstraint("alice", 11, 1, lwwRules[1]!)
+    const rc1 = makeRuleConstraint("alice", 10, 1, nth(lwwRules, 0))
+    const rc2 = makeRuleConstraint("alice", 11, 1, nth(lwwRules, 1))
     const val = makeValue("alice", 3, child1.id, "Hello", 10)
 
     let activeDelta: ZSet<Constraint> = zsetEmpty()
@@ -300,7 +302,7 @@ describe("IncrementalEvaluation", () => {
       )
 
       expect(zsetSize(deltaResolved)).toBe(1)
-      const winnerEntry = [...deltaResolved.values()][0]!
+      const winnerEntry = nth([...deltaResolved.values()], 0)
       expect(winnerEntry.weight).toBe(1)
       expect(winnerEntry.element.slotId).toBe(slotId)
       expect(winnerEntry.element.content).toBe("Hello")
@@ -325,7 +327,7 @@ describe("IncrementalEvaluation", () => {
       )
 
       expect(zsetSize(deltaResolved)).toBe(1)
-      const entry = [...deltaResolved.values()][0]!
+      const entry = nth([...deltaResolved.values()], 0)
       expect(entry.weight).toBe(1)
       expect(entry.element.content).toBe("World")
     })
@@ -390,7 +392,7 @@ describe("IncrementalEvaluation", () => {
 
       // Should have one pair
       expect(zsetSize(r2.deltaFuguePairs)).toBe(1)
-      const pairEntry = [...r2.deltaFuguePairs.values()][0]!
+      const pairEntry = nth([...r2.deltaFuguePairs.values()], 0)
       expect(pairEntry.weight).toBe(1)
       expect(pairEntry.element.parentKey).toBe(parentKey)
     })

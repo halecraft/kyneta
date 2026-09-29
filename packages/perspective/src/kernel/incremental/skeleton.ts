@@ -186,7 +186,7 @@ export function createIncrementalSkeleton(
     const existing = nodeBySlot.get(group.slotId)
     if (existing !== undefined) return existing
 
-    const representative = group.structures[0]!
+    const [representative] = group.structures
     const payload = representative.payload
 
     if (payload.kind === "root") {
@@ -331,18 +331,17 @@ export function createIncrementalSkeleton(
     const index = getIndex()
     const childSlotGroups = getChildrenOfSlotGroup(index, parentGroup)
 
-    if (childSlotGroups.size === 0) return
-
     // Determine child kind from first child.
-    const firstChild = childSlotGroups.values().next().value!
-    const childKind = firstChild.structures[0]?.payload.kind
+    const [firstChild] = childSlotGroups.values()
+    if (firstChild === undefined) return
+    const childKind = firstChild.structures[0].payload.kind
 
     if (childKind === "seq") {
       // For seq children, collect all and mark for reordering.
       for (const childGroup of childSlotGroups.values()) {
         if (!nodeBySlot.has(childGroup.slotId)) {
           // Create the node (but don't add to parent — reorder handles it).
-          const childRep = childGroup.structures[0]!
+          const [childRep] = childGroup.structures
           const childNode: MutableNode = {
             id: childRep.id,
             policy: childGroup.policy,
@@ -560,15 +559,14 @@ export function createIncrementalSkeleton(
     const index = getIndex()
     const group = index.slotGroups.get(slotId)
     const isSeqChild =
-      group !== undefined && group.structures[0]?.payload.kind === "seq"
+      group !== undefined && group.structures[0].payload.kind === "seq"
 
     node.value = newValue
 
     if (isSeqChild) {
       // Mark the seq parent for reordering (handles visibility).
       if (parentNode !== undefined && group !== undefined) {
-        // biome-ignore lint/style/noNonNullAssertion: group is non-empty when parentNode is defined
-        const parentPayload = group.structures[0]!.payload
+        const parentPayload = group.structures[0].payload
         if (parentPayload.kind === "seq") {
           seqParentsToReorder.add(cnIdKey(parentPayload.parent))
         }

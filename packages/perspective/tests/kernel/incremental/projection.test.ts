@@ -24,7 +24,7 @@ import {
   zsetFromEntries,
   zsetSingleton,
 } from "@kyneta/zset"
-import { describe, expect, it } from "vitest"
+import { assert, describe, expect, it } from "vitest"
 import { cnIdKey, createCnId } from "../../../src/kernel/cnid.js"
 import { createIncrementalProjection } from "../../../src/kernel/incremental/projection.js"
 import { createIncrementalStructureIndex } from "../../../src/kernel/incremental/structure-index.js"
@@ -268,10 +268,10 @@ function assertFactsEqual(
 function permutations<T>(arr: T[]): T[][] {
   if (arr.length <= 1) return [arr]
   const result: T[][] = []
-  for (let i = 0; i < arr.length; i++) {
+  for (const [i, head] of arr.entries()) {
     const rest = [...arr.slice(0, i), ...arr.slice(i + 1)]
     for (const perm of permutations(rest)) {
-      result.push([arr[i]!, ...perm])
+      result.push([head, ...perm])
     }
   }
   return result
@@ -1086,8 +1086,8 @@ describe("IncrementalProjection", () => {
       // The single factKey should correspond to the active_value fact.
       const facts = h.projection.current()
       const valueFact = facts.find(f => f.predicate === ACTIVE_VALUE.predicate)
-      expect(valueFact).toBeDefined()
-      expect(factKeys?.has(factKey(valueFact!))).toBe(true)
+      assert.exists(valueFact)
+      expect(factKeys?.has(factKey(valueFact))).toBe(true)
     })
 
     it("returns factKeys for a projected seq structure constraint", () => {

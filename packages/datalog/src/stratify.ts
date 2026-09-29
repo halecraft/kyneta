@@ -19,6 +19,7 @@
 // - `packages/perspective/.plans/007-partitioned-settling.md` § Phase 1
 
 import { analyzeArity, matchedAtom } from "./arity.js"
+import { lookup, nth } from "./checked.js"
 import {
   type ForeignRelation,
   foreignRelations,
@@ -198,13 +199,13 @@ function strongconnect(
       strongconnect(w, graph, state)
       state.lowlinks.set(
         v,
-        Math.min(state.lowlinks.get(v)!, state.lowlinks.get(w)!),
+        Math.min(lookup(state.lowlinks, v), lookup(state.lowlinks, w)),
       )
     } else if (state.onStack.has(w)) {
       // w is on stack and hence in the current SCC
       state.lowlinks.set(
         v,
-        Math.min(state.lowlinks.get(v)!, state.indices.get(w)!),
+        Math.min(lookup(state.lowlinks, v), lookup(state.indices, w)),
       )
     }
   }
@@ -212,12 +213,12 @@ function strongconnect(
   // If v is a root node, pop the SCC
   if (state.lowlinks.get(v) === state.indices.get(v)) {
     const scc: string[] = []
-    let w: string
-    do {
-      w = state.stack.pop()!
+    // v is on the stack, so the loop stops at it.
+    for (let w = state.stack.pop(); w !== undefined; w = state.stack.pop()) {
       state.onStack.delete(w)
       scc.push(w)
-    } while (w !== v)
+      if (w === v) break
+    }
     state.sccs.push(scc)
   }
 }
@@ -279,11 +280,12 @@ export function stratify(
   // does it fit its host, does it agree with itself about shapes, and does
   // its negation terminate. The first two are pure functions of the rules;
   // the third needs the dependency graph built below.
-  const problems = hostErrors(rules, host)
-  if (problems.length > 0) return err(problems[0]!)
+  const [problem] = hostErrors(rules, host)
+  if (problem !== undefined) return err(problem)
 
   const shapes = analyzeArity(rules, host)
-  if (shapes.errors.length > 0) return err(shapes.errors[0]!)
+  const [shapeError] = shapes.errors
+  if (shapeError !== undefined) return err(shapeError)
 
   const foreign = foreignRelations(host)
   if (rules.length === 0 && foreign.length === 0) {
@@ -304,8 +306,8 @@ export function stratify(
   // Step 2: Build the condensation DAG (SCC graph) and assign strata.
   // Each SCC becomes a node. Edges between SCCs inherit the negative flag.
   const predicateToScc = new Map<string, number>()
-  for (let i = 0; i < sccs.length; i++) {
-    for (const pred of sccs[i]!) {
+  for (const [i, scc] of sccs.entries()) {
+    for (const pred of scc) {
       predicateToScc.set(pred, i)
     }
   }
@@ -318,8 +320,7 @@ export function stratify(
   const sccLevel = new Array<number>(sccs.length).fill(0)
 
   // Process SCCs in forward order (leaves/dependencies first)
-  for (let i = 0; i < sccs.length; i++) {
-    const scc = sccs[i]!
+  for (const [i, scc] of sccs.entries()) {
     let maxLevel = 0
 
     for (const pred of scc) {
@@ -331,7 +332,7 @@ export function stratify(
         // Skip self-SCC edges (already handled by cyclic negation check)
         if (targetScc === i) continue
 
-        const targetLevel = sccLevel[targetScc]!
+        const targetLevel = nth(sccLevel, targetScc)
         if (edge.negative) {
           // Negative dependency: must be strictly greater
           maxLevel = Math.max(maxLevel, targetLevel + 1)
@@ -368,8 +369,7 @@ export function stratify(
 
   // Group SCC indices by level.
   const sccsByLevel = new Map<number, number[]>()
-  for (let i = 0; i < sccs.length; i++) {
-    const level = sccLevel[i]!
+  for (const [i, level] of sccLevel.entries()) {
     let list = sccsByLevel.get(level)
     if (list === undefined) {
       list = []
@@ -390,8 +390,8 @@ export function stratify(
   // Union-find helpers.
   function find(x: number): number {
     while (sccComponent[x] !== x) {
-      sccComponent[x] = sccComponent[sccComponent[x]!]! // path compression
-      x = sccComponent[x]!
+      sccComponent[x] = nth(sccComponent, nth(sccComponent, x)) // path compression
+      x = nth(sccComponent, x)
     }
     return x
   }
@@ -406,8 +406,8 @@ export function stratify(
 
   // Build a map: derived predicate → SCC index that produces it.
   const derivedPredToScc = new Map<string, number>()
-  for (let i = 0; i < sccs.length; i++) {
-    for (const pred of sccs[i]!) {
+  for (const [i, scc] of sccs.entries()) {
+    for (const pred of scc) {
       if (derivedPredicates.has(pred)) {
         derivedPredToScc.set(pred, i)
       }
@@ -420,7 +420,7 @@ export function stratify(
   for (const rule of rules) {
     const headScc = predicateToScc.get(rule.head.predicate)
     if (headScc === undefined) continue
-    const headLevel = sccLevel[headScc]!
+    const headLevel = nth(sccLevel, headScc)
 
     const bodyPreds = bodyPredicates(rule.body)
     for (const bodyPred of bodyPreds) {
@@ -430,7 +430,7 @@ export function stratify(
       if (bodyScc === headScc) continue // Same SCC — already together.
 
       // Only connect SCCs at the same level.
-      if (sccLevel[bodyScc]! !== headLevel) continue
+      if (nth(sccLevel, bodyScc) !== headLevel) continue
 
       union(headScc, bodyScc)
     }
@@ -446,8 +446,7 @@ export function stratify(
   }
 
   const componentsByLevel = new Map<number, Map<number, ComponentInfo>>()
-  for (let i = 0; i < sccs.length; i++) {
-    const level = sccLevel[i]!
+  for (const [i, level] of sccLevel.entries()) {
     const comp = find(i)
 
     let levelMap = componentsByLevel.get(level)
@@ -464,16 +463,14 @@ export function stratify(
     info.sccIndices.push(i)
   }
 
-  // Sort levels in ascending order.
-  const sortedLevels = [...componentsByLevel.keys()].sort((a, b) => a - b)
+  // Levels in ascending order.
+  const byLevel = [...componentsByLevel].sort(([a], [b]) => a - b)
 
   // Build strata with sequential indices.
   const strata: Stratum[] = []
   let nextIndex = 0
 
-  for (const level of sortedLevels) {
-    const levelMap = componentsByLevel.get(level)!
-
+  for (const [, levelMap] of byLevel) {
     // Sort components deterministically (by smallest SCC index in component).
     const components = [...levelMap.values()].sort(
       (a, b) => Math.min(...a.sccIndices) - Math.min(...b.sccIndices),
@@ -483,7 +480,7 @@ export function stratify(
       // Collect predicates in this component.
       const preds = new Set<string>()
       for (const sccIdx of comp.sccIndices) {
-        for (const pred of sccs[sccIdx]!) {
+        for (const pred of nth(sccs, sccIdx)) {
           preds.add(pred)
         }
       }

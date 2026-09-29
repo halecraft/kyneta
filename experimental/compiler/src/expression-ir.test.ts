@@ -1142,6 +1142,7 @@ describe("renderExpression", () => {
   it("renders a template literal with expression hole", () => {
     // `Hello ${name}!`
     const expr = template([literal("Hello "), identifier("name"), literal("!")])
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: the expected output is template-literal source
     expect(renderExpression(expr, noExpand)).toBe("`Hello ${name}!`")
   })
 
@@ -1156,6 +1157,7 @@ describe("renderExpression", () => {
       identifier("c"),
       literal(""),
     ])
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: the expected output is template-literal source
     expect(renderExpression(expr, noExpand)).toBe("`${a} + ${b} = ${c}`")
   })
 
@@ -1166,6 +1168,7 @@ describe("renderExpression", () => {
       refRead(identifier("count"), "increment"),
       literal(""),
     ])
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: the expected output is template-literal source
     expect(renderExpression(expr, noExpand)).toBe("`Count: ${count()}`")
   })
 

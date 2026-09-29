@@ -165,12 +165,11 @@ export function createIncrementalProjection(
    */
   function projectSeqStructure(sc: StructureConstraint): {
     facts: Fact[]
-    keys: string[]
     constraintKey: string
   } {
     const payload = sc.payload
     if (payload.kind !== "seq")
-      return { facts: [], keys: [], constraintKey: cnIdKey(sc.id) }
+      return { facts: [], constraintKey: cnIdKey(sc.id) }
 
     const seqFact = fact(ACTIVE_STRUCTURE_SEQ.predicate, [
       cnIdKey(sc.id),
@@ -186,7 +185,6 @@ export function createIncrementalProjection(
 
     return {
       facts: [seqFact, peerFact],
-      keys: [factKey(seqFact), factKey(peerFact)],
       constraintKey: cnIdKey(sc.id),
     }
   }
@@ -322,12 +320,13 @@ export function createIncrementalProjection(
           }
         } else if (c.type === "structure") {
           const sc = c as StructureConstraint
-          const { facts, keys, constraintKey } = projectSeqStructure(sc)
+          const { facts, constraintKey } = projectSeqStructure(sc)
 
-          for (let i = 0; i < facts.length; i++) {
-            accFacts.set(keys[i]!, facts[i]!)
-            trackFact(constraintKey, keys[i]!)
-            factChanges.push([keys[i]!, { element: facts[i]!, weight: 1 }])
+          for (const f of facts) {
+            const key = factKey(f)
+            accFacts.set(key, f)
+            trackFact(constraintKey, key)
+            factChanges.push([key, { element: f, weight: 1 }])
           }
         }
         // Other constraint types (retract, rule, authority, bookmark)
@@ -352,12 +351,13 @@ export function createIncrementalProjection(
           }
         } else if (c.type === "structure") {
           const sc = c as StructureConstraint
-          const { facts, keys, constraintKey } = projectSeqStructure(sc)
+          const { facts, constraintKey } = projectSeqStructure(sc)
 
-          for (let i = 0; i < facts.length; i++) {
-            accFacts.delete(keys[i]!)
-            untrackFact(constraintKey, keys[i]!)
-            factChanges.push([keys[i]!, { element: facts[i]!, weight: -1 }])
+          for (const f of facts) {
+            const key = factKey(f)
+            accFacts.delete(key)
+            untrackFact(constraintKey, key)
+            factChanges.push([key, { element: f, weight: -1 }])
           }
         }
       }

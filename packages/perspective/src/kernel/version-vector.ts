@@ -333,27 +333,20 @@ export function vvTotalOps(vv: VersionVector): number {
  * Empty input returns an empty VV.
  */
 export function vvMin(vvs: readonly VersionVector[]): MutableVersionVector {
-  if (vvs.length === 0) return createVersionVector()
-
   const result = createVersionVector()
+  const [first, ...rest] = vvs
+  if (first === undefined) return result
 
-  // Start with the peers from the first VV
-  const first = vvs[0]!
+  // Start with the peers from the first VV; a peer absent from any other
+  // has a minimum of 0.
   for (const [peer, counter] of first) {
     let min = counter
-    let presentInAll = true
-    for (let i = 1; i < vvs.length; i++) {
-      const vv = vvs[i]!
-      if (!vv.has(peer)) {
-        presentInAll = false
-        break
-      }
-      const c = vv.get(peer)!
+    for (const vv of rest) {
+      const c = vv.get(peer) ?? 0
       if (c < min) min = c
+      if (min === 0) break
     }
-    if (presentInAll && min > 0) {
-      result.set(peer, min)
-    }
+    if (min > 0) result.set(peer, min)
   }
 
   return result

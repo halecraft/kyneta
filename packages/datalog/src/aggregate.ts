@@ -33,7 +33,7 @@ import { knownPositions, matchAtomWithTuple, probeFor } from "./unify.js"
 // ---------------------------------------------------------------------------
 
 /**
- * Resolve the grouping variables to their bound values.
+ * Resolve the grouping variables to their bound values, in `groupBy` order.
  *
  * Returns `null` if any grouping variable is unbound — such a substitution
  * cannot form a group and is skipped. A variable *bound to null* is a
@@ -45,19 +45,19 @@ import { knownPositions, matchAtomWithTuple, probeFor } from "./unify.js"
  * (a group keyed on nothing). That was harmless only because the key was
  * always computed first; resolving once removes the trap.
  */
-function resolveGroupValues(
+function resolveGroupBindings(
   groupBy: readonly string[],
   sub: Substitution,
-): Value[] | null {
-  const values: Value[] = []
+): Map<string, Value> | null {
+  const bindings = new Map<string, Value>()
   for (const varName of groupBy) {
     const val = sub.bindings.get(varName)
     if (val === undefined && !sub.bindings.has(varName)) {
       return null
     }
-    values.push(val === undefined ? null : val)
+    bindings.set(varName, val === undefined ? null : val)
   }
-  return values
+  return bindings
 }
 
 // ---------------------------------------------------------------------------
@@ -65,8 +65,8 @@ function resolveGroupValues(
 // ---------------------------------------------------------------------------
 
 interface AggregationGroup {
-  /** The bound values for groupBy variables. */
-  readonly groupVals: Value[]
+  /** The groupBy variables' bound values. */
+  readonly bindings: ReadonlyMap<string, Value>
   /** All values of the `over` variable in this group. */
   readonly overValues: Value[]
 }
@@ -120,9 +120,9 @@ export function evaluateAggregation(
     if (matched === null) continue
 
     // Resolve the grouping variables once; the key is derived from them.
-    const groupVals = resolveGroupValues(agg.groupBy, matched)
-    if (groupVals === null) continue
-    const key = serializeTuple(groupVals)
+    const bindings = resolveGroupBindings(agg.groupBy, matched)
+    if (bindings === null) continue
+    const key = serializeTuple([...bindings.values()])
 
     // Extract the `over` variable value
     const overVal = matched.bindings.get(agg.over)
@@ -134,7 +134,7 @@ export function evaluateAggregation(
 
     let group = groups.get(key)
     if (group === undefined) {
-      group = { groupVals, overValues: [] }
+      group = { bindings, overValues: [] }
       groups.set(key, group)
     }
     // Mutable push — we own the array
@@ -154,10 +154,7 @@ export function evaluateAggregation(
 
     // Build substitution: baseSub bindings + groupBy bindings + result binding.
     // Output weight = 1 (aggregation is a group-by boundary).
-    const sub = new Map(baseSub.bindings)
-    for (let i = 0; i < agg.groupBy.length; i++) {
-      sub.set(agg.groupBy[i]!, group.groupVals[i]!)
-    }
+    const sub = new Map([...baseSub.bindings, ...group.bindings])
     sub.set(agg.result, aggResult)
     results.push({ bindings: sub, weight: 1 })
   }
@@ -239,37 +236,30 @@ function computeSum(values: readonly Value[]): Value | undefined {
 }
 
 function computeMin(values: readonly Value[]): Value | undefined {
-  if (values.length === 0) return undefined
-
-  let best: Value = values[0]!
-  for (let i = 1; i < values.length; i++) {
-    const v = values[i]!
-    const cmp = compareValues(v, best)
-    if (Number.isNaN(cmp)) {
-      // Incompatible types — type error
-      return undefined
-    }
-    if (cmp < 0) {
-      best = v
-    }
-  }
-  return best
+  return computeExtremum(values, cmp => cmp < 0)
 }
 
 function computeMax(values: readonly Value[]): Value | undefined {
-  if (values.length === 0) return undefined
+  return computeExtremum(values, cmp => cmp > 0)
+}
 
-  let best: Value = values[0]!
-  for (let i = 1; i < values.length; i++) {
-    const v = values[i]!
-    const cmp = compareValues(v, best)
-    if (Number.isNaN(cmp)) {
-      // Incompatible types — type error
-      return undefined
-    }
-    if (cmp > 0) {
+/**
+ * The value that beats every other by `beats`, or `undefined` for no values
+ * or values of incompatible types (a type error).
+ */
+function computeExtremum(
+  values: readonly Value[],
+  beats: (cmp: number) => boolean,
+): Value | undefined {
+  let best: Value | undefined
+  for (const v of values) {
+    if (best === undefined) {
       best = v
+      continue
     }
+    const cmp = compareValues(v, best)
+    if (Number.isNaN(cmp)) return undefined
+    if (beats(cmp)) best = v
   }
   return best
 }

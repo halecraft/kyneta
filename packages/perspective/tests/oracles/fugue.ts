@@ -264,9 +264,8 @@ function buildPositionMap(
     return an.id.counter - bn.id.counter
   })
 
-  for (let i = 0; i < preliminary.length; i++) {
-    // biome-ignore lint/style/noNonNullAssertion: index is within bounds of the array we're iterating
-    posMap.set(preliminary[i]!.node.idKey, i)
+  for (const [i, entry] of preliminary.entries()) {
+    posMap.set(entry.node.idKey, i)
   }
 
   return posMap

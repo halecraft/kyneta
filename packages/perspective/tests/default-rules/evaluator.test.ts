@@ -19,8 +19,10 @@ import {
   fact,
   factKey,
   factsToZSet,
+  lookup,
   lt,
   neq,
+  nth,
   positiveAtom,
   rule,
   varTerm,
@@ -105,7 +107,7 @@ describe("the default rule program", () => {
       expect(zsetIsEmpty(winners)).toBe(false)
       expect(zsetSize(winners)).toBe(1)
 
-      const winnerEntry = [...winners.values()][0]!
+      const winnerEntry = nth([...winners.values()], 0)
       expect(winnerEntry.weight).toBe(1)
       expect(winnerEntry.element.slotId).toBe(slotId)
       expect(winnerEntry.element.content).toBe("Hello")
@@ -128,7 +130,7 @@ describe("the default rule program", () => {
       // The new winner should be bob's value.
       const resolution = extractResolution(evaluator.currentDatabase())
       expect(resolution.winners.size).toBe(1)
-      const winner = resolution.winners.get(slotId)!
+      const winner = lookup(resolution.winners, slotId)
       expect(winner.content).toBe("World")
       expect(winner.winnerCnIdKey).toBe(cnIdKey(createCnId("bob", 1)))
     })
@@ -303,7 +305,7 @@ describe("the default rule program", () => {
       // Compare winners across all three.
       const batchWinners = new Map<string, Value>()
       for (const tuple of batchDb.getRelation("winner").tuples()) {
-        batchWinners.set(tuple[0] as string, tuple[2]!)
+        batchWinners.set(tuple[0] as string, nth(tuple, 2))
       }
 
       const singleStepWinners = extractResolution(
@@ -338,7 +340,7 @@ describe("the default rule program", () => {
       evaluator.step(factsToZSet(facts))
 
       const incRes = extractResolution(evaluator.currentDatabase())
-      const batchWinner = batchDb.getRelation("winner").tuples()[0]!
+      const batchWinner = nth(batchDb.getRelation("winner").tuples(), 0)
 
       expect(incRes.winners.size).toBe(1)
       expect(incRes.winners.get(slotId)?.content).toBe(batchWinner[2])
@@ -354,7 +356,10 @@ describe("the default rule program", () => {
       ]
       const batchResult = evaluate(lwwRules, facts)
       if (!batchResult.ok) throw new Error("batch eval failed")
-      const batchWinner = batchResult.value.getRelation("winner").tuples()[0]!
+      const batchWinner = nth(
+        batchResult.value.getRelation("winner").tuples(),
+        0,
+      )
 
       const viaHelper = createEvaluator(lwwRules)
       viaHelper.step(factsToZSet(facts))
@@ -373,7 +378,9 @@ describe("the default rule program", () => {
           ?.content,
       ).toBe(batchWinner[2])
       // And a retraction keyed the same way is honoured.
-      viaSingletons.step(zsetSingleton(factKey(facts[1]!), facts[1]!, -1))
+      viaSingletons.step(
+        zsetSingleton(factKey(nth(facts, 1)), nth(facts, 1), -1),
+      )
       expect(
         extractResolution(viaSingletons.currentDatabase()).winners.get(slotId)
           ?.content,
@@ -454,7 +461,7 @@ describe("the default rule program", () => {
       for (const tuple of batchDb.getRelation("winner").tuples()) {
         batchWinners.set(tuple[0] as string, {
           slotId: tuple[0] as string,
-          content: tuple[2]!,
+          content: nth(tuple, 2),
         })
       }
 
@@ -486,7 +493,7 @@ describe("the default rule program", () => {
       const batchResult = evaluate(lwwRules, facts)
       if (!batchResult.ok) throw new Error("batch eval failed")
       const batchDb = batchResult.value
-      const batchWinnerTuple = batchDb.getRelation("winner").tuples()[0]!
+      const batchWinnerTuple = nth(batchDb.getRelation("winner").tuples(), 0)
       const expectedContent = batchWinnerTuple[2]
 
       for (const perm of permutations(facts)) {
@@ -617,8 +624,14 @@ describe("the default rule program", () => {
 
       // Remove default superseded rules, add custom one.
       let ruleDelta = zsetEmpty<Rule>()
-      ruleDelta = zsetAdd(ruleDelta, zsetSingleton("rule1", lwwRules[0]!, -1))
-      ruleDelta = zsetAdd(ruleDelta, zsetSingleton("rule2", lwwRules[1]!, -1))
+      ruleDelta = zsetAdd(
+        ruleDelta,
+        zsetSingleton("rule1", nth(lwwRules, 0), -1),
+      )
+      ruleDelta = zsetAdd(
+        ruleDelta,
+        zsetSingleton("rule2", nth(lwwRules, 1), -1),
+      )
       ruleDelta = zsetAdd(ruleDelta, zsetSingleton("rule3", customRule, 1))
 
       evaluator.changeRules(ruleDelta)

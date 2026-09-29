@@ -94,7 +94,7 @@ export interface IncrementalStructureIndex {
 
 interface MutableSlotGroup {
   readonly slotId: string
-  readonly structures: StructureConstraint[]
+  readonly structures: [StructureConstraint, ...StructureConstraint[]]
   readonly structureKeys: Set<string>
   readonly policy: Policy
   readonly childKey: string
@@ -145,10 +145,10 @@ export function createIncrementalStructureIndex(): IncrementalStructureIndex {
 
   /**
    * Process a single structure constraint entering the system.
-   * Returns the slotId of the created/modified group, or null if
-   * the constraint was a duplicate.
+   * Returns the group it created or joined, or null if the constraint was a
+   * duplicate.
    */
-  function addStructure(sc: StructureConstraint): string | null {
+  function addStructure(sc: StructureConstraint): MutableSlotGroup | null {
     const scKey = cnIdKey(sc.id)
 
     // Dedup — already indexed
@@ -164,44 +164,39 @@ export function createIncrementalStructureIndex(): IncrementalStructureIndex {
     // Map CnId → slot
     structureToSlot.set(scKey, sid)
 
-    // Find or create slot group
-    let group = slotGroups.get(sid)
-    const isNewGroup = group === undefined
-
-    if (isNewGroup) {
-      group = {
-        slotId: sid,
-        structures: [],
-        structureKeys: new Set(),
-        policy: policyOf(sc),
-        childKey: ckey,
-      }
-      slotGroups.set(sid, group)
+    // Join an existing slot group: the root/children topology is unchanged.
+    const existing = slotGroups.get(sid)
+    if (existing !== undefined) {
+      existing.structures.push(sc)
+      existing.structureKeys.add(scKey)
+      return existing
     }
 
-    // Add structure to group
-    group?.structures.push(sc)
-    group?.structureKeys.add(scKey)
+    const group: MutableSlotGroup = {
+      slotId: sid,
+      structures: [sc],
+      structureKeys: new Set([scKey]),
+      policy: policyOf(sc),
+      childKey: ckey,
+    }
+    slotGroups.set(sid, group)
 
-    // Update root/children indexes (only for new groups — joining an
-    // existing group doesn't change the root/children topology)
-    if (isNewGroup) {
-      const payload = sc.payload
-      if (payload.kind === "root") {
-        roots.set(payload.containerId, group!)
-      } else {
-        // Map or Seq child — index under parent
-        const parentKey = cnIdKey(payload.parent)
-        let children = childrenOf.get(parentKey)
-        if (children === undefined) {
-          children = new Map()
-          childrenOf.set(parentKey, children)
-        }
-        children.set(sid, group!)
+    // A new group enters the root/children indexes.
+    const payload = sc.payload
+    if (payload.kind === "root") {
+      roots.set(payload.containerId, group)
+    } else {
+      // Map or Seq child — index under parent
+      const parentKey = cnIdKey(payload.parent)
+      let children = childrenOf.get(parentKey)
+      if (children === undefined) {
+        children = new Map()
+        childrenOf.set(parentKey, children)
       }
+      children.set(sid, group)
     }
 
-    return sid
+    return group
   }
 
   // --- Public interface ---
@@ -217,15 +212,9 @@ export function createIncrementalStructureIndex(): IncrementalStructureIndex {
       if (entry.weight <= 0) return
       if (entry.element.type !== "structure") return
 
-      const sc = entry.element as StructureConstraint
-      const sid = addStructure(sc)
-
-      if (sid !== null) {
-        // The group was created or modified — include in delta.
-        // We cast the mutable group to SlotGroup (readonly interface).
-        const group = slotGroups.get(sid)!
-        updatedSlotIds.set(sid, group as SlotGroup)
-      }
+      const group = addStructure(entry.element as StructureConstraint)
+      // The group was created or modified — include in delta.
+      if (group !== null) updatedSlotIds.set(group.slotId, group)
     })
 
     if (updatedSlotIds.size === 0) return structureIndexDeltaEmpty()

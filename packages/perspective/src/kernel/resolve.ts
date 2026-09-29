@@ -16,6 +16,7 @@
 // See unified-engine.md §7.2, §B.4.
 
 import type { Database, Fact, FactTuple } from "@kyneta/datalog"
+import { lookup, nth } from "@kyneta/datalog"
 import type { ZSet, ZSetEntry } from "@kyneta/zset"
 import { zsetFilter, zsetFromEntries, zsetMap } from "@kyneta/zset"
 import type { Value } from "./types.js"
@@ -292,8 +293,7 @@ export function topologicalOrderFromPairs(
   pairs: readonly FugueBeforePair[],
   allElementKeys: readonly string[],
 ): string[] {
-  if (allElementKeys.length === 0) return []
-  if (allElementKeys.length === 1) return [allElementKeys[0]!]
+  if (allElementKeys.length <= 1) return [...allElementKeys]
 
   // Build adjacency list and in-degree count.
   const adj = new Map<string, string[]>()
@@ -308,10 +308,12 @@ export function topologicalOrderFromPairs(
   // Add edges from before-pairs.
   for (const pair of pairs) {
     // Only include edges for elements that are in our set.
-    if (!inDegree.has(pair.a) || !inDegree.has(pair.b)) continue
+    const degree = inDegree.get(pair.b)
+    const successors = adj.get(pair.a)
+    if (degree === undefined || successors === undefined) continue
 
-    adj.get(pair.a)?.push(pair.b)
-    inDegree.set(pair.b, inDegree.get(pair.b)! + 1)
+    successors.push(pair.b)
+    inDegree.set(pair.b, degree + 1)
   }
 
   // Kahn's algorithm with deterministic tie-breaking (sort by key).
@@ -326,14 +328,17 @@ export function topologicalOrderFromPairs(
 
   const result: string[] = []
 
-  while (queue.length > 0) {
-    const current = queue.shift()!
+  for (
+    let current = queue.shift();
+    current !== undefined;
+    current = queue.shift()
+  ) {
     result.push(current)
 
     const neighbors = adj.get(current)
     if (neighbors !== undefined) {
       for (const neighbor of neighbors) {
-        const newDeg = inDegree.get(neighbor)! - 1
+        const newDeg = lookup(inDegree, neighbor) - 1
         inDegree.set(neighbor, newDeg)
         if (newDeg === 0) {
           // Insert in sorted position for determinism.
@@ -362,7 +367,7 @@ function insertSorted(arr: string[], value: string): void {
   let hi = arr.length
   while (lo < hi) {
     const mid = (lo + hi) >>> 1
-    if (arr[mid]! < value) {
+    if (nth(arr, mid) < value) {
       lo = mid + 1
     } else {
       hi = mid

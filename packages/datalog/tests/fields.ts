@@ -11,6 +11,7 @@
 //
 // Not a test file: vitest only collects `*.test.ts`.
 
+import { nth } from "../src/checked.js"
 import type { FactTuple, ForeignRelation, Probe, Value } from "../src/index.js"
 import { serializeTuple, valuesEqual } from "../src/index.js"
 
@@ -30,17 +31,19 @@ export const DISTANCE_FIELD: ForeignRelation = {
     const out: FactTuple[] = []
     const seen = new Set<string>()
     const queue: [Value, Value, number][] = []
-    for (const [x, y] of read.getRelation("origin").tuples()) {
-      const key = serializeTuple([x!, y!])
+    for (const origin of read.getRelation("origin").tuples()) {
+      const x = nth(origin, 0)
+      const y = nth(origin, 1)
+      const key = serializeTuple([x, y])
       if (seen.has(key)) continue
       seen.add(key)
-      queue.push([x!, y!, 0])
+      queue.push([x, y, 0])
     }
 
     // An origin's own tile is measured even when blocked, so that whatever
     // stands there can read its own distance; nothing steps through it.
-    for (let head = 0; head < queue.length; head++) {
-      const [x, y, d] = queue[head]!
+    // Iterating the queue while it grows visits what is pushed, in order.
+    for (const [x, y, d] of queue) {
       out.push([x, y, d])
 
       const probe: Probe = {
@@ -49,9 +52,10 @@ export const DISTANCE_FIELD: ForeignRelation = {
       }
       for (const { tuple } of adj.candidates(probe, false)) {
         // Candidates are a superset; confirm the probed positions.
-        if (!valuesEqual(tuple[0]!, x) || !valuesEqual(tuple[1]!, y)) continue
-        const nx = tuple[2]!
-        const ny = tuple[3]!
+        if (!valuesEqual(nth(tuple, 0), x) || !valuesEqual(nth(tuple, 1), y))
+          continue
+        const nx = nth(tuple, 2)
+        const ny = nth(tuple, 3)
         const key = serializeTuple([nx, ny])
         if (seen.has(key)) continue
         seen.add(key)

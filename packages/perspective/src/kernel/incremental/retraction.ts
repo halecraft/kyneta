@@ -265,9 +265,9 @@ export function createIncrementalRetraction(
 
     // BFS: if a retract constraint's status might change, its
     // target's status might also change.
+    // Iterating the queue while it grows visits what is pushed, in order.
     const queue = [...seedKeys]
-    while (queue.length > 0) {
-      const key = queue.shift()!
+    for (const key of queue) {
       // If key is a retract, its target might be affected
       const c = allByKey.get(key)
       if (c !== undefined && c.type === "retract") {

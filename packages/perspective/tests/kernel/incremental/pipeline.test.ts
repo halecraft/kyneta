@@ -14,6 +14,7 @@
 // - Multi-removal retraction fix (Task 8.1a): multiple active removals
 //   in a single delta are all processed correctly
 
+import { nth } from "@kyneta/datalog"
 import { zsetFromEntries } from "@kyneta/zset"
 import { describe, expect, it } from "vitest"
 import {
@@ -58,14 +59,17 @@ function getNode(reality: Reality, ...path: string[]): RealityNode | undefined {
   return current
 }
 
-function getSeqValues(reality: Reality, ...containerPath: string[]): Value[] {
+function getSeqValues(
+  reality: Reality,
+  ...containerPath: string[]
+): (Value | undefined)[] {
   const container = getNode(reality, ...containerPath)
   if (container === undefined) return []
-  const values: Value[] = []
+  const values: (Value | undefined)[] = []
   for (let i = 0; ; i++) {
     const child = container.children.get(String(i))
     if (child === undefined) break
-    values.push(child.value!)
+    values.push(child.value)
   }
   return values
 }
@@ -222,7 +226,7 @@ describe("IncrementalPipeline", () => {
 
       // Get a bootstrap constraint and try to re-insert it
       const bootstrapConstraints = allConstraints(result.store)
-      const dup = bootstrapConstraints[0]!
+      const dup = nth(bootstrapConstraints, 0)
 
       const delta = pipeline.insert(dup)
       expect(delta.isEmpty).toBe(true)

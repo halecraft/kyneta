@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { assert, describe, expect, it } from "vitest"
 import { Collection } from "../collection.js"
 import type { SourceEvent } from "../source.js"
 import { Source } from "../source.js"
@@ -401,16 +401,20 @@ describe("Source.flatMap", () => {
 
     outerHandle.set("p1", 1)
     outerHandle.set("p2", 2)
-    innerHandles.get("p1")!.set("shared", "from-p1")
-    innerHandles.get("p2")!.set("shared", "from-p2")
+    const p1 = innerHandles.get("p1")
+    const p2 = innerHandles.get("p2")
+    assert.exists(p1)
+    assert.exists(p2)
+    p1.set("shared", "from-p1")
+    p2.set("shared", "from-p2")
 
     expect(coll.has("shared")).toBe(true)
 
     // Remove p1's inner contribution → p2 still contributes → still present
-    innerHandles.get("p1")!.delete("shared")
+    p1.delete("shared")
     expect(coll.has("shared")).toBe(true)
 
-    innerHandles.get("p2")!.delete("shared")
+    p2.delete("shared")
     expect(coll.has("shared")).toBe(false)
   })
 })

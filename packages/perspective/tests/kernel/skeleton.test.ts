@@ -13,7 +13,7 @@
 // These tests exercise skeleton.ts in isolation, without the full pipeline.
 
 import { evaluate } from "@kyneta/datalog"
-import { describe, expect, it } from "vitest"
+import { assert, describe, expect, it } from "vitest"
 import { buildDefaultRules } from "../../src/bootstrap.js"
 import { cnIdKey, createCnId } from "../../src/kernel/cnid.js"
 import { projectToFacts } from "../../src/kernel/projection.js"
@@ -316,10 +316,10 @@ describe("skeleton: seq tombstones", () => {
     )
 
     const todos = getNode(reality, "todos")
-    expect(todos).toBeDefined()
+    assert.exists(todos)
     // Only one visible child (e1 with value), e2 is a tombstone
     expect(todos?.children.size).toBe(1)
-    expect(getChild(todos!, "0")?.value).toBe("Buy milk")
+    expect(getChild(todos, "0")?.value).toBe("Buy milk")
   })
 
   it("seq with all elements tombstoned has no visible children", () => {
@@ -363,9 +363,9 @@ describe("skeleton: slot group merging (concurrent map creation)", () => {
     )
 
     const profile = getNode(reality, "profile")
-    expect(profile).toBeDefined()
+    assert.exists(profile)
     // Only one "name" key (the slot merges both structures)
-    expect(childKeys(profile!)).toEqual(["name"])
+    expect(childKeys(profile)).toEqual(["name"])
     // Bob's value wins (higher lamport: 10 > 5)
     const name = getNode(reality, "profile", "name")
     expect(name).toBeDefined()
@@ -399,9 +399,9 @@ describe("skeleton: slot group merging (concurrent map creation)", () => {
     )
 
     const settings = getNode(reality, "data", "settings")
-    expect(settings).toBeDefined()
+    assert.exists(settings)
     // Both children should be present (from different structures in same slot group)
-    expect(childKeys(settings!).sort()).toEqual(["lang", "theme"])
+    expect(childKeys(settings).sort()).toEqual(["lang", "theme"])
     expect(getNode(reality, "data", "settings", "theme")?.value).toBe("dark")
     expect(getNode(reality, "data", "settings", "lang")?.value).toBe("en")
   })
@@ -449,11 +449,11 @@ describe("skeleton: mixed nesting", () => {
     )
 
     const tags = getNode(reality, "doc", "tags")
-    expect(tags).toBeDefined()
+    assert.exists(tags)
     expect(tags?.children.size).toBe(2)
     // Seq children keyed by position index
-    expect(getChild(tags!, "0")?.value).toBe("important")
-    expect(getChild(tags!, "1")?.value).toBe("urgent")
+    expect(getChild(tags, "0")?.value).toBe("important")
+    expect(getChild(tags, "1")?.value).toBe("urgent")
   })
 
   it("seq root container", () => {
@@ -470,10 +470,10 @@ describe("skeleton: mixed nesting", () => {
     )
 
     const items = getNode(reality, "items")
-    expect(items).toBeDefined()
+    assert.exists(items)
     expect(items?.children.size).toBe(2)
-    expect(getChild(items!, "0")?.value).toBe("first")
-    expect(getChild(items!, "1")?.value).toBe("second")
+    expect(getChild(items, "0")?.value).toBe("first")
+    expect(getChild(items, "1")?.value).toBe("second")
   })
 
   it("multiple root containers", () => {
@@ -649,11 +649,11 @@ describe("skeleton: ResolutionResult path", () => {
 
     const reality = buildSkeleton(structureIndex, resolution)
     const list = getNode(reality, "list")
-    expect(list).toBeDefined()
+    assert.exists(list)
     expect(list?.children.size).toBe(2)
     // bob-item should come first (position 0) per our fugue_before pairs
-    expect(getChild(list!, "0")?.value).toBe("bob-item")
-    expect(getChild(list!, "1")?.value).toBe("alice-item")
+    expect(getChild(list, "0")?.value).toBe("bob-item")
+    expect(getChild(list, "1")?.value).toBe("alice-item")
   })
 })
 
@@ -739,11 +739,11 @@ describe("skeleton: seq ordering (default Fugue rules)", () => {
     )
 
     const list = getNode(reality, "list")
-    expect(list).toBeDefined()
+    assert.exists(list)
     expect(list?.children.size).toBe(3)
-    expect(getChild(list!, "0")?.value).toBe("A")
-    expect(getChild(list!, "1")?.value).toBe("B")
-    expect(getChild(list!, "2")?.value).toBe("C")
+    expect(getChild(list, "0")?.value).toBe("A")
+    expect(getChild(list, "1")?.value).toBe("B")
+    expect(getChild(list, "2")?.value).toBe("C")
   })
 
   it("concurrent inserts at same position: lower peer goes first", () => {
@@ -761,10 +761,10 @@ describe("skeleton: seq ordering (default Fugue rules)", () => {
     )
 
     const list = getNode(reality, "list")
-    expect(list).toBeDefined()
+    assert.exists(list)
     expect(list?.children.size).toBe(2)
     // 'alice' < 'bob' lexicographically → alice first
-    expect(getChild(list!, "0")?.value).toBe("Alice")
-    expect(getChild(list!, "1")?.value).toBe("Bob")
+    expect(getChild(list, "0")?.value).toBe("Alice")
+    expect(getChild(list, "1")?.value).toBe("Bob")
   })
 })

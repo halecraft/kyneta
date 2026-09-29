@@ -22,7 +22,7 @@ import {
   varTerm,
 } from "@kyneta/datalog"
 import { zsetFromEntries, zsetGet, zsetSize } from "@kyneta/zset"
-import { describe, expect, it } from "vitest"
+import { assert, describe, expect, it } from "vitest"
 import { cnIdKey, createCnId } from "../../src/kernel/cnid.js"
 import {
   type PipelineConfig,
@@ -481,8 +481,10 @@ describe("pipeline: Datalog-primary equivalence", () => {
     const nativeReality = solve(store, CONFIG)
     const datalogReality = solve(store, CONFIG)
 
-    const nativeList = getNode(nativeReality, "list")!
-    const datalogList = getNode(datalogReality, "list")!
+    const nativeList = getNode(nativeReality, "list")
+    assert.exists(nativeList)
+    const datalogList = getNode(datalogReality, "list")
+    assert.exists(datalogList)
 
     // Both should have 2 children.
     expect(nativeList.children.size).toBe(2)
@@ -511,8 +513,10 @@ describe("pipeline: Datalog-primary equivalence", () => {
     const datalogReality = solve(store, CONFIG)
 
     // null wins → key absent from reality
-    const nativeProfile = getNode(nativeReality, "profile")!
-    const datalogProfile = getNode(datalogReality, "profile")!
+    const nativeProfile = getNode(nativeReality, "profile")
+    assert.exists(nativeProfile)
+    const datalogProfile = getNode(datalogReality, "profile")
+    assert.exists(datalogProfile)
     expect(nativeProfile.children.has("name")).toBe(false)
     expect(datalogProfile.children.has("name")).toBe(false)
   })
@@ -893,7 +897,8 @@ describe("pipeline: resolution metadata in PipelineResult", () => {
     const winners = result.resolutionResult.winners
     expect(winners.size).toBe(1)
 
-    const winner = Array.from(winners.values())[0]!
+    const winner = Array.from(winners.values())[0]
+    assert.exists(winner)
     expect(winner.content).toBe("Alice")
     expect(winner.winnerCnIdKey).toBe(cnIdKey(val.id))
   })

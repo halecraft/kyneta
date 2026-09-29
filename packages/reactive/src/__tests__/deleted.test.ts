@@ -1,6 +1,6 @@
 import { deleted, deletedFeed, remove, Schema } from "@kyneta/schema"
 import { batch, createDoc } from "@kyneta/schema/basic"
-import { describe, expect, it } from "vitest"
+import { assert, describe, expect, it } from "vitest"
 import { reactive, track } from "../reactive.js"
 
 const TodoDoc = Schema.product({
@@ -52,8 +52,10 @@ describe("deleted ref tracking", () => {
     const ref = doc.todos.at(0)
     if (!ref) throw new Error("ref not found")
 
+    const feed = deletedFeed(ref)
+    assert.exists(feed)
     const r = reactive(() => {
-      return deletedFeed(ref)!()
+      return feed()
     })
 
     let recomputed = 0
@@ -80,8 +82,10 @@ describe("deleted ref tracking", () => {
     const ref = doc.todos.at(0)
     if (!ref) throw new Error("ref not found")
 
+    const feed = deletedFeed(ref)
+    assert.exists(feed)
     const r = reactive(() => {
-      return track(deletedFeed(ref)!)
+      return track(feed)
     })
 
     let recomputed = 0

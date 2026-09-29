@@ -1,9 +1,10 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.3.7/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.4.11/schema.json",
   "vcs": {
     "root": ".",
     "enabled": true,
-    "clientKind": "git"
+    "clientKind": "git",
+    "useIgnoreFile": true
   },
   "files": {
     "includes": [
@@ -11,6 +12,7 @@
       "!!**/dist",
       "!!**/*.db",
       "!!**/node_modules",
+      "!!.jj",
       "!!**/playwright-report",
       "!!**/test-results",
       "!!workspace"
@@ -31,7 +33,7 @@
         "noUnusedVariables": "error"
       },
       "style": {
-        "noNonNullAssertion": "warn"
+        "noNonNullAssertion": "error"
       },
       "suspicious": {
         "noExplicitAny": "off"

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { assert, describe, expect, it } from "vitest"
 import type {
   ChildNode,
   ConditionalNode,
@@ -541,13 +541,11 @@ describe("detectFilterPattern", () => {
 
       const result = detectFilterPattern(loop)
 
-      expect(result).not.toBeNull()
+      assert.exists(result)
       // recipe.name should appear only once (deduplicated)
       const allSources = [
-        // biome-ignore lint/style/noNonNullAssertion: asserted non-null above
-        ...result!.itemDeps.map(d => d.source),
-        // biome-ignore lint/style/noNonNullAssertion: asserted non-null above
-        ...result!.externalDeps.map(d => d.source),
+        ...result.itemDeps.map(d => d.source),
+        ...result.externalDeps.map(d => d.source),
       ]
       const recipeName = allSources.filter(s => s === "recipe.name")
       expect(recipeName).toHaveLength(1)

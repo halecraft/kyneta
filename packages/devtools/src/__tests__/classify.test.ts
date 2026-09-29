@@ -10,7 +10,7 @@ function ev(body: object, peerId = "alice", seq = 0): ObsEvent {
 }
 
 describe("classify", () => {
-  it("routes every event into `events`, keyed `${peerId}:${seq}`", () => {
+  it("routes every event into `events`, keyed peerId:seq", () => {
     const r = classify(
       ev(
         { layer: "engine", kind: "transition", program: "sync", summary: "x" },
@@ -82,7 +82,7 @@ describe("classify", () => {
     ).toContainEqual({ stream: "documents", op: "delete", key: "d" })
   })
 
-  it("sync-state → syncStates, keyed `${docId}:${peer}`", () => {
+  it("sync-state → syncStates, keyed docId:peer", () => {
     expect(
       classify(
         ev({
@@ -101,7 +101,7 @@ describe("classify", () => {
     })
   })
 
-  it("diagnostic → diagnostics, keyed `${peerId}:${seq}`", () => {
+  it("diagnostic → diagnostics, keyed peerId:seq", () => {
     const r = classify(
       ev(
         {

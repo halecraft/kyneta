@@ -2,6 +2,7 @@
 // Tests for Valid(S) computation: signature verification, capability checks,
 // creator bypass, and auditability of invalid constraints.
 
+import { nth } from "@kyneta/datalog"
 import { describe, expect, it } from "vitest"
 import { hasCapability } from "../../src/kernel/authority.js"
 import { createCnId } from "../../src/kernel/cnid.js"
@@ -292,7 +293,7 @@ describe("computeValid", () => {
       const result = computeValid(constraints, "alice")
       expect(result.invalid.length).toBe(1)
 
-      const entry = result.invalid[0]!
+      const entry = nth(result.invalid, 0)
       expect(entry.constraint).toBe(bobValue)
       expect(entry.error.kind).toBe("missingCapability")
       if (entry.error.kind === "missingCapability") {

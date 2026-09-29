@@ -82,8 +82,11 @@ export interface SlotGroup {
   /** The slot identity string. */
   readonly slotId: string
 
-  /** All structure constraints in this slot group. */
-  readonly structures: readonly StructureConstraint[]
+  /**
+   * All structure constraints in this slot group; never empty, since a group
+   * exists because a constraint joined it. The first is its representative.
+   */
+  readonly structures: readonly [StructureConstraint, ...StructureConstraint[]]
 
   /** All CnId keys for structure constraints in this group. */
   readonly structureKeys: ReadonlySet<string>
@@ -161,7 +164,7 @@ export function buildStructureIndex(
     string,
     {
       slotId: string
-      structures: StructureConstraint[]
+      structures: [StructureConstraint, ...StructureConstraint[]]
       structureKeys: Set<string>
       policy: Policy
       childKey: string
@@ -177,19 +180,19 @@ export function buildStructureIndex(
 
     structureToSlot.set(scKey, sid)
 
-    let group = slotGroupsBuilder.get(sid)
+    const group = slotGroupsBuilder.get(sid)
     if (group === undefined) {
-      group = {
+      slotGroupsBuilder.set(sid, {
         slotId: sid,
-        structures: [],
-        structureKeys: new Set(),
+        structures: [sc],
+        structureKeys: new Set([scKey]),
         policy: policyOf(sc),
         childKey: ckey,
-      }
-      slotGroupsBuilder.set(sid, group)
+      })
+    } else {
+      group.structures.push(sc)
+      group.structureKeys.add(scKey)
     }
-    group.structures.push(sc)
-    group.structureKeys.add(scKey)
   }
 
   // Freeze the groups.
@@ -212,7 +215,7 @@ export function buildStructureIndex(
     // Use the first structure constraint to determine the kind.
     // All constraints in a slot group have the same kind (root/map/seq)
     // because the slot identity prefix differs by kind.
-    const representative = group.structures[0]!
+    const [representative] = group.structures
     const payload = representative.payload
 
     if (payload.kind === "root") {
@@ -308,8 +311,7 @@ export function getChildrenOfSlotGroup(
 ): ReadonlyMap<string, SlotGroup> {
   // Merge children from all structure CnIds in the group.
   if (group.structures.length === 1) {
-    // biome-ignore lint/style/noNonNullAssertion: group.structures.length === 1 guarantees element exists
-    return getChildren(index, group.structures[0]!.id)
+    return getChildren(index, group.structures[0].id)
   }
 
   const merged = new Map<string, SlotGroup>()

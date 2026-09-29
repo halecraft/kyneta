@@ -1279,11 +1279,10 @@ function allPermutations<T>(arr: T[]): T[][] {
 
   const result: T[][] = []
 
-  for (let i = 0; i < arr.length; i++) {
+  for (const [i, head] of arr.entries()) {
     const rest = [...arr.slice(0, i), ...arr.slice(i + 1)]
-    const subPerms = allPermutations(rest)
-    for (const perm of subPerms) {
-      result.push([arr[i]!, ...perm])
+    for (const perm of allPermutations(rest)) {
+      result.push([head, ...perm])
     }
   }
 

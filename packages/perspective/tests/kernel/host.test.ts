@@ -11,6 +11,7 @@ import {
   atom,
   compute,
   negation,
+  nth,
   positiveAtom,
   rule,
   varTerm,
@@ -119,7 +120,8 @@ const PREFERRED: ForeignRelation = {
   compute(read) {
     const out: Value[][] = []
     for (const t of read.getRelation("active_value").tuples()) {
-      if (typeof t[2] === "string" && t[2].startsWith("B")) out.push([t[0]!])
+      if (typeof t[2] === "string" && t[2].startsWith("B"))
+        out.push([nth(t, 0)])
     }
     return out
   },

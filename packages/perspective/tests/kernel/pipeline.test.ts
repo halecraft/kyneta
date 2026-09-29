@@ -13,7 +13,7 @@
 // native solver instead, which meant the primary pipeline test was exercising
 // the solver while appearing to exercise the engine.
 
-import { describe, expect, it } from "vitest"
+import { assert, describe, expect, it } from "vitest"
 import {
   createAgent,
   produceMapChild,
@@ -384,10 +384,10 @@ describe("pipeline: simple sequence", () => {
     const reality = solve(store, DEFAULT_CONFIG)
 
     const todos = getNode(reality, "todos")
-    expect(todos).toBeDefined()
+    assert.exists(todos)
     expect(todos?.policy).toBe("seq")
 
-    const keys = childKeys(todos!)
+    const keys = childKeys(todos)
     expect(keys).toEqual(["0", "1", "2"])
 
     expect(todos?.children.get("0")?.value).toBe("Buy milk")

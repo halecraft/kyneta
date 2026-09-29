@@ -2,7 +2,8 @@
 // Tests for the Agent: monotonic counters and lamport, refs tracking,
 // constraint production for all 6 types, observation, safe-integer overflow.
 
-import { describe, expect, it } from "vitest"
+import { nth } from "@kyneta/datalog"
+import { assert, describe, expect, it } from "vitest"
 import {
   createAgent,
   produceMapChild,
@@ -170,7 +171,7 @@ describe("Agent", () => {
       }
 
       for (let i = 1; i < lamports.length; i++) {
-        expect(lamports[i]!).toBeGreaterThan(lamports[i - 1]!)
+        expect(nth(lamports, i)).toBeGreaterThan(nth(lamports, i - 1))
       }
     })
   })
@@ -206,7 +207,7 @@ describe("Agent", () => {
       // After producing c1, the agent has seen alice@0
       // So c2 should ref alice@0
       expect(c2.refs.length).toBe(1)
-      expect(cnIdEquals(c2.refs[0]!, createCnId("alice", 0))).toBe(true)
+      expect(cnIdEquals(nth(c2.refs, 0), createCnId("alice", 0))).toBe(true)
     })
 
     it("third constraint refs only the latest per peer", () => {
@@ -221,7 +222,7 @@ describe("Agent", () => {
 
       // Should ref alice@1 (the last one before c3)
       expect(c3.refs.length).toBe(1)
-      expect(cnIdEquals(c3.refs[0]!, createCnId("alice", 1))).toBe(true)
+      expect(cnIdEquals(nth(c3.refs, 0), createCnId("alice", 1))).toBe(true)
     })
 
     it("refs include observed constraints from other peers", () => {
@@ -519,8 +520,8 @@ describe("Agent", () => {
       expect(c.payload.kind).toBe("seq")
       if (c.payload.kind === "seq") {
         expect(cnIdEquals(c.payload.parent, parent)).toBe(true)
-        expect(c.payload.originLeft).not.toBeNull()
-        expect(cnIdEquals(c.payload.originLeft!, left)).toBe(true)
+        assert.exists(c.payload.originLeft)
+        expect(cnIdEquals(c.payload.originLeft, left)).toBe(true)
         expect(c.payload.originRight).toBeNull()
       }
     })
@@ -726,10 +727,10 @@ describe("Agent", () => {
       expect(constraint.payload.kind).toBe("seq")
       if (constraint.payload.kind === "seq") {
         expect(cnIdEquals(constraint.payload.parent, parent)).toBe(true)
-        expect(constraint.payload.originLeft).not.toBeNull()
-        expect(cnIdEquals(constraint.payload.originLeft!, left)).toBe(true)
-        expect(constraint.payload.originRight).not.toBeNull()
-        expect(cnIdEquals(constraint.payload.originRight!, right)).toBe(true)
+        assert.exists(constraint.payload.originLeft)
+        expect(cnIdEquals(constraint.payload.originLeft, left)).toBe(true)
+        assert.exists(constraint.payload.originRight)
+        expect(cnIdEquals(constraint.payload.originRight, right)).toBe(true)
       }
       expect(cnIdEquals(id, constraint.id)).toBe(true)
     })

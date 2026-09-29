@@ -25,6 +25,8 @@
 // any Value placed in it; mutating the bytes afterwards corrupts its key.
 // ---------------------------------------------------------------------------
 
+import { nth } from "./checked.js"
+
 /**
  * An opaque composite identity. The engine never destructures one: it
  * serializes it, orders it, and compares it for equality, nothing else.
@@ -945,9 +947,7 @@ export function serializeValue(v: Value): string {
   if (v instanceof Uint8Array) {
     // Encode bytes as hex for deterministic serialization
     let hex = "b:"
-    for (let j = 0; j < v.length; j++) {
-      hex += (v[j]! < 16 ? "0" : "") + v[j]?.toString(16)
-    }
+    for (const byte of v) hex += byte.toString(16).padStart(2, "0")
     return hex
   }
   // ref
@@ -1007,11 +1007,10 @@ export function serializeTuple(
 ): string {
   let key = ""
   let first = true
-  for (let i = 0; i < tuple.length; i++) {
-    if ((mask & (1 << i)) !== 0) {
-      key = first
-        ? serializeValue(tuple[i]!)
-        : `${key}|${serializeValue(tuple[i]!)}`
+  let i = 0
+  for (const value of tuple) {
+    if ((mask & (1 << i++)) !== 0) {
+      key = first ? serializeValue(value) : `${key}|${serializeValue(value)}`
       first = false
     }
   }
@@ -1130,12 +1129,7 @@ export function compareValues(a: Value, b: Value): number {
   }
 
   if (a instanceof Uint8Array && b instanceof Uint8Array) {
-    const len = Math.min(a.length, b.length)
-    for (let i = 0; i < len; i++) {
-      if (a[i]! < b[i]!) return -1
-      if (a[i]! > b[i]!) return 1
-    }
-    return a.length - b.length
+    return compareBytes(a, b)
   }
 
   if (aIsRef && bIsRef) {
@@ -1237,6 +1231,17 @@ export function evaluateGuardOp(
   }
 }
 
+/** Lexicographic: the first differing byte decides, then the shorter wins. */
+function compareBytes(a: Uint8Array, b: Uint8Array): number {
+  const len = Math.min(a.length, b.length)
+  for (let i = 0; i < len; i++) {
+    const x = nth(a, i)
+    const y = nth(b, i)
+    if (x !== y) return x < y ? -1 : 1
+  }
+  return a.length - b.length
+}
+
 /**
  * Compare two values of the same type using the provided predicate.
  * Returns `false` if the types are incompatible (cannot compare number vs bigint).
@@ -1286,13 +1291,7 @@ function compareSameType(
 
   // Uint8Array — lexicographic
   if (a instanceof Uint8Array && b instanceof Uint8Array) {
-    const len = Math.min(a.length, b.length)
-    for (let i = 0; i < len; i++) {
-      if (a[i]! !== b[i]!) {
-        return pred(a[i]! < b[i]! ? -1 : 1)
-      }
-    }
-    return pred(a.length - b.length)
+    return pred(compareBytes(a, b))
   }
 
   // ref — compare by (peer, counter)

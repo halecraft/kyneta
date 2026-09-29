@@ -1,6 +1,7 @@
 // === Lamport Clock Tests ===
 // Tests for Lamport clock: tick monotonicity, merge takes max+1, observe.
 
+import { nth } from "@kyneta/datalog"
 import { describe, expect, it } from "vitest"
 import {
   createLamportClock,
@@ -62,7 +63,7 @@ describe("Lamport Clock", () => {
 
       // Every value is strictly greater than the previous
       for (let i = 1; i < values.length; i++) {
-        expect(values[i]!).toBeGreaterThan(values[i - 1]!)
+        expect(nth(values, i)).toBeGreaterThan(nth(values, i - 1))
       }
     })
 
@@ -128,7 +129,7 @@ describe("Lamport Clock", () => {
       values.push(tick(clock)) // 104
 
       for (let i = 1; i < values.length; i++) {
-        expect(values[i]!).toBeGreaterThan(values[i - 1]!)
+        expect(nth(values, i)).toBeGreaterThan(nth(values, i - 1))
       }
     })
   })

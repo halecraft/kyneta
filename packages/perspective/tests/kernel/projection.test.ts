@@ -3,8 +3,8 @@
 // via the structure index join.
 
 import type { Fact } from "@kyneta/datalog"
-import { fact } from "@kyneta/datalog"
-import { describe, expect, it } from "vitest"
+import { fact, nth } from "@kyneta/datalog"
+import { assert, describe, expect, it } from "vitest"
 import { cnIdKey, createCnId } from "../../src/kernel/cnid.js"
 import {
   ACTIVE_STRUCTURE_SEQ,
@@ -131,7 +131,7 @@ describe("projectToFacts", () => {
       const avFacts = factsOf(result.facts, ACTIVE_VALUE.predicate)
       expect(avFacts).toHaveLength(1)
 
-      const f = avFacts[0]!
+      const f = nth(avFacts, 0)
       // active_value(CnId, Slot, Content, Lamport, Peer)
       expect(f.values[ACTIVE_VALUE.CNID]).toBe(cnIdKey(val.id))
       expect(f.values[ACTIVE_VALUE.CONTENT]).toBe("Hello")
@@ -315,7 +315,7 @@ describe("projectToFacts", () => {
       const seqFacts = factsOf(result.facts, ACTIVE_STRUCTURE_SEQ.predicate)
       expect(seqFacts).toHaveLength(1)
 
-      const f = seqFacts[0]!
+      const f = nth(seqFacts, 0)
       expect(f.values[ACTIVE_STRUCTURE_SEQ.CNID]).toBe(cnIdKey(elem.id))
       expect(f.values[ACTIVE_STRUCTURE_SEQ.PARENT]).toBe(cnIdKey(root.id))
       expect(f.values[ACTIVE_STRUCTURE_SEQ.ORIGIN_LEFT]).toBeNull()
@@ -337,7 +337,8 @@ describe("projectToFacts", () => {
       // Find elem2's fact
       const f2 = seqFacts.find(
         f => f.values[ACTIVE_STRUCTURE_SEQ.CNID] === cnIdKey(elem2.id),
-      )!
+      )
+      assert.exists(f2)
       expect(f2.values[ACTIVE_STRUCTURE_SEQ.ORIGIN_LEFT]).toBe(
         cnIdKey(elem1.id),
       )
@@ -369,7 +370,7 @@ describe("projectToFacts", () => {
       const peerFacts = factsOf(result.facts, CONSTRAINT_PEER.predicate)
       expect(peerFacts).toHaveLength(1)
 
-      const f = peerFacts[0]!
+      const f = nth(peerFacts, 0)
       expect(f.values[CONSTRAINT_PEER.CNID]).toBe(cnIdKey(elem.id))
       expect(f.values[CONSTRAINT_PEER.PEER]).toBe("bob")
     })
@@ -466,7 +467,7 @@ describe("projectToFacts", () => {
       const avFacts = factsOf(result.facts, ACTIVE_VALUE.predicate)
       expect(avFacts).toHaveLength(1)
 
-      const f = avFacts[0]!
+      const f = nth(avFacts, 0)
       // Verify 5-column shape
       expect(f.values).toHaveLength(5)
 

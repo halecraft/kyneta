@@ -9,6 +9,12 @@ import { toAdded, toRemoved } from "../zset.js"
 // Source.create — manual source
 // ---------------------------------------------------------------------------
 
+function notifierOf<N>(notifiers: ReadonlyMap<string, N>, key: string): N {
+  const notifier = notifiers.get(key)
+  if (notifier === undefined) throw new Error(`no notifier for "${key}"`)
+  return notifier
+}
+
 describe("Source.create", () => {
   it("returns a [source, handle] tuple", () => {
     const [source, handle] = Source.create<number>()
@@ -431,7 +437,7 @@ describe("Source.filter", () => {
     const filtered = Source.filter(
       source,
       (_k, v) => v.status === "active",
-      (k, _v, onChange) => notifierFor.get(k)!.watch(k, _v, onChange),
+      (k, _v, onChange) => notifierOf(notifierFor, k).watch(k, _v, onChange),
     )
 
     const coll = Collection.from(filtered)
@@ -464,7 +470,7 @@ describe("Source.filter", () => {
     const filtered = Source.filter(
       source,
       (_k, v) => v.status === "active",
-      (k, _v, onChange) => notifierFor.get(k)!.watch(k, _v, onChange),
+      (k, _v, onChange) => notifierOf(notifierFor, k).watch(k, _v, onChange),
     )
     const coll = Collection.from(filtered)
 

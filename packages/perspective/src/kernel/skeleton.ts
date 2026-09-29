@@ -147,7 +147,7 @@ function buildNodeFromSlotGroup(
   ctx: BuildContext,
 ): RealityNode {
   // Use the first structure constraint as the representative for identity.
-  const representative = group.structures[0]!
+  const [representative] = group.structures
 
   // Resolve value for this slot.
   const resolvedValue = resolveSlotValue(group.slotId, ctx)
@@ -188,15 +188,12 @@ function buildChildren(
     parentGroup,
   )
 
-  if (childSlotGroups.size === 0) {
-    return EMPTY_CHILDREN
-  }
-
   // Determine whether children are map or seq by inspecting one child.
   // All children of a given parent share the same policy kind (map or seq)
   // because they were created under the same container policy.
-  const firstChild = childSlotGroups.values().next().value!
-  const childKind = firstChild.structures[0]?.payload.kind
+  const [firstChild] = childSlotGroups.values()
+  if (firstChild === undefined) return EMPTY_CHILDREN
+  const childKind = firstChild.structures[0].payload.kind
 
   if (childKind === "seq") {
     return buildSeqChildren(childSlotGroups, ctx)
@@ -299,8 +296,7 @@ function buildSeqChildren(
 
     // Find the structure constraint for this element to get the CnId.
     const sc = seqConstraints.find(s => cnIdKey(s.id) === idKey)
-    // biome-ignore lint/style/noNonNullAssertion: group always has at least one structure
-    const elementId = sc !== undefined ? sc.id : group.structures[0]!.id
+    const elementId = sc !== undefined ? sc.id : group.structures[0].id
 
     const childNode: RealityNode = {
       id: elementId,
@@ -328,8 +324,9 @@ function orderSeqElements(
   const allElementKeys = seqConstraints.map(sc => cnIdKey(sc.id))
 
   // All seq constraints in a group share a parent, so the first one names it.
-  // biome-ignore lint/style/noNonNullAssertion: seqConstraints is non-empty when called
-  const firstPayload = seqConstraints[0]!.payload
+  const [first] = seqConstraints
+  if (first === undefined) return allElementKeys
+  const firstPayload = first.payload
   if (firstPayload.kind !== "seq") {
     // Should not happen — we've already filtered to seq.
     return allElementKeys

@@ -349,8 +349,7 @@ interface RuleDeltaShape {
 export function ruleDeltaShape(body: readonly BodyElement[]): RuleDeltaShape {
   const positives: DeltaSource[] = []
   const negations: DeltaSource[] = []
-  for (let i = 0; i < body.length; i++) {
-    const el = body[i]!
+  for (const [i, el] of body.entries()) {
     if (el.kind === "atom") positives.push([i, el.atom.predicate])
     else if (el.kind === "negation") negations.push([i, el.atom.predicate])
   }
@@ -450,15 +449,12 @@ function evaluateStratumSemiNaive(
   const dbOld: ReadonlyDatabase = new DatabaseView(db, inputDelta)
 
   // Body shapes are fixed for this whole evaluation; both phases read them.
-  const shapes = rules.map(rule => ruleDeltaShape(rule.body))
+  const shaped = rules.map(rule => ({ rule, shape: ruleDeltaShape(rule.body) }))
 
   // Collect all seed-derived facts without applying them yet.
   const seedDerived: WeightedFact[] = []
 
-  for (let r = 0; r < rules.length; r++) {
-    const rule = rules[r]!
-    const shape = shapes[r]!
-
+  for (const { rule, shape } of shaped) {
     // Nothing to join against, so no delta can drive it: the rule set is what
     // decides when this runs. On a `"step"` that still excludes negations,
     // which need the differential pass below to retract. See `StratumPass`.
@@ -506,10 +502,10 @@ function evaluateStratumSemiNaive(
 
     const nextDelta = new Database()
 
-    for (let r = 0; r < rules.length; r++) {
+    for (const { rule, shape } of shaped) {
       driveDeltaSources(
-        rules[r]!,
-        shapes[r]!,
+        rule,
+        shape,
         dbOldIter,
         db,
         currentDelta,
@@ -801,8 +797,7 @@ function computeAffectedStrata(
   // BFS: when a stratum is affected, its head predicates may affect
   // higher strata.
   const predQueue = [...changedPredicates]
-  while (predQueue.length > 0) {
-    const pred = predQueue.pop()!
+  for (let pred = predQueue.pop(); pred !== undefined; pred = predQueue.pop()) {
     const affectedByPred = predToStrata.get(pred)
     if (affectedByPred === undefined) continue
 

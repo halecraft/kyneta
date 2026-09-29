@@ -2,7 +2,8 @@
 // Tests for structure index construction, slot identity computation,
 // parent→children indexes, and concurrent map structure creation.
 
-import { describe, expect, it } from "vitest"
+import { lookup } from "@kyneta/datalog"
+import { assert, describe, expect, it } from "vitest"
 import { cnIdKey, createCnId } from "../../src/kernel/cnid.js"
 import { STUB_SIGNATURE } from "../../src/kernel/signature.js"
 import {
@@ -250,10 +251,10 @@ describe("buildStructureIndex", () => {
 
       const slotId1 = getSlotId(index, child1.id)
       const slotId2 = getSlotId(index, child2.id)
-      expect(slotId1).toBeDefined()
+      assert.exists(slotId1)
       expect(slotId1).toBe(slotId2)
 
-      const group = getSlotGroup(index, slotId1!)
+      const group = getSlotGroup(index, slotId1)
       expect(group).toBeDefined()
       expect(group?.structures).toHaveLength(2)
       expect(group?.structureKeys.size).toBe(2)
@@ -284,9 +285,10 @@ describe("buildStructureIndex", () => {
       // Both must be in the same slot group
       const slotIdAlice = getSlotId(index, aliceChild.id)
       const slotIdBob = getSlotId(index, bobChild.id)
+      assert.exists(slotIdAlice)
       expect(slotIdAlice).toBe(slotIdBob)
 
-      const group = getSlotGroup(index, slotIdAlice!)
+      const group = getSlotGroup(index, slotIdAlice)
       expect(group?.structures).toHaveLength(2)
       expect(group?.childKey).toBe("name")
     })
@@ -312,7 +314,8 @@ describe("buildStructureIndex", () => {
       const index = buildStructureIndex([root, elem])
 
       const sid = getSlotId(index, elem.id)
-      const group = getSlotGroup(index, sid!)
+      assert.exists(sid)
+      const group = getSlotGroup(index, sid)
       expect(group?.structures).toHaveLength(1)
       expect(group?.structures[0]).toBe(elem)
     })
@@ -392,8 +395,10 @@ describe("buildStructureIndex", () => {
         bobLast,
       ])
 
-      const nameSlotId = getSlotId(index, aliceName.id)!
-      const nameGroup = getSlotGroup(index, nameSlotId)!
+      const nameSlotId = getSlotId(index, aliceName.id)
+      assert.exists(nameSlotId)
+      const nameGroup = getSlotGroup(index, nameSlotId)
+      assert.exists(nameGroup)
 
       // getChildrenOfSlotGroup should merge children from both alice's and bob's "name" structures
       const merged = getChildrenOfSlotGroup(index, nameGroup)
@@ -414,7 +419,7 @@ describe("buildStructureIndex", () => {
       const child = makeStructureMap("alice", 1, root.id, "title")
       const index = buildStructureIndex([root, child])
 
-      const rootGroup = index.roots.get("profile")!
+      const rootGroup = lookup(index.roots, "profile")
       const children = getChildrenOfSlotGroup(index, rootGroup)
       expect(children.size).toBe(1)
     })
@@ -473,11 +478,13 @@ describe("buildStructureIndex", () => {
 
       const index = buildStructureIndex([root, a, b, c])
 
-      const sid = getSlotId(index, a.id)!
+      const sid = getSlotId(index, a.id)
+      assert.exists(sid)
       expect(getSlotId(index, b.id)).toBe(sid)
       expect(getSlotId(index, c.id)).toBe(sid)
 
-      const group = getSlotGroup(index, sid)!
+      const group = getSlotGroup(index, sid)
+      assert.exists(group)
       expect(group.structures).toHaveLength(3)
     })
 

@@ -3,6 +3,7 @@
 // Active(S) filtering, depth limits, structure immunity, and
 // target-in-refs enforcement (semantic interpretation).
 
+import { nth } from "@kyneta/datalog"
 import { describe, expect, it } from "vitest"
 import { createAgent } from "../../src/kernel/agent.js"
 import { cnIdKey, createCnId } from "../../src/kernel/cnid.js"
@@ -620,12 +621,12 @@ describe("computeActive", () => {
       ]
 
       const results = orderings.map(cs => computeActive(cs as Constraint[]))
-      const firstActive = activeIds(results[0]!)
-      const firstDominated = dominatedIds(results[0]!)
+      const firstActive = activeIds(nth(results, 0))
+      const firstDominated = dominatedIds(nth(results, 0))
 
       for (let i = 1; i < results.length; i++) {
-        expect(activeIds(results[i]!)).toEqual(firstActive)
-        expect(dominatedIds(results[i]!)).toEqual(firstDominated)
+        expect(activeIds(nth(results, i))).toEqual(firstActive)
+        expect(dominatedIds(nth(results, i))).toEqual(firstDominated)
       }
     })
   })
