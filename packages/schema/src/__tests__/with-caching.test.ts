@@ -53,11 +53,6 @@ const cachedInterp = withCaching(
   withAddressing(withReadable(withNavigation(bottomInterpreter))),
 )
 
-// Interpreter WITHOUT withAddressing — for testing graceful degradation.
-const cachedInterpNoAddressing = withCaching(
-  withReadable(withNavigation(bottomInterpreter)),
-)
-
 function createDoc(
   schema: Parameters<typeof interpret>[0],
   store: Record<string, unknown>,
@@ -73,15 +68,6 @@ function createWritableDoc(
 ) {
   const ctx = plainContext(schema, store)
   const doc = interpret(schema, withWritable(cachedInterp), ctx) as any
-  return { doc, store, ctx }
-}
-
-function createDocNoAddressing(
-  schema: Parameters<typeof interpret>[0],
-  store: Record<string, unknown>,
-) {
-  const ctx: RefContext = { reader: plainReader(store) }
-  const doc = interpret(schema, cachedInterpNoAddressing, ctx) as any
   return { doc, store, ctx }
 }
 
@@ -554,48 +540,6 @@ describe("withCaching: writes through ctx.prepare", () => {
   })
 })
 
-describe("withCaching: degradation without withAddressing", () => {
-  it("product field caching still works without withAddressing", () => {
-    const { doc } = createDocNoAddressing(structuralDocSchema, {
-      settings: { darkMode: false, fontSize: 14 },
-      metadata: {},
-    })
-    // Product field identity is preserved (thunk memoization is self-contained)
-    expect(doc.settings).toBe(doc.settings)
-    expect(doc.settings.darkMode).toBe(doc.settings.darkMode)
-  })
-
-  it("sequence .at(i) returns fresh ref each time without withAddressing", () => {
-    const schema = Schema.struct({
-      items: Schema.list(Schema.string()),
-    })
-    const { doc } = createDocNoAddressing(schema, { items: ["a", "b"] })
-
-    const ref1 = doc.items.at(0)
-    const ref2 = doc.items.at(0)
-    // No memoization — fresh ref each time
-    expect(ref1).not.toBe(ref2)
-    // But both read the correct value
-    expect(ref1()).toBe("a")
-    expect(ref2()).toBe("a")
-  })
-
-  it("map .at(key) returns fresh ref each time without withAddressing", () => {
-    const schema = Schema.struct({
-      metadata: Schema.record(Schema.string()),
-    })
-    const { doc } = createDocNoAddressing(schema, { metadata: { a: 1 } })
-
-    const ref1 = doc.metadata.at("a")
-    const ref2 = doc.metadata.at("a")
-    // No memoization — fresh ref each time
-    expect(ref1).not.toBe(ref2)
-    // But both read the correct value
-    expect(ref1()).toBe(1)
-    expect(ref2()).toBe(1)
-  })
-})
-
 describe("withCaching: read-only stack backward compatibility", () => {
   it("withCaching(withAddressing(withReadable(bottom))) with plain RefContext still works", () => {
     const readOnlyInterp = withCaching(
@@ -625,8 +569,10 @@ describe("withCaching: read-only stack backward compatibility", () => {
 // ===========================================================================
 
 describe("type-level: withCaching", () => {
-  it("withCaching(withReadable(bottomInterpreter)) is Interpreter<RefContext, HasCall & HasNavigation & HasCaching>", () => {
-    const cached = withCaching(withReadable(withNavigation(bottomInterpreter)))
+  it("withCaching(withAddressing(withReadable(bottomInterpreter))) is Interpreter<RefContext, HasCall & HasNavigation & HasCaching>", () => {
+    const cached = withCaching(
+      withAddressing(withReadable(withNavigation(bottomInterpreter))),
+    )
     const _check: Interpreter<
       RefContext,
       HasCall & HasNavigation & HasCaching
@@ -635,7 +581,9 @@ describe("type-level: withCaching", () => {
   })
 
   it("result of cached interpreter satisfies HasCaching", () => {
-    const cached = withCaching(withReadable(withNavigation(bottomInterpreter)))
+    const cached = withCaching(
+      withAddressing(withReadable(withNavigation(bottomInterpreter))),
+    )
     const ctx: RefContext = { reader: plainReader({ n: 1 }) }
     const result = interpret(Schema.struct({ n: Schema.number() }), cached, ctx)
     const _check: HasCaching = result
@@ -643,7 +591,9 @@ describe("type-level: withCaching", () => {
   })
 
   it("result of cached interpreter also satisfies HasNavigation and HasCall", () => {
-    const cached = withCaching(withReadable(withNavigation(bottomInterpreter)))
+    const cached = withCaching(
+      withAddressing(withReadable(withNavigation(bottomInterpreter))),
+    )
     const ctx: RefContext = { reader: plainReader("test" as any) }
     const result = interpret(Schema.string(), cached, ctx)
     const _checkNav: HasNavigation = result

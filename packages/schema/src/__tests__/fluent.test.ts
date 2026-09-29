@@ -23,6 +23,7 @@ import {
   readable,
   Schema,
   TRANSACT,
+  withAddressing,
   withCaching,
   withNavigation,
   withReadable,
@@ -290,7 +291,9 @@ describe("fluent: three-arg interpret regression", () => {
     const store = { x: 10, y: 20 }
     const ctx = plainContext(pointSchema, store)
     const interp = withWritable(
-      withCaching(withReadable(withNavigation(bottomInterpreter))),
+      withCaching(
+        withAddressing(withReadable(withNavigation(bottomInterpreter))),
+      ),
     )
     const doc = interpret(pointSchema, interp, ctx) as any
 
@@ -305,7 +308,9 @@ describe("fluent: three-arg interpret regression", () => {
     })
     const store = { nested: { a: 99 } }
     const ctx: RefContext = { reader: plainReader(store) }
-    const interp = withCaching(withReadable(withNavigation(bottomInterpreter)))
+    const interp = withCaching(
+      withAddressing(withReadable(withNavigation(bottomInterpreter))),
+    )
     const doc = interpret(
       innerSchema,
       interp,

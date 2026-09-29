@@ -100,6 +100,11 @@ export {
 } from "./changefeed.js"
 // Clone — the shared deep-copy primitive (leaf module, no imports)
 export { deepClonePlain } from "./clone.js"
+export type {
+  CoordinateNode,
+  SequenceAddressTable,
+} from "./coordinate-trie.js"
+export { CoordinateTrie } from "./coordinate-trie.js"
 // Create-doc — generic document construction for any substrate
 export { createDoc, createDocAs, createRef } from "./create-doc.js"
 export { describe } from "./describe.js"
@@ -187,6 +192,7 @@ export type {
 } from "./interpreter-types.js"
 export { INTERPRETER } from "./interpreter-types.js"
 export type {
+  HasAddressing,
   HasCaching,
   HasCall,
   HasNavigation,
@@ -197,6 +203,7 @@ export {
   bottomInterpreter,
   CALL,
   makeCarrier,
+  markAddressing,
   markCaching,
   markNavigation,
   markRead,
@@ -260,7 +267,6 @@ export {
 } from "./interpreters/validate.js"
 // withAddressing — stable identity for all composite refs
 export {
-  ADDRESS_TABLE,
   DELETED,
   deleted,
   deletedFeed,
@@ -401,13 +407,10 @@ export {
 // Re-export path types from their canonical location
 export type {
   Address,
-  AddressTableRegistry,
   IndexAddress,
-  MapAddressTable,
   Path,
   RawSegment,
   Segment,
-  SequenceAddressTable,
 } from "./path.js"
 export {
   AddressedPath,

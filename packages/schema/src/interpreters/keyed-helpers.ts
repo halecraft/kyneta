@@ -6,6 +6,7 @@
 // `set-helpers.ts`.
 
 import { mapChange, mapClearChange, own } from "../change.js"
+import { coordinatePath } from "../coordinate-trie.js"
 import type { Path } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
 import { CALL, type NavigableCarrier } from "./bottom.js"
@@ -191,30 +192,25 @@ export function installKeyedNavigation<T extends object>(
   })
 }
 
-/** Override `.at(key)` with address-table-backed lookup for stable ref identity across mutations. */
+/**
+ * Override `.at(key)` to return the carrier kept on the entry's coordinate, so
+ * an entry keeps one carrier while it exists, and gets the same one back when
+ * its key is set again.
+ */
 export function installKeyedCaching(
   result: object,
-  addressTableSym: symbol,
+  ctx: RefContext,
+  path: Path,
 ): void {
-  // The symbol arrives as a parameter, so the slot being read cannot be named
-  // in a type. This helper narrows rather than asserts for that reason.
-  const slots = result as Record<symbol, unknown> & NavigableCarrier<string>
-  const baseAt = slots.at
+  // `.at` comes from `installKeyedNavigation`, one layer further in.
+  const navigable = result as NavigableCarrier<string>
+  const baseAt = navigable.at
+  const map = coordinatePath(ctx, path)
 
   Object.defineProperty(result, "at", {
     value: (key: string): unknown => {
-      const addressTable = slots[addressTableSym] as
-        | { byKey: Map<string, { address: any; ref: unknown }> }
-        | undefined
-
-      if (addressTable) {
-        const entry = addressTable.byKey.get(key)
-        if (entry?.ref !== undefined && !entry.address.dead) {
-          return entry.ref
-        }
-      }
-
-      return baseAt.call(result, key)
+      if (!ctx.reader.hasKey(map, key)) return undefined
+      return map.trie.node(map.entry(key))?.ref ?? baseAt.call(result, key)
     },
     enumerable: false,
     configurable: true,

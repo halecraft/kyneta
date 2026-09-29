@@ -4,18 +4,17 @@
 // keys, so much of the read-layer plumbing could in principle reuse
 // `keyed-helpers.ts`. In practice the layers diverge enough — topology
 // must come from `Reader.forestTopology` (not `hasKey` / `keys`, which
-// can't index by id over the flat shadow), and tombstoning dispatches
-// on `TreeChange.instructions` (not `MapChange.set/delete`) — that
-// tree-helpers is its own surface. What's genuinely shared with
+// can't index by id over the flat shadow) — that tree-helpers is its own
+// surface. What's genuinely shared with
 // keyed-helpers is the install-pattern; the contents are tree-shaped.
 
-import type { ChangeBase, TreeChange, TreeInstruction } from "../change.js"
+import type { TreeInstruction } from "../change.js"
 import { mapChange, own, treeChange } from "../change.js"
+import { coordinatePath } from "../coordinate-trie.js"
 import type { ForestNode } from "../forest.js"
 import { nestForest, subtreeIds } from "../forest.js"
 import type { FlatTreeNode, Path } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
-import type { Address } from "../path.js"
 import { hasTreeNodeAllocation, TREE_NODE_ALLOCATE } from "../substrate.js"
 import { CALL } from "./bottom.js"
 import type { WritableContext } from "./writable.js"
@@ -290,31 +289,35 @@ export function installTreeWriteOps<T extends object>(
 }
 
 // ---------------------------------------------------------------------------
-// handleTreeAddressingChange — tombstone walker for TreeChange
+// cachedTreeNodes — one carrier per node, kept on its coordinate
 // ---------------------------------------------------------------------------
 
 /**
- * Mark tree-node addresses dead based on `TreeChange.instructions`.
- *
- * `delete` is the only instruction with tombstone consequences; `create`
- * has no prior refs, and `move` doesn't change identity. The flat-shadow
- * argument lets the caller (substrate-side prepare handler) pass the
- * pre-change topology — the post-change shadow no longer has the deleted
- * ids to enumerate.
+ * The per-node closures a tree's layers build on, memoized: `node(id)`
+ * returns the carrier kept on the node's coordinate, making it the first time,
+ * and `nodes()` lists every node through it. Every surface below — `.node`,
+ * `.roots`, iteration, the snapshot — then hands out one carrier per node for
+ * as long as the node exists.
  */
-export function handleTreeAddressingChange(
-  table: { byKey: Map<string, { address: Address; ref: unknown }> } | undefined,
-  change: ChangeBase,
-  flatShadow: readonly FlatTreeNode<unknown>[],
-): void {
-  if (!table || change.type !== "tree") return
-  const treeChange = change as TreeChange
-  for (const inst of treeChange.instructions) {
-    if (inst.action === "delete") {
-      for (const id of subtreeIds(flatShadow, inst.target)) {
-        const entry = table.byKey.get(id)
-        if (entry) entry.address.dead = true
-      }
-    }
+export function cachedTreeNodes<A>(
+  ctx: RefContext,
+  path: Path,
+  node: (id: string) => A,
+): {
+  readonly node: (id: string) => A
+  readonly nodes: () => readonly FlatTreeNode<A>[]
+} {
+  const tree = coordinatePath(ctx, path)
+  const cached = (id: string): A =>
+    (tree.trie.node(tree.node(id))?.ref as A | undefined) ?? node(id)
+  return {
+    node: cached,
+    nodes: () =>
+      ctx.reader.forestTopology(tree).map(t => ({
+        id: t.id,
+        parent: t.parent,
+        index: t.index,
+        data: cached(t.id),
+      })),
   }
 }

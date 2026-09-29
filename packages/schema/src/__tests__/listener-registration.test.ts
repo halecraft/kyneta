@@ -1,21 +1,19 @@
 // listener-registration — when a node's own-path listener enters and leaves
 // the shared registry.
 //
-// A ref carrier is not unique per path. Every call to the catamorphism's
-// per-id child closure mints a fresh one (see "Per-ref-instance carrier
-// multiplication" in `packages/schema/TECHNICAL.md`), and each one wires its
-// own changefeed. Registering at carrier-construction time therefore left one
-// permanent entry per carrier ever created, with nothing able to remove it:
-// JavaScript has no destructor, and the changefeed layer holds no reference to
-// the carrier it could weaken. Registration now follows the *subscribers* —
-// established on the first, released on the last — so a carrier nobody
-// subscribes to never appears in the registry at all.
+// A ref carrier is not unique per path: two variants of a sum can each
+// declare a field of one name, and each variant's carrier memoizes its own
+// field carrier at that coordinate. Registering at carrier-construction time
+// left one permanent entry per carrier ever created, with nothing able to
+// remove it: JavaScript has no destructor, and the changefeed layer holds no
+// reference to the carrier it could weaken. Registration follows the
+// *subscribers* — established on the first, released on the last — so a
+// carrier nobody subscribes to never appears in the registry at all.
 //
-// Most assertions here read the registry directly, which is deliberate and
-// matches `with-caching-handler-chain.test.ts` one interpreter over. Delivery
-// calls exactly the callbacks that are subscribed either way, so counting
-// callbacks passes whether or not dead entries accumulate. The registry's size
-// is the only place the difference shows.
+// Most assertions here read the registry directly, which is deliberate.
+// Delivery calls exactly the callbacks that are subscribed either way, so
+// counting callbacks passes whether or not dead entries accumulate. The
+// registry's size is the only place the difference shows.
 
 import { describe, expect, it } from "vitest"
 import {
@@ -33,6 +31,10 @@ const Doc = Schema.struct({
   top: Schema.number(),
   outer: Schema.struct({ x: Schema.number() }),
   tree: Schema.tree(Schema.struct({ label: Schema.string() })),
+  shape: Schema.discriminatedUnion("kind", [
+    Schema.struct({ kind: Schema.string("a"), label: Schema.string() }),
+    Schema.struct({ kind: Schema.string("b"), label: Schema.string() }),
+  ]),
 })
 
 const topKey = RawPath.empty.field("top").key
@@ -56,12 +58,10 @@ describe("the shared registry tracks live subscriptions", () => {
     expect(__getListenerCountAtPath(ctx, topKey)).toBe(0)
   })
 
-  it("churning tree-node carriers does not accumulate registrations", () => {
-    // The workload `TECHNICAL.md` calls common, and the one that accumulated
-    // fastest: `d.tree.node(id)` mints a carrier, which registered and was
-    // then dropped. Thirty access-and-write cycles used to leave sixty
-    // permanent entries at one path key — two per cycle, one for the read
-    // carrier and one for the carrier the batch itself navigates to.
+  it("navigating to a tree node and writing through it does not accumulate registrations", () => {
+    // `d.tree.node(id)` once minted a carrier per call, and each registered
+    // and was then dropped: thirty access-and-write cycles left sixty
+    // permanent entries at one path key.
     const doc: any = createDoc(Doc)
     const ctx = contextOf(doc)
     let id = ""
@@ -176,22 +176,14 @@ describe("a node that empties and refills", () => {
 
 describe("two carriers at the same path", () => {
   it("both deliver, and releasing one does not silence the other", () => {
-    // Two carriers now contend over one shared registry key, where before each
-    // held its own entry. `doc.tree.node(id)` is the reliable way to mint
-    // distinct carriers at one path — struct fields and list items are
-    // memoized by `withCaching`, so `doc.top` hands back the same carrier.
+    // Two carriers contend over one shared registry key. A sum's variants
+    // each memoize their own field carriers, so the same-named `label` of
+    // variants `a` and `b` are two carriers at one coordinate.
     const doc: any = createDoc(Doc)
-    let id = ""
-    batch(doc, (d: any) => {
-      id = d.tree.create(null, { label: "x" })
-    })
-
-    // Subscribe at the node's `label` leaf, reached through two independent
-    // node carriers. `subscribeNode` is the own-path channel, and a write to
-    // `label` is a *descendant* of the node itself — so the node ref is the
-    // wrong place to observe it from, while the leaf is exactly right.
-    const first = doc.tree.node(id).label
-    const second = doc.tree.node(id).label
+    batch(doc, (d: any) => d.shape.set({ kind: "a", label: "x" }))
+    const first = doc.shape.label
+    batch(doc, (d: any) => d.shape.set({ kind: "b", label: "x" }))
+    const second = doc.shape.label
     expect(first).not.toBe(second)
 
     let firstCalls = 0
@@ -203,15 +195,26 @@ describe("two carriers at the same path", () => {
       secondCalls++
     })
 
-    batch(doc, (d: any) => d.tree.node(id).label.set("a"))
+    batch(doc, (d: any) => d.shape.label.set("y"))
     expect(firstCalls).toBe(1)
     expect(secondCalls).toBe(1)
 
     unsubscribeFirst()
-    batch(doc, (d: any) => d.tree.node(id).label.set("b"))
+    batch(doc, (d: any) => d.shape.label.set("z"))
 
     expect(firstCalls).toBe(1)
     expect(secondCalls).toBe(2)
+  })
+
+  it("a tree node has one carrier", () => {
+    const doc: any = createDoc(Doc)
+    let id = ""
+    batch(doc, (d: any) => {
+      id = d.tree.create({ data: { label: "x" } })
+    })
+    expect(doc.tree.node(id)).toBe(doc.tree.node(id))
+    expect(doc.tree.node(id).label).toBe(doc.tree.node(id).label)
+    expect(doc.tree.roots[0]?.data).toBe(doc.tree.node(id))
   })
 })
 

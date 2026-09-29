@@ -5,6 +5,7 @@ import {
   interpret,
   plainContext,
   Schema,
+  withAddressing,
   withCaching,
   withReadable,
   withWritable,
@@ -534,7 +535,9 @@ describe("withNavigation: navigate + write stack", () => {
 
 describe("withNavigation: read-only changefeed stack", () => {
   const readOnlyInterp = withChangefeed(
-    withCaching(withReadable(withNavigation(bottomInterpreter))),
+    withCaching(
+      withAddressing(withReadable(withNavigation(bottomInterpreter))),
+    ),
   )
 
   it("produces refs with [CHANGEFEED]", () => {
@@ -652,9 +655,11 @@ describe("type-level: withNavigation", () => {
     void navRead
   })
 
-  it("withCaching(withNavigation(bottomInterpreter)) compiles", () => {
+  it("withCaching(withAddressing(withNavigation(bottomInterpreter))) compiles", () => {
     // Caching without reading — valid composition
-    const navCache = withCaching(withNavigation(bottomInterpreter))
+    const navCache = withCaching(
+      withAddressing(withNavigation(bottomInterpreter)),
+    )
     void navCache
   })
 })

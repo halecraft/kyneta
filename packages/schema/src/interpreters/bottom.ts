@@ -12,13 +12,15 @@
 // This module also defines the capability lattice used for compile-time
 // composition safety:
 //
-//   HasCall  ←  HasNavigation  ←  HasCaching
+//   HasCall  ←  HasNavigation  ←  HasAddressing  ←  HasCaching
 //                    ↑
 //                 HasRead
 //
-// HasRead and HasCaching both extend HasNavigation independently,
+// HasRead and HasAddressing both extend HasNavigation independently,
 // forming a diamond. HasRead means "the [CALL] slot has been filled
-// with a reader." HasCaching means "children are memoized."
+// with a reader." HasAddressing means "every path is addressed, into the
+// context's coordinate trie." HasCaching means "children are memoized",
+// which needs the trie.
 //
 // Each level is branded with a phantom symbol so TypeScript's structural
 // subtyping enforces valid transformer ordering.
@@ -71,6 +73,17 @@ export const CALL: unique symbol = Symbol.for("kyneta:call")
 declare const NAVIGATION: unique symbol
 
 export type { NAVIGATION }
+
+/**
+ * Phantom brand indicating every path is addressed and the context carries a
+ * coordinate trie.
+ *
+ * Present on carriers produced by `withAddressing` and above.
+ * Never exists at runtime.
+ */
+declare const ADDRESSING: unique symbol
+
+export type { ADDRESSING }
 
 /**
  * Phantom brand indicating child caching is available.
@@ -206,11 +219,33 @@ export function markCaching<T>(carrier: T): asserts carrier is T & HasCaching {
 }
 
 /**
- * A carrier whose children are memoized. Extends `HasNavigation`.
+ * Mark a carrier as addressed. Empty for the same reason as {@link markRead}.
+ */
+export function markAddressing<T>(
+  carrier: T,
+): asserts carrier is T & HasAddressing {
+  // Intentionally empty — see {@link markRead}.
+  void carrier
+}
+
+/**
+ * A carrier interpreted with addressing: its path, and every path below it,
+ * is an `AddressedPath` into the context's `CoordinateTrie`. `withCaching`
+ * requires it, since the trie is where carriers and reads are kept.
+ *
+ * The `[ADDRESSING]` property is a phantom brand.
+ */
+export interface HasAddressing extends HasNavigation {
+  /** @internal phantom brand — never set at runtime */
+  readonly [ADDRESSING]: true
+}
+
+/**
+ * A carrier whose children are memoized. Extends `HasAddressing`.
  *
  * The `[CACHING]` property is a phantom brand.
  */
-export interface HasCaching extends HasNavigation {
+export interface HasCaching extends HasAddressing {
   /** @internal phantom brand — never set at runtime */
   readonly [CACHING]: true
 }

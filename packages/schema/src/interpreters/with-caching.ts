@@ -1,20 +1,19 @@
 // withCaching — adds identity-preserving child caching.
 //
-// This transformer takes any interpreter that produces HasNavigation
-// carriers (i.e. withReadable(bottomInterpreter) or above) and wraps
-// structural navigation with memoization:
+// This transformer takes an addressed interpreter (`withAddressing` beneath
+// it) and memoizes its structural navigation:
 //
 // - Product: each field getter memoizes its child for the carrier's
 //   lifetime (resolved/cached closure pattern).
-// - Sequence: delegates to address table when withAddressing is in the
-//   stack. The address table IS the cache — no separate Map<number, ref>.
-//   Without withAddressing, .at(i) returns a fresh ref each time.
-// - Map: same pattern as sequence — address table or fresh ref.
+// - Sequence, map, tree: `.at(i)`, `.at(key)` and `.node(id)` return the
+//   carrier kept on the child's coordinate in the context's `CoordinateTrie`,
+//   so a child has one carrier while it exists.
 // - Sum: memoizes each variant's carrier.
 //
-// Nothing here reacts to changes. Addresses advance and tombstone in
-// withAddressing's prepare stage, and a memoized carrier stays valid across
-// changes because it reads through its path.
+// Nothing here reacts to changes. Addresses advance, die and revive in
+// withAddressing's prepare stage, taking the carriers kept on their nodes
+// with them, and a memoized carrier stays valid across changes because it
+// reads through its path.
 
 import type {
   FlatTreeNode,
@@ -37,20 +36,11 @@ import type {
   TreeSchema,
 } from "../schema.js"
 
-import type { HasCaching, HasNavigation } from "./bottom.js"
+import type { HasAddressing, HasCaching } from "./bottom.js"
 import { markCaching } from "./bottom.js"
 import { installKeyedCaching } from "./keyed-helpers.js"
 import { installSequenceCaching } from "./sequence-helpers.js"
-
-// ---------------------------------------------------------------------------
-// ADDRESS_TABLE discovery (via Symbol.for to avoid import coupling)
-// ---------------------------------------------------------------------------
-
-/**
- * Symbol for discovering address tables on sequence/map refs.
- * Matches the symbol defined in `with-addressing.ts`.
- */
-const ADDRESS_TABLE_SYM = Symbol.for("kyneta:addressTable")
+import { cachedTreeNodes } from "./tree-helpers.js"
 
 // ---------------------------------------------------------------------------
 // withCaching — the interposition transformer
@@ -60,28 +50,21 @@ const ADDRESS_TABLE_SYM = Symbol.for("kyneta:addressTable")
  * Transformer that adds identity-preserving child caching to structural
  * navigation.
  *
- * Takes an `Interpreter<RefContext, A extends HasNavigation>` and returns
+ * Takes an `Interpreter<RefContext, A extends HasAddressing>` and returns
  * an `Interpreter<RefContext, A & HasCaching>`. The carrier identity is
  * preserved — `withCaching` wraps navigation methods on the existing
  * carrier, it does not replace it.
  *
  * After caching:
  * - `ref.title === ref.title` (product field identity)
- * - `seq.at(0) === seq.at(0)` (sequence child identity, when withAddressing is in stack)
- * - `map.at("k") === map.at("k")` (map child identity, when withAddressing is in stack)
+ * - `seq.at(0) === seq.at(0)`, and an item keeps its carrier as it moves
+ * - `map.at("k") === map.at("k")`, and a key set again gets its carrier back
+ * - `tree.node(id) === tree.node(id)`
  *
- * **Sequence/Map caching with addressing:**
- * When `withAddressing` is in the stack, the address table (discovered
- * via `[ADDRESS_TABLE]`) IS the cache. `.at(i)` looks up the address
- * at index `i` in the table, then retrieves the registered ref from
- * `byId`. Cache miss falls through to `baseAt(i)` which creates the
- * ref (and registers it in the address table via `onRefCreated`).
- *
- * **Sequence/Map caching without addressing:**
- * `.at(i)` calls `baseAt(i)` fresh every time — no memoization.
- * Product field caching still works (it's self-contained).
+ * Requires `withAddressing` beneath it: the carriers of list items, map
+ * entries and tree nodes are kept on their coordinates in the trie it owns.
  */
-export function withCaching<A extends HasNavigation>(
+export function withCaching<A extends HasAddressing>(
   base: Interpreter<RefContext, A>,
 ): Interpreter<RefContext, A & HasCaching> {
   return {
@@ -149,7 +132,7 @@ export function withCaching<A extends HasNavigation>(
     ): A & HasCaching {
       const baseItem = item as (index: number) => A
       const result = base.sequence(ctx, path, schema, baseItem)
-      installSequenceCaching(result, ADDRESS_TABLE_SYM)
+      installSequenceCaching(result, ctx, path)
       return result as A & HasCaching
     },
 
@@ -163,7 +146,7 @@ export function withCaching<A extends HasNavigation>(
     ): A & HasCaching {
       const baseItem = item as (key: string) => A
       const result = base.map(ctx, path, schema, baseItem)
-      installKeyedCaching(result, ADDRESS_TABLE_SYM)
+      installKeyedCaching(result, ctx, path)
       return result as A & HasCaching
     },
 
@@ -244,19 +227,18 @@ export function withCaching<A extends HasNavigation>(
     },
 
     // --- Tree ------------------------------------------------------------------
-    // Per-node refs are cached by the inner recursion (each node's `data`
-    // ref carries caching). The `.roots` projection is built fresh per
-    // read; memoizing it per tree-version is a future optimization.
+    // Hand the layers below memoized per-node closures, so `.node(id)`,
+    // `.roots`, iteration and the snapshot share one carrier per node.
     tree(
       ctx: RefContext,
       path: Path,
       schema: TreeSchema,
-      nodes: () => readonly FlatTreeNode<A & HasCaching>[],
+      _nodes: () => readonly FlatTreeNode<A & HasCaching>[],
       node: (id: string) => A & HasCaching,
     ): A & HasCaching {
-      const baseNodes = nodes as unknown as () => readonly FlatTreeNode<A>[]
-      const baseNode = node as unknown as (id: string) => A
-      return base.tree(ctx, path, schema, baseNodes, baseNode) as A & HasCaching
+      const cached = cachedTreeNodes(ctx, path, node as (id: string) => A)
+      return base.tree(ctx, path, schema, cached.nodes, cached.node) as A &
+        HasCaching
     },
 
     // --- Movable ---------------------------------------------------------------
@@ -269,7 +251,7 @@ export function withCaching<A extends HasNavigation>(
     ): A & HasCaching {
       const baseItem = item as (index: number) => A
       const result = base.movable(ctx, path, schema, baseItem)
-      installSequenceCaching(result, ADDRESS_TABLE_SYM)
+      installSequenceCaching(result, ctx, path)
       return result as A & HasCaching
     },
 

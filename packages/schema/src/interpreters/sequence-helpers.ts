@@ -33,6 +33,7 @@
 // addressable refs.
 
 import { own, richTextChange, sequenceChange, textChange } from "../change.js"
+import { coordinatePath } from "../coordinate-trie.js"
 import type { Path } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
 import { CALL, type Mutable, type NavigableCarrier } from "./bottom.js"
@@ -343,39 +344,28 @@ export function installSequenceNavigation<T extends object>(
 }
 
 // ---------------------------------------------------------------------------
-// installSequenceCaching — address-table-backed .at() override
+// installSequenceCaching — one carrier per item, kept on its coordinate
 // ---------------------------------------------------------------------------
 
-/** Override `.at()` with address-table-backed lookup for stable ref identity across mutations. */
+/**
+ * Override `.at(i)` to return the carrier kept on the item's coordinate, so an
+ * item keeps one carrier for as long as it exists, wherever it moves.
+ */
 export function installSequenceCaching(
   result: object,
-  addressTableSym: symbol,
+  ctx: RefContext,
+  path: Path,
 ): void {
-  // The symbol arrives as a parameter, so its slot cannot be named in a type.
-  // This helper narrows rather than asserts for that reason.
-  const slots = result as Record<symbol, unknown> & NavigableCarrier<number>
-  const baseAt = slots.at
+  // `.at` comes from `installSequenceNavigation`, one layer further in.
+  const navigable = result as NavigableCarrier<number>
+  const baseAt = navigable.at
+  const list = coordinatePath(ctx, path)
 
   Object.defineProperty(result, "at", {
     value: (index: number): unknown => {
-      const addressTable = slots[addressTableSym] as
-        | {
-            byIndex: Map<number, any>
-            byId: Map<number, { address: any; ref: unknown }>
-          }
-        | undefined
-
-      if (addressTable) {
-        const addr = addressTable.byIndex.get(index)
-        if (addr && addr.kind === "index") {
-          const entry = addressTable.byId.get(addr.id)
-          if (entry?.ref !== undefined) {
-            return entry.ref
-          }
-        }
-      }
-
-      return baseAt.call(result, index)
+      if (index < 0 || index >= ctx.reader.arrayLength(list)) return undefined
+      const item = list.item(index)
+      return list.trie.node(item)?.ref ?? baseAt.call(result, index)
     },
     enumerable: false,
     configurable: true,

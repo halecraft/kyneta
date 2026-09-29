@@ -1,3 +1,24 @@
+// path — typed path infrastructure for the interpreter stack.
+//
+// Two implementations of a single Path interface:
+//
+// - RawPath: external, serializable, positional. Segments are immutable
+//   value objects (`{ type: "field" | "entry" | "index", ... }`). Used by
+//   wire formats, external ops, and non-addressing stacks.
+//
+// - AddressedPath: internal, identity-stable, tombstone-aware. Segments
+//   are Address objects with mutable indices (sequences) and liveness
+//   flags, owned by a `CoordinateTrie`. Used by the interpreter stack when
+//   withAddressing is composed in.
+//
+// Consumers use the Path interface uniformly — field(), item(), key,
+// read(), format(), slice(), concat(). They never branch on path kind.
+// The concrete type is determined by the root path (set on context by
+// withAddressing or defaulting to RawPath.empty), inherited by all
+// descendants via field()/item().
+
+import type { CoordinateTrie } from "./coordinate-trie.js"
+
 /**
  * Recognize the `stepTree` shadow shape (`{id, parent, index, data}[]`)
  * structurally, so `path.node(id)` can step into a node's data without
@@ -15,25 +36,6 @@ function isFlatForestArray(arr: readonly unknown[]): boolean {
     "data" in (first as object)
   )
 }
-
-// path — typed path infrastructure for the interpreter stack.
-//
-// Two implementations of a single Path interface:
-//
-// - RawPath: external, serializable, positional. Segments are immutable
-//   value objects (`{ type: "field" | "entry" | "index", ... }`). Used by
-//   wire formats, external ops, and non-addressing stacks.
-//
-// - AddressedPath: internal, identity-stable, tombstone-aware. Segments
-//   are Address objects with mutable indices (sequences) or tombstone
-//   flags (maps). Used by the interpreter stack when withAddressing is
-//   composed in.
-//
-// Consumers use the Path interface uniformly — field(), item(), key,
-// read(), format(), slice(), concat(). They never branch on path kind.
-// The concrete type is determined by the root path (set on context by
-// withAddressing or defaulting to RawPath.empty), inherited by all
-// descendants via field()/item().
 
 // ---------------------------------------------------------------------------
 // Segment — the minimal contract for a path segment
@@ -177,10 +179,15 @@ export function rawIndex(index: number): RawSegment {
  * than the path or the caller — refs holding a stale address fail loudly
  * the moment they try to navigate, not later via silent undefined reads.
  *
- *  - `"field"` — declared product fields and sums. Schema-defined; never dies.
- *  - `"entry"` — map entries, set members, tree node ids. Dies per-key.
+ *  - `"field"` — declared product fields. Dies while its parent's schema, with
+ *    any sum resolved from the state, does not declare it.
+ *  - `"entry"` — map entries, set members, tree node ids. Dies while its key
+ *    or id is absent.
  *  - `"index"` — sequences. Mutable `index` (advanced on structural change),
- *    stable `id`. Dies per-item.
+ *    stable `id`. Dies with its item, for good.
+ *
+ * A dead field or entry address comes back to life when its coordinate exists
+ * again (see `CoordinateTrie` and `planAddressFates`).
  */
 export type Address =
   | {
@@ -254,9 +261,8 @@ export function resetAddressIdCounter(): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Field address for declared product fields and sums. The `dead` flag
- * is shape parity with `entryAddress` / `indexAddress` — product fields
- * are schema-defined and never tombstoned in normal operation.
+ * Field address for declared product fields and sums. Dead while the parent's
+ * schema, with any sum resolved from the state, does not declare the field.
  */
 export function fieldAddress(key: string, dead = false): Address {
   return {
@@ -330,6 +336,19 @@ export function indexAddress(index: number, dead = false): Address {
   }
 }
 
+/**
+ * Set an address's liveness, calling its death listeners when it changes.
+ * The one way an address dies or comes back, so `[DELETED]` subscribers
+ * always hear.
+ */
+export function setDead(address: Address, dead: boolean): void {
+  if (address.dead === dead) return
+  address.dead = dead
+  if (address.listeners) {
+    for (const callback of [...address.listeners]) callback()
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Path — the uniform interface
 // ---------------------------------------------------------------------------
@@ -393,7 +412,7 @@ export interface Path {
    * Project to an immutable, liveness-agnostic `RawPath` — the value form
    * used by the op-log and the wire. Idempotent on `RawPath` (returns
    * `this`); on `AddressedPath` it reads each segment's `coord()` so the
-   * result never aliases the live addressing registry. The named inverse
+   * result never aliases the live addressing trie. The named inverse
    * of `resolveToAddressed`. Context: jj:mlurlzqt.
    */
   toRaw(): RawPath
@@ -550,9 +569,9 @@ export class RawPath extends AbstractPath {
   concat(other: Path): Path {
     if (other.isAddressed) {
       // The other path is addressed — promote this RawPath to addressed
-      // using the other's registry, then concat as AddressedPaths.
+      // using the other's trie, then concat as AddressedPaths.
       const addressed = other as AddressedPath
-      const selfAsAddressed = resolveToAddressed(this, addressed.registry)
+      const selfAsAddressed = resolveToAddressed(this, addressed.trie)
       return selfAsAddressed.concat(addressed)
     }
     return new RawPath([...this.segments, ...(other as RawPath).segments])
@@ -566,201 +585,6 @@ export class RawPath extends AbstractPath {
 }
 
 // ---------------------------------------------------------------------------
-// AddressTableRegistry — per-composite-node address management
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Address table types — per-composite-node data structures
-// ---------------------------------------------------------------------------
-
-/**
- * Address table for sequence nodes. Tracks index addresses and their
- * associated refs, enabling identity-preserving `.at(i)` lookups and
- * bulk address advancement on structural changes.
- */
-export interface SequenceAddressTable {
-  /** Stable ID → { address, ref } for all live and dead addresses. */
-  byId: Map<number, { address: Address; ref: unknown }>
-  /** Current index → address for index-based lookup (.at(i)). Rebuilt after advancement. */
-  byIndex: Map<number, Address>
-}
-
-/**
- * Address table for map nodes. Tracks key addresses and their
- * associated refs, enabling identity-preserving `.at(key)` lookups
- * and tombstone detection on key deletion.
- */
-export interface MapAddressTable {
-  /** Key string → { address, ref } for all live and dead addresses. */
-  byKey: Map<string, { address: Address; ref: unknown }>
-}
-
-/**
- * Manages per-node address tables. Internal to the addressing system.
- *
- * `AddressedPath` holds a reference to this registry (received via the
- * root path) and calls `getOrCreateKeyAddress` / `getOrCreateSequenceAddress`
- * from its `field()` / `item()` methods.
- *
- * The registry is NOT exposed on the context — it's threaded through
- * path derivation.
- */
-export class AddressTableRegistry {
-  /**
-   * Field addresses (declared product fields) keyed by
-   * `parentPathKey + "\0" + childKey`. Idempotent.
-   */
-  private readonly fieldAddresses = new Map<string, Address>()
-
-  /**
-   * Entry addresses (map / set / tree node ids — runtime keys) keyed
-   * by `parentPathKey + "\0" + childKey`. Idempotent; tombstone-aware.
-   */
-  private readonly entryAddresses = new Map<string, Address>()
-
-  /**
-   * Sequence address tables keyed by parent path key.
-   */
-  private readonly sequenceTables = new Map<string, SequenceAddressTable>()
-
-  /**
-   * Map address tables keyed by parent path key.
-   */
-  private readonly mapTables = new Map<string, MapAddressTable>()
-
-  /**
-   * Get or create a field address for a declared product field at the
-   * given parent path key. Field addresses never tombstone (schema-defined
-   * existence).
-   *
-   * Idempotent: same arguments → same Address object.
-   */
-  getOrCreateFieldAddress(parentKey: string, childKey: string): Address {
-    const lookupKey = `${parentKey}\0${childKey}`
-    let addr = this.fieldAddresses.get(lookupKey)
-    if (!addr) {
-      addr = fieldAddress(childKey)
-      this.fieldAddresses.set(lookupKey, addr)
-    }
-    return addr
-  }
-
-  /**
-   * Get or create an entry address for a map entry, set member, or
-   * tree node id at the given parent path key.
-   *
-   * Idempotent: same arguments → same Address object.
-   */
-  getOrCreateEntryAddress(parentKey: string, childKey: string): Address {
-    const lookupKey = `${parentKey}\0${childKey}`
-    let addr = this.entryAddresses.get(lookupKey)
-    if (!addr) {
-      addr = entryAddress(childKey)
-      this.entryAddresses.set(lookupKey, addr)
-    }
-    return addr
-  }
-
-  /**
-   * Get or create an index-based address for a sequence item at the
-   * given parent path key and index.
-   *
-   * Idempotent per index: calling with the same parent + index returns
-   * the same Address object (via the byIndex reverse map).
-   */
-  getOrCreateSequenceAddress(parentKey: string, index: number): Address {
-    let table = this.sequenceTables.get(parentKey)
-    if (!table) {
-      table = { byId: new Map(), byIndex: new Map() }
-      this.sequenceTables.set(parentKey, table)
-    }
-
-    // Check if we already have an address at this index
-    let addr = table.byIndex.get(index)
-    if (addr) return addr
-
-    // Create a new index address
-    addr = indexAddress(index)
-    table.byId.set((addr as { id: number }).id, {
-      address: addr,
-      ref: undefined,
-    })
-    table.byIndex.set(index, addr)
-    return addr
-  }
-
-  /**
-   * Register a ref for a sequence item address. Called by `onRefCreated`
-   * after `interpretImpl` creates the child ref.
-   */
-  registerSequenceRef(parentKey: string, address: Address, ref: unknown): void {
-    const table = this.sequenceTables.get(parentKey)
-    if (!table) return
-    const id = (address as { id: number }).id
-    const entry = table.byId.get(id)
-    if (entry) entry.ref = ref
-  }
-
-  /**
-   * Get or create a map address table for the given parent path key,
-   * and ensure the key address is tracked in it.
-   */
-  ensureMapEntry(parentKey: string, childKey: string, address: Address): void {
-    let table = this.mapTables.get(parentKey)
-    if (!table) {
-      table = { byKey: new Map() }
-      this.mapTables.set(parentKey, table)
-    }
-    if (!table.byKey.has(childKey)) {
-      table.byKey.set(childKey, { address, ref: undefined })
-    }
-  }
-
-  /**
-   * Register a ref for a map entry address. Called by `onRefCreated`
-   * after `interpretImpl` creates the child ref.
-   */
-  registerMapRef(parentKey: string, childKey: string, ref: unknown): void {
-    const table = this.mapTables.get(parentKey)
-    if (!table) return
-    const entry = table.byKey.get(childKey)
-    if (entry) entry.ref = ref
-  }
-
-  /**
-   * Get the sequence address table for a given parent path key.
-   * Returns undefined if no table exists (no items accessed yet).
-   */
-  getSequenceTable(parentKey: string): SequenceAddressTable | undefined {
-    return this.sequenceTables.get(parentKey)
-  }
-
-  /**
-   * Get the map address table for a given parent path key.
-   * Returns undefined if no table exists (no entries accessed yet).
-   */
-  getMapTable(parentKey: string): MapAddressTable | undefined {
-    return this.mapTables.get(parentKey)
-  }
-
-  /**
-   * Get a field address by parent path key and child key.
-   * Returns undefined if no address exists.
-   */
-  getFieldAddress(parentKey: string, childKey: string): Address | undefined {
-    return this.fieldAddresses.get(`${parentKey}\0${childKey}`)
-  }
-
-  /**
-   * Get an entry address by parent path key and child key.
-   * Returns undefined if no address exists.
-   */
-  getEntryAddress(parentKey: string, childKey: string): Address | undefined {
-    return this.entryAddresses.get(`${parentKey}\0${childKey}`)
-  }
-}
-
-// ---------------------------------------------------------------------------
 // AddressedPath — internal, identity-stable, tombstone-aware
 // ---------------------------------------------------------------------------
 
@@ -769,29 +593,37 @@ export class AddressTableRegistry {
  *
  * Segments are `Address` objects. `key` produces identity-stable strings
  * (address.id for sequences, key string for fields/entries). `field()`,
- * `entry()`, and `item()` are **effectful** — they call
- * `registry.getOrCreate*()` which mutates the address table. The effect
- * is idempotent: calling with the same arguments returns the same
- * `Address` object.
+ * `entry()`, and `item()` are **effectful** — they ask the context's
+ * `CoordinateTrie` for the child's address, creating its node on first use.
+ * The effect is idempotent: calling with the same arguments returns the same
+ * `Address` object while the coordinate stays in the trie.
  */
 export class AddressedPath extends AbstractPath {
+  // Private, so a path does not carry the whole trie into a `JSON.stringify`
+  // of an op, or anything else that walks its own properties.
+  readonly #trie: CoordinateTrie
+
   constructor(
     readonly segments: readonly Address[],
-    readonly registry: AddressTableRegistry,
+    trie: CoordinateTrie,
   ) {
     super()
+    this.#trie = trie
+  }
+
+  /** The coordinates this path's addresses belong to. */
+  get trie(): CoordinateTrie {
+    return this.#trie
   }
 
   readonly isAddressed = true as const
 
   field(key: string): AddressedPath {
-    const address = this.registry.getOrCreateFieldAddress(this.key, key)
-    return new AddressedPath([...this.segments, address], this.registry)
+    return this.child(this.trie.fieldAddress(this, key))
   }
 
   entry(key: string): AddressedPath {
-    const address = this.registry.getOrCreateEntryAddress(this.key, key)
-    return new AddressedPath([...this.segments, address], this.registry)
+    return this.child(this.trie.entryAddress(this, key))
   }
 
   override node(id: string): AddressedPath {
@@ -799,32 +631,36 @@ export class AddressedPath extends AbstractPath {
   }
 
   item(index: number): AddressedPath {
-    const address = this.registry.getOrCreateSequenceAddress(this.key, index)
-    return new AddressedPath([...this.segments, address], this.registry)
+    return this.child(this.trie.itemAddress(this, index))
+  }
+
+  /** This path extended by `address`, which the caller got from the trie. */
+  child(address: Address): AddressedPath {
+    return new AddressedPath([...this.segments, address], this.trie)
   }
 
   slice(start: number, end?: number): AddressedPath {
-    return new AddressedPath(this.segments.slice(start, end), this.registry)
+    return new AddressedPath(this.segments.slice(start, end), this.trie)
   }
 
   concat(other: Path): AddressedPath {
     if (!other.isAddressed) {
-      // The other path is raw — resolve it to addressed using our registry,
+      // The other path is raw — resolve it to addressed using our trie,
       // then concat as AddressedPaths.
-      const otherAddressed = resolveToAddressed(other as RawPath, this.registry)
+      const otherAddressed = resolveToAddressed(other as RawPath, this.trie)
       return new AddressedPath(
         [...this.segments, ...otherAddressed.segments],
-        this.registry,
+        this.trie,
       )
     }
     return new AddressedPath(
       [...this.segments, ...(other as AddressedPath).segments],
-      this.registry,
+      this.trie,
     )
   }
 
   root(): AddressedPath {
-    return new AddressedPath([], this.registry)
+    return new AddressedPath([], this.trie)
   }
 
   /**
@@ -832,7 +668,7 @@ export class AddressedPath extends AbstractPath {
    * coordinate via `coord()` (never `resolve()` — this must succeed even
    * for a `dead` address, e.g. an entry deleted after the op was authored).
    * The named inverse of `resolveToAddressed`. The op-log and wire hold
-   * these values, so history never aliases the mutable registry.
+   * these values, so history never aliases the mutable trie.
    * Context: jj:mlurlzqt.
    */
   toRaw(): RawPath {
@@ -858,36 +694,35 @@ export class AddressedPath extends AbstractPath {
 // ---------------------------------------------------------------------------
 
 /**
- * Resolve a path to an `AddressedPath` using the given registry.
+ * Resolve a path to an `AddressedPath` in the given trie.
  *
  * - If the path is already addressed, return it as-is (idempotent).
- * - If raw, walk the segments and look up (or create) addresses in the
- *   registry at each level. Returns an `AddressedPath` whose `.key`
- *   matches the keys used by changefeed listeners and cache handlers.
+ * - If raw, walk the segments from the root, taking (or creating) each
+ *   coordinate's address from the trie. Returns an `AddressedPath` whose
+ *   `.key` matches the keys used by changefeed listeners and the trie.
  *
- * This is the single point where raw→addressed translation happens.
- * Called in the prepare pipeline so that `path.key` on incoming
- * external mutations matches the identity-stable keys used internally.
- * The inverse — addressed→raw, for freezing history — is `AddressedPath.toRaw()`.
+ * This is the single point where raw→addressed translation happens. The
+ * prepare pipeline calls it once per op, before any stage runs, so
+ * `path.key` on an incoming external change matches the identity-stable
+ * keys used internally. The inverse — addressed→raw, for freezing history —
+ * is `AddressedPath.toRaw()`.
  */
 export function resolveToAddressed(
   path: Path,
-  registry: AddressTableRegistry,
+  trie: CoordinateTrie,
 ): AddressedPath {
   if (path.isAddressed) return path as AddressedPath
 
-  // Walk the raw segments, building an AddressedPath by calling
-  // the registry's getOrCreate* methods at each level.
-  let current = new AddressedPath([], registry)
+  let current = new AddressedPath([], trie)
   for (const seg of path.segments) {
     // `coord()` for consistency; input is always raw here (addressed returns
     // early), so this is a pure coordinate read either way.
     if (seg.role === "field") {
-      current = current.field(seg.coord() as string) as AddressedPath
+      current = current.field(seg.coord() as string)
     } else if (seg.role === "entry") {
-      current = current.entry(seg.coord() as string) as AddressedPath
+      current = current.entry(seg.coord() as string)
     } else {
-      current = current.item(seg.coord() as number) as AddressedPath
+      current = current.item(seg.coord() as number)
     }
   }
   return current

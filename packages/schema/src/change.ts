@@ -836,8 +836,10 @@ import type { IndexAddress } from "./path.js"
 /**
  * Advance all index addresses in one pass through the instructions.
  *
- * Mutates `address.index` and `address.dead` in place. Returns the
- * list of addresses that were killed (dead set to true).
+ * Mutates each surviving `address.index` in place, and returns the addresses
+ * whose items the instructions deleted. It does not mark those dead: the
+ * caller does, with whatever else a death entails (its listeners, and the
+ * coordinates below it).
  *
  * Complexity: O(n + k) where n = instruction count, k = address count.
  * Addresses are sorted by index and walked in tandem with the
@@ -884,10 +886,7 @@ export function advanceAddresses(
       // All addresses in [source, source + delete) are dead.
       while (ci < sorted.length && sorted[ci]?.index < source + op.delete) {
         const addr = sorted[ci]
-        if (addr.index >= source) {
-          addr.dead = true
-          dead.push(addr)
-        }
+        if (addr.index >= source) dead.push(addr)
         ci++
       }
       source += op.delete

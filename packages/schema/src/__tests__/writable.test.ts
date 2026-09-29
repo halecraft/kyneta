@@ -49,7 +49,7 @@ import {
 
 // Full stack: readable + caching + writable (the standard composition)
 const fullInterpreter = withWritable(
-  withCaching(withReadable(withNavigation(bottomInterpreter))),
+  withCaching(withAddressing(withReadable(withNavigation(bottomInterpreter)))),
 )
 
 // Cacheless stack: readable + writable (no caching layer)

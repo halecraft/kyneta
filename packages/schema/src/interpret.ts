@@ -23,7 +23,7 @@ import type { HasRead } from "./interpreters/bottom.js"
 import { bottomInterpreter } from "./interpreters/bottom.js"
 import type { HasTransact } from "./interpreters/writable.js"
 import type { Path } from "./path.js"
-import { RawPath } from "./path.js"
+import { AddressedPath, RawPath, resolveToAddressed } from "./path.js"
 import type { Ref, RRef, RWRef } from "./ref.js"
 import {
   type CounterSchema,
@@ -548,12 +548,13 @@ function interpretImpl<Ctx, A>(
   ctx: Ctx,
   path?: Path,
 ): A {
-  // Resolve the path. For the root call (path === undefined), ctx.rootPath
-  // may not be set yet — withAddressing sets it on first method invocation.
-  // We use RawPath.empty as a temporary root path; child-deriving closures
-  // (field thunks, itemFn, innerThunk) re-read ctx.rootPath at execution
-  // time so that withAddressing's rootPath is picked up.
-  const isRootCall = path === undefined
+  // The path this node is interpreted at. An addressing layer installs an
+  // addressed `ctx.rootPath` when its first case runs, which is after this
+  // call computed its own path — so the entry call's path (the root, or a
+  // caller's raw path) may be raw here. Every child path is derived later, by
+  // `effectivePath()`, which reads `ctx.rootPath` then and resolves a raw
+  // path against it, so descendants are addressed whenever the stack is.
+  //
   // `rootPath` and `onRefCreated` below are installed on the context by
   // `withAddressing` at runtime; `RefContext` does not declare them, because a
   // stack composed without that layer has neither. Naming the optional shape
@@ -567,15 +568,12 @@ function interpretImpl<Ctx, A>(
   const getOnRefCreated = () =>
     (ctx as { onRefCreated?: (path: Path, ref: unknown) => void })?.onRefCreated
 
-  // For the root call, child-deriving closures need the path that
-  // ctx.rootPath resolves to AFTER the first interpreter method has run
-  // (which is when withAddressing installs rootPath). Non-root calls
-  // use the explicitly-passed resolvedPath directly.
   const effectivePath = (): Path => {
-    if (isRootCall) {
-      return (ctx as { rootPath?: Path })?.rootPath ?? resolvedPath
-    }
-    return resolvedPath
+    if (resolvedPath instanceof AddressedPath) return resolvedPath
+    const root = (ctx as { rootPath?: Path })?.rootPath
+    return root instanceof AddressedPath
+      ? resolveToAddressed(resolvedPath, root.trie)
+      : resolvedPath
   }
 
   switch (schema[KIND]) {

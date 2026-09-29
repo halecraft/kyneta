@@ -231,17 +231,19 @@ describe("advanceAddresses", () => {
     const indices = [0, 1, 2, 3, 4, 5, 6]
     const addresses = indices.map(i => makeAddress(i))
 
-    advanceAddresses(addresses, instructions)
+    const removed = advanceAddresses(addresses, instructions)
 
     for (let i = 0; i < indices.length; i++) {
       const expected = advanceIndex(indices[i] as any, instructions)
       const addr = addresses[i] as any
       if (expected === null) {
-        expect(addr.dead).toBe(true)
+        expect(removed).toContain(addr)
       } else {
-        expect(addr.dead).toBe(false)
+        expect(removed).not.toContain(addr)
         expect(addr.index).toBe(expected)
       }
+      // Marking an address dead is the caller's business.
+      expect(addr.dead).toBe(false)
     }
   })
 

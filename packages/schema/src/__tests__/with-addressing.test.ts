@@ -1,8 +1,8 @@
 import { CHANGEFEED } from "@kyneta/changefeed"
 import { describe, expect, it } from "vitest"
 import { own } from "../change.js"
+import { CoordinateTrie } from "../coordinate-trie.js"
 import {
-  ADDRESS_TABLE,
   applyChanges,
   batch,
   deleted,
@@ -14,14 +14,13 @@ import {
   replaceChange,
   resolveToAddressed,
   Schema,
-  withCaching,
   withNavigation,
   withReadable,
   writable,
 } from "../index.js"
 import type { RefContext } from "../interpreter-types.js"
 import { bottomInterpreter } from "../interpreters/bottom.js"
-import { AddressedPath, AddressTableRegistry } from "../path.js"
+import { AddressedPath } from "../path.js"
 import { plainReader } from "../reader.js"
 
 // ===========================================================================
@@ -253,8 +252,9 @@ describe("withAddressing: composition", () => {
   it("stacks without withAddressing use RawPath (fallback works)", () => {
     const store = { x: 42 }
     const schema = Schema.struct({ x: Schema.number() })
-    // Build a stack WITHOUT withAddressing
-    const interp = withCaching(withReadable(withNavigation(bottomInterpreter)))
+    // Build a stack WITHOUT withAddressing (and so without withCaching,
+    // which needs it)
+    const interp = withReadable(withNavigation(bottomInterpreter))
     const ctx: RefContext = { reader: plainReader(store) }
     const doc = interpret(schema, interp, ctx) as any
 
@@ -314,47 +314,6 @@ describe("withAddressing: onRefCreated", () => {
       d.todos.delete(0, 1)
     })
     expect(deleted(item)).toBe(true)
-  })
-})
-
-// ===========================================================================
-// ADDRESS_TABLE symbol — discovery by downstream layers
-// ===========================================================================
-
-describe("withAddressing: [ADDRESS_TABLE]", () => {
-  it("sequence refs have ADDRESS_TABLE symbol when withAddressing is in the stack", () => {
-    const { doc } = createTodoDoc([{ text: "test", done: false }])
-
-    // Access an item so the table gets populated
-    doc.todos.at(0)
-
-    expect(ADDRESS_TABLE in doc.todos).toBe(true)
-    const table = (doc.todos as any)[ADDRESS_TABLE]
-    expect(table).toBeDefined()
-    expect(table.byIndex).toBeInstanceOf(Map)
-    expect(table.byId).toBeInstanceOf(Map)
-  })
-
-  it("map refs have ADDRESS_TABLE symbol when withAddressing is in the stack", () => {
-    const { doc } = createMapDoc({ version: "1.0" })
-
-    // Access an entry so the table gets populated
-    doc.metadata.at("version")
-
-    expect(ADDRESS_TABLE in doc.metadata).toBe(true)
-    const table = (doc.metadata as any)[ADDRESS_TABLE]
-    expect(table).toBeDefined()
-    expect(table.byKey).toBeInstanceOf(Map)
-  })
-
-  it("sequence refs without withAddressing do NOT have ADDRESS_TABLE", () => {
-    const store = { items: ["a", "b"] }
-    const schema = Schema.struct({ items: Schema.list(Schema.string()) })
-    const interp = withCaching(withReadable(withNavigation(bottomInterpreter)))
-    const ctx: RefContext = { reader: plainReader(store) }
-    const doc = interpret(schema, interp, ctx) as any
-
-    expect(ADDRESS_TABLE in doc.items).toBe(false)
   })
 })
 
@@ -540,21 +499,21 @@ describe("withAddressing: dead ref detection", () => {
 
 describe("resolveToAddressed", () => {
   it("is idempotent — already-addressed path passes through unchanged", () => {
-    const registry = new AddressTableRegistry()
-    const addressed = new AddressedPath([], registry).field("a").item(0)
-    const resolved = resolveToAddressed(addressed, registry)
+    const trie = new CoordinateTrie()
+    const addressed = new AddressedPath([], trie).field("a").item(0)
+    const resolved = resolveToAddressed(addressed, trie)
     expect(resolved).toBe(addressed)
   })
 
   it("converts a RawPath to an AddressedPath with matching key", () => {
-    const registry = new AddressTableRegistry()
+    const trie = new CoordinateTrie()
     const raw = RawPath.empty.field("todos").item(0).field("done")
 
-    // First, create the addresses via the registry (simulating .at(0) access)
-    const addrRoot = new AddressedPath([], registry)
+    // First, create the addresses via the trie (simulating .at(0) access)
+    const addrRoot = new AddressedPath([], trie)
     const expected = addrRoot.field("todos").item(0).field("done")
 
-    const resolved = resolveToAddressed(raw, registry)
+    const resolved = resolveToAddressed(raw, trie)
     expect(resolved.isAddressed).toBe(true)
     expect(resolved.key).toBe(expected.key)
   })

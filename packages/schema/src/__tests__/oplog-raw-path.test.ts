@@ -3,6 +3,7 @@
 // corrupt an already-logged op that exportSince later serializes. Rationale:
 // jj:mlurlzqt.
 import { describe, expect, it } from "vitest"
+import { CoordinateTrie } from "../coordinate-trie.js"
 import {
   batch,
   createRef,
@@ -12,7 +13,7 @@ import {
   Schema,
   type SubstratePayload,
 } from "../index.js"
-import { type Address, AddressedPath, AddressTableRegistry } from "../path.js"
+import { type Address, AddressedPath } from "../path.js"
 import { decodePlainPayload } from "../substrates/plain.js"
 
 const Candidate = Schema.struct({
@@ -151,7 +152,7 @@ describe("plain op-log: history survives deletion and reordering", () => {
   it("format() does not throw on a path with a deleted segment", () => {
     // format() feeds error messages; if it threw on a dead segment it would
     // mask the real error. The toContain assertion also fails if format throws.
-    const p = new AddressedPath([], new AddressTableRegistry())
+    const p = new AddressedPath([], new CoordinateTrie())
       .field("candidates")
       .entry(KEY)
     ;(p.segments[1] as Address).dead = true
@@ -159,7 +160,7 @@ describe("plain op-log: history survives deletion and reordering", () => {
   })
 
   it("toRaw() projects a path with a deleted segment, preserving its coordinates", () => {
-    const p = new AddressedPath([], new AddressTableRegistry())
+    const p = new AddressedPath([], new CoordinateTrie())
       .field("candidates")
       .entry(KEY)
       .field("status")

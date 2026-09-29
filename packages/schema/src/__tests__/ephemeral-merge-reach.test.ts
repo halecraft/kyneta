@@ -3,7 +3,7 @@
 // presence use case: one peer's cursor, watched on its own.
 
 import { describe, expect, it } from "vitest"
-import { Schema, subscribe, subscribeNode } from "../index.js"
+import { deleted, Schema, subscribe, subscribeNode } from "../index.js"
 import { peerOf, ship } from "./ephemeral-fixtures.js"
 
 const Presence = Schema.struct({
@@ -54,5 +54,34 @@ describe("a merge reaches subscribers below a top-level field", () => {
     ship(remote, local)
 
     expect(changes).toEqual([["peers", "map"]])
+  })
+})
+
+describe("refs across a merge", () => {
+  it("a held entry stays alive, with its identity, while its key exists", () => {
+    const local = peerOf(Presence)
+    const remote = peerOf(Presence)
+    remote.doc.peers.set("alice", { cursor: 1 })
+    ship(remote, local)
+
+    const alice = local.doc.peers.at("alice")
+    const cursor = alice?.cursor
+
+    remote.doc.peers.at("alice")?.cursor.set(2)
+    ship(remote, local)
+    expect(local.doc.peers.at("alice")).toBe(alice)
+    expect(deleted(alice)).toBe(false)
+    expect(cursor?.()).toBe(2)
+
+    remote.doc.peers.set("bob", { cursor: 0 })
+    ship(remote, local)
+    expect(local.doc.peers.at("alice")).toBe(alice)
+    expect(deleted(alice)).toBe(false)
+
+    remote.doc.peers.delete("alice")
+    ship(remote, local)
+    expect(deleted(alice)).toBe(true)
+    expect(deleted(cursor)).toBe(true)
+    expect(local.doc.peers.at("alice")).toBeUndefined()
   })
 })

@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest"
+import { CoordinateTrie } from "../coordinate-trie.js"
 import {
   type Address,
   AddressedPath,
-  AddressTableRegistry,
   fieldAddress,
   indexAddress,
   RawPath,
@@ -126,8 +126,8 @@ describe("RawPath", () => {
 
     it("promotes to AddressedPath when passed an AddressedPath", () => {
       const raw = RawPath.empty.field("a")
-      const registry = new AddressTableRegistry()
-      const addressed = new AddressedPath([], registry).field("b")
+      const trie = new CoordinateTrie()
+      const addressed = new AddressedPath([], trie).field("b")
       const result = raw.concat(addressed)
       expect(result.isAddressed).toBe(true)
       expect(result.length).toBe(2)
@@ -207,15 +207,15 @@ describe("Address", () => {
 // ===========================================================================
 
 describe("AddressedPath", () => {
-  let registry: AddressTableRegistry
+  let trie: CoordinateTrie
 
   beforeEach(() => {
     resetAddressIdCounter()
-    registry = new AddressTableRegistry()
+    trie = new CoordinateTrie()
   })
 
-  it("field(key) creates a field address in the registry", () => {
-    const root = new AddressedPath([], registry)
+  it("field(key) creates a field address in the trie", () => {
+    const root = new AddressedPath([], trie)
     const child = root.field("title")
     expect(child).toBeInstanceOf(AddressedPath)
     expect(child.length).toBe(1)
@@ -226,8 +226,8 @@ describe("AddressedPath", () => {
     expect(seg.resolve()).toBe("title")
   })
 
-  it("item(index) creates a cursor address in the registry", () => {
-    const root = new AddressedPath([], registry)
+  it("item(index) creates a cursor address in the trie", () => {
+    const root = new AddressedPath([], trie)
     const child = root.item(0)
     expect(child).toBeInstanceOf(AddressedPath)
     expect(child.length).toBe(1)
@@ -240,7 +240,7 @@ describe("AddressedPath", () => {
 
   describe("idempotency", () => {
     it("field() with same arguments returns same Address object", () => {
-      const root = new AddressedPath([], registry)
+      const root = new AddressedPath([], trie)
       const a = root.field("title")
       const b = root.field("title")
       // Same Address object reference
@@ -248,7 +248,7 @@ describe("AddressedPath", () => {
     })
 
     it("item() with same index returns same Address object", () => {
-      const root = new AddressedPath([], registry)
+      const root = new AddressedPath([], trie)
       const a = root.item(0)
       const b = root.item(0)
       // Same Address object reference
@@ -258,7 +258,7 @@ describe("AddressedPath", () => {
 
   describe("key", () => {
     it("cursor-addressed segments produce stable strings across index changes", () => {
-      const root = new AddressedPath([], registry)
+      const root = new AddressedPath([], trie)
       const child = root.item(5)
       const key1 = child.key
 
@@ -269,12 +269,12 @@ describe("AddressedPath", () => {
       // Key should NOT change — it uses cursor.id, not cursor.index
       // (Note: key is memoized, so this also verifies memoization correctness
       // for the addressed case where it MUST use id, not index)
-      const freshPath = new AddressedPath([addr], registry)
+      const freshPath = new AddressedPath([addr], trie)
       expect(freshPath.key).toBe(key1)
     })
 
     it("key-addressed segments use the key string", () => {
-      const root = new AddressedPath([], registry)
+      const root = new AddressedPath([], trie)
       const child = root.field("settings").field("darkMode")
       expect(child.key).toBe("settings\0darkMode")
     })
@@ -283,7 +283,7 @@ describe("AddressedPath", () => {
   describe("read", () => {
     it("reads correct store location via seg.resolve()", () => {
       const store = { items: [{ name: "alice" }, { name: "bob" }] }
-      const root = new AddressedPath([], registry)
+      const root = new AddressedPath([], trie)
       const p = root.field("items").item(1).field("name")
       expect(p.read(store)).toBe("bob")
     })
@@ -292,7 +292,7 @@ describe("AddressedPath", () => {
       // read() is total: a deleted coordinate reads as absent (the store no
       // longer has the key), not a throw. Writes still guard (see below).
       // Context: jj:mlurlzqt.
-      const root = new AddressedPath([], registry)
+      const root = new AddressedPath([], trie)
       const child = root.item(0)
       const addr = child.segments[0] as any as Address
       addr.dead = true
@@ -301,7 +301,7 @@ describe("AddressedPath", () => {
   })
 
   it("lastAddress() returns the last Address segment", () => {
-    const root = new AddressedPath([], registry)
+    const root = new AddressedPath([], trie)
     const p = root.field("items").item(2)
     const last = p.lastAddress() as any
     expect(last.kind).toBe("index")
@@ -309,21 +309,21 @@ describe("AddressedPath", () => {
   })
 
   it("lastAddress() returns undefined for empty path", () => {
-    const root = new AddressedPath([], registry)
+    const root = new AddressedPath([], trie)
     expect(root.lastAddress()).toBeUndefined()
   })
 
   describe("concat", () => {
     it("concatenates two addressed paths", () => {
-      const a = new AddressedPath([], registry).field("a")
-      const b = new AddressedPath([], registry).field("b")
+      const a = new AddressedPath([], trie).field("a")
+      const b = new AddressedPath([], trie).field("b")
       const c = a.concat(b)
       expect(c.length).toBe(2)
       expect(c).toBeInstanceOf(AddressedPath)
     })
 
     it("promotes RawPath to AddressedPath when concatenating", () => {
-      const addressed = new AddressedPath([], registry).field("a")
+      const addressed = new AddressedPath([], trie).field("a")
       const raw = RawPath.empty.field("b")
       const result = addressed.concat(raw)
       expect(result.isAddressed).toBe(true)
@@ -333,26 +333,26 @@ describe("AddressedPath", () => {
   })
 
   it("isAddressed is true", () => {
-    const root = new AddressedPath([], registry)
+    const root = new AddressedPath([], trie)
     expect(root.isAddressed).toBe(true)
     expect(root.field("x").isAddressed).toBe(true)
   })
 
-  it("root() returns an empty AddressedPath with same registry", () => {
-    const root = new AddressedPath([], registry)
+  it("root() returns an empty AddressedPath with same trie", () => {
+    const root = new AddressedPath([], trie)
     const child = root.field("a").item(0)
     const r = child.root()
     expect(r).toBeInstanceOf(AddressedPath)
     expect(r.length).toBe(0)
     expect(r.isAddressed).toBe(true)
-    // Verify same registry by creating an address and checking idempotency
+    // Verify same trie by creating an address and checking idempotency
     const x = r.field("x")
     const y = root.field("x")
     expect(x.segments[0]).toBe(y.segments[0])
   })
 
   it("format() works identically to RawPath for equivalent segments", () => {
-    const root = new AddressedPath([], registry)
+    const root = new AddressedPath([], trie)
     const p = root.field("todos").item(2).field("done")
     expect(p.format()).toBe("todos[2].done")
   })
@@ -401,24 +401,24 @@ describe("Monoid laws", () => {
   })
 
   describe("AddressedPath", () => {
-    let registry: AddressTableRegistry
+    let trie: CoordinateTrie
 
     beforeEach(() => {
       resetAddressIdCounter()
-      registry = new AddressTableRegistry()
+      trie = new CoordinateTrie()
     })
 
     it("right identity: path.concat(path.root()).key === path.key", () => {
-      const root = new AddressedPath([], registry)
+      const root = new AddressedPath([], trie)
       const p = root.field("a").field("b")
       expect(p.concat(p.root()).key).toBe(p.key)
     })
 
     it("left identity: path.root().concat(path).key === path.key", () => {
-      const root = new AddressedPath([], registry)
+      const root = new AddressedPath([], trie)
       const p = root.field("a").field("b")
       // Need to build a proper two-segment path by extracting segments
-      const twoSeg = new AddressedPath(p.segments, registry)
+      const twoSeg = new AddressedPath(p.segments, trie)
       const leftIdentity = p.root().concat(twoSeg)
       expect(leftIdentity.key).toBe(p.key)
     })
@@ -426,7 +426,7 @@ describe("Monoid laws", () => {
 })
 
 // ===========================================================================
-// AddressTableRegistry
+// CoordinateTrie
 // ===========================================================================
 
 // ===========================================================================
@@ -440,8 +440,8 @@ describe("dead address propagation", () => {
 
   it("writeByPath throws when path contains a dead address", () => {
     const store = { items: [{ name: "alice" }] } as Record<string, unknown>
-    const registry = new AddressTableRegistry()
-    const root = new AddressedPath([], registry)
+    const trie = new CoordinateTrie()
+    const root = new AddressedPath([], trie)
     const p = root.field("items").item(0).field("name")
 
     // Kill the index address
@@ -454,8 +454,8 @@ describe("dead address propagation", () => {
   })
 
   it("read() returns undefined (does not throw) when a path segment is dead", () => {
-    const registry = new AddressTableRegistry()
-    const root = new AddressedPath([], registry)
+    const trie = new CoordinateTrie()
+    const root = new AddressedPath([], trie)
     const p = root.field("settings").field("theme")
 
     // Kill the field address
@@ -469,7 +469,7 @@ describe("dead address propagation", () => {
 })
 
 // ===========================================================================
-// AddressTableRegistry
+// CoordinateTrie
 // ===========================================================================
 
 describe("segmentKeys and prefixKeys", () => {
@@ -497,7 +497,7 @@ describe("segmentKeys and prefixKeys", () => {
   })
 
   it("equal each slice's key on an addressed path, keying an index by its id", () => {
-    const root = new AddressedPath([], new AddressTableRegistry())
+    const root = new AddressedPath([], new CoordinateTrie())
     const path = root.field(tricky).item(0).entry("k")
     const index = path.segments[1]
     if (index.kind !== "index") throw new Error("expected an index address")

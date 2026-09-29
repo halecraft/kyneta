@@ -402,7 +402,7 @@ export function buildWritableContext(
   const resolve = (path: Path): Path => {
     const root = (ctx as { rootPath?: Path }).rootPath
     return root instanceof AddressedPath
-      ? resolveToAddressed(path, root.registry)
+      ? resolveToAddressed(path, root.trie)
       : path
   }
 

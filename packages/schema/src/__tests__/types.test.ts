@@ -66,6 +66,7 @@ import {
   type WritableBrand,
   type WritableContext,
   type WritableMapRef,
+  withAddressing,
   withCaching,
   withNavigation,
   withReadable,
@@ -1539,7 +1540,9 @@ describe("type-level: ResolveCarrier<S, A> selects the correct tier", () => {
 describe("type-level: withWritable contributes HasTransact to A", () => {
   it("withWritable return type includes HasTransact", () => {
     const interp = withWritable(
-      withCaching(withReadable(withNavigation(bottomInterpreter))),
+      withCaching(
+        withAddressing(withReadable(withNavigation(bottomInterpreter))),
+      ),
     )
     // The interpreter's A type should include HasTransact
     expectTypeOf(interp).toMatchTypeOf<
@@ -1559,7 +1562,9 @@ describe("type-level: withChangefeed contributes HasChangefeed to A", () => {
   it("withChangefeed return type includes HasChangefeed", () => {
     const interp = withChangefeed(
       withWritable(
-        withCaching(withReadable(withNavigation(bottomInterpreter))),
+        withCaching(
+          withAddressing(withReadable(withNavigation(bottomInterpreter))),
+        ),
       ),
     )
     expectTypeOf(interp).toMatchTypeOf<Interpreter<RefContext, HasChangefeed>>()
@@ -1568,7 +1573,9 @@ describe("type-level: withChangefeed contributes HasChangefeed to A", () => {
   it("full stack has HasTransact & HasChangefeed in carrier type", () => {
     const interp = withChangefeed(
       withWritable(
-        withCaching(withReadable(withNavigation(bottomInterpreter))),
+        withCaching(
+          withAddressing(withReadable(withNavigation(bottomInterpreter))),
+        ),
       ),
     )
     expectTypeOf(interp).toMatchTypeOf<
