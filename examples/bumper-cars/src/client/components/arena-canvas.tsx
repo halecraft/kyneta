@@ -225,7 +225,7 @@ export function ArenaCanvas({ cars, myPeerId }: ArenaCanvasProps) {
       window.removeEventListener("resize", updateSize)
       cancelAnimationFrame(animationId)
     }
-  }, []) // empty deps — set up once, no listener churn
+  }, [myPeerId]) // the loop reads cars through refs, so only a new peer id restarts it
 
   return <canvas ref={canvasRef} />
 }

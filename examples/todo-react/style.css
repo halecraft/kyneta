@@ -88,7 +88,7 @@ li input[type="checkbox"] {
 
 /* ── Remove button ───────────────────────────────────────────────────── */
 
-li button {
+.todo-remove {
   flex-shrink: 0;
   background: none;
   border: none;
@@ -99,7 +99,7 @@ li button {
   line-height: 1;
 }
 
-li button:hover {
+.todo-remove:hover {
   color: #c00;
 }
 

@@ -18,7 +18,7 @@ const GREEN = "\x1b[32m"
 const YELLOW = "\x1b[33m"
 const WHITE = "\x1b[37m"
 
-// eslint-disable-next-line no-control-regex
+// biome-ignore lint/suspicious/noControlCharactersInRegex: an ANSI escape sequence begins with ESC
 const ANSI_RE = /\x1b\[[0-9;]*m/g
 
 /** Visible character width of a string, ignoring ANSI escape sequences. */
@@ -150,7 +150,7 @@ export function render(
     `${DIM}↑↓/jk navigate  ←→/hl change  q quit${RESET}`,
   ]
 
-  return "\x1b[2J\x1b[H" + lines.join("\n")
+  return `\x1b[2J\x1b[H${lines.join("\n")}`
 }
 
 // ---------------------------------------------------------------------------

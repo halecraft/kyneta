@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "peer": "bun src/peer.ts"
+    "peer": "bun src/peer.ts",
+    "verify": "verify"
   },
   "dependencies": {
     "@kyneta/exchange": "workspace:^",

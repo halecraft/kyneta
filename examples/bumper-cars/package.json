@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "bun src/server.ts",
     "build": "bun src/build.ts",
-    "test": "vitest run"
+    "test": "verify logic",
+    "verify": "verify"
   },
   "dependencies": {
     "@kyneta/bun-server": "workspace:^",

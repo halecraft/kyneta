@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "tsx src/server.ts",
     "generate": "prisma generate",
-    "migrate": "prisma migrate dev --name init"
+    "migrate": "prisma migrate dev --name init",
+    "verify": "verify"
   },
   "dependencies": {
     "@kyneta/exchange": "workspace:^",

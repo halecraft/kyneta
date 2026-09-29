@@ -8,16 +8,16 @@
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
+import { defined } from "@kyneta/schema/testing"
 import { describe, expect, it } from "vitest"
 import {
-  ARENA_HEIGHT,
   ARENA_WIDTH,
   CAR_RADIUS,
   COLLISION_COOLDOWN,
   HIT_EFFECT_DURATION,
 } from "../constants.js"
 import { makeCar, makeTickInput } from "./test-helpers.js"
-import { type TickInput, tick } from "./tick.js"
+import { tick } from "./tick.js"
 
 // ─────────────────────────────────────────────────────────────────────────
 // Basic tick behavior
@@ -92,8 +92,8 @@ describe("tick", () => {
     expect(result.scoredCollisions).toHaveLength(0)
 
     // But the cars were still resolved — they should be separated
-    const next1 = result.cars.get("a")!
-    const next2 = result.cars.get("b")!
+    const next1 = defined(result.cars.get("a"), "car a")
+    const next2 = defined(result.cars.get("b"), "car b")
     const dx = next2.x - next1.x
     const dy = next2.y - next1.y
     const distance = Math.sqrt(dx * dx + dy * dy)
@@ -195,7 +195,7 @@ describe("tick", () => {
       // Victims (non-scorers) should have hitUntil set
       for (const peer of [collision.peer1, collision.peer2]) {
         if (!collision.scorers.includes(peer)) {
-          const victimCar = result.cars.get(peer)!
+          const victimCar = defined(result.cars.get(peer), "the victim's car")
           expect(victimCar.hitUntil).toBe(now + HIT_EFFECT_DURATION)
         }
       }

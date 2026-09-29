@@ -82,8 +82,10 @@ export function tick(input: TickInput): TickOutput {
     for (let j = i + 1; j < peerIds.length; j++) {
       const p1 = peerIds[i]
       const p2 = peerIds[j]
-      const car1 = nextCars.get(p1)!
-      const car2 = nextCars.get(p2)!
+      const car1 = nextCars.get(p1)
+      const car2 = nextCars.get(p2)
+      // Every id came from `nextCars`, and none is ever removed from it.
+      if (car1 === undefined || car2 === undefined) continue
 
       const result = checkCarCollision(p1, car1, p2, car2, now)
       if (!result.collision) {

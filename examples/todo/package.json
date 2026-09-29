@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "bun src/server.ts",
-    "build": "bun src/build.ts"
+    "build": "bun src/build.ts",
+    "verify": "verify"
   },
   "dependencies": {
     "@kyneta/bun-server": "workspace:^",

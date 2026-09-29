@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx src/server.ts"
+    "dev": "tsx src/server.ts",
+    "verify": "verify"
   },
   "dependencies": {
     "@kyneta/devtools": "workspace:^",

@@ -4,12 +4,12 @@ export default defineConfig({
   tasks: [
     {
       key: "format",
-      run: "biome check --write src/ example/",
+      run: "biome check --write .",
       parser: parsers.biome,
     },
     {
       key: "types",
-      run: "tsgo --noEmit --skipLibCheck && tsgo --noEmit --skipLibCheck -p example",
+      run: "tsgo --noEmit --skipLibCheck",
       parser: parsers.tsc,
       reportingDependsOn: ["format"],
     },
@@ -17,12 +17,6 @@ export default defineConfig({
       key: "logic",
       run: "vitest run",
       parser: parsers.vitest,
-      reportingDependsOn: ["format", "types"],
-    },
-    {
-      // The examples run as written in the README, and must not throw.
-      key: "examples",
-      run: "bun example/basic/main.ts > /dev/null && bun example/advanced/main.ts > /dev/null",
       reportingDependsOn: ["format", "types"],
     },
   ],

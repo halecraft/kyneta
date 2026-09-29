@@ -24,7 +24,6 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { streamObservations } from "@kyneta/devtools"
 import { Exchange } from "@kyneta/exchange"
-import { createLevelDBStore } from "@kyneta/leveldb-store"
 import {
   WebsocketServerTransport,
   wrapNodeWebsocket,
@@ -46,7 +45,8 @@ const exchange = new Exchange({
   type: "service",
   transports: [serverTransport],
 
-  /** Uncomment to add local storage persistence via LevelDB */
+  // To persist to LevelDB, import `createLevelDBStore` from
+  // "@kyneta/leveldb-store" and add:
   // store: await createLevelDBStore("./todo.db"),
 })
 

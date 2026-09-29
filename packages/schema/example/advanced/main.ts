@@ -203,6 +203,12 @@ log(`
 
 section(6, "Referential Identity and Caching")
 
+// Two reads of each, compared below.
+const [name1, name2] = [doc.name, doc.name]
+const [settings1, settings2] = [doc.settings, doc.settings]
+const [task1, task2] = [doc.tasks.at(0), doc.tasks.at(0)]
+const [read1, read2] = [doc(), doc()]
+
 const before = doc()
 doc.stars.increment(1)
 const after = doc()
@@ -211,13 +217,13 @@ log(`
     withCaching (included in 'readable') ensures repeated field access
     returns the same object identity — critical for React memoization.
 
-    doc.name === doc.name → ${doc.name === doc.name}
-    doc.settings === doc.settings → ${doc.settings === doc.settings}
-    doc.tasks.at(0) === doc.tasks.at(0) → ${doc.tasks.at(0) === doc.tasks.at(0)}
+    doc.name === doc.name → ${name1 === name2}
+    doc.settings === doc.settings → ${settings1 === settings2}
+    doc.tasks.at(0) === doc.tasks.at(0) → ${task1 === task2}
 
     Reads are frozen, and keep their identity until what they read changes:
 
-    doc() === doc() → ${doc() === doc()}
+    doc() === doc() → ${read1 === read2}
     Object.isFrozen(doc()) → ${Object.isFrozen(doc())}
     after doc.stars.increment(1):
       after === before → ${after === before}

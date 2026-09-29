@@ -36,7 +36,7 @@ export function TodoItem({
         type="text"
         className={done ? "todo-text done" : "todo-text"}
         placeholder="What needs to be done?"
-        // eslint-disable-next-line jsx-a11y/no-autofocus
+        // biome-ignore lint/a11y/noAutofocus: a todo added from the keyboard takes focus so typing continues into it
         autoFocus={autoFocus}
         onKeyDown={e => {
           if (e.key === "Enter") {
@@ -45,7 +45,11 @@ export function TodoItem({
           }
         }}
       />
-      <button type="button" onClick={() => remove(todoRef)}>
+      <button
+        type="button"
+        className="todo-remove"
+        onClick={() => remove(todoRef)}
+      >
         ×
       </button>
     </li>
