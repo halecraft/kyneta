@@ -19,8 +19,8 @@
 // - Read-only: ctx has no prepare/deliver → .subscribe never fires,
 //   .current still works. Valid static Moore machine.
 //
-// Notification flow (read-write only): the transformer wraps ctx.prepare
-// to resolve each op's path and mark it populated, and wraps ctx.deliver
+// Notification flow (read-write only): the transformer registers a
+// `prepare` stage that marks each op's path populated, and wraps ctx.deliver
 // to plan and fire notifications for one sealed batch. Capturing each
 // batch's ops, sealing, and delivering in seal order after the native
 // commit belong to the writable context (`buildWritableContext`).
@@ -45,7 +45,6 @@ import type {
   SumVariants,
 } from "../interpret.js"
 import { INTERPRETER, type RefContext } from "../interpreter-types.js"
-import { AddressedPath, resolveToAddressed } from "../path.js"
 import type {
   CounterSchema,
   MapSchema,
@@ -59,7 +58,7 @@ import type {
   TextSchema,
   TreeSchema,
 } from "../schema.js"
-import type { BatchOptions, PrepareOptions } from "../substrate.js"
+import type { BatchOptions } from "../substrate.js"
 
 import type { HasRead } from "./bottom.js"
 import { CALL } from "./bottom.js"
@@ -268,17 +267,14 @@ export function planDelivery(
     // A change at `a/b/c` concerns subscribers at `a/b/c`, `a/b`, `a`, and the
     // root. That set is just the path's ancestor chain, so it is derived here
     // from the path itself rather than maintained between deliveries.
+    const prefixKeys = path.prefixKeys
     for (let i = path.length; i >= 0; i--) {
-      // Structural: take the first `i` segments, then compute THAT path's key.
-      //
-      // A key is its segments joined by a separator, so ancestor keys look like
-      // prefixes of the key string, and cutting the string would be cheaper. It
-      // is also wrong. Joining is lossy: a segment whose own text contains the
-      // separator makes the split invent a level that never existed, and a
-      // subscriber at that phantom path would receive changes from an unrelated
-      // subtree. Slicing segments cannot produce a level that is not there.
-      // `markPopulated` walks structurally for the same reason.
-      const ancestorKey = i === path.length ? key : path.slice(0, i).key
+      // `prefixKeys` is built segment by segment, never by cutting `key`:
+      // joining is lossy, so a segment whose own text contains the separator
+      // would make a split invent a level that never existed, and a
+      // subscriber at that phantom path would receive changes from an
+      // unrelated subtree. `markPopulated` walks the same keys.
+      const ancestorKey = prefixKeys[i]
       if (!deepKeys.has(ancestorKey)) continue
 
       // Rebase only where someone is listening, so a deep document with few
@@ -408,7 +404,7 @@ export function changesetMetadata(options: BatchOptions): BatchMetadata {
  * multiply garbage for no benefit.
  *
  * @param plan - From `planDelivery`.
- * @param listeners - Own-path subscribers, keyed by path (from `ensurePrepareWiring`).
+ * @param listeners - Own-path subscribers, keyed by path (from `ensureChangefeedWiring`).
  * @param descendants - Deep subscribers, keyed by their own path.
  * @param options - The sealed batch's options; `changesetMetadata` turns
  *   them into the metadata every emitted `Changeset` carries.
@@ -491,11 +487,11 @@ export function synthesizeTreeDeleteTerminal(
 }
 
 // ---------------------------------------------------------------------------
-// Prepare/deliver wrapping — per-context, idempotent
+// Prepare stage and deliver wrapping — per-context, idempotent
 // ---------------------------------------------------------------------------
 
 /**
- * Per-context state for the changefeed layer's prepare/deliver wrapping.
+ * Per-context state for the changefeed layer's wiring.
  *
  * - `listeners` / `descendants`: the two subscriber registries, written into
  *   by `listenIn` when someone subscribes. Together they are the
@@ -513,28 +509,16 @@ interface ContextWiringState {
   readonly populatedListeners: Map<string, Set<() => void>>
 }
 
-// WeakMap ensures a single prepare/deliver wrapper per context,
-// shared across all nodes interpreted with that context.
+// One wiring per context, shared across all nodes interpreted with it.
 const contextState = new WeakMap<RefContext, ContextWiringState>()
-
-/**
- * Ensures the given context has its `prepare` and `deliver` wrapped
- * for changefeed notification. On read-only stacks (no `prepare`/`deliver`)
- * `.subscribe` callbacks are registered in a local listener map but never
- * fired: a valid static Moore machine.
- *
- * On read-write stacks:
- * - `prepare` wrapping: resolves the op's path to its addressed form (so
- *   `path.key` matches listener and cache keys), calls the inner prepare,
- *   and marks the path populated.
- * - `deliver` wrapping: plans delivery from the sealed batch's ops
- *   (`planDelivery`, pure) and fires listeners (`deliverNotifications`).
- */
 
 // WeakMap for read-only contexts: each gets its own orphaned listener
 // map. Subscribers register but nothing feeds into it — valid static
 // Moore machine. Separate per-context to avoid cross-contamination.
 const readOnlyState = new WeakMap<RefContext, ChangefeedChannels>()
+
+/** The key this layer registers its prepare stage under. */
+const CHANGEFEED_STAGE: unique symbol = Symbol("kyneta:changefeed-stage")
 
 /**
  * The two subscriber registries a changefeed writes into: own-path and
@@ -546,7 +530,20 @@ interface ChangefeedChannels {
   readonly descendants: DeepRegistry
 }
 
-function ensurePrepareWiring(ctx: RefContext): ChangefeedChannels {
+/**
+ * The subscriber registries for `ctx`, wiring the context for notification
+ * on first use. On read-only stacks (no pipeline) `.subscribe` callbacks
+ * are registered in a local listener map but never fired: a valid static
+ * Moore machine.
+ *
+ * On read-write stacks:
+ * - an `after` stage marks each op's path populated;
+ * - `deliver` wrapping plans delivery from the sealed batch's ops
+ *   (`planDelivery`, pure) and fires listeners (`deliverNotifications`).
+ *   This is the only wrapper left on the context, so there is no wrapping
+ *   order to depend on.
+ */
+function ensureChangefeedWiring(ctx: RefContext): ChangefeedChannels {
   if (!hasPreparePipeline(ctx)) {
     let channels = readOnlyState.get(ctx)
     if (!channels) {
@@ -564,28 +561,14 @@ function ensurePrepareWiring(ctx: RefContext): ChangefeedChannels {
   const descendants: DeepRegistry = new Map()
   const populated = new Set<string>()
   const populatedListeners = new Map<string, Set<() => void>>()
-  const originalPrepare = ctx.prepare
   const originalDeliver = ctx.deliver
 
-  // Wrapped prepare: resolve the path, forward to the inner prepare, and
-  // mark the path populated. The base context captures the resolved op
-  // into the batch's trace.
-  const wrappedPrepare = (
-    path: Path,
-    change: ChangeBase,
-    options: PrepareOptions,
-  ): void => {
-    // Resolve raw paths to addressed paths so that path.key matches
-    // the identity-stable keys used by changefeed listeners and cache
-    // invalidation handlers. Idempotent for already-addressed paths.
-    const rootPath = (ctx as { rootPath?: unknown }).rootPath
-    const resolved =
-      rootPath instanceof AddressedPath
-        ? resolveToAddressed(path, rootPath.registry)
-        : path
-    originalPrepare(resolved, change, options)
-    markPopulated(resolved, populated, populatedListeners)
-  }
+  // Mark each op's path populated once the substrate has applied it. The
+  // pipeline hands the stage the resolved path, so its key matches the
+  // listeners' keys whoever called `prepare`.
+  ctx.addPrepareStage(CHANGEFEED_STAGE, {
+    after: path => markPopulated(path, populated, populatedListeners),
+  })
 
   // Wrapped deliver: plan from the sealed batch's ops, then call the
   // subscribers. `listeners` and `descendants` are passed as membership
@@ -596,7 +579,6 @@ function ensurePrepareWiring(ctx: RefContext): ChangefeedChannels {
     deliverNotifications(plan, listeners, descendants, batch.options)
   }
 
-  ctx.prepare = wrappedPrepare
   ctx.deliver = wrappedDeliver
 
   state = {
@@ -614,9 +596,7 @@ function ensurePrepareWiring(ctx: RefContext): ChangefeedChannels {
  *
  * @internal Not exported from the package barrel.
  *
- * Test-only, and modelled on `__getCacheHandlerCountAtPath` in
- * `with-caching.ts` — the same problem one interpreter over. A registration
- * that outlives its subscriber costs memory and per-delivery work and nothing
+ * Test-only. A registration that outlives its subscriber costs memory and per-delivery work and nothing
  * else: delivery still calls exactly the callbacks that are subscribed, so a
  * test counting callbacks passes whether or not the registry accretes. Reading
  * the structure is the test that actually holds.
@@ -653,8 +633,9 @@ function markPopulated(
   }
 
   // Mark all ancestor paths (prefix walk)
+  const prefixKeys = path.prefixKeys
   for (let i = path.length - 1; i >= 0; i--) {
-    const ancestorKey = path.slice(0, i).key
+    const ancestorKey = prefixKeys[i]
     if (populated.has(ancestorKey)) break // already marked, ancestors are too
     populated.add(ancestorKey)
     firePopulatedListeners(ancestorKey, populatedListeners)
@@ -795,8 +776,8 @@ function getPopulatedState(ctx: RefContext): {
       populatedListeners: state.populatedListeners,
     }
   }
-  // ensurePrepareWiring hasn't been called yet — call it to initialize
-  ensurePrepareWiring(ctx)
+  // ensureChangefeedWiring hasn't been called yet — call it to initialize
+  ensureChangefeedWiring(ctx)
   const initialized = contextState.get(ctx)
   if (initialized) {
     return {
@@ -804,7 +785,7 @@ function getPopulatedState(ctx: RefContext): {
       populatedListeners: initialized.populatedListeners,
     }
   }
-  // Unreachable in practice — `ensurePrepareWiring` populates the map for any
+  // Unreachable in practice — `ensureChangefeedWiring` populates the map for any
   // context with a prepare pipeline, and the read-only case returned above.
   // Answering with empties rather than asserting keeps that assumption from
   // becoming a crash if a future context shape breaks it.
@@ -955,12 +936,13 @@ function createTreeChangefeed(
  *   `subscribeDescendants` fires for own-path AND descendant changes with relative
  *   paths (tree-level), making it a strict superset of `subscribe`.
  *
- * Notification flows through the changefeed tree, not flat subscriber maps.
- * Each node's `subscribeDescendants` composes its children's changefeeds.
+ * A subscriber registers at its own path key; delivery finds it by walking
+ * each changed path's ancestors (`planDelivery`), so no node forwards
+ * changes to another.
  *
- * **Prepare/deliver wrapping:** The transformer wraps `ctx.prepare` to
- * resolve paths and mark them populated, and `ctx.deliver` to turn one
- * sealed batch into one `Changeset` per affected subscriber.
+ * **Prepare stage and deliver wrapping:** The transformer registers a
+ * `prepare` stage that marks paths populated, and wraps `ctx.deliver` to
+ * turn one sealed batch into one `Changeset` per affected subscriber.
  *
  * This means:
  * - Auto-commit (single mutation via `dispatch`): a batch of one op →
@@ -1007,7 +989,7 @@ function wireChangefeed(
   ) => RecursiveChangefeedProtocol<unknown, ChangeBase>,
 ): void {
   if (isPropertyHost(result)) {
-    const channels = ensurePrepareWiring(ctx)
+    const channels = ensureChangefeedWiring(ctx)
     const changefeed = createCf(channels, path)
     attachChangefeed(result as object, changefeed)
     const populatedState = getPopulatedState(ctx)

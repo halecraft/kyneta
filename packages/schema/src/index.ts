@@ -265,11 +265,8 @@ export {
   hasDeleted,
   withAddressing,
 } from "./interpreters/with-addressing.js"
-// withCaching — interposition transformer (identity-preserving caching + INVALIDATE)
-export {
-  INVALIDATE,
-  withCaching,
-} from "./interpreters/with-caching.js"
+// withCaching — interposition transformer (identity-preserving caching)
+export { withCaching } from "./interpreters/with-caching.js"
 // Path types — re-exported from path.ts via interpret.ts
 // (Path, RawPath, RawSegment, Segment, etc. are exported above)
 // Changefeed observation layer.

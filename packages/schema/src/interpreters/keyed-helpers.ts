@@ -191,17 +191,13 @@ export function installKeyedNavigation<T extends object>(
   })
 }
 
-/** Override `.at(key)` with address-table-backed lookup and register an invalidation handler. */
+/** Override `.at(key)` with address-table-backed lookup for stable ref identity across mutations. */
 export function installKeyedCaching(
   result: object,
-  path: Path,
   addressTableSym: symbol,
-  invalidateSym: symbol,
-  registerHandler: (path: Path, handler: (change: any) => void) => void,
 ): void {
-  // Both symbols arrive as parameters, so neither the slot being read nor the
-  // one being written can be named in a type. This helper narrows rather than
-  // asserts for that reason — the members it touches are dynamic by design.
+  // The symbol arrives as a parameter, so the slot being read cannot be named
+  // in a type. This helper narrows rather than asserts for that reason.
   const slots = result as Record<symbol, unknown> & NavigableCarrier<string>
   const baseAt = slots.at
 
@@ -223,12 +219,4 @@ export function installKeyedCaching(
     enumerable: false,
     configurable: true,
   })
-
-  // Addressing layer handles all structural changes, so the cache
-  // layer has nothing to invalidate.
-  const invalidateKeyed = (_change: any): void => {}
-
-  slots[invalidateSym] = invalidateKeyed
-
-  registerHandler(path, invalidateKeyed)
 }

@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { own } from "../change.js"
 import {
   interpret,
-  mapChange,
   plainContext,
   plainInterpreter,
   plainReader,
@@ -20,7 +18,7 @@ import type {
 } from "../interpreters/bottom.js"
 import { bottomInterpreter } from "../interpreters/bottom.js"
 import { withAddressing } from "../interpreters/with-addressing.js"
-import { INVALIDATE, withCaching } from "../interpreters/with-caching.js"
+import { withCaching } from "../interpreters/with-caching.js"
 import { withNavigation } from "../interpreters/with-navigation.js"
 import { withReadable } from "../interpreters/with-readable.js"
 import { RawPath } from "../path.js"
@@ -65,6 +63,15 @@ function createDoc(
 ) {
   const ctx: RefContext = { reader: plainReader(store) }
   const doc = interpret(schema, cachedInterp, ctx) as any
+  return { doc, store, ctx }
+}
+
+function createWritableDoc(
+  schema: Parameters<typeof interpret>[0],
+  store: Record<string, unknown>,
+) {
+  const ctx = plainContext(store)
+  const doc = interpret(schema, withWritable(cachedInterp), ctx) as any
   return { doc, store, ctx }
 }
 
@@ -323,197 +330,72 @@ describe("withCaching: hybrid discriminant", () => {
     expect(doc.item.body()).toBe("hello")
   })
 
-  it("INVALIDATE clears non-discriminant caches but discriminant still reads from store", () => {
-    const { doc, store } = createDoc(schema, {
+  it("a variant switch keeps the sum's identity, and the discriminant reads from the store", () => {
+    const { doc } = createWritableDoc(schema, {
       item: { type: "text", body: "hello" },
     })
-    const bodyBefore = doc.item.body
-    expect(bodyBefore).toBe(doc.item.body) // cached
+    const item = doc.item
+    item.set({ type: "image", url: "pic.png" })
 
-    // Mutate store and invalidate
-    ;(store as any).item = { type: "image", url: "pic.png" }
-    doc.item[INVALIDATE](replaceChange(own({ type: "image", url: "pic.png" })))
-
-    // Discriminant reads live from store
+    expect(doc.item).toBe(item)
     expect(doc.item.type).toBe("image")
-    // Non-discriminant cache was cleared — fresh ref
-    expect(doc.item.url).not.toBe(bodyBefore)
+    expect(doc.item.url()).toBe("pic.png")
   })
 })
 
 // ===========================================================================
-// INVALIDATE: product
+// Field refs live as long as their product ref
 // ===========================================================================
 
-describe("withCaching: INVALIDATE product", () => {
-  it("has [INVALIDATE] symbol on product refs", () => {
-    const { doc } = createDoc(structuralDocSchema, {
+describe("withCaching: field refs across a replace of their product", () => {
+  it("a replace of the product keeps every field ref's identity", () => {
+    const { doc } = createWritableDoc(structuralDocSchema, {
       settings: { darkMode: false, fontSize: 14 },
       metadata: {},
     })
-    expect(typeof doc[INVALIDATE]).toBe("function")
+    const darkMode = doc.settings.darkMode
+    const fontSize = doc.settings.fontSize
+
+    doc.settings.set({ darkMode: true, fontSize: 20 })
+
+    expect(doc.settings.darkMode).toBe(darkMode)
+    expect(doc.settings.fontSize).toBe(fontSize)
+    expect(darkMode()).toBe(true)
+    expect(fontSize()).toBe(20)
   })
 
-  it("INVALIDATE with replaceChange clears all field caches", () => {
-    const { doc } = createDoc(structuralDocSchema, {
-      settings: { darkMode: false, fontSize: 14 },
-      metadata: {},
+  it("a replace of the product keeps a sum field's and a list field's identity", () => {
+    const schema = Schema.struct({
+      outer: Schema.struct({
+        mode: Schema.discriminatedUnion("type", [
+          Schema.struct({ type: Schema.string("a"), a: Schema.number() }),
+          Schema.struct({ type: Schema.string("b"), b: Schema.string() }),
+        ]),
+        opt: Schema.struct({ x: Schema.number() }).nullable(),
+        items: Schema.list(Schema.number()),
+      }),
     })
-    const settingsBefore = doc.settings
-    expect(settingsBefore).toBe(doc.settings) // cached
-
-    doc[INVALIDATE](
-      replaceChange(
-        own({
-          settings: { darkMode: true, fontSize: 20 },
-          metadata: {},
-        }),
-      ),
-    )
-
-    const settingsAfter = doc.settings
-    expect(settingsAfter).not.toBe(settingsBefore) // cache cleared
-  })
-
-  it("INVALIDATE with unrecognized change type clears all caches", () => {
-    const { doc } = createDoc(structuralDocSchema, {
-      settings: { darkMode: false, fontSize: 14 },
-      metadata: {},
+    const { doc } = createWritableDoc(schema, {
+      outer: { mode: { type: "a", a: 1 }, opt: null, items: [1] },
     })
-    const settingsBefore = doc.settings
-    expect(settingsBefore).toBe(doc.settings)
+    const mode = doc.outer.mode
+    const opt = doc.outer.opt
+    const items = doc.outer.items
 
-    doc[INVALIDATE]({ type: "unknown" })
-
-    expect(doc.settings).not.toBe(settingsBefore)
-  })
-
-  it("after INVALIDATE, re-accessing returns fresh refs that still work", () => {
-    const { doc, store } = createDoc(structuralDocSchema, {
-      settings: { darkMode: false, fontSize: 14 },
-      metadata: {},
+    doc.outer.set({
+      mode: { type: "b", b: "x" },
+      opt: { x: 2 },
+      items: [1, 2, 3],
     })
-    // Force cache
-    expect(doc.settings.darkMode()).toBe(false)
 
-    // Mutate store directly and invalidate
-    ;(store as any).settings = { darkMode: true, fontSize: 20 }
-    doc[INVALIDATE](
-      replaceChange(
-        own({
-          settings: { darkMode: true, fontSize: 20 },
-          metadata: {},
-        }),
-      ),
-    )
-
-    // Fresh refs read new data
-    expect(doc.settings.darkMode()).toBe(true)
-    expect(doc.settings.fontSize()).toBe(20)
-  })
-})
-
-// ===========================================================================
-// INVALIDATE: sequence
-// ===========================================================================
-
-describe("withCaching: INVALIDATE sequence", () => {
-  const schema = Schema.struct({
-    items: Schema.list(Schema.struct({ name: Schema.string() })),
-  })
-
-  function createListDoc(items: Array<{ name: string }>) {
-    return createDoc(schema, { items })
-  }
-
-  it("has [INVALIDATE] symbol on sequence refs", () => {
-    const { doc } = createListDoc([{ name: "a" }])
-    expect(typeof doc.items[INVALIDATE]).toBe("function")
-  })
-
-  it("sequence INVALIDATE is a no-op (addressing layer handles advancement)", () => {
-    const { doc } = createListDoc([{ name: "a" }, { name: "b" }])
-    const refA = doc.items.at(0)
-    const _refB = doc.items.at(1)
-
-    // Calling INVALIDATE with a sequence change should be a no-op —
-    // the addressing layer handles all advancement in prepare.
-    doc.items[INVALIDATE](sequenceChange([{ retain: 1 }, { delete: 1 }]))
-
-    // Refs are still the same objects (INVALIDATE didn't clear anything)
-    expect(doc.items.at(0)).toBe(refA)
-    // Note: refB's address may have been advanced by the addressing
-    // layer during prepare, but direct INVALIDATE doesn't change it.
-  })
-
-  it("address-table-backed .at(i) returns same ref on repeated access", () => {
-    const { doc } = createListDoc([{ name: "a" }, { name: "b" }])
-
-    const ref0a = doc.items.at(0)
-    const ref0b = doc.items.at(0)
-    expect(ref0a).toBe(ref0b) // identity via address table
-  })
-})
-
-// ===========================================================================
-// INVALIDATE: map
-// ===========================================================================
-
-describe("withCaching: INVALIDATE map", () => {
-  const schema = Schema.struct({
-    metadata: Schema.record(Schema.number()),
-  })
-
-  function createMapDoc(metadata: Record<string, number>) {
-    return createDoc(schema, { metadata })
-  }
-
-  it("has [INVALIDATE] symbol on map refs", () => {
-    const { doc } = createMapDoc({ a: 1 })
-    expect(typeof doc.metadata[INVALIDATE]).toBe("function")
-  })
-
-  it("map INVALIDATE is a no-op (addressing layer handles tombstoning)", () => {
-    const { doc } = createMapDoc({ a: 1, b: 2 })
-    const refA = doc.metadata.at("a")
-
-    // Calling INVALIDATE with a map change should be a no-op
-    doc.metadata[INVALIDATE](mapChange(undefined, ["b"]))
-
-    // Ref A is still the same object
-    expect(doc.metadata.at("a")).toBe(refA)
-  })
-
-  it("address-table-backed .at(key) returns same ref on repeated access", () => {
-    const { doc } = createMapDoc({ a: 1, b: 2 })
-
-    const refA1 = doc.metadata.at("a")
-    const refA2 = doc.metadata.at("a")
-    expect(refA1).toBe(refA2) // identity via address table
-  })
-})
-
-// ===========================================================================
-// Scalars/annotations: no INVALIDATE (pass-through)
-// ===========================================================================
-
-describe("withCaching: leaf pass-through", () => {
-  it("scalar refs do not have [INVALIDATE]", () => {
-    const schema = Schema.struct({ n: Schema.number() })
-    const { doc } = createDoc(schema, { n: 42 })
-    expect(INVALIDATE in doc.n).toBe(false)
-  })
-
-  it("text refs do not have [INVALIDATE]", () => {
-    const schema = Schema.struct({ title: Schema.text() })
-    const { doc } = createDoc(schema, { title: "Hello" })
-    expect(INVALIDATE in doc.title).toBe(false)
-  })
-
-  it("counter refs do not have [INVALIDATE]", () => {
-    const schema = Schema.struct({ count: Schema.counter() })
-    const { doc } = createDoc(schema, { count: 0 })
-    expect(INVALIDATE in doc.count).toBe(false)
+    expect(doc.outer.mode).toBe(mode)
+    expect(doc.outer.opt).toBe(opt)
+    expect(doc.outer.items).toBe(items)
+    expect(doc.outer()).toEqual({
+      mode: { type: "b", b: "x" },
+      opt: { x: 2 },
+      items: [1, 2, 3],
+    })
   })
 })
 
@@ -572,26 +454,13 @@ describe("withCaching: full doc tree", () => {
 })
 
 // ===========================================================================
-// INVALIDATE symbol identity
-// ===========================================================================
-
-describe("INVALIDATE symbol", () => {
-  it("is stable across references (Symbol.for identity)", () => {
-    const other = Symbol.for("kyneta:invalidate")
-    expect(INVALIDATE).toBe(other)
-  })
-})
-
-// ===========================================================================
-// Prepare-pipeline invalidation (Phase 4 verification)
+// Writes through the prepare pipeline
 //
-// These tests verify that cache invalidation fires via the prepare
-// pipeline — i.e. calling ctx.prepare(path, change) directly (without
-// going through mutation methods) invalidates caches. This is the key
-// behavioral contract introduced in Phase 4.
+// Every change reaches `ctx.prepare`, whether or not a mutation method sent
+// it, and memoized refs read through their paths, so none goes stale.
 // ===========================================================================
 
-describe("withCaching: prepare-pipeline invalidation", () => {
+describe("withCaching: writes through ctx.prepare", () => {
   const fullInterpreter = withWritable(
     withCaching(
       withAddressing(withReadable(withNavigation(bottomInterpreter))),
@@ -624,24 +493,18 @@ describe("withCaching: prepare-pipeline invalidation", () => {
     return { doc, store, ctx }
   }
 
-  it("ctx.prepare invalidates cache at target path (bypassing mutation methods)", () => {
-    // This is the RED test for the old code: before Phase 4, prepare was
-    // just applyChangeToStore — no invalidation. The cache would be stale.
+  it("a write through ctx.prepare is read back (bypassing mutation methods)", () => {
     const { doc, ctx } = createFullDoc()
+    const darkMode = doc.settings.darkMode
+    expect(darkMode()).toBe(false)
 
-    // Populate the cache by reading
-    expect(doc.settings.darkMode()).toBe(false)
-
-    // Bypass mutation methods — call prepare + flush directly.
-    // This simulates what applyChanges will do in Phase 5.
     const path = RawPath.empty.field("settings").field("darkMode")
     ctx.runBatch(() => {
       ctx.prepare(path, replaceChange(true), { ingress: "author" })
     }, {})
 
-    // The cache must be invalidated — reading should return the new value.
-    // Pre-Phase 4 this would return `false` (stale cache).
-    expect(doc.settings.darkMode()).toBe(true)
+    expect(doc.settings.darkMode).toBe(darkMode)
+    expect(darkMode()).toBe(true)
   })
 
   it("mutating one path preserves unrelated cached refs", () => {
@@ -656,7 +519,6 @@ describe("withCaching: prepare-pipeline invalidation", () => {
     // Mutate settings.darkMode — this should NOT affect messages cache
     doc.settings.darkMode.set(true)
 
-    // settings cache was invalidated (darkMode returns new value)
     expect(doc.settings.darkMode()).toBe(true)
 
     // messages cache is untouched — same ref identity
@@ -664,7 +526,7 @@ describe("withCaching: prepare-pipeline invalidation", () => {
     expect(doc.messages.at(0).author()).toBe("Alice")
   })
 
-  it("ctx.prepare invalidates sequence cache (evict on insert)", () => {
+  it("an insert through ctx.prepare moves the held items' addresses", () => {
     const { doc, ctx } = createFullDoc()
 
     // Populate sequence cache
@@ -683,10 +545,11 @@ describe("withCaching: prepare-pipeline invalidation", () => {
       )
     }, {})
 
-    // All indices are evicted and re-created with correct paths
-    expect(doc.messages.at(0).author()).toBe("Eve") // new item
-    expect(doc.messages.at(1).author()).toBe("Alice") // semantic correctness
-    expect(doc.messages.at(2).author()).toBe("Bob") // semantic correctness
+    expect(doc.messages.at(0).author()).toBe("Eve")
+    expect(doc.messages.at(1)).toBe(_refAlice)
+    expect(doc.messages.at(2)).toBe(_refBob)
+    expect(_refAlice.author()).toBe("Alice")
+    expect(_refBob.author()).toBe("Bob")
   })
 })
 
@@ -753,16 +616,6 @@ describe("withCaching: read-only stack backward compatibility", () => {
     expect(doc.settings.darkMode()).toBe(false)
     // Caching works (identity preserved)
     expect(doc.settings).toBe(doc.settings)
-    // [INVALIDATE] is still on refs (for direct use)
-    expect(INVALIDATE in doc.settings).toBe(true)
-    // Direct [INVALIDATE] clears memoized children — after store update
-    // and invalidation, re-reading returns the new value.
-    store.settings = { darkMode: true, fontSize: 24 }
-    doc.settings[INVALIDATE](
-      replaceChange(own({ darkMode: true, fontSize: 24 })),
-    )
-    expect(doc.settings.darkMode()).toBe(true)
-    expect(doc.settings.fontSize()).toBe(24)
   })
 })
 

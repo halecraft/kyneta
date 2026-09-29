@@ -36,18 +36,16 @@ import type { Substrate, SubstratePayload, Version } from "./substrate.js"
  * `interpretImpl` via the `nativeResolver` protocol — no action needed here.
  *
  * When `options.lease` is provided, it's attached to the substrate's ctx
- * before interpretation runs. The observation layer's per-context
- * dispatcher (`with-changefeed.ts:ensurePrepareWiring`) reads it from
- * the ctx and uses it instead of creating a private lease. This lets
- * doc-layer dispatchers cooperate with the Exchange's Synchronizer
- * under one shared cascade budget.
+ * before interpretation runs. The context's delivery dispatcher
+ * (`buildWritableContext`) reads it from the ctx and uses it instead of
+ * creating a private lease. This lets doc-layer dispatchers cooperate with
+ * the Exchange's Synchronizer under one shared cascade budget.
  *
  * **Lease attachment timing on cached ctx is exotic-but-defined.**
  * `substrate.context()` is cached per-substrate. The dispatcher is
- * constructed on the first `ensurePrepareWiring(ctx)` call (during the
- * observation layer's `.with()` step), and captures whatever value
- * `ctx.lease` holds at that moment. Subsequent `createRef` calls on the
- * same substrate would overwrite `ctx.lease` but cannot re-create the
+ * constructed on the context's first write, and captures whatever value
+ * `ctx.lease` holds at that moment. A later `createRef` call on the same
+ * substrate would overwrite `ctx.lease` but cannot re-create the
  * dispatcher — the captured lease binding is fixed. The Exchange's
  * normal flow (one substrate per doc, one `createRef` per substrate)
  * never reaches this corner.

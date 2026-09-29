@@ -1,17 +1,12 @@
 import { hasChangefeed } from "@kyneta/changefeed"
 import { describe, expect, it } from "vitest"
-import { own } from "../change.js"
 import type { Readable, RefContext } from "../index.js"
 import {
   bottomInterpreter,
-  INVALIDATE,
   interpret,
-  mapChange,
   plainContext,
   plainReader,
-  replaceChange,
   Schema,
-  sequenceChange,
   withAddressing,
   withCaching,
   withNavigation,
@@ -387,7 +382,6 @@ describe("readable: sequence ref", () => {
     expect(doc.messages.get(0)).toEqual({ author: "Alice", body: "Hi" })
     // Mutate store directly
     ;(store.messages as unknown[]).push({ author: "Bob", body: "Hey" })
-    doc.messages[INVALIDATE](replaceChange(own([])))
     expect(doc.messages.get(1)).toEqual({ author: "Bob", body: "Hey" })
   })
 })
@@ -517,7 +511,6 @@ describe("readable: map ref", () => {
     expect(doc.metadata.get("version")).toBe(1)
     // Mutate store directly
     ;(store.metadata as Record<string, unknown>).version = 42
-    doc.metadata[INVALIDATE](mapChange(undefined, ["version"]))
     expect(doc.metadata.get("version")).toBe(42)
   })
 })
@@ -566,54 +559,6 @@ describe("readable: nullable (positional sum)", () => {
     const ctx: RefContext = { reader: plainReader(store) }
     const doc = interpret(schema, readableInterpreter, ctx) as any
     expect(doc.bio()).toBe("Hello world")
-  })
-})
-
-// ===========================================================================
-// Composability hooks
-// ===========================================================================
-
-describe("readable: composability hooks", () => {
-  it("sequence ref has [INVALIDATE] symbol", () => {
-    const { doc } = createReadOnlyAnnotatedDoc()
-    expect(typeof doc.messages[INVALIDATE]).toBe("function")
-  })
-
-  it("sequence INVALIDATE is a no-op (addressing layer handles advancement)", () => {
-    const { doc } = createReadOnlyAnnotatedDoc({
-      messages: [
-        { author: "Alice", body: "Hi" },
-        { author: "Bob", body: "Hey" },
-      ],
-    })
-    const first = doc.messages.at(0) as any
-    expect(doc.messages.at(0)).toBe(first) // cached via address table
-
-    // INVALIDATE with sequence change is a no-op — addressing handles it
-    doc.messages[INVALIDATE](sequenceChange([{ retain: 1 }, { delete: 1 }]))
-
-    // Ref is still the same object (INVALIDATE didn't clear anything)
-    expect(doc.messages.at(0)).toBe(first)
-  })
-
-  it("map ref has [INVALIDATE] symbol", () => {
-    const { doc } = createReadOnlyDoc()
-    expect(typeof doc.metadata[INVALIDATE]).toBe("function")
-  })
-
-  it("map INVALIDATE is a no-op (addressing layer handles tombstoning)", () => {
-    const { doc } = createReadOnlyDoc({
-      metadata: { a: 1, b: 2 },
-    })
-    const aRef = doc.metadata.at("a")
-    const bRef = doc.metadata.at("b")
-
-    // INVALIDATE with map change is a no-op — addressing handles it
-    doc.metadata[INVALIDATE](mapChange(undefined, ["a"]))
-
-    // Both refs are still the same objects
-    expect(doc.metadata.at("a")).toBe(aRef)
-    expect(doc.metadata.at("b")).toBe(bRef)
   })
 })
 

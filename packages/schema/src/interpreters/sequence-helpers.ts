@@ -334,18 +334,15 @@ export function installSequenceNavigation<T extends object>(
 }
 
 // ---------------------------------------------------------------------------
-// installSequenceCaching — address-table-backed .at() override + INVALIDATE
+// installSequenceCaching — address-table-backed .at() override
 // ---------------------------------------------------------------------------
 
 /** Override `.at()` with address-table-backed lookup for stable ref identity across mutations. */
 export function installSequenceCaching(
   result: object,
-  path: Path,
   addressTableSym: symbol,
-  invalidateSym: symbol,
-  registerHandler: (path: Path, handler: (change: any) => void) => void,
 ): void {
-  // Both symbols arrive as parameters, so neither slot can be named in a type.
+  // The symbol arrives as a parameter, so its slot cannot be named in a type.
   // This helper narrows rather than asserts for that reason.
   const slots = result as Record<symbol, unknown> & NavigableCarrier<number>
   const baseAt = slots.at
@@ -374,12 +371,4 @@ export function installSequenceCaching(
     enumerable: false,
     configurable: true,
   })
-
-  // Addressing layer handles all structural changes, so the cache
-  // layer has nothing to invalidate.
-  const invalidateSequence = (_change: any): void => {}
-
-  slots[invalidateSym] = invalidateSequence
-
-  registerHandler(path, invalidateSequence)
 }

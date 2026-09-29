@@ -12,9 +12,8 @@
 //
 // withWritable is a pure extension — it has no bound on A and works with
 // any carrier. Mutation methods are bolted on; reading is not required.
-// Cache invalidation is handled by the prepare pipeline — withCaching
-// hooks ctx.prepare to invalidate caches at the target path before store
-// mutation. Mutation methods simply construct the change and dispatch.
+// Mutation methods construct the change and dispatch it; whatever other
+// layers need to do about a change they do as stages of `ctx.prepare`.
 
 import type { DispatcherHandle, Lease } from "@kyneta/machine"
 import { createDispatcher } from "@kyneta/machine"
@@ -36,6 +35,7 @@ export type { Op }
 
 import type { ChangeBase } from "../change.js"
 import { incrementChange, own, replaceChange } from "../change.js"
+import { AddressedPath, resolveToAddressed } from "../path.js"
 import type { PositionCapable } from "../position.js"
 import type {
   CounterSchema,
@@ -94,9 +94,6 @@ type WritableDiscriminantProductRef<F extends Record<string, Schema>> = {
  * Symbol that refs carry to expose their originating `WritableContext`.
  * This enables `batch()` and other utilities to discover the context
  * from any ref without a WeakMap or re-interpretation.
- *
- * Follows the same pattern as `INVALIDATE` in `with-caching.ts` — a
- * composability hook defined in the layer that owns the concept.
  *
  * Uses `Symbol.for` so multiple copies share the same identity.
  */
@@ -170,6 +167,31 @@ export interface SealedBatch {
 }
 
 /**
+ * One layer's part in `ctx.prepare`. A layer registers at most one stage per
+ * context, with `addPrepareStage`.
+ *
+ * Both hooks receive the path already resolved: addressed whenever the
+ * context has an addressed root, whoever called `prepare` and with whatever
+ * path. Neither may call `prepare`.
+ */
+export interface PrepareStage {
+  /** Runs before the substrate applies the change, while σ still holds the
+   *  state before it. Stages in this phase must commute. */
+  readonly before?: (
+    path: Path,
+    change: ChangeBase,
+    options: PrepareOptions,
+  ) => void
+  /** Runs after the substrate applied the change and every `before` stage
+   *  ran. Stages in this phase must commute. */
+  readonly after?: (
+    path: Path,
+    change: ChangeBase,
+    options: PrepareOptions,
+  ) => void
+}
+
+/**
  * The context shared across the entire interpreted tree. Extends
  * `RefContext` with the write primitives.
  *
@@ -190,10 +212,23 @@ export interface SealedBatch {
  *   seal, so helpers in a `batch()` block collapse into one Changeset.
  */
 export interface WritableContext extends RefContext {
-  /** Take one op into the batch being captured; `options.ingress` says how
-   *  it arrived. Throws outside `runBatch` or `announce`. Mutable — caching,
-   *  addressing and changefeed layers wrap it at interpretation time. */
-  prepare: (path: Path, change: ChangeBase, options: PrepareOptions) => void
+  /**
+   * Take one op into the batch being captured; `options.ingress` says how it
+   * arrived. Throws outside `runBatch` or `announce`.
+   *
+   * A fixed pipeline: resolve the path, run every stage's `before`, apply
+   * the change to the substrate (for `author` and `compensate`) and add the
+   * op to the batch's trace, then run every stage's `after`. Order comes from
+   * that shape, never from the order in which layers registered.
+   */
+  readonly prepare: (
+    path: Path,
+    change: ChangeBase,
+    options: PrepareOptions,
+  ) => void
+  /** Register a layer's `prepare` stage, once per context: a second call
+   *  with the same `layer` is ignored. */
+  readonly addPrepareStage: (layer: symbol, stage: PrepareStage) => void
   /** Deliver one sealed batch. The base does nothing; the changefeed layer
    *  wraps it. Called in seal order by the context's delivery dispatcher. */
   deliver: (batch: SealedBatch) => void
@@ -230,15 +265,16 @@ export interface WritableContext extends RefContext {
 
 /**
  * Whether `ctx` carries the prepare/deliver pipeline, i.e. was built by
- * `buildWritableContext`. The caching, addressing and changefeed layers keep
- * their `RefContext` signatures and wrap these only on a writable stack.
+ * `buildWritableContext`. The addressing and changefeed layers keep their
+ * `RefContext` signatures, and register a prepare stage (and, for the
+ * changefeed, wrap `deliver`) only on a writable stack.
  */
 export function hasPreparePipeline(
   ctx: RefContext,
-): ctx is RefContext & Pick<WritableContext, "prepare" | "deliver"> {
+): ctx is RefContext & Pick<WritableContext, "addPrepareStage" | "deliver"> {
   return (
-    "prepare" in ctx &&
-    typeof ctx.prepare === "function" &&
+    "addPrepareStage" in ctx &&
+    typeof ctx.addPrepareStage === "function" &&
     "deliver" in ctx &&
     typeof ctx.deliver === "function"
   )
@@ -347,12 +383,33 @@ export function buildWritableContext(
     delivery().dispatch({ type: "deliver", batch })
   }
 
-  // Base prepare: the substrate call for the ingress, then the op joins the
-  // open batch's trace. Layers like withChangefeed wrap this (replacing
-  // `ctx.prepare`) to resolve paths and mark them populated; layers like
-  // withCaching wrap it to invalidate caches at the target path.
+  // Each layer's stage, keyed by the layer so registering twice is a no-op.
+  // Stages within a phase commute, so the Map's insertion order carries no
+  // meaning.
+  const stages = new Map<symbol, PrepareStage>()
+  const addPrepareStage: WritableContext["addPrepareStage"] = (
+    layer,
+    stage,
+  ) => {
+    if (!stages.has(layer)) stages.set(layer, stage)
+  }
+
+  // Resolve once, for every caller. A raw path from `announce` or
+  // `applyChanges` becomes the addressed path whose `key` the listeners,
+  // address tables and caches are keyed by. Idempotent for addressed paths.
+  // `rootPath` is read per call: `withAddressing` installs it on the context
+  // after the context is built.
+  const resolve = (path: Path): Path => {
+    const root = (ctx as { rootPath?: Path }).rootPath
+    return root instanceof AddressedPath
+      ? resolveToAddressed(path, root.registry)
+      : path
+  }
+
+  // Resolve, `before` stages, the substrate call for the ingress and the op
+  // joining the open batch's trace, then `after` stages.
   const prepare = (
-    path: Path,
+    rawPath: Path,
     change: ChangeBase,
     options: PrepareOptions,
   ): void => {
@@ -360,6 +417,8 @@ export function buildWritableContext(
     if (trace === undefined) {
       throw new Error("ctx.prepare called outside runBatch or announce")
     }
+    const path = resolve(rawPath)
+    for (const stage of stages.values()) stage.before?.(path, change, options)
     switch (options.ingress) {
       case "author":
         substrate.prepare(path, change, recordInverse)
@@ -371,6 +430,7 @@ export function buildWritableContext(
         break
     }
     trace.push({ op: { path, change }, authored: options.ingress === "author" })
+    for (const stage of stages.values()) stage.after?.(path, change, options)
   }
 
   // Base deliver: nothing to deliver to. The changefeed layer wraps it.
@@ -406,11 +466,11 @@ export function buildWritableContext(
         work()
       } catch (e) {
         // Undo-replay handler: pop this frame's start, replay its recorded
-        // inverses LIFO via ctx.prepare with `ingress: "compensate"`.
-        // Routing through ctx.prepare (not substrate.prepare) keeps the
+        // inverses LIFO via `prepare` with `ingress: "compensate"`.
+        // Routing through `prepare` (not substrate.prepare) keeps the
         // compensations in the trace, so the aborted Changeset shows the
-        // full op log; the substrate receives no recorder, so it does not
-        // record the inverse-of-the-inverse.
+        // full op log, and runs every stage on them; the substrate receives
+        // no recorder, so it does not record the inverse-of-the-inverse.
         // `?? 0` rather than an assertion: the push/pop are paired by
         // construction, so an empty stack cannot happen — and if it ever did,
         // compensating the whole log is the safe reading, not crashing.
@@ -418,7 +478,7 @@ export function buildWritableContext(
         try {
           for (let i = inverseStack.length - 1; i >= frameStart; i--) {
             const { path, inverse } = inverseStack[i]
-            ctx.prepare(path, inverse, COMPENSATE)
+            prepare(path, inverse, COMPENSATE)
           }
           inverseStack.length = frameStart
           if (frameStarts.length === 0) {
@@ -465,7 +525,7 @@ export function buildWritableContext(
     traces.push(trace)
     try {
       for (const { path, change } of ops) {
-        ctx.prepare(path, change, ANNOUNCE)
+        prepare(path, change, ANNOUNCE)
       }
     } catch (error) {
       closeTrace(trace)
@@ -484,16 +544,17 @@ export function buildWritableContext(
   const dispatch = (path: Path, change: ChangeBase): void => {
     if (frameStarts.length === 0) {
       runBatch(() => {
-        ctx.prepare(path, change, AUTHOR)
+        prepare(path, change, AUTHOR)
       }, {})
     } else {
-      ctx.prepare(path, change, AUTHOR)
+      prepare(path, change, AUTHOR)
     }
   }
 
   const ctx: WritableContext = {
     reader: substrate.reader,
     prepare,
+    addPrepareStage,
     deliver,
     runBatch,
     announce,
@@ -728,11 +789,10 @@ export type Writable<S extends Schema> =
  * structural cases (product, sum).
  *
  * Mutation methods construct the appropriate change and call
- * `ctx.dispatch(path, change)`. Cache invalidation is handled by the
- * `prepare` pipeline — `withCaching` hooks `ctx.prepare` to fire
- * per-path invalidation handlers before store mutation. This means
- * every change source (imperative mutation, `applyChanges`, etc.)
- * gets automatic cache invalidation without manual `[INVALIDATE]` calls.
+ * `ctx.dispatch(path, change)`. Every change source (imperative mutation,
+ * `applyChanges`, announcements, compensation) reaches the same
+ * `ctx.prepare` pipeline, so the stages other layers register there see
+ * all of them.
  *
  * ```ts
  * const interp = withWritable(withCaching(withReadable(bottomInterpreter)))

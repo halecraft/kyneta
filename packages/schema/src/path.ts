@@ -81,6 +81,13 @@ export interface Segment {
    * identity. Context: jj:mlurlzqt.
    */
   coord(): string | number
+
+  /**
+   * The segment's identity key, the unit `Path.key` is built from: `@${id}`
+   * for an addressed index, whose position moves while its identity does
+   * not, and the coordinate as a string for everything else.
+   */
+  readonly identity: string
 }
 
 // ---------------------------------------------------------------------------
@@ -100,6 +107,7 @@ export type RawSegment =
       readonly type: "field"
       readonly field: string
       readonly role: "field"
+      readonly identity: string
       resolve(): string
       coord(): string
     }
@@ -107,6 +115,7 @@ export type RawSegment =
       readonly type: "entry"
       readonly entry: string
       readonly role: "entry"
+      readonly identity: string
       resolve(): string
       coord(): string
     }
@@ -114,6 +123,7 @@ export type RawSegment =
       readonly type: "index"
       readonly index: number
       readonly role: "index"
+      readonly identity: string
       resolve(): number
       coord(): number
     }
@@ -126,6 +136,7 @@ export function rawField(key: string): RawSegment {
     type: "field",
     field: key,
     role: "field",
+    identity: key,
     resolve: () => key,
     coord: () => key,
   }
@@ -137,6 +148,7 @@ export function rawEntry(key: string): RawSegment {
     type: "entry",
     entry: key,
     role: "entry",
+    identity: key,
     resolve: () => key,
     coord: () => key,
   }
@@ -148,6 +160,7 @@ export function rawIndex(index: number): RawSegment {
     type: "index",
     index,
     role: "index",
+    identity: String(index),
     resolve: () => index,
     coord: () => index,
   }
@@ -176,6 +189,7 @@ export type Address =
       dead: boolean
       listeners?: Set<() => void>
       readonly role: "field"
+      readonly identity: string
       resolve(): string
       coord(): string
     }
@@ -185,6 +199,7 @@ export type Address =
       dead: boolean
       listeners?: Set<() => void>
       readonly role: "entry"
+      readonly identity: string
       resolve(): string
       coord(): string
     }
@@ -195,6 +210,7 @@ export type Address =
       dead: boolean
       listeners?: Set<() => void>
       readonly role: "index"
+      readonly identity: string
       resolve(): number
       coord(): number
     }
@@ -248,6 +264,7 @@ export function fieldAddress(key: string, dead = false): Address {
     key,
     dead,
     role: "field",
+    identity: key,
     resolve() {
       if (this.dead) {
         throw new Error(
@@ -272,6 +289,7 @@ export function entryAddress(key: string, dead = false): Address {
     key,
     dead,
     role: "entry",
+    identity: key,
     resolve() {
       if (this.dead) {
         throw new Error(
@@ -297,6 +315,7 @@ export function indexAddress(index: number, dead = false): Address {
     index,
     dead,
     role: "index",
+    identity: `@${id}`,
     resolve() {
       if (this.dead) {
         throw new Error(
@@ -342,6 +361,18 @@ export interface Path {
    * produce positional keys. Memoized on first access.
    */
   readonly key: string
+  /** Each segment's `identity`, in order. */
+  readonly segmentKeys: readonly string[]
+  /**
+   * `prefixKeys[i]` is the key of the first `i` segments, so
+   * `prefixKeys[0]` is the root's key and `prefixKeys[length] === key`.
+   *
+   * Built by extending the previous key one segment at a time, never by
+   * cutting `key`. A key joins segments with a separator that a segment's
+   * own text may contain, so splitting one can invent a level that does
+   * not exist.
+   */
+  readonly prefixKeys: readonly string[]
   /** The segments of this path. */
   readonly segments: readonly Segment[]
   /** Number of segments. */
@@ -397,18 +428,34 @@ export abstract class AbstractPath implements Path {
   }
 
   /**
-   * Memoized — computed once on first access. Safe because segments
-   * are readonly and key computation uses only stable identities
-   * (address.id, not address.index).
+   * Memoized, like `prefixKeys` and `key`. Safe because segments are
+   * readonly and a segment's key uses only stable identities (`address.id`,
+   * not `address.index`).
    */
-  private _key: string | undefined
-  get key(): string {
-    if (this._key === undefined) {
-      this._key = this.computeKey()
-    }
-    return this._key
+  private _segmentKeys: readonly string[] | undefined
+  get segmentKeys(): readonly string[] {
+    this._segmentKeys ??= this.segments.map(segment => segment.identity)
+    return this._segmentKeys
   }
-  protected abstract computeKey(): string
+
+  private _prefixKeys: readonly string[] | undefined
+  get prefixKeys(): readonly string[] {
+    if (this._prefixKeys === undefined) {
+      const keys = this.segmentKeys
+      const prefixes: string[] = [""]
+      let prefix = ""
+      for (let i = 0; i < keys.length; i++) {
+        prefix = i === 0 ? keys[i] : `${prefix}\0${keys[i]}`
+        prefixes.push(prefix)
+      }
+      this._prefixKeys = prefixes
+    }
+    return this._prefixKeys
+  }
+
+  get key(): string {
+    return this.prefixKeys[this.segments.length]
+  }
 
   read(store: unknown): unknown {
     let current = store
@@ -489,11 +536,6 @@ export class RawPath extends AbstractPath {
 
   item(index: number): RawPath {
     return new RawPath([...this.segments, rawIndex(index)])
-  }
-
-  protected computeKey(): string {
-    // `coord()`: identity is a coordinate projection, not a live read.
-    return this.segments.map(s => String(s.coord())).join("\0")
   }
 
   /** Already raw — identity projection. */
@@ -759,12 +801,6 @@ export class AddressedPath extends AbstractPath {
   item(index: number): AddressedPath {
     const address = this.registry.getOrCreateSequenceAddress(this.key, index)
     return new AddressedPath([...this.segments, address], this.registry)
-  }
-
-  protected computeKey(): string {
-    return this.segments
-      .map(seg => (seg.kind === "index" ? `@${seg.id}` : seg.key))
-      .join("\0")
   }
 
   slice(start: number, end?: number): AddressedPath {

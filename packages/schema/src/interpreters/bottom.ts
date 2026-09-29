@@ -18,12 +18,11 @@
 //
 // HasRead and HasCaching both extend HasNavigation independently,
 // forming a diamond. HasRead means "the [CALL] slot has been filled
-// with a reader." HasCaching means "child caching + INVALIDATE."
+// with a reader." HasCaching means "children are memoized."
 //
 // Each level is branded with a phantom symbol so TypeScript's structural
 // subtyping enforces valid transformer ordering.
 
-import type { ChangeBase } from "../change.js"
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
 import { INTERPRETER, type RefContext } from "../interpreter-types.js"
 import { NATIVE } from "../native.js"
@@ -42,21 +41,6 @@ import type {
   TextSchema,
   TreeSchema,
 } from "../schema.js"
-
-// ---------------------------------------------------------------------------
-// Forward-declared INVALIDATE symbol type
-// ---------------------------------------------------------------------------
-// The INVALIDATE runtime symbol lives in with-caching.ts. We declare its
-// type here so HasCaching can reference it without importing the runtime
-// value or using a computed Symbol.for() in the interface (which esbuild
-// rejects).
-
-declare const INVALIDATE_SYMBOL: unique symbol
-/**
- * Type-level reference to the INVALIDATE symbol.
- * At runtime this is `Symbol.for("kyneta:invalidate")`.
- */
-export type INVALIDATE_TYPE = typeof INVALIDATE_SYMBOL
 
 // ---------------------------------------------------------------------------
 // Runtime symbols
@@ -215,8 +199,6 @@ export function markRead<T>(carrier: T): asserts carrier is T & HasRead {
  * The counterpart to {@link markRead}, and empty for the same reason:
  * `HasCaching` carries a phantom brand that has no runtime existence, so
  * claiming it is a statement of intent rather than a fact about the object.
- * The `[INVALIDATE]` slot it also declares is optional, and is attached
- * separately by `withCaching` where a node actually gets a cache.
  */
 export function markCaching<T>(carrier: T): asserts carrier is T & HasCaching {
   // Intentionally empty — see {@link markRead}.
@@ -224,22 +206,11 @@ export function markCaching<T>(carrier: T): asserts carrier is T & HasCaching {
 }
 
 /**
- * A carrier that has child caching and change-driven cache invalidation.
- * Extends `HasNavigation`.
- *
- * `INVALIDATE` is optional because not every node kind gets a cache
- * (scalars, text, counters don't). `withWritable` guards at runtime:
- * `if (INVALIDATE in result)`.
+ * A carrier whose children are memoized. Extends `HasNavigation`.
  *
  * The `[CACHING]` property is a phantom brand.
- *
- * Note: The INVALIDATE slot uses a declared symbol type rather than
- * `Symbol.for(...)` because esbuild doesn't support computed property
- * names with expressions in interfaces. The runtime symbol identity
- * is `Symbol.for("kyneta:invalidate")`, defined in with-caching.ts.
  */
 export interface HasCaching extends HasNavigation {
-  readonly [INVALIDATE_SYMBOL]?: (change: ChangeBase) => void
   /** @internal phantom brand — never set at runtime */
   readonly [CACHING]: true
 }

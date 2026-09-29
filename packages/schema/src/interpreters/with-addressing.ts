@@ -2,7 +2,7 @@
 //
 // This transformer owns address tables for all composite types,
 // installs an AddressedPath root on the context (so all descendant
-// paths are identity-stable), hooks into the `prepare` pipeline for
+// paths are identity-stable), registers a `prepare` stage for
 // eager index address advancement (sequences) and tombstoning (maps),
 // attaches the `deleted` getter on refs via the `onRefCreated` hook,
 // and attaches `[REMOVE]` on container-child refs (writable stacks only).
@@ -65,7 +65,6 @@ import type {
   TextSchema,
   TreeSchema,
 } from "../schema.js"
-import type { PrepareOptions } from "../substrate.js"
 import { currentScope, dependencyKey, reportRead } from "../tracking.js"
 import type { HasNavigation } from "./bottom.js"
 import type { WritableContext } from "./writable.js"
@@ -77,8 +76,8 @@ import {
 } from "./writable.js"
 
 /**
- * Expose a node's address table under a symbol, and register the prepare
- * handler that keeps it current.
+ * Expose a node's address table under `ADDRESS_TABLE`, and register the node
+ * as a container with the handler that keeps the table current.
  *
  * **One function for sequences and maps.** They previously had an
  * `installSequenceAddressing` and an `installKeyedAddressing` that were
@@ -95,15 +94,14 @@ import {
  * addresses and it must run whether or not anyone can read the table.
  */
 function installAddressTable(
+  ctx: RefContext,
   result: object,
   path: Path,
-  addressTableSymbol: symbol,
   getTable: () => unknown,
-  registerHandler: (path: Path, handler: (change: any) => void) => void,
   handleChange: (table: unknown, change: any) => void,
 ): void {
   if (isPropertyHost(result)) {
-    Object.defineProperty(result, addressTableSymbol, {
+    Object.defineProperty(result, ADDRESS_TABLE, {
       get() {
         return getTable()
       },
@@ -112,7 +110,7 @@ function installAddressTable(
     })
   }
 
-  registerHandler(path, (change: any) => {
+  registerContainer(ctx, path, (change: ChangeBase) => {
     const t = getTable()
     if (t) handleChange(t, change)
   })
@@ -215,57 +213,60 @@ export function deletedFeed(
 }
 
 // ---------------------------------------------------------------------------
-// Per-context state — prepare wrapping for address advancement
+// Per-context state — the addressing prepare stage
 // ---------------------------------------------------------------------------
 
-type AddressingHandlers = Map<string, (change: ChangeBase) => void>
+/**
+ * What the addressing layer keeps per context.
+ *
+ * - `handlers`: per composite path key, how a change there moves the
+ *   addresses below it (advancement for lists, tombstoning for maps). The
+ *   layer's `before` stage looks them up by the change's path.
+ * - `containers`: the path keys of the lists, maps and sets interpreted so
+ *   far. `[REMOVE]` is attached to a ref exactly when its parent is one.
+ */
+interface AddressingState {
+  readonly handlers: Map<string, (change: ChangeBase) => void>
+  readonly containers: Set<string>
+}
 
-const addressingContextState = new WeakMap<object, AddressingHandlers>()
+const addressingContextState = new WeakMap<object, AddressingState>()
+
+/** The key this layer registers its prepare stage under. */
+const ADDRESSING_STAGE: unique symbol = Symbol("kyneta:addressing-stage")
 
 /**
- * Ensures the given context has its `prepare` wrapped for address
- * advancement. Returns the shared handler map, or `null` if the
- * context doesn't have `prepare` (read-only stack).
+ * The addressing state for `ctx`, registering the layer's prepare stage on
+ * first use when the context has a pipeline (read-only stacks have none and
+ * never change).
  *
- * Same structural pattern as `ensureCacheWiring` in `withCaching`.
- * The addressing layer's prepare wrapper fires BEFORE the cache layer's
- * wrapper (because withAddressing is inner to withCaching in composition),
- * so addresses are advanced before cache invalidation.
+ * Addresses advance in `before`: advancement reads the change's
+ * instructions, not the state they produce, and a list's addresses must
+ * have moved before any `after` stage looks the list's items up.
  */
-function ensureAddressingWiring(ctx: RefContext): AddressingHandlers | null {
-  if (!hasPreparePipeline(ctx)) return null
-
+function addressingState(ctx: RefContext): AddressingState {
   const existing = addressingContextState.get(ctx)
   if (existing) return existing
 
-  const handlers: AddressingHandlers = new Map()
-  const originalPrepare = ctx.prepare
-
-  const wrappedPrepare = (
-    path: Path,
-    change: ChangeBase,
-    options: PrepareOptions,
-  ): void => {
-    const key = path.key
-    const handler = handlers.get(key)
-    if (handler) handler(change)
-    originalPrepare(path, change, options)
+  const state: AddressingState = { handlers: new Map(), containers: new Set() }
+  addressingContextState.set(ctx, state)
+  if (hasPreparePipeline(ctx)) {
+    ctx.addPrepareStage(ADDRESSING_STAGE, {
+      before: (path, change) => state.handlers.get(path.key)?.(change),
+    })
   }
-
-  ctx.prepare = wrappedPrepare
-
-  addressingContextState.set(ctx, handlers)
-  return handlers
+  return state
 }
 
-function registerAddressingHandler(
-  handlers: Map<string, (change: ChangeBase) => void> | null,
+/** Record a container's path and the handler that keeps its addresses current. */
+function registerContainer(
+  ctx: RefContext,
   path: Path,
-  handler: (change: ChangeBase) => void,
+  handler?: (change: ChangeBase) => void,
 ): void {
-  if (handlers) {
-    handlers.set(path.key, handler)
-  }
+  const state = addressingState(ctx)
+  state.containers.add(path.key)
+  if (handler) state.handlers.set(path.key, handler)
 }
 
 function setDead(address: Address, dead: boolean): void {
@@ -378,8 +379,8 @@ function handleMapChange(table: MapAddressTable, change: ChangeBase): void {
  * 1. `ctx.rootPath` — an `AddressedPath` root with a fresh registry
  * 2. `ctx.onRefCreated` — a hook that links addresses to refs and
  *    attaches the `deleted` getter
- * 3. Per-node `prepare` handlers for address advancement (sequences)
- *    and tombstoning (maps)
+ * 3. A `prepare` stage, and per-node handlers it runs, for address
+ *    advancement (sequences) and tombstoning (maps)
  *
  * The `[ADDRESS_TABLE]` symbol is attached to sequence/map refs for
  * downstream discovery by `withCaching`.
@@ -493,20 +494,12 @@ export function withAddressing<A extends HasNavigation>(
 
         // Attach [REMOVE] for container children on writable stacks.
         // Only attach when: (1) ref has [TRANSACT] (writable stack),
-        // (2) ref is a property host, and (3) the child is part of a
-        // container (sequence/map/set/movable), not a product field.
-        //
-        // Container discrimination: the addressing handler map has an
-        // entry for every container parent (sequence, map, set, movable
-        // cases register handlers). Product parents do not register
-        // handlers. So handlers.has(parentPath.key) === true means
-        // "parent is a container."
+        // (2) ref is a property host, and (3) its parent is a list, map or
+        // set, as recorded by those cases. The address kind cannot decide
+        // alone: a tree node is an entry address too, and removing one is a
+        // tree delete, not a map delete.
         if (isPropertyHost(ref) && hasTransact(ref)) {
-          const isContainerChild =
-            lastAddr.kind === "index" ||
-            (addressingContextState.get(ctx)?.has(parentPath.key) ?? false)
-
-          if (isContainerChild) {
+          if (addressingState(ctx).containers.has(parentPath.key)) {
             Object.defineProperty(ref, REMOVE, {
               value() {
                 if (lastAddr.dead) {
@@ -583,12 +576,10 @@ export function withAddressing<A extends HasNavigation>(
       const result = base.sequence(ctx, path, schema, item)
       const seqPathKey = path.key
       installAddressTable(
+        ctx,
         result,
         path,
-        ADDRESS_TABLE,
         () => registry.getSequenceTable(seqPathKey),
-        (p, handler) =>
-          registerAddressingHandler(ensureAddressingWiring(ctx), p, handler),
         handleSequenceChange as (table: unknown, change: unknown) => void,
       )
       return result
@@ -606,12 +597,10 @@ export function withAddressing<A extends HasNavigation>(
       const result = base.map(ctx, path, schema, item)
       const mapPathKey = path.key
       installAddressTable(
+        ctx,
         result,
         path,
-        ADDRESS_TABLE,
         () => registry.getMapTable(mapPathKey),
-        (p, handler) =>
-          registerAddressingHandler(ensureAddressingWiring(ctx), p, handler),
         handleMapChange as (table: unknown, change: unknown) => void,
       )
       return result
@@ -642,13 +631,16 @@ export function withAddressing<A extends HasNavigation>(
 
     // --- Set -------------------------------------------------------------------
     // Sets are leaf-shaped: no per-member child refs, so no address table
-    // and no tombstoning. Pass through (same pattern as text/counter).
+    // and no tombstoning. Recorded as a container all the same, so a member
+    // ref, were one ever built, would carry `[REMOVE]`.
     set(
       ctx: RefContext,
       path: Path,
       schema: SetSchema,
       item: (key: string) => A,
     ): A {
+      getOrCreateRegistry(ctx)
+      registerContainer(ctx, path)
       return base.set(ctx, path, schema, item)
     },
 
@@ -676,12 +668,10 @@ export function withAddressing<A extends HasNavigation>(
       const result = base.movable(ctx, path, schema, item)
       const seqPathKey = path.key
       installAddressTable(
+        ctx,
         result,
         path,
-        ADDRESS_TABLE,
         () => registry.getSequenceTable(seqPathKey),
-        (p, handler) =>
-          registerAddressingHandler(ensureAddressingWiring(ctx), p, handler),
         handleSequenceChange as (table: unknown, change: unknown) => void,
       )
       return result

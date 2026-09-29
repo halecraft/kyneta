@@ -1,31 +1,21 @@
-// withCaching — adds identity-preserving child caching and change-driven
-// cache invalidation.
+// withCaching — adds identity-preserving child caching.
 //
 // This transformer takes any interpreter that produces HasNavigation
 // carriers (i.e. withReadable(bottomInterpreter) or above) and wraps
 // structural navigation with memoization:
 //
-// - Product: thunk memoization (resolved/cached closure pattern)
+// - Product: each field getter memoizes its child for the carrier's
+//   lifetime (resolved/cached closure pattern).
 // - Sequence: delegates to address table when withAddressing is in the
 //   stack. The address table IS the cache — no separate Map<number, ref>.
 //   Without withAddressing, .at(i) returns a fresh ref each time.
 // - Map: same pattern as sequence — address table or fresh ref.
+// - Sum: memoizes each variant's carrier.
 //
-// Each structural node gets an [INVALIDATE](change) method:
-//
-// - Product: clear all resolved flags (re-evaluate thunks on next access)
-// - Sequence: no-op (withAddressing handles advancement in prepare)
-// - Map: no-op (withAddressing handles tombstoning in prepare)
-//
-// Pipeline integration: when composed in a writable stack, withCaching
-// hooks into the `prepare` phase via `ensureCacheWiring`. Each composite
-// node registers its invalidation handler by path during interpretation.
-// The `prepare` wrapper looks up the handler and calls it before
-// forwarding to the inner prepare (store mutation). This means
-// `withWritable` mutation methods don't need to call [INVALIDATE]
-// directly — the pipeline handles it.
+// Nothing here reacts to changes. Addresses advance and tombstone in
+// withAddressing's prepare stage, and a memoized carrier stays valid across
+// changes because it reads through its path.
 
-import type { ChangeBase } from "../change.js"
 import type {
   FlatTreeNode,
   Interpreter,
@@ -46,31 +36,11 @@ import type {
   TextSchema,
   TreeSchema,
 } from "../schema.js"
-import type { PrepareOptions } from "../substrate.js"
 
 import type { HasCaching, HasNavigation } from "./bottom.js"
 import { markCaching } from "./bottom.js"
 import { installKeyedCaching } from "./keyed-helpers.js"
 import { installSequenceCaching } from "./sequence-helpers.js"
-import { hasPreparePipeline } from "./writable.js"
-
-// ---------------------------------------------------------------------------
-// INVALIDATE symbol — composability hook for cache coordination
-// ---------------------------------------------------------------------------
-
-/**
- * Symbol for change-driven cache invalidation. Attached to product,
- * sequence, and map refs by `withCaching`.
- *
- * Each composite ref still carries `[INVALIDATE]` as a public symbol
- * for advanced direct use. However, in the standard writable stack,
- * invalidation is driven by the `prepare` pipeline — `ensureCacheWiring`
- * registers per-path handlers that fire automatically during
- * `ctx.prepare(path, change)`, before store mutation.
- *
- * Uses `Symbol.for` so multiple copies of this module share identity.
- */
-export const INVALIDATE: unique symbol = Symbol.for("kyneta:invalidate")
 
 // ---------------------------------------------------------------------------
 // ADDRESS_TABLE discovery (via Symbol.for to avoid import coupling)
@@ -83,125 +53,12 @@ export const INVALIDATE: unique symbol = Symbol.for("kyneta:invalidate")
 const ADDRESS_TABLE_SYM = Symbol.for("kyneta:addressTable")
 
 // ---------------------------------------------------------------------------
-// ensureCacheWiring — prepare-pipeline integration (per-context, idempotent)
-// ---------------------------------------------------------------------------
-
-/**
- * Path-keyed invalidation handlers. Each composite node registers its
- * handler here during interpretation.
- *
- * Outer key: path where the handler fires. Inner key: registrant's own
- * path (the product/sequence/etc. that owns the handler). Re-registration
- * from the same registrant replaces — so re-interpretation of a sum's
- * current variant doesn't accrete dead handlers.
- */
-type CacheHandlers = Map<string, Map<string, (change: ChangeBase) => void>>
-
-// WeakMap ensures a single prepare wrapper per context object,
-// shared across all nodes interpreted with that context.
-const cacheContextState = new WeakMap<object, CacheHandlers>()
-
-/**
- * Ensures the given context has its `prepare` wrapped for cache
- * invalidation. Returns the shared handler map, or `null` if the
- * context doesn't have `prepare` (read-only stack).
- *
- * - `prepare` wrapping: before forwarding to the inner prepare,
- *   looks up an invalidation handler by `path.key` and calls it
- *   if found. This invalidates the cache BEFORE store mutation, so
- *   subsequent reads (e.g. during subscriber notification after flush)
- *   see updated values.
- *
- * Uses the same structural pattern as `ensurePrepareWiring` in
- * `withChangefeed` — WeakMap + idempotent wrapping + path-keyed map.
- */
-function ensureCacheWiring(ctx: RefContext): CacheHandlers | null {
-  if (!hasPreparePipeline(ctx)) return null
-
-  const existing = cacheContextState.get(ctx)
-  if (existing) return existing
-
-  const handlers: CacheHandlers = new Map()
-  const originalPrepare = ctx.prepare
-
-  // Wrapped prepare: invalidate cache at path, then forward.
-  const wrappedPrepare = (
-    path: Path,
-    change: ChangeBase,
-    options: PrepareOptions,
-  ): void => {
-    const inner = handlers.get(path.key)
-    if (inner) {
-      for (const h of inner.values()) h(change)
-    }
-    originalPrepare(path, change, options)
-  }
-
-  ctx.prepare = wrappedPrepare
-
-  cacheContextState.set(ctx, handlers)
-  return handlers
-}
-
-/**
- * Registers an invalidation handler at `atPath`, keyed by `registrantPath`.
- *
- * Multiple registrants can share an `atPath`: parent and variant products
- * both register at a sum field's path. Re-registration from the same
- * `registrantPath` replaces the previous handler — so re-interpreting the
- * sum's current variant after a cache flush doesn't accrete dead handlers,
- * and storing them in a left-folded closure (the prior shape) wouldn't
- * blow the stack via composed recursion.
- *
- * `handlers === null` denotes a read-only stack (no prepare pipeline);
- * registration is a no-op there — invalidation runs only via direct
- * `ref[INVALIDATE](change)` calls.
- */
-function registerCacheHandler(
-  handlers: Map<string, Map<string, (change: ChangeBase) => void>> | null,
-  registrantPath: Path,
-  atPath: Path,
-  handler: (change: ChangeBase) => void,
-): void {
-  if (!handlers) return
-  const atKey = atPath.key
-  let inner = handlers.get(atKey)
-  if (!inner) {
-    inner = new Map()
-    handlers.set(atKey, inner)
-  }
-  inner.set(registrantPath.key, handler)
-}
-
-/**
- * Number of distinct cache-handler registrants at `atPathKey` for the given
- * context.
- *
- * @internal Not exported from the package barrel.
- *
- * Test-only. Lets regression tests assert the registry stays bounded across
- * many re-interpretations (the historical bug accreted handlers in a composed
- * closure chain instead of keying by registrant).
- *
- * The backdoor is deliberate. Accretion's only symptom is memory and per-write
- * work, with no public-surface proxy, so a behavioural test would pass whether
- * or not handlers accreted. Reading the structure is the test that actually
- * holds.
- */
-export function __getCacheHandlerCountAtPath(
-  ctx: object,
-  atPathKey: string,
-): number {
-  return cacheContextState.get(ctx)?.get(atPathKey)?.size ?? 0
-}
-
-// ---------------------------------------------------------------------------
 // withCaching — the interposition transformer
 // ---------------------------------------------------------------------------
 
 /**
  * Transformer that adds identity-preserving child caching to structural
- * navigation and change-driven cache invalidation via `[INVALIDATE]`.
+ * navigation.
  *
  * Takes an `Interpreter<RefContext, A extends HasNavigation>` and returns
  * an `Interpreter<RefContext, A & HasCaching>`. The carrier identity is
@@ -223,13 +80,6 @@ export function __getCacheHandlerCountAtPath(
  * **Sequence/Map caching without addressing:**
  * `.at(i)` calls `baseAt(i)` fresh every time — no memoization.
  * Product field caching still works (it's self-contained).
- *
- * **Pipeline integration:** When composed inside `withWritable` (i.e.
- * the context is a `WritableContext`), `withCaching` hooks into the
- * `prepare` phase via `ensureCacheWiring`. Each composite node
- * registers its invalidation handler by path. The `prepare` wrapper
- * fires the handler before store mutation, so caches are invalidated
- * automatically for every change.
  */
 export function withCaching<A extends HasNavigation>(
   base: Interpreter<RefContext, A>,
@@ -243,7 +93,9 @@ export function withCaching<A extends HasNavigation>(
     },
 
     // --- Product ---------------------------------------------------------------
-    // Wrap field getters with resolved/cached memoization.
+    // Wrap field getters with resolved/cached memoization, for the carrier's
+    // lifetime. A field's carrier reads through its path, so a change to the
+    // product, even a replace of the whole of it, leaves it valid.
     product(
       ctx: RefContext,
       path: Path,
@@ -283,24 +135,6 @@ export function withCaching<A extends HasNavigation>(
         })
       }
 
-      // INVALIDATE handler: clear all field caches.
-      const invalidateProduct = (_change: ChangeBase): void => {
-        for (const key of Object.keys(fieldState)) {
-          fieldState[key].resolved = false
-          fieldState[key].cached = undefined
-        }
-      }
-
-      // Attach [INVALIDATE] on the ref (public API, direct use).
-      // `HasCaching` declares this slot optional — not every node kind gets a
-      // cache — so it is attached here rather than being part of the brand.
-      ;(result as { [INVALIDATE]?: (change: ChangeBase) => void })[INVALIDATE] =
-        invalidateProduct
-
-      // Register in the prepare pipeline (writable stacks only)
-      const handlers = ensureCacheWiring(ctx)
-      registerCacheHandler(handlers, path, path, invalidateProduct)
-
       markCaching(result)
       return result
     },
@@ -315,14 +149,7 @@ export function withCaching<A extends HasNavigation>(
     ): A & HasCaching {
       const baseItem = item as (index: number) => A
       const result = base.sequence(ctx, path, schema, baseItem)
-      installSequenceCaching(
-        result,
-        path,
-        ADDRESS_TABLE_SYM,
-        INVALIDATE,
-        (p, handler) =>
-          registerCacheHandler(ensureCacheWiring(ctx), p, p, handler),
-      )
+      installSequenceCaching(result, ADDRESS_TABLE_SYM)
       return result as A & HasCaching
     },
 
@@ -336,14 +163,7 @@ export function withCaching<A extends HasNavigation>(
     ): A & HasCaching {
       const baseItem = item as (key: string) => A
       const result = base.map(ctx, path, schema, baseItem)
-      installKeyedCaching(
-        result,
-        path,
-        ADDRESS_TABLE_SYM,
-        INVALIDATE,
-        (p, handler) =>
-          registerCacheHandler(ensureCacheWiring(ctx), p, p, handler),
-      )
+      installKeyedCaching(result, ADDRESS_TABLE_SYM)
       return result as A & HasCaching
     },
 
@@ -411,8 +231,8 @@ export function withCaching<A extends HasNavigation>(
 
     // --- Set -------------------------------------------------------------------
     // Sets are leaf-shaped: no per-member child refs, so no address-table
-    // cache. Invalidation is whole-carrier — every call to `()` re-reads
-    // through `ctx.reader`. Pass through (same pattern as text/counter).
+    // cache. Every call to `()` re-reads through `ctx.reader`. Pass through
+    // (same pattern as text/counter).
     set(
       ctx: RefContext,
       path: Path,
@@ -449,14 +269,7 @@ export function withCaching<A extends HasNavigation>(
     ): A & HasCaching {
       const baseItem = item as (index: number) => A
       const result = base.movable(ctx, path, schema, baseItem)
-      installSequenceCaching(
-        result,
-        path,
-        ADDRESS_TABLE_SYM,
-        INVALIDATE,
-        (p, handler) =>
-          registerCacheHandler(ensureCacheWiring(ctx), p, p, handler),
-      )
+      installSequenceCaching(result, ADDRESS_TABLE_SYM)
       return result as A & HasCaching
     },
 

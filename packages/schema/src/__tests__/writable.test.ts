@@ -30,6 +30,7 @@ import {
   Schema,
   subscribe,
   TRANSACT,
+  withAddressing,
   withCaching,
   withNavigation,
   withReadable,
@@ -746,6 +747,7 @@ describe("writable: write-only stack", () => {
     const ctx: WritableContext = {
       reader: store,
       prepare: (path, change) => dispatched.push({ path, change }),
+      addPrepareStage: () => {},
       deliver: () => {},
       runBatch: work => {
         work()
@@ -1227,6 +1229,7 @@ it("[TRANSACT] is present on write-only stack refs", () => {
   const ctx: WritableContext = {
     reader: plainReader(store),
     prepare: (path, change) => dispatched.push({ path, change }),
+    addPrepareStage: () => {},
     deliver: () => {},
     runBatch: work => {
       work()
@@ -1239,4 +1242,69 @@ it("[TRANSACT] is present on write-only stack refs", () => {
   // Write-only product ref has [TRANSACT] (child .n is not navigable
   // without withReadable, so we test the product itself)
   expect(ref[TRANSACT]).toBe(ctx)
+})
+
+// ===========================================================================
+// The prepare pipeline
+// ===========================================================================
+
+describe("writable: the prepare pipeline", () => {
+  const schema = Schema.struct({ n: Schema.number() })
+  const interp = withWritable(
+    withCaching(
+      withAddressing(withReadable(withNavigation(bottomInterpreter))),
+    ),
+  )
+
+  function setup() {
+    const store = { n: 1 }
+    const ctx = plainContext(store)
+    interpret(schema, interp, ctx)
+    return ctx
+  }
+
+  it("runs `before` on the state before the change and `after` on the state after it, with an addressed path, whatever the registration order", () => {
+    const ctx = setup()
+    const seen: string[] = []
+    const record = (label: string) => (path: Path) => {
+      seen.push(`${label} ${path.isAddressed} ${ctx.reader.read(path)}`)
+    }
+    // Registered after-first and before-first, so order of registration and
+    // order of phase disagree.
+    ctx.addPrepareStage(Symbol("one"), {
+      after: record("after"),
+      before: record("before"),
+    })
+    ctx.addPrepareStage(Symbol("two"), { before: record("before") })
+    ctx.addPrepareStage(Symbol("three"), { after: record("after") })
+
+    ctx.runBatch(() => {
+      ctx.prepare(RawPath.empty.field("n"), replaceChange(2), {
+        ingress: "author",
+      })
+    }, {})
+
+    expect(seen).toEqual([
+      "before true 1",
+      "before true 1",
+      "after true 2",
+      "after true 2",
+    ])
+  })
+
+  it("ignores a second registration under the same layer", () => {
+    const ctx = setup()
+    const layer = Symbol("layer")
+    const calls: string[] = []
+    ctx.addPrepareStage(layer, { after: () => calls.push("first") })
+    ctx.addPrepareStage(layer, { after: () => calls.push("second") })
+
+    ctx.runBatch(() => {
+      ctx.prepare(RawPath.empty.field("n"), replaceChange(2), {
+        ingress: "author",
+      })
+    }, {})
+
+    expect(calls).toEqual(["first"])
+  })
 })
