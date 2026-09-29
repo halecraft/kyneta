@@ -167,6 +167,8 @@ subscribeNode(doc.count, (changeset) => {
 
 One `batch()` reaches each subscriber as **one `Changeset`**, covering everything the block wrote inside that subscriber's subtree. A subscriber at the document root sees all of it together, however many fields or records the block touched; a subscriber further down sees only its own part. The whole batch is applied before any callback runs, so no subscriber ever observes partially-applied state.
 
+A write that rewrites a subtree reaches the subscribers inside it too: a struct's `.set`, a record entry set whole, a deleted or cleared key, a deleted tree node. Each receives the change as seen from where it sits, at its own relative root: a `replace` of its new value, `replace(undefined)` if it was removed, or, at a deleted tree node, the tree delete. Subscribers above the write receive the op as written. So a subscriber hears a batch exactly when its value (`ref()`) comes back as a new object.
+
 Within a changeset, `changes` are in the order they were written. That makes the list a faithful log: a root subscriber's `changes` are exactly the `Op[]` that `batch()` returned, and handing them to `applyChanges()` on another document reproduces the same writes. Deeper subscribers are called before shallower ones.
 
 Ops are yours to keep. A change's payload is a snapshot taken when the write was dispatched, so you can queue one for a later network send, hold it for an undo stack, or forward it to another document, and it will still describe what was written. Neither a later write nor the caller that supplied the value can reach back and alter it.
@@ -191,7 +193,7 @@ populated(doc.count)      // false (untouched siblings stay false)
 subscribeNode(populatedFeed(doc.title), () => { /* data arrived */ })
 ```
 
-`populated(ref)` reports whether any mutation — local, remote, or replayed from storage — has touched that ref or a descendant. It starts `false` and, once `true`, never reverts. `populatedFeed(ref)` returns the same state as a callable carrying its own `[CHANGEFEED]`, so it can be subscribed to or composed into a reactive computation.
+`populated(ref)` reports whether any mutation — local, remote, or replayed from storage — has reached that ref: at it, at a descendant, or by rewriting a subtree above that contains it (a struct's `.set` populates its fields). It starts `false` and, once `true`, never reverts. `populatedFeed(ref)` returns the same state as a callable carrying its own `[CHANGEFEED]`, so it can be subscribed to or composed into a reactive computation.
 
 These are free functions, not properties on the ref. Refs expose your schema's fields as properties, so framework metadata is stored under a `Symbol` (`[POPULATED]`) instead — otherwise a schema with an `populated` field would collide with it. The same applies to `deleted(ref)` / `deletedFeed(ref)`.
 

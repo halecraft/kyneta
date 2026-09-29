@@ -19,19 +19,21 @@
 // - Read-only: ctx has no prepare/deliver → .subscribe never fires,
 //   .current still works. Valid static Moore machine.
 //
-// Notification flow (read-write only): the transformer registers a
-// `prepare` stage that marks each op's path populated, and wraps ctx.deliver
-// to plan and fire notifications for one sealed batch. Capturing each
-// batch's ops, sealing, and delivering in seal order after the native
-// commit belong to the writable context (`buildWritableContext`).
+// Notification flow (read-write only): subscribers live in the context's
+// `SubscriberTrie`. The transformer registers a `prepare` stage that marks
+// what each op populated, and wraps ctx.deliver to plan and fire
+// notifications for one sealed batch: a change reaches the subscribers on its
+// path's ancestors and, projected, those inside the part of the tree it
+// rewrote. Capturing each batch's ops, sealing, and delivering in seal order
+// after the native commit belong to the writable context
+// (`buildWritableContext`).
 //
-// Compose: withChangefeed(withWritable(withCaching(withReadable(withNavigation(bottom)))))
-// Or read-only: withChangefeed(withCaching(withReadable(withNavigation(bottom))))
+// Compose: withChangefeed(withWritable(withCaching(withAddressing(withReadable(withNavigation(bottom))))))
+// Or read-only: withChangefeed(withCaching(withAddressing(withReadable(withNavigation(bottom)))))
 
 import type { BatchMetadata, HasChangefeed } from "@kyneta/changefeed"
 import { CHANGEFEED } from "@kyneta/changefeed"
 import type { ChangeBase } from "../change.js"
-import { isTreeChange, treeChange } from "../change.js"
 import type {
   Changeset,
   Op,
@@ -59,9 +61,11 @@ import type {
   TreeSchema,
 } from "../schema.js"
 import type { BatchOptions } from "../substrate.js"
+import { planSubtreeEffect, projectChange } from "../subtree-effect.js"
 
 import type { HasRead } from "./bottom.js"
 import { CALL } from "./bottom.js"
+import { type SubscriberNode, SubscriberTrie } from "./subscriber-trie.js"
 import { hasPreparePipeline, type SealedBatch } from "./writable.js"
 
 export const POPULATED: unique symbol = Symbol.for("kyneta:populated")
@@ -92,9 +96,10 @@ export function hasPopulated(value: unknown): value is HasPopulated {
 }
 
 /**
- * Returns true if the ref has been populated (received at least one mutation —
- * local, remote, or replayed from storage). Returns false if it has not, or if
- * it is not a ref that tracks population.
+ * Returns true if the ref has been populated: a change — local, remote, or
+ * replayed from storage — has reached it, at it, below it, or by rewriting a
+ * part of the tree above that contains it. Returns false if none has, or if it
+ * is not a ref that tracks population.
  *
  * This is the plain boolean and is safe to put in an `if`. For the observable
  * form, use {@link populatedFeed}.
@@ -165,70 +170,46 @@ export function attachChangefeed(
 // ---------------------------------------------------------------------------
 
 /**
- * A membership test, structurally satisfied by both `Map` and `Set`.
- *
- * The planner only needs to ask "is anyone listening at this key?", so taking
- * this shape lets the shell hand over its live subscriber registries directly
- * — no copying a `Map`'s keys into a `Set` on every delivery — while keeping the
- * planner a pure function of plain data for testing.
- */
-export interface KeySet {
-  has(key: string): boolean
-}
-
-/**
- * A path-keyed registry of subscriber callbacks — the shape both channels use.
- *
- * Written out as a type because the two registries are otherwise spelled at
- * length in a dozen places, and the point worth seeing is that they differ in
- * exactly one thing: what a callback is handed.
- */
-type Registry<C> = Map<string, Set<C>>
-
-/** Own-path subscribers. They receive the node's own changes, without paths. */
-type OwnPathRegistry = Registry<(changeset: Changeset<ChangeBase>) => void>
-
-/**
- * Deep subscribers, keyed by the path they subscribed AT — not by the paths
- * they are interested in. A subscriber says "I am at P" once, and delivery
- * finds it by walking each changed path's ancestors.
- *
- * Kept separate from the own-path registry because the two channels carry
- * different shapes: a deep subscriber gets an `Op` per change, carrying that
- * change's path relative to the subscription point.
- */
-type DeepRegistry = Registry<(changeset: Changeset<Op>) => void>
-
-/**
  * What one sealed batch delivers, to whom, and in what order.
  *
- * The two channels group differently, and the reason is structural. A node's
- * own path is a single key, so own-path changes can only ever come from one
- * place. A node's *subtree* spans many paths, so a deep subscriber's changeset
- * has to gather ops from all of them — which is exactly the merge this type
- * exists to express.
+ * Keyed by subscriber-trie node rather than by path key: a key joins segments
+ * lossily, and a node is exactly one coordinate.
  *
- * This is the Functional Core of the notification pipeline, following the same
- * FC/IS pattern as `planCacheUpdate`/`applyCacheOps` in `withCaching`.
+ * The two channels group differently, and the reason is structural. A node's
+ * own path is a single coordinate, so its own-path changes come from one
+ * place. A node's *subtree* spans many paths, so a deep subscriber's changeset
+ * gathers ops from all of them — which is exactly the merge this type exists
+ * to express.
  */
 export interface DeliveryPlan {
   /**
-   * Own-path channel: subscriber key → the changes dispatched at exactly that
-   * path, in dispatch order. Insertion order is first-touch order, which is
-   * the order these callbacks fire in.
+   * Own-path channel: node → the changes to that coordinate, in dispatch
+   * order: changes made at it, and changes made above it projected onto it.
+   * Insertion order is first-touch order, which is the order these callbacks
+   * fire in.
    */
-  readonly ownPath: ReadonlyMap<string, readonly ChangeBase[]>
+  readonly ownPath: ReadonlyMap<SubscriberNode, readonly ChangeBase[]>
   /**
-   * Deep channel: subscriber key → every op in that subscriber's subtree,
-   * already rebased to the subscriber's relative path, in dispatch order.
+   * Deep channel: node → every op in that node's subtree, already rebased to
+   * its relative path, and the projections of ops above it at its relative
+   * root, in dispatch order.
    */
-  readonly deep: ReadonlyMap<string, readonly Op[]>
-  /** Deep subscriber keys, deepest-first — the order those callbacks fire in. */
-  readonly deepOrder: readonly string[]
+  readonly deep: ReadonlyMap<SubscriberNode, readonly Op[]>
+  /** Deep subscriber nodes, deepest-first — the order those callbacks fire in. */
+  readonly deepOrder: readonly SubscriberNode[]
 }
 
 /**
  * Plan one batch's delivery: walk the ops once and answer both channels.
+ *
+ * A change at P concerns the coordinates whose read it changes: P's
+ * ancestors, P itself, and whatever below P it rewrote
+ * (`planSubtreeEffect`). So each op is walked up the trie through P's
+ * ancestor chain, where deep subscribers receive it rebased to their relative
+ * path, and down through the rewritten scope, where every subscriber receives
+ * `projectChange(change, relative)`, the change as seen from where it sits.
+ * The read cache invalidates by the same walk, so a subscriber hears a batch
+ * exactly when its read gets a new identity in it.
  *
  * The single pass is not just an optimisation. The deep channel needs ops in
  * *dispatch* order, and any grouping step destroys that: if an ancestor write
@@ -236,130 +217,71 @@ export interface DeliveryPlan {
  * ancestor past both of them, and replaying the result reaches a different
  * state than the writes produced.
  *
- * Walking `pending` in order and appending as we go preserves it for free. The
- * two channels also share work — at `i === path.length` the ancestor key *is*
- * the op's own path key — so computing them separately would repeat a lookup.
- *
- * @param pending - Accumulated ops from prepare calls, in dispatch order.
- * @param ownPathKeys - Keys with own-path subscribers.
- * @param deepKeys - Keys with deep (descendant) subscribers.
+ * @param pending - The sealed batch's ops, in dispatch order.
+ * @param trie - The context's subscribers; only read.
  */
 export function planDelivery(
   pending: readonly Op[],
-  ownPathKeys: KeySet,
-  deepKeys: KeySet,
+  trie: SubscriberTrie,
 ): DeliveryPlan {
-  const ownPath = new Map<string, ChangeBase[]>()
-  const deep = new Map<string, Op[]>()
-  // Depth per deep key, recorded on first sight so the ordering sort below
-  // does not have to re-derive it from the key string.
-  const depths = new Map<string, number>()
+  const ownPath = new Map<SubscriberNode, ChangeBase[]>()
+  const deep = new Map<SubscriberNode, Op[]>()
+  // Depth per deep node, recorded on first sight for the ordering sort below.
+  const depths = new Map<SubscriberNode, number>()
 
-  for (const { path, change } of pending) {
-    const key = path.key
-
-    if (ownPathKeys.has(key)) {
-      const at = ownPath.get(key)
-      if (at) at.push(change)
-      else ownPath.set(key, [change])
-    }
-
-    // A change at `a/b/c` concerns subscribers at `a/b/c`, `a/b`, `a`, and the
-    // root. That set is just the path's ancestor chain, so it is derived here
-    // from the path itself rather than maintained between deliveries.
-    const prefixKeys = path.prefixKeys
-    for (let i = path.length; i >= 0; i--) {
-      // `prefixKeys` is built segment by segment, never by cutting `key`:
-      // joining is lossy, so a segment whose own text contains the separator
-      // would make a split invent a level that never existed, and a
-      // subscriber at that phantom path would receive changes from an
-      // unrelated subtree. `markPopulated` walks the same keys.
-      const ancestorKey = prefixKeys[i]
-      if (!deepKeys.has(ancestorKey)) continue
-
-      // Rebase only where someone is listening, so a deep document with few
-      // subscribers pays for lookups but not for allocation. `path.slice(i)` is
-      // the changed path relative to this ancestor; at `i === path.length` that
-      // is the empty path, which is exactly the own-path case seen from the
-      // deep channel.
-      const op: Op = { path: path.slice(i), change }
-      const buffer = deep.get(ancestorKey)
-      if (buffer) buffer.push(op)
-      else {
-        deep.set(ancestorKey, [op])
-        depths.set(ancestorKey, i)
-      }
+  const toOwn = (node: SubscriberNode, change: ChangeBase): void => {
+    if (!node.own?.size) return
+    const at = ownPath.get(node)
+    if (at) at.push(change)
+    else ownPath.set(node, [change])
+  }
+  const toDeep = (node: SubscriberNode, op: Op, depth: number): void => {
+    if (!node.deep?.size) return
+    const at = deep.get(node)
+    if (at) at.push(op)
+    else {
+      deep.set(node, [op])
+      depths.set(node, depth)
     }
   }
 
-  // Deepest-first. The order is chosen here rather than emerging from the shape
-  // of a subscription graph, which is what determined it before — delivery
-  // order used to depend on the sequence in which subscribers happened to
-  // register.
-  //
-  // `sort` has been specified stable since ES2019, and this relies on it: keys
-  // at equal depth keep the insertion order above, which is first-touch order.
+  for (const { path, change } of pending) {
+    // Up: the ancestor chain, as far as the trie has it. `chain[i]` is the
+    // node for the first `i` segments; the chain is built from segment
+    // identities, never by cutting a key string, so it cannot invent a level.
+    const chain = trie.chain(path)
+    const target = chain.length === path.length + 1 ? chain.at(-1) : undefined
+    if (target) toOwn(target, change)
+    for (let i = chain.length - 1; i >= 0; i--) {
+      const node = chain[i]
+      // Rebase only where someone is listening. At `i === path.length` the
+      // relative path is empty: the own-path case seen from the deep channel.
+      if (node?.deep?.size) toDeep(node, { path: path.slice(i), change }, i)
+    }
+
+    // Down: the part of the tree the change rewrote.
+    if (target === undefined) continue
+    for (const [node, relative] of trie.scope(
+      target,
+      planSubtreeEffect(change),
+    )) {
+      const projected = projectChange(change, relative)
+      toOwn(node, projected)
+      toDeep(
+        node,
+        { path: path.root(), change: projected },
+        path.length + relative.length,
+      )
+    }
+  }
+
+  // Deepest-first. `sort` is stable, so nodes at equal depth keep first-touch
+  // order.
   const deepOrder = [...deep.keys()].sort(
     (a, b) => (depths.get(b) ?? 0) - (depths.get(a) ?? 0),
   )
 
   return { ownPath, deep, deepOrder }
-}
-
-/**
- * Register a subscriber at a path, and hand back the teardown that removes it.
- *
- * **One function serves both channels**, which is the point. They differ only
- * in what a callback receives — own-path subscribers get the node's own
- * changes, deep subscribers get an `Op` per change — so the registration
- * discipline itself is shared, and there is no second copy to drift.
- *
- * There is no wiring here, and nothing to tear down when the document changes
- * shape: a subscriber records where it sits, and `deliverNotifications` finds
- * it by walking each changed path upward. That is the whole reason this is so
- * small. The previous design had each composite subscribe to its children's
- * changefeeds and forward their changes upward, which meant holding references
- * to the child ref objects that existed at wiring time. Those references go
- * stale whenever the document's shape changes — most sharply for a sum, whose
- * carrier is swapped out on a variant shift — and each dynamic composite had
- * grown its own machinery to rebuild them.
- *
- * Registration happens here and nowhere else, so it happens when a *subscriber*
- * arrives rather than when a ref carrier is built. That distinction is load-
- * bearing: carriers are not unique per path (see "Per-ref-instance carrier
- * multiplication" in `packages/schema/TECHNICAL.md`), and registering per
- * carrier left one permanent entry per carrier ever created, with nothing able
- * to remove it. JavaScript offers no destructor, and the changefeed layer holds
- * no reference to a carrier it could weaken.
- *
- * **The membership check in the teardown is doing more work than it looks
- * like.** It makes a doubled teardown harmless, and it also stops a *stale*
- * teardown from evicting a later subscriber. The teardown closes over the set
- * that existed when its subscriber registered, and that set can stop being the
- * registry's: emptying a key deletes it, and subscribing at that path again
- * puts a new set in its place. The old teardown cannot damage the replacement,
- * because a set is only ever orphaned at the moment it becomes empty and
- * nothing can refill it afterwards — registration always looks the key up
- * fresh. An orphaned set is empty forever, so `delete` returns false and the
- * stale teardown stops before the size check it would otherwise get wrong.
- */
-function listenIn<C>(
-  registry: Registry<C>,
-  path: Path,
-  callback: C,
-): () => void {
-  const key = path.key
-  let set = registry.get(key)
-  if (!set) {
-    set = new Set()
-    registry.set(key, set)
-  }
-  const registered = set
-  registered.add(callback)
-  return () => {
-    if (!registered.delete(callback)) return
-    if (registered.size === 0) registry.delete(key)
-  }
 }
 
 /**
@@ -392,52 +314,37 @@ export function changesetMetadata(options: BatchOptions): BatchMetadata {
  * `planDelivery`; this only builds changesets and calls functions.
  *
  * **Ordering.** Every own-path callback fires first, in first-touch order, then
- * every deep callback, deepest-first. Before the per-subscriber merge the two
- * channels interleaved per changed path — own(P1), deep(P1→root), own(P2),
- * deep(P2→root) — because delivery happened inside the walk. Planning before
- * firing is what collapses a subscriber's several changesets into one, and this
- * ordering is the price of that. It is a deliberate trade, not a side effect.
+ * every deep callback, deepest-first. Planning before firing is what collapses
+ * a subscriber's several changesets into one, and this ordering is the price
+ * of that.
  *
- * One `Changeset` is built per *key* and shared by every callback registered
- * there. Several ref carriers can sit at the same path (see "Per-ref-instance
- * carrier multiplication" in TECHNICAL.md), and allocating per callback would
- * multiply garbage for no benefit.
+ * One `Changeset` is built per node and shared by every callback registered
+ * there.
  *
  * @param plan - From `planDelivery`.
- * @param listeners - Own-path subscribers, keyed by path (from `ensureChangefeedWiring`).
- * @param descendants - Deep subscribers, keyed by their own path.
  * @param options - The sealed batch's options; `changesetMetadata` turns
  *   them into the metadata every emitted `Changeset` carries.
  */
 export function deliverNotifications(
   plan: DeliveryPlan,
-  listeners: ReadonlyMap<
-    string,
-    ReadonlySet<(cs: Changeset<ChangeBase>) => void>
-  >,
-  descendants: ReadonlyMap<string, ReadonlySet<(cs: Changeset<Op>) => void>>,
   options: BatchOptions,
 ): void {
   const metadata = changesetMetadata(options)
-  for (const [key, changes] of plan.ownPath) {
-    const set = listeners.get(key)
-    if (!set || set.size === 0) continue
+  for (const [node, changes] of plan.ownPath) {
+    if (!node.own?.size) continue
     const changeset: Changeset<ChangeBase> = { changes, ...metadata }
     // Snapshot before calling. A callback is free to unsubscribe — itself or
     // anyone else — and a `Set` being iterated live would then skip a
-    // subscriber it had not reached yet, silencing someone who never asked to
-    // leave. The copy costs one small array per key that has subscribers.
-    for (const callback of [...set]) callback(changeset)
+    // subscriber it had not reached yet, or visit one added mid-delivery.
+    for (const callback of [...node.own]) callback(changeset)
   }
 
-  for (const key of plan.deepOrder) {
-    const subscribersHere = descendants.get(key)
-    if (!subscribersHere || subscribersHere.size === 0) continue
-    const changes = plan.deep.get(key)
-    if (!changes) continue
+  for (const node of plan.deepOrder) {
+    const changes = plan.deep.get(node)
+    if (!node.deep?.size || !changes) continue
     const changeset: Changeset<Op> = { changes, ...metadata }
     // Snapshot for the same reason as the own-path loop above.
-    for (const callback of [...subscribersHere]) callback(changeset)
+    for (const callback of [...node.deep]) callback(changeset)
   }
 }
 
@@ -449,9 +356,8 @@ export function deliverNotifications(
  * Lift a `Changeset<C>` to `Changeset<Op<C>>` by wrapping each change
  * with a constant path.
  *
- * Used wherever a leaf-shaped (own-path) changeset needs to be promoted
- * to tree-shaped (addressed Op) delivery: leaf `subscribeDescendants`,
- * composite own-path fan-out into tree subscribers.
+ * Used where a leaf-shaped (own-path) changeset has to be delivered on the
+ * deep channel: the populated feed's `subscribeDescendants`.
  *
  * Pure, table-testable. Exported for tests; not re-exported from index.
  */
@@ -468,142 +374,76 @@ export function liftToOps<C extends ChangeBase>(
   }
 }
 
-/**
- * Synthetic `Changeset<ChangeBase>` for terminal-event delivery on a
- * deleted tree node. Extracted as a first-class helper so the wire
- * shape lives in one place — `createTreeChangefeed` dispatches it
- * through the path-keyed listener channel; subscribers see the lifted
- * `Changeset<Op>` form indistinguishable from a real own-path delivery.
- *
- * Pure, table-testable; subscribers pattern-match on
- * `changeset.changes[0].type === "tree" && instructions[0].action === "delete"`.
- */
-export function synthesizeTreeDeleteTerminal(
-  id: string,
-): Changeset<ChangeBase> {
-  return {
-    changes: [treeChange([{ action: "delete", target: id }])],
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Prepare stage and deliver wrapping — per-context, idempotent
 // ---------------------------------------------------------------------------
 
-/**
- * Per-context state for the changefeed layer's wiring.
- *
- * - `listeners` / `descendants`: the two subscriber registries, written into
- *   by `listenIn` when someone subscribes. Together they are the
- *   `ChangefeedChannels` a factory is handed.
- * - `populated`: monotonic set of path keys that have received at least
- *   one mutation. Once a key enters this set it never leaves (except
- *   on substrate reset). Used by `populated` changefeeds.
- * - `populatedListeners`: callbacks waiting for a specific path key to
- *   become populated. Fired at most once per path key, then removed.
- */
-interface ContextWiringState {
-  readonly listeners: OwnPathRegistry
-  readonly descendants: DeepRegistry
-  readonly populated: Set<string>
-  readonly populatedListeners: Map<string, Set<() => void>>
-}
+// One subscriber trie per context, shared across all nodes interpreted with it.
+const contextState = new WeakMap<RefContext, SubscriberTrie>()
 
-// One wiring per context, shared across all nodes interpreted with it.
-const contextState = new WeakMap<RefContext, ContextWiringState>()
-
-// WeakMap for read-only contexts: each gets its own orphaned listener
-// map. Subscribers register but nothing feeds into it — valid static
-// Moore machine. Separate per-context to avoid cross-contamination.
-const readOnlyState = new WeakMap<RefContext, ChangefeedChannels>()
+// Read-only contexts: each gets its own trie. Subscribers register but
+// nothing feeds into it — a valid static Moore machine.
+const readOnlyState = new WeakMap<RefContext, SubscriberTrie>()
 
 /** The key this layer registers its prepare stage under. */
 const CHANGEFEED_STAGE: unique symbol = Symbol("kyneta:changefeed-stage")
 
 /**
- * The two subscriber registries a changefeed writes into: own-path and
- * descendant. Bundled so `wireChangefeed` can hand both to a factory without
- * every factory growing a second parameter it may not use.
- */
-interface ChangefeedChannels {
-  readonly listeners: OwnPathRegistry
-  readonly descendants: DeepRegistry
-}
-
-/**
- * The subscriber registries for `ctx`, wiring the context for notification
- * on first use. On read-only stacks (no pipeline) `.subscribe` callbacks
- * are registered in a local listener map but never fired: a valid static
- * Moore machine.
+ * The subscriber trie for `ctx`, wiring the context for notification on first
+ * use. On read-only stacks (no pipeline) subscribers are registered but never
+ * called: a valid static Moore machine.
  *
  * On read-write stacks:
- * - an `after` stage marks each op's path populated;
+ * - an `after` stage marks what each op populated (its path, its ancestors,
+ *   and what it rewrote below);
  * - `deliver` wrapping plans delivery from the sealed batch's ops
- *   (`planDelivery`, pure) and fires listeners (`deliverNotifications`).
+ *   (`planDelivery`, pure) and fires the subscribers (`deliverNotifications`).
  *   This is the only wrapper left on the context, so there is no wrapping
  *   order to depend on.
  */
-function ensureChangefeedWiring(ctx: RefContext): ChangefeedChannels {
+function subscriberTrieOf(ctx: RefContext): SubscriberTrie {
   if (!hasPreparePipeline(ctx)) {
-    let channels = readOnlyState.get(ctx)
-    if (!channels) {
-      channels = { listeners: new Map(), descendants: new Map() }
-      readOnlyState.set(ctx, channels)
+    let trie = readOnlyState.get(ctx)
+    if (!trie) {
+      trie = new SubscriberTrie()
+      readOnlyState.set(ctx, trie)
     }
-    return channels
+    return trie
   }
 
-  let state = contextState.get(ctx)
-  if (state)
-    return { listeners: state.listeners, descendants: state.descendants }
+  const existing = contextState.get(ctx)
+  if (existing) return existing
 
-  const listeners: OwnPathRegistry = new Map()
-  const descendants: DeepRegistry = new Map()
-  const populated = new Set<string>()
-  const populatedListeners = new Map<string, Set<() => void>>()
+  const trie = new SubscriberTrie()
   const originalDeliver = ctx.deliver
 
-  // Mark each op's path populated once the substrate has applied it. The
-  // pipeline hands the stage the resolved path, so its key matches the
-  // listeners' keys whoever called `prepare`.
   ctx.addPrepareStage(CHANGEFEED_STAGE, {
-    after: path => markPopulated(path, populated, populatedListeners),
+    after: (path, change) =>
+      trie.markPopulated(path, planSubtreeEffect(change)),
   })
 
-  // Wrapped deliver: plan from the sealed batch's ops, then call the
-  // subscribers. `listeners` and `descendants` are passed as membership
-  // tests: the planner only asks whether a key has subscribers.
-  const wrappedDeliver = (batch: SealedBatch): void => {
+  ctx.deliver = (batch: SealedBatch): void => {
     originalDeliver(batch)
-    const plan = planDelivery(batch.ops, listeners, descendants)
-    deliverNotifications(plan, listeners, descendants, batch.options)
+    deliverNotifications(planDelivery(batch.ops, trie), batch.options)
   }
 
-  ctx.deliver = wrappedDeliver
-
-  state = {
-    listeners,
-    descendants,
-    populated,
-    populatedListeners,
-  }
-  contextState.set(ctx, state)
-  return { listeners, descendants }
+  contextState.set(ctx, trie)
+  return trie
 }
 
 /**
- * Number of own-path listener registrations at `pathKey` for the given context.
+ * Number of own-path subscribers at `path` for the given context.
  *
  * @internal Not exported from the package barrel.
  *
- * Test-only. A registration that outlives its subscriber costs memory and per-delivery work and nothing
- * else: delivery still calls exactly the callbacks that are subscribed, so a
- * test counting callbacks passes whether or not the registry accretes. Reading
- * the structure is the test that actually holds.
+ * Test-only. A registration that outlives its subscriber costs memory and
+ * per-delivery work and nothing else: delivery still calls exactly the
+ * callbacks that are subscribed, so a test counting callbacks passes whether
+ * or not the registry accretes. Reading the structure is the test that
+ * actually holds.
  */
-export function __getListenerCountAtPath(ctx: object, pathKey: string): number {
-  const state = contextState.get(ctx as RefContext)
-  return state?.listeners.get(pathKey)?.size ?? 0
+export function __getListenerCountAtPath(ctx: object, path: Path): number {
+  return contextState.get(ctx as RefContext)?.find(path)?.own?.size ?? 0
 }
 
 // ---------------------------------------------------------------------------
@@ -611,54 +451,14 @@ export function __getListenerCountAtPath(ctx: object, pathKey: string): number {
 // ---------------------------------------------------------------------------
 
 /**
- * Mark a path and all its ancestors as populated.
- *
- * "Populated" means a mutation has been applied at this path or a
- * descendant. This is a monotonic lattice: once true, never false
- * (except on substrate reset).
- *
- * When a path transitions from unpopulated to populated, any registered
- * listeners for that path key are fired and removed.
- */
-function markPopulated(
-  path: Path,
-  populated: Set<string>,
-  populatedListeners: Map<string, Set<() => void>>,
-): void {
-  // Mark the exact path
-  const key = path.key
-  if (!populated.has(key)) {
-    populated.add(key)
-    firePopulatedListeners(key, populatedListeners)
-  }
-
-  // Mark all ancestor paths (prefix walk)
-  const prefixKeys = path.prefixKeys
-  for (let i = path.length - 1; i >= 0; i--) {
-    const ancestorKey = prefixKeys[i]
-    if (populated.has(ancestorKey)) break // already marked, ancestors are too
-    populated.add(ancestorKey)
-    firePopulatedListeners(ancestorKey, populatedListeners)
-  }
-}
-
-function firePopulatedListeners(
-  key: string,
-  populatedListeners: Map<string, Set<() => void>>,
-): void {
-  const set = populatedListeners.get(key)
-  if (set) {
-    // Fire all listeners, then remove — this fires at most once per path
-    for (const callback of set) callback()
-    populatedListeners.delete(key)
-  }
-}
-
-/**
  * Create a `RecursiveChangefeedProtocol<boolean>` for the population state
  * at a path — the protocol behind `populatedFeed(ref)` / `populated(ref)`.
  *
- * - `.current` reads from the populated set (true if this path key is in the set)
+ * "Populated" means a change has reached this coordinate: an op landed at or
+ * below it, or an op above it rewrote a part of the tree containing it — the
+ * same scope delivery reaches. Monotonic: once true, never false.
+ *
+ * - `.current` asks the subscriber trie (`isPopulated`).
  * - `.subscribe` fires exactly once when the path transitions from
  *   unpopulated to populated. If already populated at subscribe time,
  *   the callback fires immediately (via microtask for consistency).
@@ -670,39 +470,26 @@ function firePopulatedListeners(
  */
 function createPopulatedChangefeed(
   path: Path,
-  populated: Set<string>,
-  populatedListeners: Map<string, Set<() => void>>,
+  trie: SubscriberTrie,
 ): RecursiveChangefeedProtocol<boolean, ChangeBase> {
-  const key = path.key
-
   const subscribe = (
     callback: (changeset: Changeset<ChangeBase>) => void,
   ): (() => void) => {
     // Already populated — fire immediately via microtask
-    if (populated.has(key)) {
+    if (trie.isPopulated(path)) {
       Promise.resolve().then(() =>
         callback({ changes: [], origin: "populated" }),
       )
       return () => {}
     }
-
-    // Not yet populated — register a one-shot listener
-    let set = populatedListeners.get(key)
-    if (!set) {
-      set = new Set()
-      populatedListeners.set(key, set)
-    }
-    const handler = () => callback({ changes: [], origin: "populated" })
-    set.add(handler)
-    return () => {
-      set?.delete(handler)
-      if (set?.size === 0) populatedListeners.delete(key)
-    }
+    return trie.listenPopulated(path, () =>
+      callback({ changes: [], origin: "populated" }),
+    )
   }
 
   return {
     get current(): boolean {
-      return populated.has(key)
+      return trie.isPopulated(path)
     },
     subscribe,
     subscribeDescendants(callback) {
@@ -723,22 +510,9 @@ function createPopulatedChangefeed(
 function attachIsPopulated(
   target: object,
   path: Path,
-  populated: Set<string>,
-  populatedListeners: Map<string, Set<() => void>>,
+  trie: SubscriberTrie,
 ): void {
-  const changefeed = createPopulatedChangefeed(
-    path,
-    populated,
-    populatedListeners,
-  )
-  const populatedRef = Object.create(null) as Record<symbol, unknown>
-  Object.defineProperty(populatedRef, CHANGEFEED, {
-    value: changefeed,
-    enumerable: false,
-    configurable: false,
-    writable: false,
-  })
-  // Also make it callable: populatedRef() returns the boolean
+  const changefeed = createPopulatedChangefeed(path, trie)
   const callable = function (this: unknown) {
     return changefeed.current
   }
@@ -756,77 +530,29 @@ function attachIsPopulated(
   })
 }
 
-/**
- * Get the populated state for a context. Returns the populated set and
- * listeners map. For read-only stacks (no prepare pipeline), returns a
- * static empty set — `populated` will always be false.
- */
-function getPopulatedState(ctx: RefContext): {
-  populated: Set<string>
-  populatedListeners: Map<string, Set<() => void>>
-} {
-  if (!hasPreparePipeline(ctx)) {
-    // Read-only stack — no mutations possible, nothing is ever populated
-    return { populated: new Set(), populatedListeners: new Map() }
-  }
-  const state = contextState.get(ctx)
-  if (state) {
-    return {
-      populated: state.populated,
-      populatedListeners: state.populatedListeners,
-    }
-  }
-  // ensureChangefeedWiring hasn't been called yet — call it to initialize
-  ensureChangefeedWiring(ctx)
-  const initialized = contextState.get(ctx)
-  if (initialized) {
-    return {
-      populated: initialized.populated,
-      populatedListeners: initialized.populatedListeners,
-    }
-  }
-  // Unreachable in practice — `ensureChangefeedWiring` populates the map for any
-  // context with a prepare pipeline, and the read-only case returned above.
-  // Answering with empties rather than asserting keeps that assumption from
-  // becoming a crash if a future context shape breaks it.
-  return { populated: new Set(), populatedListeners: new Map() }
-}
-
 // ---------------------------------------------------------------------------
-// Changefeed factories
+// The changefeed factory
 // ---------------------------------------------------------------------------
 
 /**
- * Builds the `RecursiveChangefeedProtocol` for a node — any node.
+ * Builds the `RecursiveChangefeedProtocol` for a node — any node, a tree
+ * included.
  *
- * One factory serves every schema kind except `tree`. That is not a
- * simplification applied on top; it is what the design reduced to. Sequence,
- * map and tree used to each carry a per-key map of forwarder subscriptions
- * plus wire/unwire machinery to rebuild it as entries came and went, and a
- * product used to subscribe to its own fields. All of it existed to keep a
- * derived structure aligned with a document whose shape changes at runtime.
+ * A subscriber records the coordinate it sits at in the subscriber trie, and
+ * `planDelivery` finds it by walking each change's ancestors and the part of
+ * the tree the change rewrote — recomputed per delivery from the change
+ * alone, so there is nothing to keep aligned and no reference to a child ref
+ * that could go stale. See "Why there are no dynamic-collection changefeed
+ * factories" in `packages/schema/TECHNICAL.md` for the machinery this
+ * replaced.
  *
- * Delivery no longer needs that structure. A subscriber records the path it
- * sits at, and `deliverNotifications` finds it by walking each changed path's
- * ancestors — recomputed per delivery from the path alone, so there is nothing to
- * keep aligned and no reference to a child ref object that could go stale. See
- * "Why there are no dynamic-collection changefeed factories" in
- * `packages/schema/TECHNICAL.md` for what that machinery was and the bug that
- * forced the question.
- *
- * What remains is the same for a scalar and a record: register own-path
- * subscribers in one registry, deep subscribers in the other. Even the leaf
- * case is not special — a leaf is a tree of size one, so its own change *is*
- * its whole subtree, and the ancestor walk reaches its deep subscribers at
- * relative path `[]`.
- *
- * (Do not confuse this with the *populated* feed further up, whose
- * `subscribeDescendants` really is an own-path → Op lift via `liftToOps`. That
- * feed reports readiness rather than content, and it is the only deep channel
- * in the file that does not go through the ancestor walk.)
+ * A leaf is not special: a leaf is a tree of size one, so its own change *is*
+ * its whole subtree, and the walk reaches its deep subscribers at relative
+ * path `[]`. Nor is a tree: a subscriber at a deleted tree node receives the
+ * delete projected onto it, the tree-delete terminal (`projectChange`).
  */
 function createNodeChangefeed(
-  channels: ChangefeedChannels,
+  trie: SubscriberTrie,
   path: Path,
   readCurrent: () => unknown,
 ): RecursiveChangefeedProtocol<unknown, ChangeBase> {
@@ -834,91 +560,8 @@ function createNodeChangefeed(
     get current() {
       return readCurrent()
     },
-    subscribe: callback => listenIn(channels.listeners, path, callback),
-    subscribeDescendants: callback =>
-      listenIn(channels.descendants, path, callback),
-  }
-}
-
-/**
- * Creates a RecursiveChangefeedProtocol for a `Schema.tree` node.
- *
- * Routing works like every other composite: subscribers register at their own
- * path and the ancestor walk finds them.
- *
- * The tree does carry one responsibility that is not routing — a **terminal
- * event** when a node is deleted. Its subscribers need to learn that their node
- * is gone, and no ordinary change can tell them: once the node is deleted, no
- * op targets its path again. So the delete instructions are scanned directly.
- *
- * Only trees get this. TreeIDs are CRDT-stable identifiers minted at create
- * time and never reused, so a subscriber at `d.tree.node(id)` holds a
- * meaningful identity reference and deserves a lifecycle-end signal. Map keys
- * are user-chosen strings that can come and go, and sequence items are
- * positional; neither carries that invariant.
- */
-function createTreeChangefeed(
-  channels: ChangefeedChannels,
-  path: Path,
-  readCurrent: () => unknown,
-): RecursiveChangefeedProtocol<unknown, ChangeBase> {
-  function deliverDeleteTerminal(id: string): void {
-    // Delivered straight to the deleted node's own key rather than through the
-    // notification plan, and deliberately so: it must reach that node only.
-    // The tree already reported the deletion via its own-path change, so an
-    // ancestor receiving the terminal as well would see the same delete twice.
-    //
-    // Both channels are fed by hand here. This is the one event in the system
-    // that is synthesized rather than derived from an op, so it is the one
-    // place the ancestor walk cannot do the routing. The facade `subscribe` is
-    // `subscribeDescendants`, so a per-node subscriber sits in the descendant
-    // map, while `.subscribe(callback)` on the node sits in the own-path map.
-    const nodePath = path.node(id)
-    const nodeKey = nodePath.key
-    const synthetic = synthesizeTreeDeleteTerminal(id)
-
-    const ownPathSubscribers = channels.listeners.get(nodeKey)
-    if (ownPathSubscribers && ownPathSubscribers.size > 0) {
-      // Snapshot, for the same reason `deliverNotifications` does: a callback
-      // may change this set while it is being walked, and a `Set` visits
-      // entries added mid-iteration.
-      for (const callback of [...ownPathSubscribers]) callback(synthetic)
-    }
-
-    const descendantSubscribers = channels.descendants.get(nodeKey)
-    if (descendantSubscribers && descendantSubscribers.size > 0) {
-      const lifted = liftToOps(synthetic, nodePath.root())
-      for (const callback of [...descendantSubscribers]) callback(lifted)
-    }
-  }
-
-  // The delete scan is the tree's one job that is not a subscription, so it
-  // gets its own registration and keeps it for the life of the carrier. Every
-  // other entry in the own-path registry belongs to a subscriber and leaves
-  // when that subscriber does; this one has to see every changeset whether or
-  // not anyone is listening to the tree, because the node being deleted may
-  // have subscribers even when the tree itself has none.
-  //
-  // Registered here rather than on first subscription, which also fixes the
-  // ordering: it is added before any subscriber, and the registry iterates in
-  // insertion order, so a node learns it is gone before the tree's own-path
-  // subscribers hear about the batch that removed it.
-  listenIn(channels.listeners, path, changeset => {
-    for (const change of changeset.changes) {
-      if (!isTreeChange(change)) continue
-      for (const inst of change.instructions) {
-        if (inst.action === "delete") deliverDeleteTerminal(inst.target)
-      }
-    }
-  })
-
-  return {
-    get current() {
-      return readCurrent()
-    },
-    subscribe: callback => listenIn(channels.listeners, path, callback),
-    subscribeDescendants: callback =>
-      listenIn(channels.descendants, path, callback),
+    subscribe: callback => trie.listenOwn(path, callback),
+    subscribeDescendants: callback => trie.listenDeep(path, callback),
   }
 }
 
@@ -953,13 +596,13 @@ function createTreeChangefeed(
  *
  * ```ts
  * // Full stack (read + write + observe):
- * const interp = withChangefeed(withWritable(withCaching(withReadable(withNavigation(bottom)))))
- * const ctx = plainContext(store)
+ * const interp = withChangefeed(withWritable(withCaching(withAddressing(withReadable(withNavigation(bottom))))))
+ * const ctx = plainContext(schema, store)
  * const doc = interpret(schema, interp, ctx)
  * doc[CHANGEFEED].subscribe(callback)       // fires on mutation
  *
  * // Read-only stack (observe without mutation):
- * const roInterp = withChangefeed(withCaching(withReadable(withNavigation(bottom))))
+ * const roInterp = withChangefeed(withCaching(withAddressing(withReadable(withNavigation(bottom)))))
  * const roDoc = interpret(schema, roInterp, { store })
  * roDoc[CHANGEFEED].current           // works — reads via [CALL]
  * roDoc[CHANGEFEED].subscribe(callback)     // valid — never fires
@@ -971,35 +614,20 @@ function createTreeChangefeed(
 // ---------------------------------------------------------------------------
 
 /**
- * Wire a changefeed onto a ref. Handles isPropertyHost guard, prepare wiring,
- * changefeed attachment, and populated attachment. The `createCf` closure
- * receives prepare listeners AND path (avoiding double-capture) and returns
- * the kind-specific changefeed protocol.
- *
- * If `result` is not a property host (e.g. a primitive), this is a no-op —
- * the caller still casts the return type, matching existing behavior.
+ * Wire a changefeed onto a ref: attach `[CHANGEFEED]` and `[POPULATED]`, both
+ * over the context's subscriber trie. A carrier that cannot hold properties
+ * gets nothing.
  */
 function wireChangefeed(
   result: unknown,
   ctx: RefContext,
   path: Path,
-  createCf: (
-    channels: ChangefeedChannels,
-    path: Path,
-  ) => RecursiveChangefeedProtocol<unknown, ChangeBase>,
+  readCurrent: () => unknown,
 ): void {
-  if (isPropertyHost(result)) {
-    const channels = ensureChangefeedWiring(ctx)
-    const changefeed = createCf(channels, path)
-    attachChangefeed(result as object, changefeed)
-    const populatedState = getPopulatedState(ctx)
-    attachIsPopulated(
-      result as object,
-      path,
-      populatedState.populated,
-      populatedState.populatedListeners,
-    )
-  }
+  if (!isPropertyHost(result)) return
+  const trie = subscriberTrieOf(ctx)
+  attachChangefeed(result, createNodeChangefeed(trie, path, readCurrent))
+  attachIsPopulated(result, path, trie)
 }
 
 export function withChangefeed<A extends HasRead>(
@@ -1014,9 +642,7 @@ export function withChangefeed<A extends HasRead>(
       schema: ScalarSchema,
     ): A & HasChangefeed {
       const result = base.scalar(ctx, path, schema)
-      wireChangefeed(result, ctx, path, (channels, nodePath) =>
-        createNodeChangefeed(channels, nodePath, () => result[CALL]()),
-      )
+      wireChangefeed(result, ctx, path, () => result[CALL]())
       return result as A & HasChangefeed
     },
 
@@ -1028,9 +654,7 @@ export function withChangefeed<A extends HasRead>(
       fields: Readonly<Record<string, () => A>>,
     ): A & HasChangefeed {
       const result = base.product(ctx, path, schema, fields)
-      wireChangefeed(result, ctx, path, (channels, nodePath) =>
-        createNodeChangefeed(channels, nodePath, () => result[CALL]()),
-      )
+      wireChangefeed(result, ctx, path, () => result[CALL]())
       return result as A & HasChangefeed
     },
 
@@ -1042,9 +666,7 @@ export function withChangefeed<A extends HasRead>(
       item: (index: number) => A,
     ): A & HasChangefeed {
       const result = base.sequence(ctx, path, schema, item)
-      wireChangefeed(result, ctx, path, (channels, nodePath) =>
-        createNodeChangefeed(channels, nodePath, () => result[CALL]()),
-      )
+      wireChangefeed(result, ctx, path, () => result[CALL]())
       return result as A & HasChangefeed
     },
 
@@ -1056,9 +678,7 @@ export function withChangefeed<A extends HasRead>(
       item: (key: string) => A,
     ): A & HasChangefeed {
       const result = base.map(ctx, path, schema, item)
-      wireChangefeed(result, ctx, path, (channels, nodePath) =>
-        createNodeChangefeed(channels, nodePath, () => result[CALL]()),
-      )
+      wireChangefeed(result, ctx, path, () => result[CALL]())
       return result as A & HasChangefeed
     },
 
@@ -1082,9 +702,7 @@ export function withChangefeed<A extends HasRead>(
     // Leaf type — attach a leaf changefeed + populated.
     text(ctx: RefContext, path: Path, schema: TextSchema): A & HasChangefeed {
       const result = base.text(ctx, path, schema)
-      wireChangefeed(result, ctx, path, (channels, nodePath) =>
-        createNodeChangefeed(channels, nodePath, () => result[CALL]()),
-      )
+      wireChangefeed(result, ctx, path, () => result[CALL]())
       return result as A & HasChangefeed
     },
 
@@ -1096,9 +714,7 @@ export function withChangefeed<A extends HasRead>(
       schema: CounterSchema,
     ): A & HasChangefeed {
       const result = base.counter(ctx, path, schema)
-      wireChangefeed(result, ctx, path, (channels, nodePath) =>
-        createNodeChangefeed(channels, nodePath, () => result[CALL]()),
-      )
+      wireChangefeed(result, ctx, path, () => result[CALL]())
       return result as A & HasChangefeed
     },
 
@@ -1113,15 +729,13 @@ export function withChangefeed<A extends HasRead>(
       item: (key: string) => A,
     ): A & HasChangefeed {
       const result = base.set(ctx, path, schema, item)
-      wireChangefeed(result, ctx, path, (channels, nodePath) =>
-        createNodeChangefeed(channels, nodePath, () => result[CALL]()),
-      )
+      wireChangefeed(result, ctx, path, () => result[CALL]())
       return result as A & HasChangefeed
     },
 
     // --- Tree -----------------------------------------------------------------
-    // See `createTreeChangefeed` for the per-TreeID fan-out + terminal-on-delete
-    // semantics; identical shape to sequence/map's wireChangefeed call.
+    // Like every other kind: a subscriber at a deleted node hears the delete
+    // projected onto it, the tree-delete terminal.
     tree(
       ctx: RefContext,
       path: Path,
@@ -1130,9 +744,7 @@ export function withChangefeed<A extends HasRead>(
       node: (id: string) => A,
     ): A & HasChangefeed {
       const result = base.tree(ctx, path, schema, nodes, node)
-      wireChangefeed(result, ctx, path, (channels, nodePath) =>
-        createTreeChangefeed(channels, nodePath, () => result[CALL]()),
-      )
+      wireChangefeed(result, ctx, path, () => result[CALL]())
       return result as A & HasChangefeed
     },
 
@@ -1145,9 +757,7 @@ export function withChangefeed<A extends HasRead>(
       item: (index: number) => A,
     ): A & HasChangefeed {
       const result = base.movable(ctx, path, schema, item)
-      wireChangefeed(result, ctx, path, (channels, nodePath) =>
-        createNodeChangefeed(channels, nodePath, () => result[CALL]()),
-      )
+      wireChangefeed(result, ctx, path, () => result[CALL]())
       return result as A & HasChangefeed
     },
 
@@ -1159,9 +769,7 @@ export function withChangefeed<A extends HasRead>(
       schema: RichTextSchema,
     ): A & HasChangefeed {
       const result = base.richtext(ctx, path, schema)
-      wireChangefeed(result, ctx, path, (channels, nodePath) =>
-        createNodeChangefeed(channels, nodePath, () => result[CALL]()),
-      )
+      wireChangefeed(result, ctx, path, () => result[CALL]())
       return result as A & HasChangefeed
     },
   }

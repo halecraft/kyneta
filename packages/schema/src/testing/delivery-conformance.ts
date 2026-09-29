@@ -14,18 +14,21 @@
 //      turns a product's MapChange into per-key ops on the CRDT bridges, while
 //      the plain substrate dispatches per field directly.
 //
-// So this suite asserts *invariants*, never literal op lists. Eight hold on
+// So this suite asserts *invariants*, never literal op lists. Nine hold on
 // every substrate:
 //
 //   Cardinality   one changeset per subscribed key per flush
 //   Containment   every delivered op's relative path lies within the subtree
 //   Order         dispatch order within a changeset; deepest-first across them
 //   Metadata      origin/replay/aborted/source identical across one flush
-//   Conservation  what the root sees equals the union of what everyone sees
+//   Conservation  every op a subscriber hears is one the root hears, rebased
+//                 to it, or one the root hears projected onto it
 //   Reach         a subscriber below a top-level field hears a write to it,
 //                 and not one to a sibling, however the write arrived
 //   Coherence     a read equals σ after every write, and gets a new identity
 //                 exactly when an op the root received lies in its subtree
+//   Delivery      a subscriber hears a write exactly when its read changes,
+//                 coarse writes over it included
 //   Signal        the substrate reports a local update iff the ops were
 //                 written here, and then they are not a replay; after
 //                 `commitPending`, an export reports none
@@ -562,6 +565,64 @@ export function deliveryConformance(
               const read = env.doc[field]()
               if (touched) expect(read, field).not.toBe(reads[field])
               else expect(read, field).toBe(reads[field])
+            }
+          }
+        })
+
+        // =================================================================
+        // Delivery ≡ identity
+        // =================================================================
+
+        it("delivery: a subscriber hears a write exactly when its read changes", () => {
+          const env = factory()
+          driver.write(env, d => {
+            d.outer.x.set(1)
+            d.outer.y.set(1)
+            d.entries.set("k", 1)
+            d.roster.set("alice", { cursor: 1 })
+            d.roster.set("bob", { cursor: 1 })
+          })
+
+          // Composite probes change identity; a leaf's read is a primitive,
+          // so the writes below change every leaf value they reach.
+          const probes: readonly [string, () => unknown][] = [
+            ["doc", () => env.doc],
+            ["outer", () => env.doc.outer],
+            ["outer.x", () => env.doc.outer.x],
+            ["entries", () => env.doc.entries],
+            ["entries.k", () => env.doc.entries.at("k")],
+            ["roster", () => env.doc.roster],
+            ["roster.alice", () => env.doc.roster.at("alice")],
+            ["roster.alice.cursor", () => env.doc.roster.at("alice")?.cursor],
+            ["roster.bob.cursor", () => env.doc.roster.at("bob")?.cursor],
+          ]
+          // Coarse writes over subscribers, and one fine write beside them.
+          const writes: ((d: DeliveryDoc) => void)[] = [
+            d => d.outer.set({ x: 2, y: 2 }),
+            d => d.roster.set("alice", { cursor: 2 }),
+            d => d.entries.delete("k"),
+            d => d.roster.at("bob")?.cursor.set(2),
+          ]
+
+          for (const write of writes) {
+            const watched = probes.flatMap(([name, refOf]) => {
+              const ref = refOf() as (() => unknown) | undefined
+              if (ref === undefined) return []
+              let heard = 0
+              const unsubscribe = subscribe(ref, () => {
+                heard++
+              })
+              return [
+                { name, ref, before: ref(), heard: () => heard, unsubscribe },
+              ]
+            })
+
+            driver.write(env, write)
+
+            for (const probe of watched) {
+              const changed = !Object.is(probe.ref(), probe.before)
+              expect(probe.heard() > 0, probe.name).toBe(changed)
+              probe.unsubscribe()
             }
           }
         })

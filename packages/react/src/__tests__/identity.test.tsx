@@ -62,6 +62,24 @@ describe("useValue", () => {
   })
 })
 
+describe("a coarse write", () => {
+  it("re-renders a component reading a field below it", async () => {
+    const Roster = Schema.struct({
+      roster: Schema.record(Schema.struct({ cursor: Schema.number() })),
+    })
+    const doc: any = createDoc(Roster)
+    doc.roster.set("alice", { cursor: 1 })
+    const cursor = doc.roster.at("alice").cursor
+    const { result } = renderHook(() => useValue(cursor))
+    expect(result.current).toBe(1)
+
+    await act(async () => {
+      doc.roster.set("alice", { cursor: 7 })
+    })
+    expect(result.current).toBe(7)
+  })
+})
+
 describe("useTracked", () => {
   it("with a useCallback thunk, keeps identity across an unrelated render and follows the capture", () => {
     const doc = todoDoc()

@@ -37,9 +37,9 @@ const Doc = Schema.struct({
   ]),
 })
 
-const topKey = RawPath.empty.field("top").key
-const treeKey = RawPath.empty.field("tree").key
-const nodeKey = (id: string) => RawPath.empty.field("tree").node(id).key
+const topPath = RawPath.empty.field("top")
+const treePath = RawPath.empty.field("tree")
+const nodePath = (id: string) => treePath.node(id)
 
 /** The context the changefeed layer wired itself onto. */
 const contextOf = (doc: unknown) => (doc as any)[TRANSACT] as object
@@ -55,7 +55,7 @@ describe("the shared registry tracks live subscriptions", () => {
 
     for (let i = 0; i < 100; i++) void doc.top
 
-    expect(__getListenerCountAtPath(ctx, topKey)).toBe(0)
+    expect(__getListenerCountAtPath(ctx, topPath)).toBe(0)
   })
 
   it("navigating to a tree node and writing through it does not accumulate registrations", () => {
@@ -66,7 +66,7 @@ describe("the shared registry tracks live subscriptions", () => {
     const ctx = contextOf(doc)
     let id = ""
     batch(doc, (d: any) => {
-      id = d.tree.create(null, { label: "x" })
+      id = d.tree.create({ data: { label: "x" } })
     })
 
     for (let i = 0; i < 30; i++) {
@@ -74,7 +74,7 @@ describe("the shared registry tracks live subscriptions", () => {
       batch(doc, (d: any) => d.tree.node(id).label.set(`v${i}`))
     }
 
-    expect(__getListenerCountAtPath(ctx, nodeKey(id))).toBe(0)
+    expect(__getListenerCountAtPath(ctx, nodePath(id))).toBe(0)
   })
 
   it("subscribing registers, and unsubscribing releases", () => {
@@ -82,10 +82,10 @@ describe("the shared registry tracks live subscriptions", () => {
     const ctx = contextOf(doc)
 
     const unsubscribe = subscribeNode(doc.top, () => {})
-    expect(__getListenerCountAtPath(ctx, topKey)).toBe(1)
+    expect(__getListenerCountAtPath(ctx, topPath)).toBe(1)
 
     unsubscribe()
-    expect(__getListenerCountAtPath(ctx, topKey)).toBe(0)
+    expect(__getListenerCountAtPath(ctx, topPath)).toBe(0)
   })
 
   it("stops delivering after the last subscriber leaves", () => {
@@ -123,7 +123,7 @@ describe("a node that empties and refills", () => {
     batch(doc, (d: any) => d.top.set(1))
 
     expect(calls).toBe(1)
-    expect(__getListenerCountAtPath(ctx, topKey)).toBe(1)
+    expect(__getListenerCountAtPath(ctx, topPath)).toBe(1)
   })
 
   it("survives a teardown being called twice", () => {
@@ -145,7 +145,7 @@ describe("a node that empties and refills", () => {
     batch(doc, (d: any) => d.top.set(1))
 
     expect(calls).toBe(1)
-    expect(__getListenerCountAtPath(ctx, topKey)).toBe(1)
+    expect(__getListenerCountAtPath(ctx, topPath)).toBe(1)
   })
 
   it("keeps delivering while any subscriber remains", () => {
@@ -166,7 +166,7 @@ describe("a node that empties and refills", () => {
 
     expect(first).toBe(0)
     expect(second).toBe(1)
-    expect(__getListenerCountAtPath(ctx, topKey)).toBe(1)
+    expect(__getListenerCountAtPath(ctx, topPath)).toBe(1)
   })
 })
 
@@ -219,30 +219,26 @@ describe("two carriers at the same path", () => {
 })
 
 // ===========================================================================
-// The tree's delete scan is not a subscription
+// A deleted tree node hears its deletion without a scan
 // ===========================================================================
 
-describe("the tree's delete scan", () => {
-  it("holds its registration whether or not anyone is subscribed", () => {
-    // The tree watches every changeset for delete instructions so a vanishing
-    // node can be told it is gone. That is a side effect on the changeset, not
-    // a subscription, so it registers eagerly and is never released.
+describe("a deleted tree node", () => {
+  it("needs no registration of the tree's own", () => {
+    // A tree delete reaches the deleted nodes' subscribers as the projection
+    // of the delete onto them, like any change reaching the part of the tree
+    // it rewrote. Nothing watches the tree on their behalf.
     const doc: any = createDoc(Doc)
     const ctx = contextOf(doc)
 
-    // Nothing is registered before the tree is navigated to, because no tree
-    // carrier exists yet — refs are built on demand by the catamorphism.
-    expect(__getListenerCountAtPath(ctx, treeKey)).toBe(0)
-
     void doc.tree
-    expect(__getListenerCountAtPath(ctx, treeKey)).toBe(1)
+    expect(__getListenerCountAtPath(ctx, treePath)).toBe(0)
   })
 
   it("still delivers a terminal to a subscriber on the deleted node", () => {
     const doc: any = createDoc(Doc)
     let id = ""
     batch(doc, (d: any) => {
-      id = d.tree.create(null, { label: "x" })
+      id = d.tree.create({ data: { label: "x" } })
     })
 
     const terminals: unknown[] = []
@@ -258,15 +254,11 @@ describe("the tree's delete scan", () => {
     expect(last.changes[0].change.instructions[0].action).toBe("delete")
   })
 
-  it("fires when nobody is subscribed to the tree node", () => {
-    // The scan used to ride along inside the tree's own fan-out shim, which
-    // existed for as long as the carrier did. With the shim gone, the scan
-    // needs its own registration or it disappears the moment the tree has no
-    // subscribers — and this is how that regression would show.
+  it("the delete reaches a document subscriber once, as the tree change", () => {
     const doc: any = createDoc(Doc)
     let id = ""
     batch(doc, (d: any) => {
-      id = d.tree.create(null, { label: "x" })
+      id = d.tree.create({ data: { label: "x" } })
     })
 
     const deletes: unknown[] = []

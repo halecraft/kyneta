@@ -1,0 +1,251 @@
+// subscriber-trie — where a context's changefeed subscribers and population
+// state live, one node per coordinate that has either.
+//
+// Keyed by segment identity (`Path.segmentKeys`), like the coordinate trie,
+// so two coordinates whose joined `path.key` strings collide are two nodes,
+// and a subtree can be enumerated exactly. That enumeration is what delivery
+// needs: a change reaches the subscribers on its path's ancestor chain and
+// the subscribers inside the part of the tree it rewrote.
+//
+// It is not the `CoordinateTrie`. A subscription belongs to its subscriber,
+// not to the coordinate it names: a subscriber at a list item or tree node a
+// change kills must still hear that change, and the coordinate trie unlinks
+// such nodes in addressing's `after` stage, before delivery.
+
+import type { ChangeBase } from "../change.js"
+import type { Changeset, Op } from "../changefeed.js"
+import type { Path, Segment } from "../path.js"
+import type { SubtreeEffect } from "../subtree-effect.js"
+
+/** An own-path subscriber: the node's own changes, without paths. */
+export type OwnCallback = (changeset: Changeset<ChangeBase>) => void
+
+/** A deep subscriber: an `Op` per change at or below it, relative to it. */
+export type DeepCallback = (changeset: Changeset<Op>) => void
+
+/** One coordinate's subscribers and population state. */
+export interface SubscriberNode {
+  /** The segment naming this node under its parent; absent at the root. */
+  readonly segment: Segment | undefined
+  readonly parent: SubscriberNode | undefined
+  readonly children: Map<string, SubscriberNode>
+  own: Set<OwnCallback> | undefined
+  deep: Set<DeepCallback> | undefined
+  /** One-shot callbacks waiting for this coordinate to become populated. */
+  populatedListeners: Set<() => void> | undefined
+  /** An op landed at or below this coordinate. */
+  populated: boolean
+  /** An op here rewrote everything below it. */
+  rewroteAll: boolean
+  /** Keys of children an op here rewrote. */
+  rewroteKeys: Set<string> | undefined
+  /** Callbacks of every kind at or below this node, so walks skip the rest. */
+  watchers: number
+}
+
+function createNode(
+  segment: Segment | undefined,
+  parent: SubscriberNode | undefined,
+): SubscriberNode {
+  return {
+    segment,
+    parent,
+    children: new Map(),
+    own: undefined,
+    deep: undefined,
+    populatedListeners: undefined,
+    populated: false,
+    rewroteAll: false,
+    rewroteKeys: undefined,
+    watchers: 0,
+  }
+}
+
+/** A node reached below a change's path, and the segments from there to it. */
+export type ScopedNode = readonly [
+  node: SubscriberNode,
+  relative: readonly Segment[],
+]
+
+export class SubscriberTrie {
+  readonly root: SubscriberNode = createNode(undefined, undefined)
+
+  /** The node at `path`, if it exists. */
+  find(path: Path): SubscriberNode | undefined {
+    let node: SubscriberNode | undefined = this.root
+    for (const key of path.segmentKeys) {
+      node = node.children.get(key)
+      if (node === undefined) return undefined
+    }
+    return node
+  }
+
+  /** The node at `path`, created with its ancestors if missing. */
+  ensure(path: Path): SubscriberNode {
+    let node = this.root
+    for (const segment of path.segments) {
+      let child = node.children.get(segment.identity)
+      if (child === undefined) {
+        child = createNode(segment, node)
+        node.children.set(segment.identity, child)
+      }
+      node = child
+    }
+    return node
+  }
+
+  /**
+   * The existing nodes from the root along `path`, as far as they go:
+   * `chain[i]` is the node for the first `i` segments.
+   */
+  chain(path: Path): SubscriberNode[] {
+    const out: SubscriberNode[] = [this.root]
+    let node: SubscriberNode | undefined = this.root
+    for (const key of path.segmentKeys) {
+      node = node.children.get(key)
+      if (node === undefined) break
+      out.push(node)
+    }
+    return out
+  }
+
+  /**
+   * The watched nodes strictly below `node` that a change there with
+   * `effect` may have rewritten, parents before children, each with its
+   * segments relative to `node`. Subtrees nobody watches are skipped.
+   */
+  scope(node: SubscriberNode, effect: SubtreeEffect): ScopedNode[] {
+    if (effect === "none") return []
+    const out: [SubscriberNode, Segment[]][] = []
+    const visit = (child: SubscriberNode, relative: Segment[]): void => {
+      if (child.watchers === 0 || child.segment === undefined) return
+      const here = [...relative, child.segment]
+      out.push([child, here])
+      for (const grandchild of child.children.values()) visit(grandchild, here)
+    }
+    if (effect === "all") {
+      for (const child of node.children.values()) visit(child, [])
+    } else {
+      for (const key of effect.keys) {
+        const child = node.children.get(key)
+        if (child !== undefined) visit(child, [])
+      }
+    }
+    return out
+  }
+
+  /** Register an own-path subscriber at `path`; returns its teardown. */
+  listenOwn(path: Path, callback: OwnCallback): () => void {
+    return this.register(path, node => (node.own ??= new Set()), callback)
+  }
+
+  /** Register a deep subscriber at `path`; returns its teardown. */
+  listenDeep(path: Path, callback: DeepCallback): () => void {
+    return this.register(path, node => (node.deep ??= new Set()), callback)
+  }
+
+  /**
+   * Add `callback` to the set `setOf` picks at `path`, and hand back the
+   * teardown that removes it. The teardown is idempotent, and one left over
+   * from a pruned node finds its callback gone and does nothing.
+   */
+  private register<C>(
+    path: Path,
+    setOf: (node: SubscriberNode) => Set<C>,
+    callback: C,
+  ): () => void {
+    const node = this.ensure(path)
+    const set = setOf(node)
+    if (set.has(callback)) return () => {}
+    set.add(callback)
+    adjustWatchers(node, 1)
+    return () => {
+      if (!set.delete(callback)) return
+      adjustWatchers(node, -1)
+      prune(node)
+    }
+  }
+
+  /**
+   * Register a one-shot population listener at `path`. It is removed when it
+   * fires; the teardown removes it before then.
+   */
+  listenPopulated(path: Path, callback: () => void): () => void {
+    return this.register(
+      path,
+      node => (node.populatedListeners ??= new Set()),
+      callback,
+    )
+  }
+
+  /**
+   * Whether `path` is populated: an op landed at or below it, or an op at an
+   * ancestor rewrote a part of the tree containing it.
+   */
+  isPopulated(path: Path): boolean {
+    let node: SubscriberNode = this.root
+    for (const key of path.segmentKeys) {
+      if (node.rewroteAll || node.rewroteKeys?.has(key)) return true
+      const child = node.children.get(key)
+      if (child === undefined) return false
+      node = child
+    }
+    return node.populated
+  }
+
+  /**
+   * Mark what a change at `path` populated: `path` and its ancestors, and
+   * the part below it that `effect` names. Fires the population listeners of
+   * every node that became populated.
+   */
+  markPopulated(path: Path, effect: SubtreeEffect): void {
+    const node = this.ensure(path)
+    for (let at: SubscriberNode | undefined = node; at; at = at.parent) {
+      if (at.populated) break // ancestors of a populated node are populated
+      populate(at)
+    }
+    if (effect === "all") node.rewroteAll = true
+    else if (effect !== "none") {
+      node.rewroteKeys ??= new Set()
+      for (const key of effect.keys) node.rewroteKeys.add(key)
+    }
+    for (const [below] of this.scope(node, effect)) populate(below)
+  }
+}
+
+function populate(node: SubscriberNode): void {
+  if (node.populated) return
+  node.populated = true
+  const listeners = node.populatedListeners
+  if (listeners === undefined) return
+  node.populatedListeners = undefined
+  adjustWatchers(node, -listeners.size)
+  for (const callback of listeners) callback()
+}
+
+function adjustWatchers(node: SubscriberNode, by: number): void {
+  for (let at: SubscriberNode | undefined = node; at; at = at.parent) {
+    at.watchers += by
+  }
+}
+
+/** Unlink `node`, and each ancestor after it, while it holds nothing. */
+function prune(node: SubscriberNode): void {
+  let at: SubscriberNode | undefined = node
+  while (at?.parent !== undefined && isEmpty(at) && at.segment !== undefined) {
+    at.parent.children.delete(at.segment.identity)
+    at = at.parent
+  }
+}
+
+function isEmpty(node: SubscriberNode): boolean {
+  return (
+    node.watchers === 0 &&
+    node.children.size === 0 &&
+    !node.populated &&
+    !node.rewroteAll &&
+    node.rewroteKeys === undefined &&
+    !node.own?.size &&
+    !node.deep?.size
+  )
+}
