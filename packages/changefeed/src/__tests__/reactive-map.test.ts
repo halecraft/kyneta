@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from "vitest"
 import {
   type CallableChangefeed,
+  CHANGEFEED,
   type ChangeBase,
   type Changeset,
   createReactiveMap,
@@ -53,21 +54,33 @@ describe("call signature", () => {
     expect(snapshot.get("a")).toBe(1)
   })
 
-  it(".current returns the live map; callable returns a snapshot copy", () => {
+  it(".current, the call and the protocol's current return one snapshot", () => {
     const [map, handle] = createReactiveMap<string, number, TestChange>()
     handle.set("x", 42)
-    // .current is the live map (same reference every time)
-    expect(map.current).toBe(map.current)
-    // callable returns a snapshot (new Map each call)
-    expect(map()).not.toBe(map.current)
-    // But contents are equal
-    expect(map()).toEqual(map.current)
+    const snapshot = map.current
+    expect(map()).toBe(snapshot)
+    expect(map[CHANGEFEED].current).toBe(snapshot)
+    expect(map.current).toBe(snapshot)
+    expect(snapshot).toEqual(new Map([["x", 42]]))
   })
 
-  it("successive map() calls return distinct references", () => {
+  it("a mutation makes a new snapshot at once, before any emit, that agrees with get", () => {
     const [map, handle] = createReactiveMap<string, number, TestChange>()
     handle.set("a", 1)
-    expect(map()).not.toBe(map())
+    const before = map()
+    handle.set("a", 2)
+    const after = map()
+    expect(after).not.toBe(before)
+    expect(after.get("a")).toBe(map.get("a"))
+    expect(map()).toBe(after)
+  })
+
+  it("a delete of an absent key, or a clear of an empty map, changes nothing", () => {
+    const [map, handle] = createReactiveMap<string, number, TestChange>()
+    const empty = map()
+    handle.delete("missing")
+    handle.clear()
+    expect(map()).toBe(empty)
   })
 
   it("snapshot is isolated from later mutations", () => {

@@ -15,7 +15,11 @@ import type {
   Changeset,
   ReactiveMap,
 } from "@kyneta/changefeed"
-import { CHANGEFEED, createReactiveMap } from "@kyneta/changefeed"
+import {
+  CHANGEFEED,
+  cachedSnapshot,
+  createReactiveMap,
+} from "@kyneta/changefeed"
 import type { Collection, CollectionChange } from "./collection.js"
 import type { KeySpec } from "./key-spec.js"
 import { createWatcherTable } from "./watcher-table.js"
@@ -37,8 +41,13 @@ export type IndexChange =
       readonly entryKey: string
     }
 
+/**
+ * A grouping of a collection's entries. Its `current` is a snapshot of the
+ * groups — group key to the entry keys in it — which keeps its identity until
+ * a group changes.
+ */
 export interface SecondaryIndex<V>
-  extends Changefeed<ReadonlyMap<string, Set<string>>, IndexChange> {
+  extends Changefeed<ReadonlyMap<string, ReadonlySet<string>>, IndexChange> {
   /** Reactive view of a single group. Returns a ReactiveMap that updates as entries join/leave. */
   get(groupKey: string): ReactiveMap<string, V, IndexChange>
   /** Which group keys an entry belongs to. */
@@ -66,6 +75,15 @@ function by<V>(
 
   // groupKey → set of entryKeys
   const groups = new Map<string, Set<string>>()
+  // The groups as `current` hands them out: copied, so a later change to a
+  // group cannot reach a snapshot already handed out, and dropped whenever a
+  // group changes.
+  const snapshot = cachedSnapshot<ReadonlyMap<string, ReadonlySet<string>>>(
+    () =>
+      new Map(
+        [...groups].map(([groupKey, entries]) => [groupKey, new Set(entries)]),
+      ),
+  )
   // entryKey → current list of groupKeys
   const entryGroups = new Map<string, string[]>()
   // entryKey → entry value, with watcher lifecycle (regroup hook)
@@ -93,6 +111,7 @@ function by<V>(
       groups.set(groupKey, set)
     }
     set.add(entryKey)
+    snapshot.invalidate()
   }
 
   function removeFromGroup(groupKey: string, entryKey: string): void {
@@ -102,6 +121,7 @@ function by<V>(
     if (set.size === 0) {
       groups.delete(groupKey)
     }
+    snapshot.invalidate()
   }
 
   function addEntry(entryKey: string, value: V): IndexChange[] {
@@ -192,11 +212,11 @@ function by<V>(
 
   // Build the changefeed protocol for the index-level changefeed
   const protocol: ChangefeedProtocol<
-    ReadonlyMap<string, Set<string>>,
+    ReadonlyMap<string, ReadonlySet<string>>,
     IndexChange
   > = {
-    get current(): ReadonlyMap<string, Set<string>> {
-      return groups
+    get current(): ReadonlyMap<string, ReadonlySet<string>> {
+      return snapshot.get()
     },
     subscribe(
       callback: (changeset: Changeset<IndexChange>) => void,
@@ -212,8 +232,8 @@ function by<V>(
   const index: SecondaryIndex<V> = {
     [CHANGEFEED]: protocol,
 
-    get current(): ReadonlyMap<string, Set<string>> {
-      return groups
+    get current(): ReadonlyMap<string, ReadonlySet<string>> {
+      return snapshot.get()
     },
 
     subscribe(cb: (changeset: Changeset<IndexChange>) => void): () => void {

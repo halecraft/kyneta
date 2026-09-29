@@ -103,6 +103,26 @@ describe("diffValueMaps (functional core)", () => {
 // Integration — Source.fromReactiveMap → Collection
 // ---------------------------------------------------------------------------
 
+describe("Source.fromReactiveMap", () => {
+  it("emits nothing for a notification the map did not change under", () => {
+    const [map, handle] = createReactiveMap<string, number, MapChange>()
+    setEmit(handle, "a", 1)
+    const source = Source.fromReactiveMap(map)
+    const events: unknown[] = []
+    source.subscribe(event => events.push(event))
+
+    handle.emit({ changes: [{ type: "set", key: "a" }] })
+    expect(events).toEqual([])
+  })
+
+  it("snapshot() is the map's own snapshot, not a copy", () => {
+    const [map, handle] = createReactiveMap<string, number, MapChange>()
+    setEmit(handle, "a", 1)
+    const source = Source.fromReactiveMap(map)
+    expect(source.snapshot()).toBe(map.current)
+  })
+})
+
 describe("Source.fromReactiveMap → Collection", () => {
   it("bootstraps from a pre-populated map", () => {
     const [map, handle] = createReactiveMap<string, number, MapChange>()

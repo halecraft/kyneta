@@ -147,7 +147,10 @@ export interface Changeset<C = ChangeBase> extends BatchMetadata {
  * machine with a push-based transition stream.
  *
  * Properties:
- * - `current` is a getter — always returns the live current value
+ * - `current` is a getter, and obeys the identity rule: it returns the same
+ *   value until the state changes, and a new one once it has. So a consumer
+ *   can tell whether anything changed by comparing identities alone, as
+ *   `useSyncExternalStore` and `React.memo` do.
  * - `subscribe` returns an unsubscribe function
  * - Subscribers receive a `Changeset<C>` — a batch of changes with
  *   optional provenance. For auto-commit (single mutation), the
@@ -160,7 +163,8 @@ export interface Changeset<C = ChangeBase> extends BatchMetadata {
  * and `.subscribe()` in one interface).
  */
 export interface ChangefeedProtocol<S, C extends ChangeBase = ChangeBase> {
-  /** The current value, always live (a getter). */
+  /** The current value: the same value until the state changes, a new one
+   *  once it has. */
   readonly current: S
   /** Subscribe to future changes. Returns an unsubscribe function. */
   subscribe(callback: (changeset: Changeset<C>) => void): () => void
@@ -187,7 +191,8 @@ export interface ChangefeedProtocol<S, C extends ChangeBase = ChangeBase> {
 export interface Changefeed<S, C extends ChangeBase = ChangeBase> {
   /** The protocol object behind the symbol. */
   readonly [CHANGEFEED]: ChangefeedProtocol<S, C>
-  /** The current value, always live (a getter). */
+  /** The current value: the same value until the state changes, a new one
+   *  once it has. */
   readonly current: S
   /** Subscribe to future changes. Returns an unsubscribe function. */
   subscribe(callback: (changeset: Changeset<C>) => void): () => void
@@ -284,6 +289,11 @@ export function changefeed<S, C extends ChangeBase>(
  * Returns a tuple of the feed and an emit function. The feed's
  * `[CHANGEFEED]` returns the protocol view of itself. Manages its
  * own subscriber set internally.
+ *
+ * `current` returns whatever `getCurrent` returns, so the identity rule is
+ * the producer's to keep: `getCurrent` must return the same value until the
+ * state changes. A producer over mutable state keeps one snapshot with
+ * `cachedSnapshot`.
  *
  * ```ts
  * const [feed, emit] = createChangefeed(() => count)

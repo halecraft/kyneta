@@ -7,8 +7,10 @@
 //
 // This extracts the recurring pattern of "callable changefeed over a
 // ReadonlyMap with convenience accessors" (used by exchange.peers,
-// Catalog, and future reactive collections) into a single combinator.
+// exchange.documents and every @kyneta/index Collection) into a single
+// combinator.
 
+import { cachedSnapshot } from "./cached-snapshot.js"
 import type { CallableChangefeed } from "./callable.js"
 import type { ChangeBase } from "./change.js"
 import type { ChangefeedProtocol, Changeset } from "./changefeed.js"
@@ -22,14 +24,16 @@ import { CHANGEFEED, createChangefeed } from "./changefeed.js"
  * A callable changefeed over a `ReadonlyMap<K, V>` with lifted
  * collection accessors.
  *
- * `reactiveMap()` returns a **snapshot** — a shallow copy of the
- * current `ReadonlyMap<K, V>`. Each call produces a new `Map` instance,
- * so external-store consumers (e.g. `useSyncExternalStore`) can detect
- * changes via reference identity.
+ * `reactiveMap()`, `.current` and the protocol's `current` all return one
+ * **snapshot**: a copy of the map, the same `Map` instance until the map is
+ * mutated and a new one after. So external-store consumers (e.g.
+ * `useSyncExternalStore`) detect a change by identity alone, and a render
+ * that changed nothing keeps its value. A `Map` cannot be frozen; the
+ * snapshot's immutability rests on the `ReadonlyMap` type.
  *
- * `.current` returns the **live** map — the same instance every time.
- * `.get()`, `.has()`, `.keys()`, `.size`, and `[Symbol.iterator]()`
- * delegate to the live internal map — no need to unwrap `.current` first.
+ * `.get()`, `.has()`, `.keys()`, `.size`, and `[Symbol.iterator]()` read the
+ * live internal map, which the snapshot always agrees with — no need to
+ * unwrap `.current` first.
  *
  * Extends `CallableChangefeed` — assignable anywhere a
  * `CallableChangefeed<ReadonlyMap<K, V>, C>` or `Changefeed` is expected.
@@ -87,8 +91,8 @@ export interface ReactiveMapHandle<K, V, C extends ChangeBase> {
  * handle.set("alice", aliceInfo)
  * handle.emit({ changes: [{ type: "peer-joined", peer: aliceInfo }] })
  *
- * peers()          // ReadonlyMap snapshot (shallow copy)
- * peers.current    // live map (same instance always)
+ * peers()          // ReadonlyMap snapshot, the same until the map changes
+ * peers.current    // the same snapshot
  * peers.get("alice")  // aliceInfo (reads live map)
  * peers.size       // 1
  * ```
@@ -99,20 +103,17 @@ export function createReactiveMap<K, V, C extends ChangeBase = ChangeBase>(): [
 ] {
   const map = new Map<K, V>()
 
-  // Create the base changefeed + emit pair.
-  // The thunk returns a shallow copy — each call produces a new Map.
-  // This gives the callable snapshot semantics: external-store consumers
-  // (e.g. useSyncExternalStore) detect identity changes when contents
-  // change.  The live map is still available via .current and the
-  // lifted accessors.
-  const [feed, emit] = createChangefeed<ReadonlyMap<K, V>, C>(
-    () => new Map(map),
-  )
+  // One snapshot, dropped by every handle mutation. Dropping on mutation
+  // rather than on `emit` keeps it coherent with the lifted accessors
+  // between a `set` and the `emit` that announces it.
+  const snapshot = cachedSnapshot<ReadonlyMap<K, V>>(() => new Map(map))
+
+  const [feed, emit] = createChangefeed<ReadonlyMap<K, V>, C>(snapshot.get)
 
   // Build the callable function-object.
   // We construct it manually (rather than using createCallable) so we
   // can attach the collection accessors in one pass.
-  const callable: any = () => new Map(map) as ReadonlyMap<K, V>
+  const callable: any = () => snapshot.get()
 
   // ── Changefeed protocol ──
 
@@ -126,7 +127,7 @@ export function createReactiveMap<K, V, C extends ChangeBase = ChangeBase>(): [
 
   Object.defineProperty(callable, "current", {
     get(): ReadonlyMap<K, V> {
-      return map
+      return snapshot.get()
     },
     enumerable: true,
     configurable: false,
@@ -160,11 +161,15 @@ export function createReactiveMap<K, V, C extends ChangeBase = ChangeBase>(): [
   const handle: ReactiveMapHandle<K, V, C> = {
     set(key: K, value: V): void {
       map.set(key, value)
+      snapshot.invalidate()
     },
     delete(key: K): boolean {
-      return map.delete(key)
+      const removed = map.delete(key)
+      if (removed) snapshot.invalidate()
+      return removed
     },
     clear(): void {
+      if (map.size > 0) snapshot.invalidate()
       map.clear()
     },
     emit,

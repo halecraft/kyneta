@@ -3,6 +3,8 @@
 // This barrel re-exports everything from the three source modules
 // that make up the changefeed contract package.
 
+// cachedSnapshot — one snapshot of mutable state, dropped on mutation
+export { cachedSnapshot } from "./cached-snapshot.js"
 // Callable — the createCallable combinator
 export type { CallableChangefeed } from "./callable.js"
 export { createCallable } from "./callable.js"

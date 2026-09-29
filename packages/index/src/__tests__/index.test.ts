@@ -1,4 +1,4 @@
-import { hasChangefeed } from "@kyneta/changefeed"
+import { CHANGEFEED, hasChangefeed } from "@kyneta/changefeed"
 import { batch, createDoc, json, Schema } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import { Collection } from "../collection.js"
@@ -237,6 +237,24 @@ describe("Index.by with field (scalar FK)", () => {
     const current = index.current
     expect(current).toBeInstanceOf(Map)
     expect(current.has("user:alice")).toBe(true)
+  })
+
+  it("index.current keeps its identity until a group changes, and a snapshot handed out does not change", () => {
+    const { index, handle } = setup()
+    const before = index.current
+    expect(index.current).toBe(before)
+    expect(index[CHANGEFEED].current).toBe(before)
+    const alice = before.get("user:alice")
+
+    const ref3 = makeItemRef()
+    batch(ref3, (d: any) => d.ownerId.set("user:alice"))
+    handle.set("item3", ref3)
+
+    const after = index.current
+    expect(after).not.toBe(before)
+    expect(after.get("user:alice")?.size).toBe(3)
+    expect(alice?.size).toBe(2)
+    expect(index.current).toBe(after)
   })
 })
 

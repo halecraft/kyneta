@@ -648,21 +648,25 @@ function fromReactiveMap<V, C extends ChangeBase>(
   const equals = options?.equals ?? Object.is
   const { emit, subscribe, clear } = createSourceEmitter<V>()
 
-  // Last-seen value map — diffed against `map.current` on every notification.
-  let known = new Map<string, V>(map.current)
+  // The last snapshot seen, diffed against `map.current` on every
+  // notification. A snapshot keeps its identity until the map changes, so it
+  // is kept rather than copied, and an unchanged identity means nothing to
+  // diff.
+  let known = map.current
 
   const unsub = map.subscribe(() => {
     const current = map.current
+    if (current === known) return
     for (const event of diffValueMaps(known, current, equals)) {
       emit(event)
     }
-    known = new Map(current)
+    known = current
   })
 
   return {
     subscribe,
     snapshot(): ReadonlyMap<string, V> {
-      return new Map(map.current)
+      return map.current
     },
     snapshotZSet(): SourceEvent<V> {
       return defaultSnapshotZSet(map.current)
