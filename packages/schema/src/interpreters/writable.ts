@@ -8,7 +8,7 @@
 // 5. Writable<S> type-level interpretation
 //
 // Shared types used across interpreters (RefContext, Plain<S>) live in
-// `../interpreter-types.ts` and are re-exported here for backward compat.
+// `../interpreter-types.ts`.
 //
 // withWritable is a pure extension — it has no bound on A and works with
 // any carrier. Mutation methods are bolted on; reading is not required.
@@ -17,7 +17,8 @@
 
 import type { DispatcherHandle, Lease } from "@kyneta/machine"
 import { createDispatcher } from "@kyneta/machine"
-
+import type { ChangeBase } from "../change.js"
+import { incrementChange, own, replaceChange } from "../change.js"
 import type { Op } from "../changefeed.js"
 import type {
   FlatTreeNode,
@@ -30,11 +31,6 @@ import {
   type Plain,
   type RefContext,
 } from "../interpreter-types.js"
-
-export type { Op }
-
-import type { ChangeBase } from "../change.js"
-import { incrementChange, own, replaceChange } from "../change.js"
 import { AddressedPath, resolveToAddressed } from "../path.js"
 import type { PositionCapable } from "../position.js"
 import type {
@@ -732,10 +728,6 @@ export interface WritableTreeRef<V = unknown> {
 // ---------------------------------------------------------------------------
 // Type-level interpretations — schema type → TypeScript type
 // ---------------------------------------------------------------------------
-
-// ScalarPlain is re-exported from schema.ts (the canonical definition).
-// It maps ScalarKind literals to their corresponding TypeScript types.
-export type { ScalarPlain } from "../schema.js"
 
 /**
  * Computes the mutation-only ref type for a given schema type.

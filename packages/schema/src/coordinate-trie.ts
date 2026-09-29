@@ -32,7 +32,7 @@ import type { SubtreeEffect } from "./subtree-effect.js"
  * `path` as a path into the context's trie.
  *
  * Every path an addressing stack derives is addressed. The exception is the
- * path of `interpret`'s entry call — the root, or a caller's raw path — which
+ * path of `interpret`'s entry call (the root, or a caller's raw path), which
  * is computed before the addressing layer's first case installs the addressed
  * root, and arrives raw; it is resolved against that root here.
  */
@@ -175,7 +175,7 @@ export class CoordinateTrie {
   }
 
   // -------------------------------------------------------------------------
-  // Addresses — the only way a node comes into being
+  // Addresses: the only way a node comes into being
   // -------------------------------------------------------------------------
 
   /** The address of declared field `key` below `parent`. */

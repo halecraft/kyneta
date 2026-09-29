@@ -58,7 +58,7 @@ export function useInitialize<D extends object>(
   // Hold the latest callbacks in refs rather than in the dependency list.
   // Both are almost always inline arrows, so a fresh identity every render
   // would re-run the effect every render. The document is the identity that
-  // actually matters here. Same technique as `useTracked`'s `thunkRef`.
+  // actually matters here.
   const seedRef = useRef(seed)
   seedRef.current = seed
   const onErrorRef = useRef(onError)

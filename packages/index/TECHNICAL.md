@@ -40,7 +40,7 @@ Used by applications that need live joins, filters, groupings, or flat-mappings 
 | `ExchangeSourceHandle<V>` | Producer-side for `Source.fromExchange`: `createDoc(key)`, `delete(key)`. | `SourceHandle` |
 | `Collection<V>` | `ReactiveMap<string, V, CollectionChange> & { dispose(): void }`. Stateful integrator of a `Source<V>`. | A JS `Array`, a schema `list` — `Collection` is a keyed reactive map, not an ordered sequence |
 | `CollectionChange` | `{ type: "added" \| "removed", key: string }`. The projected change delivered to subscribers. | The internal ℤ-set — that's what flows between operators |
-| `SecondaryIndex<V>` | Grouping view: `Map<GroupKey, Map<EntryKey, V>>` maintained incrementally as entries are added/removed/mutated. | A SQL index, a hash index — this is a live join/group intermediate |
+| `SecondaryIndex<V>` | Grouping view maintained incrementally as entries are added/removed/mutated: a changefeed over `ReadonlyMap<GroupKey, ReadonlySet<EntryKey>>`, with `get(groupKey)` a `ReactiveMap<EntryKey, V>` per group. | A SQL index, a hash index — this is a live join/group intermediate |
 | `IndexChange` | The change type emitted by `SecondaryIndex` — entries shifting between groups. | `CollectionChange` |
 | `JoinIndex<L, R>` | Bilinear reactive join composing two `SecondaryIndex`es on a shared group-key space. | A SQL join, a hash-join table — this is an incrementally-maintained view |
 | `KeySpec<V>` | A function / schema-path / list-of-paths that extracts one or more group keys from a value. | A validation schema |
@@ -75,8 +75,8 @@ Source<V>│ subscribe →│ Collection<V>│ ───→  │SecondaryIndex�
 |-------|--------|-----------|--------------|
 | `Source<V>` | Internal (adapter-held) | Push via `subscribe` | `src/source.ts` |
 | `Collection<V>` | Materialized ℐ | Yes — `ReactiveMap + [CHANGEFEED]` | `src/collection.ts` |
-| `SecondaryIndex<V>` | Materialized grouping | Yes — `ReactiveMap` | `src/index-impl.ts` |
-| `JoinIndex<L, R>` | Materialized join | Yes — `ReactiveMap` | `src/join.ts` |
+| `SecondaryIndex<V>` | Materialized grouping | Yes — `Changefeed` over the groups; a `ReactiveMap` per group | `src/index-impl.ts` |
+| `JoinIndex<L, R>` | Materialized join | Yes — `Changefeed<null>`; a `ReactiveMap` per key, each way | `src/join.ts` |
 | `ZSet` + group ops | None (pure) | N/A | `src/zset.ts` |
 | `KeySpec` | None | N/A | `src/key-spec.ts` |
 
@@ -235,9 +235,10 @@ There is no event table here on purpose. The subscriber does not dispatch on `Do
 
 ### `Source.fromReactiveMap` — bridging a changefeed `ReactiveMap`
 
-`@kyneta/changefeed`'s `ReactiveMap` is an LWW register-per-key (the surface behind `exchange.peers`, `Catalog`, and devtools' status maps). `fromReactiveMap` adapts it into a `Source<V>` so an LWW map can drive `Index.by` / `Index.join` — the bridge between the framework's two integrators.
+`@kyneta/changefeed`'s `ReactiveMap` is an LWW register-per-key (the surface behind `exchange.peers`, `exchange.documents`, and devtools' status maps). `fromReactiveMap` adapts it into a `Source<V>` so an LWW map can drive `Index.by` / `Index.join` — the bridge between the framework's two integrators.
 
-- **Re-diff, not payload-driven.** On each `map.subscribe` notification the adapter ignores the changeset and re-diffs `map.current` against the last-seen value map (exactly as `fromRecord` re-diffs `recordRef.keys()`). This is vocabulary-agnostic — `set`/`delete`, `peer-joined`/`peer-left`, `added`/`removed` all work, because the adapter never inspects the change type. The pure diff is the exported `diffValueMaps(known, current, equals)`.
+- **Re-diff, not payload-driven.** On each `map.subscribe` notification the adapter ignores the changeset and re-diffs `map.current` against the last snapshot it saw (exactly as `fromRecord` re-diffs `recordRef.keys()`). This is vocabulary-agnostic — `set`/`delete`, `peer-joined`/`peer-left`, `added`/`removed` all work, because the adapter never inspects the change type. The pure diff is the exported `diffValueMaps(known, current, equals)`.
+- **Snapshots are kept, not copied.** `map.current` keeps its identity until the map changes (the changefeed identity rule), so the adapter holds the snapshot itself as the last-seen map, skips the diff entirely when a notification arrives with the same snapshot, and `snapshot()` returns `map.current` as it is.
 - **In-place updates lower to retract+insert.** A same-key/`!equals` value change emits a retraction (`-1`) then an insertion (`+1`, new value) — the DBSP/Materialize UPSERT envelope (an update is a delete of the old row + insert of the new). `integrate` already orders remove-before-add and the value refreshes; the ℤ-set core is untouched. `options.equals` (default `Object.is`) suppresses a redundant retract+insert when a re-set value is equal.
 - **Churn is confined to derived views.** Because an update is remove+add, a downstream `Collection`/`SecondaryIndex` subscriber sees `removed`+`added` even when the group-key is unchanged. The base `ReactiveMap` a renderer reads directly is unaffected. Consumers that must avoid churn read current values from the base map and use the index for membership/grouping only.
 - **Reader, not owner.** `dispose()` unsubscribes from the map's changefeed and clears the emitter; it does **not** dispose `map`. The map's owner tears it down.
@@ -329,8 +330,11 @@ Source: `packages/index/src/index-impl.ts`.
 ```ts
 Index.by<V>(collection: Collection<V>, keySpec?: KeySpec<V>): SecondaryIndex<V>
 
-// SecondaryIndex<V> is a ReactiveMap<GroupKey, Map<EntryKey, V>, IndexChange>
+// SecondaryIndex<V> is a Changefeed<ReadonlyMap<GroupKey, ReadonlySet<EntryKey>>, IndexChange>,
+// and get(groupKey) is a ReactiveMap<EntryKey, V, IndexChange>
 ```
+
+`current` — on the index object and behind `[CHANGEFEED]` alike — is a snapshot of the groups, copied so a later change cannot reach one already handed out, and kept until a group changes (`cachedSnapshot`). Like every changefeed's, it keeps its identity exactly while nothing changed. `Collection.current` is the same: a `Collection` is a `ReactiveMap`, whose `current` is one snapshot per state.
 
 Groups entries of a `Collection<V>` by one or more derived keys. Identity grouping (each entry in its own group) when `keySpec` is omitted — convenient for stacking joins.
 

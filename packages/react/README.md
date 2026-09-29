@@ -1,6 +1,6 @@
 # @kyneta/react
 
-Thin React bindings for [`@kyneta/schema`](../schema) and [`@kyneta/exchange`](../exchange). Subscribe to collaborative documents with hooks, get plain JS snapshots with stable referential equality.
+Thin React bindings for [`@kyneta/schema`](../schema) and [`@kyneta/exchange`](../exchange). Subscribe to collaborative documents with hooks, and get frozen plain JS snapshots that keep their identity until they change — so `React.memo` and `useMemo` work as they should.
 
 ## Install
 
@@ -183,7 +183,7 @@ const doc = useDocument("my-doc", TodoDoc)
 
 ### `useValue(ref)`
 
-Subscribes to a ref's current plain value. Returns `Plain<S>` — a plain JS snapshot — and re-renders when the changefeed fires. The snapshot is memoized for referential equality.
+Subscribes to a ref's current plain value. Returns `Plain<S>` — a frozen plain JS snapshot — and re-renders when the value changes. The snapshot keeps its identity across renders until the value changes, and a change leaves every unchanged part of it the same object, so a `React.memo` child given one part re-renders only when that part changed.
 
 <!-- ts-docs-setup
 const doc = createDoc(TodoDoc)
@@ -218,13 +218,25 @@ const visible = useSelector(doc.todos, todos =>
 )
 ```
 
-The `select` closure may freely close over props/state (e.g. a URL `filter`) with **no deps array** — it re-runs every render to follow the latest closure.
+The `select` closure may freely close over props/state (e.g. a URL `filter`) with **no deps array**: an inline closure is a new function each render, so it re-runs and follows them.
 
 ### `useTracked(thunk)`
 
-The primitive behind `useValue`/`useSelector`. Runs an arbitrary `thunk` reading kyneta refs (and/or other reactives), auto-tracks its reads, and re-renders when they change. `useValue(ref) ≡ useTracked(() => ref())`; `useSelector(ref, fn) ≡ useTracked(() => fn(ref))`.
+The primitive behind `useValue`/`useSelector`. Runs an arbitrary `thunk` reading kyneta refs (and/or other reactives), auto-tracks its reads, and re-renders when they change. `useSelector(ref, fn)` is `useTracked` over `() => fn(ref)`, memoized on `ref` and `fn`; `useValue(ref)` is `useSelector(ref, readValue)`, with one module-level `readValue`.
 
 Built on [`@kyneta/reactive`](../reactive); change detection is version-driven (no value comparison) and microtask-coalesced.
+
+**Identity.** The value is new on any change to what the thunk tracked, and otherwise keeps its identity — as long as the thunk does. The thunk's identity is its change signal: an inline thunk is a new function each render, so it re-runs (and follows props with no deps array). To keep the value stable across renders that change nothing, keep the thunk stable — React Compiler does this for an inline thunk, and `useCallback` does it by hand:
+
+<!-- Not compiled: a fragment from inside a component. -->
+<!-- ts-docs-verifier:ignore -->
+```tsx
+const visible = useTracked(
+  useCallback(() => [...doc.todos].filter(t => t.done() === done), [done]),
+)
+```
+
+The thunk must be pure over what it captures and what it reads: one that reads `Date.now()` or a mutable ref returns a stale value once its identity is stable. Values read from documents are frozen; copy one (`structuredClone`) to mutate it.
 
 ### `useDocReady(doc, opts?)`
 
@@ -285,7 +297,7 @@ return <input disabled={refusal !== undefined} value={title} onChange={onChange}
 
 `@kyneta/react` re-exports a curated subset so most app code only needs one import:
 
-From `@kyneta/schema`: `batch`, `applyChanges`, `subscribe`, `subscribeNode`, `Schema`, `CHANGEFEED`, and types `Ref`, `RRef`, `Plain`, `Changeset`, `Op`, `BoundSchema`.
+From `@kyneta/schema`: `batch`, `applyChanges`, `diffText`, `subscribe`, `subscribeNode`, `Schema`, and types `Ref`, `RRef`, `Plain`, `Op`, `BoundSchema`, `CommitOptions`. From `@kyneta/changefeed`: `CHANGEFEED`, and types `Changefeed`, `Changeset`.
 
 ### Document status
 
@@ -315,25 +327,25 @@ The package follows a **Functional Core / Imperative Shell** pattern:
 - **Functional Core**: reactive change detection lives in [`@kyneta/reactive`](../reactive) (auto-tracked computations over the changefeed) and the React-free `src/store.ts` (the `SyncRef`-backed `createSyncStore`). Zero React imports. Independently testable.
 - **Imperative Shell** (hooks): `useTracked`/`useSelector`/`useValue`, `useSyncState`, `useDocReady`, etc. are thin wrappers that feed reactives / pure stores into React's `useSyncExternalStore`.
 
-See [TECHNICAL.md](./TECHNICAL.md) for details on snapshot memoization, type recovery, and subscription strategy.
+See [TECHNICAL.md](./TECHNICAL.md) for details on value identity, type recovery, and subscription strategy.
 
 ## Best Practices
 
 ### Prefer `useSelector` over `useValue(doc)` for large documents
 
-`useValue(doc)` materializes the **entire document** — every field, every list item, every text node — into a plain JS snapshot on every render. For a small config doc this is fine. But for a document with a growing `turns` array, a `messages` log, or any unbounded collection, this serializes megabytes of data on every keystroke.
+`useValue(doc)` materializes the **entire document** — every field, every list item, every text node — into a plain JS snapshot, and re-renders on **every** change anywhere in it. Reads are cached, so a change rebuilds only the path to what changed and shares the rest; but for a document with a growing `turns` array, a `messages` log, or any unbounded collection, the first read still copies all of it, and every keystroke anywhere still re-renders the component.
 
-Kyneta refs are **live**: you can traverse the schema and read individual nodes without any serialization. `doc.activeStudentTurnId()` reads one scalar. `doc.turns.at(0)?.role()` reads one field of one item. The ref never builds a full snapshot unless you call `()` on the root.
+Kyneta refs are **live**: you can traverse the schema and read individual nodes without building a snapshot of their parents. `doc.activeStudentTurnId()` reads one scalar. `doc.turns.at(0)?.role()` reads one field of one item. The ref never builds a full snapshot unless you call `()` on the root.
 
 `useSelector` exploits this: it auto-tracks exactly the nodes your `select` function reads, and re-renders **only** when those specific nodes change. A `text` edit in turn #5 never re-renders a `status`-only selector.
 
-**Avoid this — serializes the entire document on every change:**
+**Avoid this — re-renders on every change, and copies the entire document:**
 
 <!-- Not compiled: a fragment from inside a component, or one assuming a document shape the shared prelude does not declare. -->
 <!-- ts-docs-verifier:ignore -->
 ```tsx
-// ❌ Re-renders on ANY change anywhere in the document, materializing
-// every turn's full text content into a JS snapshot each time.
+// ❌ Re-renders on ANY change anywhere in the document, and materializes
+// every turn's full text content into a JS snapshot.
 function Conversation({ docRef }) {
   const doc = useValue(docRef)
   return <div>{doc.turns.at(0)?.content}</div>
@@ -402,10 +414,11 @@ This fires only when `response` changes — not when `prompt` or `status` change
 | Concern | loro-extended/react | @kyneta/react |
 |---|---|---|
 | Ref identity | Unstable — `.toJSON()` on every change | Stable — `doc.title === doc.title` |
+| Value identity | New on every read | The same until it changes; unchanged subtrees shared |
 | Subscription bridge | `createSyncStore` + version-key caching | Direct `CHANGEFEED` → `useSyncExternalStore` |
 | `useValue` overloads | 12+ TypeScript overloads | Single conditional return type |
 | Framework abstraction | `FrameworkHooks` DI + factory pattern | None — CHANGEFEED is the framework boundary |
-| Text input hooks | `useCollaborativeText` (beforeinput) | Deferred (future work) |
+| Text input hooks | `useCollaborativeText` (beforeinput) | `useText` — an uncontrolled `<input>`/`<textarea>` bound through `attach` |
 | Undo/redo | `useUndoManager` | Deferred (future work) |
 
 ## License

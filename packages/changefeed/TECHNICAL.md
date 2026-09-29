@@ -4,8 +4,8 @@
 > **Role**: The universal reactive contract — a single symbol (`CHANGEFEED`) that any value can carry to expose its current state and a stream of future changes.
 > **Depends on**: *(none — zero runtime dependencies)*
 > **Depended on by**: `@kyneta/schema`, `@kyneta/index`, `@kyneta/exchange`, `@kyneta/react`, `@kyneta/loro-schema`, `@kyneta/yjs-schema`, `@kyneta/compiler`, `@kyneta/cast`
-> **Canonical symbols**: `CHANGEFEED`, `Changefeed<S, C>`, `ChangefeedProtocol<S, C>`, `Changeset<C>`, `HasChangefeed<S, C>`, `CallableChangefeed<S, C>`, `ReactiveMap<K, V, C>`, `ReactiveMapHandle<K, V, C>`, `ChangeBase`, `createChangefeed`, `createCallable`, `createReactiveMap`, `changefeed`, `hasChangefeed`, `staticChangefeed`
-> **Key invariant(s)**: Every reactive value in Kyneta exposes itself through exactly one symbol — `CHANGEFEED`. Accessing `value[CHANGEFEED]` yields `{ current, subscribe }`. Anything else is not a changefeed.
+> **Canonical symbols**: `CHANGEFEED`, `Changefeed<S, C>`, `ChangefeedProtocol<S, C>`, `Changeset<C>`, `HasChangefeed<S, C>`, `CallableChangefeed<S, C>`, `ReactiveMap<K, V, C>`, `ReactiveMapHandle<K, V, C>`, `ChangeBase`, `createChangefeed`, `createCallable`, `createReactiveMap`, `cachedSnapshot`, `changefeed`, `hasChangefeed`, `staticChangefeed`
+> **Key invariant(s)**: Every reactive value in Kyneta exposes itself through exactly one symbol — `CHANGEFEED`. Accessing `value[CHANGEFEED]` yields `{ current, subscribe }`. Anything else is not a changefeed. `current` obeys the **identity rule**: it returns the same value until the state changes, and a new one once it has.
 
 A shared vocabulary that lets any object — a schema ref, a document, a live map, a function-object — say "here is my current value and here is how you watch it change." Every reactive surface in Kyneta goes through this one symbol.
 
@@ -21,6 +21,7 @@ Imported by schema, exchange, index, react, compiler, cast, and both CRDT substr
 - What is a `Changeset` and why are changes batched? → [Changesets and batching](#changesets-and-batching)
 - How does `ReactiveMap` differ from a plain `Map` with subscribers? → [ReactiveMap — callable changefeed over a mutable Map](#reactivemap--callable-changefeed-over-a-mutable-map)
 - Why does `ReactiveMapHandle.set` not emit automatically? → [Mutation does not imply notification](#mutation-does-not-imply-notification)
+- When does `current` return a new value? → [The identity rule](#the-identity-rule)
 
 ## Vocabulary
 
@@ -77,7 +78,15 @@ Two types sit behind the symbol:
 
 ### What "reactive" means here (and does NOT mean)
 
-- **Not push-only.** `current` is a *getter* that always returns live state. Consumers may read synchronously at any time without subscribing. The "reactive" part is the *option* to receive future changes, not the requirement.
+- **Not push-only.** `current` is a *getter* that always returns the current state. Consumers may read synchronously at any time without subscribing. The "reactive" part is the *option* to receive future changes, not the requirement.
+
+### The identity rule
+
+`current` returns the same value until the state changes, and a new one once it has. Identity then carries exactly one bit — changed or not — and a consumer can use it without comparing values: React's `useSyncExternalStore` requires it of a snapshot, and `React.memo`, `useMemo` and every equality check in Angular, Vue or Solid rely on it.
+
+Both halves matter. A `current` that allocates on every read tells a consumer something changed when nothing did (`useSyncExternalStore` then loops); a `current` that hands out one live, mutable object tells it nothing changed when something did (it never re-renders).
+
+`createChangefeed(getCurrent)` returns whatever `getCurrent` returns, so the rule is the producer's to keep. A producer over mutable state keeps one snapshot with `cachedSnapshot(build)`: `get()` builds it on first read and returns the same value after, and `invalidate()` — called wherever the state mutates — drops it. Schema refs keep the rule through their cached reads (`@kyneta/schema` TECHNICAL.md §"Read identity").
 - **Not signal-graph reactivity.** There is no dependency tracking, no auto-wiring between computations. A consumer that derives a value from a changefeed must subscribe explicitly and re-compute explicitly.
 - **Not framework-bound.** `subscribe` returns a plain unsubscribe function. React's `useSyncExternalStore` consumes it, but so does a CLI test that just pushes into an array.
 
@@ -89,7 +98,7 @@ Three factories cover the common cases.
 
 | Factory | Returns | Use case |
 |---------|---------|----------|
-| `createChangefeed<S, C>(getCurrent)` | `[feed, emit]` | You own the state and want to push changes. The thunk reads live state; `emit(changeset)` fans out to subscribers. |
+| `createChangefeed<S, C>(getCurrent)` | `[feed, emit]` | You own the state and want to push changes. The thunk returns the current state, keeping the identity rule (`cachedSnapshot` for mutable state); `emit(changeset)` fans out to subscribers. |
 | `staticChangefeed<S>(head)` | `ChangefeedProtocol<S, never>` | You have a value that never changes but must still satisfy the protocol (e.g. injected into a function that expects a changefeed). |
 | `changefeed<S, C>(source)` | `Changefeed<S, C>` | You have a `HasChangefeed` and want the developer-facing surface. Pure projection — no new protocol created. |
 
@@ -226,19 +235,18 @@ handle.emit({ changes: [{ type: "replaced", entries: incoming }] })
 
 One emit, one changeset, one subscriber invocation per subscriber — instead of N+1.
 
+Snapshots are coherent between a mutation and its emit: the handle drops the snapshot when it mutates, not when it emits, so a read in between already agrees with `.get()`.
+
 ### Snapshot semantics
 
-`reactiveMap()` and `reactiveMap.current` serve different consumers:
+`reactiveMap()`, `reactiveMap.current` and `reactiveMap[CHANGEFEED].current` return one **snapshot**: a copy of the map, kept (`cachedSnapshot`) and dropped by every handle mutation. It is the same `Map` until the map changes and a new one after, so external-store consumers (`useSyncExternalStore`, Svelte stores, Solid signals) detect a change by identity alone, and a render that changed nothing keeps its value.
 
-| Access | Returns | Identity | Use case |
-|--------|---------|----------|----------|
-| `reactiveMap()` | Shallow copy (`new Map(map)`) | New reference each call | External-store consumers (`useSyncExternalStore`, Svelte stores, Solid signals) |
-| `reactiveMap.current` | The live internal `Map` | Same reference always | Imperative reads inside subscriber callbacks |
-| `.get()`, `.has()`, `.size`, iteration | Reads from live map | N/A | Ergonomic access without unwrapping |
+| Access | Returns | Identity |
+|--------|---------|----------|
+| `reactiveMap()`, `.current`, `[CHANGEFEED].current` | The snapshot | Same until the next mutation |
+| `.get()`, `.has()`, `.size`, iteration | Reads from the live map, which the snapshot agrees with | N/A |
 
-The callable returns a **snapshot** — a new `Map` on each call. This mirrors how schema product/sequence refs work: `ref()` allocates a fresh plain object so that external-store consumers (React's `useSyncExternalStore`, Svelte stores, Solid signals) detect changes via reference identity (`Object.is`). Without snapshot semantics, `useValue(reactiveMap)` would never trigger a re-render because the same `Map` reference would be compared equal.
-
-`.current` returns the **live** map — the same instance every time. This matches the `ChangefeedProtocol.current` contract ("the current value, always live") and is useful for imperative code that reads map state during subscriber callbacks.
+A `Map` cannot be frozen, so the snapshot's immutability rests on its `ReadonlyMap` type.
 
 ### What a `ReactiveMap` is NOT
 
@@ -261,6 +269,7 @@ The callable returns a **snapshot** — a new `Map` on each call. This mirrors h
 | `CallableChangefeed<S, C>` | `src/callable.ts` | `Changefeed<S, C> & (() => S)` — callable function-object variant. |
 | `ReactiveMap<K, V, C>` | `src/reactive-map.ts` | Callable changefeed over `ReadonlyMap<K, V>` with lifted accessors. |
 | `ReactiveMapHandle<K, V, C>` | `src/reactive-map.ts` | Producer-side: `set`, `delete`, `clear`, `emit`. |
+| `cachedSnapshot<T>(build)` | `src/cached-snapshot.ts` | One snapshot of mutable state, rebuilt on the first read after `invalidate()`. |
 
 ## File Map
 
@@ -271,8 +280,10 @@ The callable returns a **snapshot** — a new `Map` on each call. This mirrors h
 | `src/change.ts` | `ChangeBase` — the open change protocol. |
 | `src/callable.ts` | `CallableChangefeed`, `createCallable`. |
 | `src/reactive-map.ts` | `ReactiveMap`, `ReactiveMapHandle`, `createReactiveMap`. |
+| `src/cached-snapshot.ts` | `cachedSnapshot` — the producer's half of the identity rule. |
 | `src/__tests__/changefeed.test.ts` | Protocol tests: symbol identity, `createChangefeed`/`changefeed`/`staticChangefeed`, subscribe semantics. |
-| `src/__tests__/reactive-map.test.ts` | `ReactiveMap` tests: lifted accessors, handle semantics, batched emit, subscriber fan-out. |
+| `src/__tests__/reactive-map.test.ts` | `ReactiveMap` tests: one snapshot per state, lifted accessors, handle semantics, batched emit, subscriber fan-out. |
+| `src/__tests__/cached-snapshot.test.ts` | `cachedSnapshot`: lazy build, identity until invalidated. |
 
 ## Testing
 

@@ -584,7 +584,7 @@ describe("withNavigation: read-only changefeed stack", () => {
     unsub()
   })
 
-  it("composite .current returns a fresh snapshot", () => {
+  it("on a read-only stack, composite .current is a fresh frozen snapshot", () => {
     const schema = Schema.struct({
       settings: Schema.struct({
         darkMode: Schema.boolean(),
@@ -598,8 +598,9 @@ describe("withNavigation: read-only changefeed stack", () => {
     const CF_SYM = Symbol.for("kyneta:changefeed")
     const cf = doc.settings[CF_SYM]
     expect(cf.current).toEqual({ darkMode: false, fontSize: 14 })
-    // Fresh snapshot each time
+    // Nothing could invalidate a cached read here, so none is kept.
     expect(cf.current).not.toBe(cf.current)
+    expect(Object.isFrozen(cf.current)).toBe(true)
   })
 })
 

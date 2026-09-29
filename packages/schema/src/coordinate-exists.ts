@@ -1,8 +1,8 @@
 // coordinate-exists — whether a coordinate still exists, and its schema.
 //
 // Pure over its inputs: a parent's schema, a reader over σ, and the segment.
-// A coordinate exists by one rule whatever it is — a key or node id is in the
-// state, a field is declared by the parent's schema — with every sum resolved
+// A coordinate exists by one rule whatever it is (a key or node id is in the
+// state, a field is declared by the parent's schema), with every sum resolved
 // from σ by the rule `dispatchSum` applies, so a field of an inactive variant,
 // or of a nullable that is null, does not exist.
 

@@ -73,7 +73,7 @@ export interface Reactive<T> extends HasChangefeed<T> {
    * identity across renders that changed nothing, and never loops with
    * `useSyncExternalStore`, because the change token (`version`) is untouched.
    *
-   * The gate reads `dirty`, not `version`: a dependency marks the node dirty
+   * It checks `dirty`, not `version`: a dependency marks the node dirty
    * at once, while `version` only advances on the microtask flush, and a call
    * in between must not return the stale value.
    *

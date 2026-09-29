@@ -51,7 +51,7 @@ Zero runtime dependencies.
 
 | Capability | How |
 |---|---|
-| **Typed reads** | `doc.title()` returns `string`, `doc()` returns the full plain snapshot |
+| **Typed reads** | `doc.title()` returns `string`, `doc()` returns the full plain snapshot — frozen, and the same object until something in it changes, sharing every subtree that did not. Copy one (`structuredClone`) to mutate it |
 | **Typed writes** | `.set()`, `.insert()`, `.increment()`, `.push()`, `.delete()` — each ref knows its mutation surface |
 | **Batching** | `batch(doc, d => { … })` → `Op[]` — group writes into one atomic commit + one notification (a single write needs no wrapper); returns the captured ops for sync |
 | **Sync** | `applyChanges(docB, ops)` — apply ops from another doc, network, or undo stack |

@@ -145,18 +145,20 @@ log(`
     ├─────────────┼──────────────────────────────────────────────────────┤
     │ bottom      │ Function-shaped carriers with [CALL] slot           │
     │ navigation  │ Structural addressing (field getters, .at(), .keys) │
-    │ readable    │ [CALL] filled with store reader + caching           │
+    │ readable    │ [CALL] filled with store reader, addressing, caching│
     │ writable    │ .set(), .insert(), .increment(), .delete()          │
     │ observation │ [CHANGEFEED] protocol — subscribe / subscribeNode   │
     └─────────────┴──────────────────────────────────────────────────────┘
 
     Fluent:  .with(readable).with(writable).with(observation).done()
 
-    The 'readable' layer itself composes three sub-transformers:
-      withCaching(withReadable(withNavigation(base)))
+    The 'readable' layer itself composes four sub-transformers:
+      withCaching(withAddressing(withReadable(withNavigation(base))))
 
     Partial manual expansion:
-      observation(withWritable(withCaching(withReadable(withNavigation(bottomInterpreter)))))
+      observation.transform(
+        withWritable(withCaching(withAddressing(withReadable(withNavigation(bottomInterpreter))))),
+      )
 
     'observation' is as far down as this goes. The transformer it wraps is an
     internal of the changefeed layer and is not exported.
@@ -173,7 +175,8 @@ log(`
 `)
 
 {
-  const roStore = doc() as Record<string, unknown>
+  // A read is frozen and shared, so the store for a new document is a copy.
+  const roStore = structuredClone(doc()) as Record<string, unknown>
   const roDoc: RRef<typeof ProjectSchema> = interpret(
     ProjectSchema,
     plainContext(ProjectSchema, roStore),
@@ -200,6 +203,10 @@ log(`
 
 section(6, "Referential Identity and Caching")
 
+const before = doc()
+doc.stars.increment(1)
+const after = doc()
+
 log(`
     withCaching (included in 'readable') ensures repeated field access
     returns the same object identity — critical for React memoization.
@@ -208,12 +215,20 @@ log(`
     doc.settings === doc.settings → ${doc.settings === doc.settings}
     doc.tasks.at(0) === doc.tasks.at(0) → ${doc.tasks.at(0) === doc.tasks.at(0)}
 
+    Reads are frozen, and keep their identity until what they read changes:
+
+    doc() === doc() → ${doc() === doc()}
+    Object.isFrozen(doc()) → ${Object.isFrozen(doc())}
+    after doc.stars.increment(1):
+      after === before → ${after === before}
+      after.settings === before.settings → ${after.settings === before.settings}  (unchanged, shared)
+
     Namespace isolation — only schema fields appear:
     Object.keys(doc) → [${Object.keys(doc)
       .map(k => `"${k}"`)
       .join(", ")}]
 
-    Symbol-keyed hooks (CALL, INVALIDATE, TRANSACT, CHANGEFEED)
+    Symbol-keyed hooks (CALL, TRANSACT, CHANGEFEED)
     are invisible to Object.keys, JSON.stringify, and for..in.
 `)
 
@@ -228,7 +243,6 @@ log(`
     │ Symbol           │ Purpose                                       │
     ├──────────────────┼───────────────────────────────────────────────┤
     │ [CALL]           │ Controls what carrier() does (read from store)│
-    │ [INVALIDATE]     │ Change-driven cache invalidation              │
     │ [TRANSACT]       │ Context discovery from any ref                │
     │ [CHANGEFEED]     │ Observation coalgebra (Moore machine)         │
     └──────────────────┴───────────────────────────────────────────────┘

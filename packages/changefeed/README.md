@@ -6,9 +6,11 @@ The universal reactive contract for Kyneta — a Moore machine identified by `[C
 
 A **changefeed** is a reactive value with a current state and a stream of future changes. You read `.current` to see what's there now; you `.subscribe()` to learn what changes next.
 
+`.current` keeps its identity until the state changes, and is a new value once it has. So comparing two reads with `===` tells you whether anything changed — which is what `useSyncExternalStore`, `React.memo` and every framework's equality check assume.
+
 The protocol is expressed through a single well-known symbol: `CHANGEFEED` (`Symbol.for("kyneta:changefeed")`). Any object carrying this symbol participates in the reactive protocol — schema-interpreted refs, local state, peer lifecycle feeds, or anything else.
 
-This package contains the **contract only** — zero dependencies, no schema, no interpreters, no paths. Schema-specific extensions (`Op`, `TreeChangefeedProtocol`, tree observation) live in `@kyneta/schema`, which depends on this package.
+This package contains the **contract only** — zero dependencies, no schema, no interpreters, no paths. Schema-specific extensions (`Op`, `RecursiveChangefeedProtocol`, tree observation) live in `@kyneta/schema`, which depends on this package.
 
 ## Install
 
@@ -75,6 +77,24 @@ emit({ changes: [{ type: "increment", amount: 1 }] })
 // subscriber receives the changeset
 ```
 
+`feed.current` is whatever `getCurrent` returns, so keeping its identity until the state changes is up to `getCurrent`. Over mutable state, keep one snapshot:
+
+#### `cachedSnapshot<T>(build: () => T): { get(): T; invalidate(): void }`
+
+One snapshot of mutable state: `get()` builds it on first read and returns the same value after; `invalidate()`, called wherever the state mutates, drops it.
+
+```ts
+import { cachedSnapshot, createChangefeed } from "@kyneta/changefeed"
+
+const items = new Map<string, number>()
+const snapshot = cachedSnapshot<ReadonlyMap<string, number>>(() => new Map(items))
+const [feed, emit] = createChangefeed(snapshot.get)
+
+items.set("a", 1)
+snapshot.invalidate()
+emit({ changes: [{ type: "set", key: "a" }] })
+```
+
 #### `createCallable<S, C>(feed: Changefeed<S, C>): CallableChangefeed<S, C>`
 
 Wrap a changefeed in a callable function-object. `feed()` returns `feed.current`.
@@ -99,7 +119,7 @@ Project any object with `[CHANGEFEED]` into a developer-facing `Changefeed` — 
 import { changefeed } from "@kyneta/changefeed"
 
 const feed = changefeed(doc.title)
-feed.current          // live value
+feed.current          // the current value
 feed.subscribe(cb)    // subscribe to changes
 ```
 
@@ -119,9 +139,9 @@ Creates a protocol object that never emits changes — useful for static data so
 |---|---|
 | `ChangeBase` | `TextChange`, `MapChange`, `SequenceChange`, ... |
 | `Changeset<C>` | `Op<C>` (addressed delta with `Path`) |
-| `ChangefeedProtocol<S, C>` | `TreeChangefeedProtocol<S, C>` (adds `subscribeTree`) |
-| `Changefeed<S, C>` | `HasTreeChangefeed<S, C>` |
-| `hasChangefeed()` | `hasTreeChangefeed()`, `getOrCreateChangefeed()` |
+| `ChangefeedProtocol<S, C>` | `RecursiveChangefeedProtocol<S, C>` (adds `subscribeDescendants`) |
+| `Changefeed<S, C>` | `HasRecursiveChangefeed<S, C>` |
+| `hasChangefeed()` | `hasRecursiveChangefeed()`, `getOrCreateChangefeed()` |
 | `createChangefeed()`, `createCallable()` | `expandMapOpsToLeaves()` |
 
 Consumers import the contract from `@kyneta/changefeed` directly — schema does **not** re-export contract symbols. The import path tells the truth about the dependency.

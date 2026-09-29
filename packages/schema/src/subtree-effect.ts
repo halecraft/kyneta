@@ -42,9 +42,9 @@ export type SubtreeEffect =
  *   rule everywhere.
  * - A tree change removes the nodes it deletes. Creates and moves leave
  *   every node's data where it was.
- * - Everything else — sequence and movable edits, text, counters, rich text,
- *   set ops, and any change type this package does not define — rewrites
- *   nothing below.
+ * - Everything else rewrites nothing below: sequence and movable edits, text,
+ *   counters, rich text, set ops, and any change type this package does not
+ *   define.
  */
 export function planSubtreeEffect(change: ChangeBase): SubtreeEffect {
   if (isReplaceChange(change)) return "all"

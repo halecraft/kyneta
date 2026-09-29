@@ -13,7 +13,7 @@
 //   until a change reaches it, on a writable stack. Unchanged subtrees are
 //   shared from one read to the next.
 //
-// Carriers need nothing when a change lands: addresses advance, die and
+// Carriers need nothing when a change is applied: addresses advance, die and
 // revive in withAddressing's prepare stage, taking the carriers kept on their
 // nodes with them, and a memoized carrier reads through its path. Reads do:
 // this layer's own `after` stage clears the ones a change made stale.

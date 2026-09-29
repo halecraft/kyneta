@@ -56,7 +56,7 @@ To **group** an LWW map, the map is bridged into the index via `Source.fromReact
 
 ### Selector discipline (snapshot reads)
 
-`select.ts` selectors read group **membership** from a `SecondaryIndex`'s `.current` (`Map<groupKey, Set<entryKey>>`) and resolve **values** from the base store (`events` / `syncStates`). They never call `SecondaryIndex.get(key)`: that allocates a fresh `ReactiveMap` + a parent subscription retained until index `dispose()` on *every* call — a leak under repeated rendering. `.get()` is reserved for a renderer that genuinely holds one group's live subscription. Context: jj:qwzkmzvy.
+`select.ts` selectors read group **membership** from a `SecondaryIndex`'s `.current` (a snapshot `ReadonlyMap<groupKey, ReadonlySet<entryKey>>`, the same until a group changes) and resolve **values** from the base store (`events` / `syncStates`). They never call `SecondaryIndex.get(key)`: that allocates a fresh `ReactiveMap` + a parent subscription retained until index `dispose()` on *every* call — a leak under repeated rendering. `.get()` is reserved for a renderer that genuinely holds one group's live subscription. Context: jj:qwzkmzvy.
 
 ### Observation stream — egress / ingest (the two planes)
 

@@ -5,8 +5,8 @@
 // plain substrate's reset) has no ops of its own: it moves σ from one state
 // to another. Subscribers, addresses and cached reads all key off ops, and
 // delivery walks up from a changed path, never down. So the announcement has
-// to be as fine as the store — one op per field, record key or register that
-// moved — or a subscriber below a coarse op never hears the change.
+// to be as fine as the store, one op per field, record key or register that
+// moved, or a subscriber below a coarse op never hears the change.
 
 import type { ChangeBase } from "./change.js"
 import {
@@ -40,13 +40,13 @@ import { Zero } from "./zero.js"
  * - A text leaf becomes `diffText(before, after)`'s minimal contiguous edit,
  *   and a counter an increment by the difference, so their subscribers
  *   receive the change type they understand.
- * - Every other node that differs — an atomic register (a sum or `.json()`
- *   node), a sequence, a set, a tree, a rich-text delta, a scalar — becomes
- *   one `replace`.
+ * - Every other node that differs becomes one `replace`: an atomic register
+ *   (a sum or `.json()` node), a sequence, a set, a tree, a rich-text delta,
+ *   a scalar.
  * - Unchanged nodes produce nothing.
  *
- * Values are compared only where an op would be emitted — leaves, registers
- * and record keys — never at a container before recursing into it, which
+ * Values are compared only where an op would be emitted (leaves, registers
+ * and record keys), never at a container before recursing into it, which
  * would make the diff O(size × depth).
  *
  * Every payload is a copy (`own`), so the ops share nothing with `after`.

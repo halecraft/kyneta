@@ -4,13 +4,13 @@
 > **Role**: Thin React bindings over `@kyneta/schema` + `@kyneta/exchange`. Bridges the `[CHANGEFEED]` reactive protocol to React's rendering cycle via `useSyncExternalStore`, and provides a framework-agnostic text-adapter for binding native `<input>` / `<textarea>` elements to collaborative `TextRef`s.
 > **Depends on**: `@kyneta/schema` (peer), `@kyneta/changefeed` (peer), `@kyneta/exchange` (peer), `@kyneta/reactive` (peer), `react` (>=18, peer)
 > **Depended on by**: Application code that renders Kyneta documents in React.
-> **Canonical symbols**: `ExchangeProvider`, `useExchange`, `useDocument`, `useTracked`, `useSelector`, `useValue`, `useSyncState`, `useDocReady`, `useDocStatus`, `useInitialize`, `useText`, `useWriteRefusal`, `ExchangeProviderProps`, `UseTextOptions`, `CallableRef`, `ExternalStore`, `createSyncStore`, `createNullishStore`, `attach`, `diffText`, `transformSelection`, `TextRefLike`, `AttachOptions`
+> **Canonical symbols**: `ExchangeProvider`, `useExchange`, `useDocument`, `useTracked`, `useSelector`, `useValue`, `useChangefeed`, `useSyncState`, `useDocReady`, `useDocStatus`, `useInitialize`, `useText`, `useWriteRefusal`, `ExchangeProviderProps`, `UseTextOptions`, `CallableRef`, `ExternalStore`, `createSyncStore`, `attach`, `transformSelection`, `TextRefLike`, `AttachOptions` (and `diffText`, re-exported from `@kyneta/schema`)
 > **Key invariant(s)**:
-> 1. The package is an **adapter**, not a renderer. Every hook is a ≤10-line `useSyncExternalStore` wrapper over a pure, React-agnostic store factory. Zero React imports in `store.ts` or `text-adapter.ts`.
-> 2. `useValue` returns the same object reference between renders when the underlying value has not changed — downstream `React.memo` and `useMemo` remain stable.
+> 1. The package is an **adapter**, not a renderer. Hooks are thin: the reactive core lives in `@kyneta/reactive`, `@kyneta/schema` and `@kyneta/changefeed`, and each hook bridges it to `useSyncExternalStore`. Zero React imports in `store.ts` or `text-adapter.ts`.
+> 2. **The identity rule.** A hook's value changes identity only when a tracked read changed or the thunk's identity changed. Downstream `React.memo` and `useMemo` stay stable across every render that changed nothing.
 > 3. `useText` never causes re-renders on text changes. Collaborative text binds imperatively through `text-adapter.ts`; the textarea is an *uncontrolled* element.
 
-A minimal React binding kit. Applications wrap their tree in `ExchangeProvider`, consume documents via `useDocument(bound)`, read values with `useValue(ref)`, gate on sync readiness with `useDocReady(doc)` (or read raw per-peer state with `useSyncState(doc)`), and bind collaborative text fields with `useText(textRef)`. That's the full surface. Heavy lifting — the `[CHANGEFEED]` subscription, the snapshot caching, the text diffing + selection rebasing — lives in framework-agnostic pure modules.
+A minimal React binding kit. Applications wrap their tree in `ExchangeProvider`, consume documents via `useDocument(bound)`, read values with `useValue(ref)`, gate on sync readiness with `useDocReady(doc)` (or read raw per-peer state with `useSyncState(doc)`), and bind collaborative text fields with `useText(textRef)`. That's the full surface. Heavy lifting — dependency tracking, identity-stable reads, the text diffing + selection rebasing — lives in framework-agnostic packages and modules.
 
 Consumed by application code. Not imported by any other Kyneta package.
 
@@ -18,10 +18,10 @@ Consumed by application code. Not imported by any other Kyneta package.
 
 ## Questions this document answers
 
-- How does `useValue` interact with `useSyncExternalStore`? → [The FC/IS split](#the-fcis-split)
-- Why does `useValue` return a stable reference between renders? → [Snapshot caching for referential stability](#snapshot-caching-for-referential-stability)
+- How do the hooks interact with `useSyncExternalStore`? → [Auto-tracked reads](#auto-tracked-reads--usetracked--useselector-and-usevalue)
+- When does a hook's value keep its identity, and when is it new? → [Identity](#identity)
 - Why is `useText` imperative — why doesn't it re-render on text changes? → [`useText` — uncontrolled by design](#usetext--uncontrolled-by-design)
-- How does the text-adapter detect what the user typed? → [`diffText` — single contiguous edit detection](#difftext--single-contiguous-edit-detection)
+- How does the text-adapter detect what the user typed? → [`diffText`](#difftext)
 - How does the text-adapter keep the cursor in the right place during remote edits? → [`transformSelection` — cursor rebasing](#transformselection--cursor-rebasing)
 - What's the difference between deep and shallow subscription? → [Deep vs shallow subscription](#deep-vs-shallow-subscription)
 - How do I pass an `Exchange` to components without prop-drilling? → [`ExchangeProvider` and `useExchange`](#exchangeprovider-and-useexchange)
@@ -32,35 +32,33 @@ Consumed by application code. Not imported by any other Kyneta package.
 |------|-------|-------------------------|
 | `ExternalStore<T>` | `{ subscribe(onStoreChange): unsubscribe, getSnapshot(): T }` — the contract `useSyncExternalStore` consumes. | A state container, a Zustand store — this is the React built-in contract |
 | `CallableRef` | Structural type: a callable `(...args) => any` that also carries `[CHANGEFEED]`. Every `Ref<S>` from the standard interpreter stack satisfies it. | A React `ref`, a DOM ref |
-| `createChangefeedStore(ref)` | Pure factory: `ref → ExternalStore<Plain<S>>`. Subscribes to `[CHANGEFEED]`, caches snapshots, dispatches deep or shallow based on ref kind. | `createSyncStore` |
-| `createSyncStore(syncRef)` | `SyncRef → ExternalStore<PeerSyncState[]>`. One `onPeerSyncChange` subscription; the snapshot is cached because `peerStates` allocates a fresh array per read. | `createChangefeedStore` |
-| `createNullishStore(value)` | Pure factory returning a store whose snapshot is `null` / `undefined` and whose `subscribe` is a no-op. Used for conditional hook calls. | A placeholder — this is a real `ExternalStore` with stable identity |
+| `createSyncStore(syncRef)` | `SyncRef → ExternalStore<PeerSyncState[]>`. One `onPeerSyncChange` subscription; the snapshot is cached because `peerStates` allocates a fresh array per read. | `useChangefeed` — a changefeed needs no store factory |
 | `ExchangeProvider` | React context provider that publishes an `Exchange` to descendants. | A DI container |
 | `useExchange()` | Reads the `Exchange` from context. Throws if no provider is in the tree. | `useContext` on some generic `ExchangeContext` — this is the curated hook |
 | `useDocument(bound)` | Returns `Ref<S>` for `exchange.get(docId, bound)`. Stable across renders; memoizes by `(exchange, docId, bound)`. | `useValue` — `useDocument` returns the *ref*, not the plain value |
-| `useValue(ref)` | Returns `Plain<S>`. Re-renders when the ref's changefeed fires. Memoized for referential stability. | `useDocument` |
+| `useValue(ref)` | Returns `Plain<S>`, a frozen snapshot that keeps its identity until the ref's value changes. Re-renders when it does. | `useDocument` |
 | `useDocReady(doc, opts?)` | Returns a monotonic `boolean` readiness latch (flicker-free scalar). The 90% gate. | `useSyncState(doc)` — raw per-peer array |
 | `useSyncState(doc)` | Returns `PeerSyncState[]` describing per-peer sync progress. Re-renders on per-peer sync changes. | `useValue(doc)` — `useSyncState` looks at the sync surface, not the doc's data |
 | `useText(textRef, options?)` | React ref callback that binds a native `<input>` / `<textarea>` to a `TextRef`. Does not re-render on text changes. Read-only while loading, and while the document refuses this peer's writes. | `useValue(textRef)` — use that if you want to *read* the text reactively (e.g., for a character count) |
 | `useWriteRefusal(doc)` | Why a stored `json` document refuses this peer's writes (a `WriterRefusedError`: another tab of the store writes it), or `undefined`. Re-renders when it changes. | `useDocReady(doc)` — whether the document has loaded, not whether it may be written |
 | `attach(element, textRef, options?)` | Imperative, framework-agnostic: bind an element to a text ref, return a detach function. The foundation of `useText`. | A React hook — `attach` has no React dependency |
-| `diffText(oldText, newText, cursorHint)` | Pure function: produce the `TextChange` describing a single contiguous edit from `oldText` to `newText`, disambiguated by cursor position. | A general-purpose string diff — `diffText` assumes a single contiguous edit |
+| `diffText(oldText, newText, cursorHint?)` | From `@kyneta/schema`, re-exported here: the `TextChange` for the single contiguous edit from `oldText` to `newText`, disambiguated by cursor position. | A general-purpose string diff — `diffText` assumes a single contiguous edit |
 | `transformSelection(start, end, instructions)` | Pure function: rebase a selection range through text instructions. | `transformIndex` from `@kyneta/schema` — this is the two-index convenience |
-| Deep subscription | Via `subscribeTree` — composite refs' descendants' changes trigger re-render. | Shallow subscription |
+| Deep subscription | Via `subscribeDescendants` — composite refs' descendants' changes trigger re-render. | Shallow subscription |
 | Shallow subscription | Via `subscribe` — only the node's own changes trigger re-render (no descendants). | Deep subscription |
 
 ---
 
 ## Architecture
 
-**Thesis**: React is not a state library. Reactive state is already solved by `[CHANGEFEED]`. The binding is one line each: `useSyncExternalStore(store.subscribe, store.getSnapshot)`, where `store` is a pure factory that knows how to translate `[CHANGEFEED]` into the `{ subscribe, getSnapshot }` contract.
+**Thesis**: React is not a state library. Reactive state is already solved by `[CHANGEFEED]`, dependency tracking by `@kyneta/reactive`, and identity by the reads themselves. Each hook bridges one of them to `useSyncExternalStore`.
 
 Two layers:
 
 | Layer | Module | React? |
 |-------|--------|--------|
-| **Functional Core** | `store.ts`, `text-adapter.ts` | No imports |
-| **Imperative Shell** | `exchange-context.tsx`, `use-value.ts`, `use-document.ts`, `use-sync-state.ts`, `use-text.ts` | Thin React wrappers |
+| **Functional Core** | `store.ts`, `text-adapter.ts` (and upstream: `@kyneta/reactive`, `@kyneta/schema`, `@kyneta/changefeed`) | No imports |
+| **Imperative Shell** | `exchange-context.tsx`, `use-*.ts` | Thin React wrappers |
 
 ```
 Application code
@@ -68,14 +66,15 @@ Application code
      ├─ ExchangeProvider, useExchange ──── React context
      ├─ useDocument(bound)             ─── exchange.get
      ├─ useTracked(thunk)              ─── useSyncExternalStore ──► reactive(thunk)  [@kyneta/reactive]
-     ├─ useSelector(ref, select)       ─── useTracked(() => select(ref))
-     ├─ useValue(ref)                  ─── useTracked(() => track(ref))
+     ├─ useSelector(ref, select)       ─── useTracked(useMemo(() => () => select(ref), [ref, select]))
+     ├─ useValue(ref)                  ─── useSelector(ref, readValue)
+     ├─ useChangefeed(feed)            ─── useSyncExternalStore ──► feed.current, subscribeDescendants | subscribe
      ├─ useSyncState(doc)              ─── useSyncExternalStore ──► createSyncStore(syncRef)
      ├─ useDocStatus(doc)              ─── useChangefeed ────────► docStatusFeed(doc)  [@kyneta/exchange]
      ├─ useDocReady(doc)               ─── useDocStatus(doc) !== "pending"
      └─ useText(textRef)               ─── ref callback         ──► attach(el, textRef)
                                                                      │
-                                                                     └─ diffText, transformSelection (pure)
+                                                                     └─ diffText [@kyneta/schema], transformSelection (pure)
 ```
 
 Every hook file is ≤100 lines — most are 40–80 — because the work lives in the two pure modules.
@@ -90,98 +89,19 @@ Every hook file is ≤100 lines — most are 40–80 — because the work lives 
 
 ---
 
-## The FC/IS split
+## Identity
 
-Source: `packages/react/src/store.ts` (Functional Core) + `packages/react/src/use-value.ts`, `use-sync-state.ts` (Imperative Shell).
+A hook's value changes identity only when a tracked read changed or the thunk's identity changed. Three things produce that, none of them in this package:
 
-### Functional Core — `store.ts`
+- **Schema reads** are cached on their coordinates (`@kyneta/schema` TECHNICAL.md §"Read identity"). `ref()` returns the same frozen snapshot until something below the ref changes, and a new snapshot shares every subtree that did not change.
+- **Changefeed snapshots.** Every changefeed's `current` keeps its identity until its state changes (`@kyneta/changefeed` TECHNICAL.md §"The identity rule") — `exchange.peers`, `exchange.documents`, index `Collection`s among them.
+- **The refresh gate.** `useTracked` returns `reactive.refresh(thunk)`, which re-runs only when the thunk is a new function or a tracked dependency fired, and otherwise returns the value it already has (`@kyneta/reactive` TECHNICAL.md §"`refresh(thunk)`").
 
-Two framework-agnostic pure factories:
+**Keeping a thunk stable.** The thunk's identity is its change signal, so an inline thunk — a new function each render — re-runs each render. That is what lets it follow props with no dependency list, and it is cheap, since what it reads comes from cached reads. To keep the value's identity across renders that change nothing, keep the thunk stable: React Compiler memoizes an inline thunk on exactly what it captures (a thunk over `doc.todos` and `filter` is kept until one of them changes — refs are identity-stable, so they work as its dependencies), and `useCallback` does the same by hand. `useSelector` does it for you over its own arguments, and `useValue`'s selector is one module-level function.
 
-```ts
-createChangefeedStore(ref: CallableRef): ExternalStore<unknown>
-createSyncStore(syncRef: SyncRef):       ExternalStore<PeerSyncState[]>
-```
+**Purity.** A thunk must be pure over its captures and its tracked reads. One that reads `useRef().current`, `Date.now()` or a store kyneta does not track returns a stale value once its identity is stable — the contract of `useMemo`, `computed` and React Compiler alike.
 
-Plus a utility:
-
-```ts
-createNullishStore<T extends null | undefined>(value: T): ExternalStore<T>
-```
-
-`createChangefeedStore(ref)`:
-
-1. Reads `ref[CHANGEFEED]` to determine whether the ref is composite (has `subscribeTree`) or leaf (plain `subscribe`).
-2. Caches the current snapshot in a closure variable.
-3. Returns `{ subscribe, getSnapshot }`:
-   - `subscribe(onChange)` registers a `[CHANGEFEED]` subscriber. When it fires, `snapshot = ref()` (re-compute), then `onChange()`.
-   - `getSnapshot()` returns the cached `snapshot`.
-
-The cache is the key detail — without it, `getSnapshot` would return `ref()` fresh each call, producing different object references across tearing-check reads and forcing React to bail out.
-
-`createSyncStore(syncRef)` has the same shape over `SyncRef.onPeerSyncChange`.
-
-`createNullishStore(value)` is a degenerate `ExternalStore` with a no-op `subscribe` and a fixed snapshot. Used by `useValue` to handle `null` / `undefined` inputs without calling a hook conditionally (React rule).
-
-### Imperative Shell — the hook files
-
-`use-value.ts` is eight lines of React:
-
-```ts
-export function useValue<R extends CallableRef | null | undefined>(ref: R): UseValueResult<R> {
-  const store = useMemo(
-    () => (ref == null ? createNullishStore(ref as null | undefined) : createChangefeedStore(ref)),
-    [ref],
-  )
-  return useSyncExternalStore(store.subscribe, store.getSnapshot) as UseValueResult<R>
-}
-```
-
-That's the entire pattern. `use-sync-state.ts` is the same shape.
-
-### Testing the core without React
-
-`store.test.ts` (291 lines) tests `createChangefeedStore` and `createSyncStore` with synthetic refs constructed from `createDoc + batch()`. No `render`, no `act`, no jsdom. The React hook test files are thin — they verify that the hook passes the right store factory to `useSyncExternalStore`, not the subscription logic itself.
-
-### What this split is NOT
-
-- **Not a middleware pattern.** There's no interceptor chain. The hook calls the pure factory directly.
-- **Not an abstraction that could swap React for another framework.** The factories are React-agnostic, but the *hooks* are React-specific — for Vue or Solid, other bindings would import `store.ts` directly.
-
----
-
-## Snapshot caching for referential stability
-
-Source: `packages/react/src/store.ts` → `createChangefeedStore` cache logic.
-
-`useSyncExternalStore` calls `getSnapshot()` on every render to detect tearing. If `getSnapshot()` returns a different object each time (for example, `ref()` computing a fresh plain value on each call), React thinks the state is changing constantly and produces warnings or spurious re-renders.
-
-`createChangefeedStore` solves this by caching the snapshot:
-
-```
-// Pseudocode
-let snapshot = ref()
-subscribe = (onChange) => {
-  return ref[CHANGEFEED].subscribe(() => {
-    snapshot = ref()       // recompute on real change
-    onChange()
-  })
-}
-getSnapshot = () => snapshot
-```
-
-Between `[CHANGEFEED]` firings, `getSnapshot()` returns the same object. `React.memo(child, (prev, next) => prev === next)` works correctly. A `useMemo(() => compute(value), [value])` remains stable.
-
-This relies on an implicit contract: **`ref()` must return a new reference when the underlying value has changed.** Schema product refs satisfy this by allocating a fresh `{}` on each call; sequence refs allocate a fresh `[]`; scalars return primitives (compared by value). `ReactiveMap` satisfies this by returning `new Map(map)` — a shallow copy — on each call, while `.current` remains the live map for imperative use.
-
-### Eager snapshot on mount
-
-The initial snapshot is computed synchronously during `createChangefeedStore` construction. There is no `null` / loading state — the ref always has a current value (that's the `[CHANGEFEED]` contract). Applications that need a loading indicator use `useDocReady` for the readiness gate (or `useSyncState` for per-peer progress), not `useValue` state.
-
-### What snapshot caching is NOT
-
-- **Not deep equality.** Two different object references with the same contents are *not* considered equal. The cache returns the exact instance from the most recent recomputation.
-- **Not a memoization of `ref()`.** Each recomputation is a full `ref()` call. The cache holds the *result*, not the computation.
+**Structural sharing and `React.memo`.** Because a read shares its unchanged subtrees, a `React.memo` child handed part of a `useValue` result skips re-rendering unless its part changed: after an edit to `todos[0]`, `value.todos[1]` is the same object as before. Reads are frozen, so a component cannot corrupt a value another component holds; copy one (`structuredClone`) to mutate it.
 
 ---
 
@@ -191,20 +111,20 @@ Source: `packages/react/src/use-tracked.ts`, `use-selector.ts`, `use-value.ts`, 
 
 `useTracked(thunk)` runs `thunk` as a reactive computation: it **auto-tracks** exactly the kyneta nodes the thunk reads and re-renders the component only when one of those changes. No deps array, no `scope`, no `isEqual`, no `shallowEqual` — the dependency set is discovered from the reads, and change detection is **version-driven** (the reactive's monotonic `version`, which advances iff a tracked dependency fired), not value comparison.
 
-- `useSelector(ref, select) ≡ useTracked(() => select(ref))` — project a ref to a derived value; re-renders only when the nodes `select` actually read change. A `text` edit never re-renders a `done`-only selector, and nothing materializes unless `select` asks for it.
-- `useValue(ref) ≡ useTracked(() => track(ref))` — the deep-aspect corner: reading `ref()` reports a `deep` dependency, so it re-renders on any descendant change (the long-standing contract). `track` (from `@kyneta/reactive`) reports plain `HasChangefeed` sources (`exchange.peers`/`documents` `ReactiveMap`s, index `Collection`s) that don't self-report; for schema refs it is a pass-through (they self-report when called).
+- `useSelector(ref, select)` is `useTracked` over `() => select(ref)`, memoized on `ref` and `select` — project a ref to a derived value; re-renders only when the nodes `select` actually read change. A `text` edit never re-renders a `done`-only selector, and nothing materializes unless `select` asks for it.
+- `useValue(ref)` is `useSelector(ref, readValue)`, with `readValue = r => (r == null ? r : track(r))` one module-level function — the deep-aspect corner: reading `ref()` reports a `deep` dependency, so it re-renders on any descendant change. `track` (from `@kyneta/reactive`) reports plain `HasChangefeed` sources (`exchange.peers`/`documents` `ReactiveMap`s, index `Collection`s) that don't self-report; for schema refs it is a pass-through (they self-report when called). One mechanism, not a second `useMemo`.
 
-### Mechanism: version token + render-time refresh (no deps array)
+### Mechanism: version token + the refresh gate (no deps array)
 
-`useTracked` wires `useSyncExternalStore(reactive.subscribe, () => reactive.version)` — the **version** is the stable change token, so a CRDT change drives a re-render. The returned value comes from `reactive.refresh()`, which re-runs the **latest** thunk closure every render (following props/state like a `filter` with no deps array) **without** bumping `version` — so it never loops with the store. (This is why the selector may freely close over `filter`: a `filter` change is a React re-render in which `refresh` re-runs the new closure; a CRDT change bumps `version` and re-renders.) `reactive.disposed` lets the hook recreate after React StrictMode's dev mount→unmount→mount.
+`useTracked` creates `reactive(thunk)` on mount and wires `useSyncExternalStore(reactive.subscribe, () => reactive.version)` — the **version** is the stable change token, so a CRDT change drives a re-render. The returned value comes from `reactive.refresh(thunk)`, which re-runs only when this render's thunk is a new function or a tracked dependency fired, **without** bumping `version` — so it never loops with the store. (This is why a thunk may freely close over `filter`: a `filter` change makes a new thunk, which `refresh` runs; a CRDT change bumps `version` and re-renders.) `reactive.disposed` lets the hook recreate after React StrictMode's dev mount→unmount→mount.
 
 ### Subscription granularity (the corrected vocabulary)
 
-The reactive runtime maps each captured dependency's *aspect* to the existing schema observation primitive — `subscribeNode` (own-path: `value`/`structure`), `subscribe`/`subscribeDescendants` (deep), or a plain `[CHANGEFEED].subscribe` for non-schema sources — reusing the `hasRecursiveChangefeed` discriminator. (Historical note: earlier drafts of this document referred to `subscribeTree` / `hasTreeChangefeed` / `TreeChangefeedProtocol`; the shipped names are `subscribeDescendants` / `hasRecursiveChangefeed` / `RecursiveChangefeedProtocol`.)
+The reactive runtime maps each captured dependency's *aspect* to the existing schema observation primitive — `subscribeNode` (own-path: `value`/`structure`), `subscribe`/`subscribeDescendants` (deep), or a plain `[CHANGEFEED].subscribe` for non-schema sources — reusing the `hasRecursiveChangefeed` discriminator.
 
 ### Timing — microtask-coalesced
 
-`useValue`/`useSelector`/`useTracked` re-render on the **next microtask** after a change (the reactive scheduler coalesces a burst of changesets — multiple merges, a sync replay — into one re-run). This is a change from the previous synchronous `createChangefeedStore` path; React re-renders are async anyway, so it is imperceptible, and it is why mutation assertions in tests use `await act(async () => …)`.
+`useValue`/`useSelector`/`useTracked` re-render on the **next microtask** after a change (the reactive scheduler coalesces a burst of changesets — multiple merges, a sync replay — into one re-run). React re-renders are async anyway, so it is imperceptible, and it is why mutation assertions in tests use `await act(async () => …)`.
 
 ### What this is NOT
 
@@ -301,9 +221,9 @@ Source: `packages/react/src/use-changefeed.ts`.
 useChangefeed<T>(feed: Changefeed<T, any>): T
 ```
 
-Subscribe to any `[CHANGEFEED]` source — a schema ref, `exchange.peers`, `exchange.documents`, or a standalone feed — and return its current value, re-rendering on each changeset.
+Subscribe to any `[CHANGEFEED]` source — a schema ref, `exchange.peers`, `exchange.documents`, or a standalone feed — and return its current value, re-rendering exactly when it changes.
 
-This is the general-purpose hook. Every other hook (`useValue`, `useSyncState`, `useDocReady`) is a specialization of this pattern: bridge a `[CHANGEFEED]`-shaped source into `useSyncExternalStore`. `useChangefeed` exposes the general case directly.
+`.current` is the snapshot and a subscription is the change signal, which is the `useSyncExternalStore` contract once two things hold. `current` must keep its identity until the source changes — the changefeed identity rule, which every kyneta source keeps — or React warns and loops. And the subscription must cover everything `current` reads: a schema composite's `current` is its whole subtree, so a source that supports descendant subscriptions (`hasRecursiveChangefeed`) is subscribed with `subscribeDescendants`, and any other with `subscribe` — the same choice `@kyneta/reactive` makes for a dependency. `useDocStatus` and `useWriteRefusal` are `useChangefeed` over feeds `@kyneta/exchange` composes.
 
 ```tsx
 // exchange.peers — a ReactiveMap
@@ -313,14 +233,14 @@ const peers = useChangefeed(exchange.peers)
 // exchange.documents
 const docs = useChangefeed(exchange.documents)
 
-// Schema ref (via changefeed() projector)
+// Schema ref (via changefeed() projector) — re-renders on any edit below it
 import { changefeed } from "@kyneta/changefeed"
-const title = useChangefeed(changefeed(doc.title))
+const todos = useChangefeed(changefeed(doc.todos))
 ```
 
 ### What `useChangefeed` is NOT
 
-- **Not a replacement for `useValue`.** `useValue` handles deep subscription for composite refs and nullish guard. `useChangefeed` is the raw binding.
+- **Not a replacement for `useValue`.** `useValue` also accepts `null` / `undefined`, and tracks reads, so it composes with other tracked reads. `useChangefeed` is the raw binding of one feed.
 - **Not `useTracked`.** `useChangefeed` subscribes to the whole changeset stream of a single feed. `useTracked` auto-tracks reads across multiple refs within a thunk.
 
 ---
@@ -359,7 +279,9 @@ useValue<R extends CallableRef | null | undefined>(ref: R): UseValueResult<R>
 - `R extends null` → `null`.
 - `R extends undefined` → `undefined`.
 
-The single function signature + conditional return covers the three cases without overload explosion. Hook call count is stable (React's rule) — when `ref` is nullish, the hook still runs; it just subscribes to a `createNullishStore` instance that never fires.
+The single function signature + conditional return covers the three cases without overload explosion. Hook call count is stable (React's rule) — when `ref` is nullish, the hook still runs; its selector returns the nullish value and tracks nothing, so nothing ever fires.
+
+`useValue(ref)` is `useSelector(ref, readValue)`. `readValue` is one module-level function, so the selector never changes and the value keeps its identity across every render in which the ref's value did not change.
 
 ### Composite vs leaf
 
@@ -410,8 +332,7 @@ cache), so StrictMode's deliberate double-invocation, a remount, or two
 components both wanting defaults all collapse to one write. The `seed` and
 `onError` callbacks are held in refs rather than dependencies — both are
 usually inline arrows, so depending on them would re-run the effect every
-render; the document is the identity that matters. Same technique as
-`useTracked`'s `thunkRef`.
+render; the document is the identity that matters.
 
 `useDocReady` is now sugar over `useDocStatus` (`status !== "pending"`). It
 also gained a behaviour fix: `sync(doc).ready` is `true` on a transportless
@@ -431,9 +352,8 @@ directly.
 That matters more than it looks. The status moves for two unrelated reasons:
 data arriving, and the last truth source reporting in. A hand-rolled hook would
 have to subscribe to both and merge them; the composed feed has already done
-that in `@kyneta/exchange`, so there is nothing left to wire in React. This is
-why §"The FC/IS split" applies differently here — the functional core is
-upstream, not in `store.ts`.
+that in `@kyneta/exchange`, so there is nothing left to wire in React — the
+functional core is upstream, not in `store.ts`.
 
 `createDerivedSyncStore` is consequently gone. It had become a generic
 combinator with exactly one caller and one fixed selector, so its `select`
@@ -513,29 +433,11 @@ A `<string, TextChange>`-specific shim could therefore never match a real ref (i
 
 ---
 
-## `diffText` — single contiguous edit detection
+## `diffText`
 
-Source: `packages/react/src/text-adapter.ts` → `diffText`.
+`diffText(oldText, newText, cursorHint?)` lives in `@kyneta/schema`, beside `transformIndex` in the position algebra, and is re-exported here; its algorithm is documented in `@kyneta/schema`'s TECHNICAL.md §"Position algebra". The adapter calls it with `element.selectionStart` as the cursor hint, which places an edit inside a run of identical characters where the user made it: `"aaa"` → `"aaaa"` has four valid answers, and the cursor names the right one, which matters for CRDT convergence when two peers type into the same run.
 
-```ts
-diffText(oldText: string, newText: string, cursorHint: number): TextChange
-```
-
-Given the text before and after an `input` event, produce a `TextChange` describing the one contiguous edit. The `cursorHint` is `element.selectionStart` after the event, used to disambiguate edits within runs of identical characters.
-
-Algorithm:
-
-1. Scan from the left for a common prefix, bounded by `cursorHint`.
-2. Scan from the right for a common suffix, not overlapping the prefix.
-3. The region between prefix and suffix is the edit — produce `TextInstruction[]` with `retain(prefix.length)`, optional `delete(deletedLength)`, optional `insert(inserted)`, `retain(suffix.length)`.
-
-The cursor disambiguation matters because a naive diff of `"aaa"` → `"aaaa"` has four valid answers (insert `a` before each of the four positions). The cursor tells the adapter exactly which position was edited, which matters for CRDT convergence: two concurrent peers inserting into different positions of an `"aaa"` should produce different results post-merge, and the operational-transform / CRDT algebra relies on the actual index.
-
-### What `diffText` is NOT
-
-- **Not a general-purpose string diff.** It assumes a single contiguous edit. `paste-replace` and `multi-cursor-edit` scenarios are out of scope — the `input` event surface covers them one edit at a time (the browser fires multiple events for multi-cursor) or falls back to `update(newText)` via dedicated code paths for complete replacement.
-- **Not symmetric.** It describes how to get from `oldText` to `newText`. Reversing the arguments produces the inverse edit.
-- **Not minimal in the Myers / LCS sense.** It produces *a* single contiguous edit; whether it's the minimal one doesn't matter because the CRDT converges regardless of the specific representation.
+It lives in the schema package because a state-based merge needs it too: announcing a text field that a merge or reset moved as `diffText`'s minimal edit, rather than a replace, keeps every bound element's cursor in place.
 
 ---
 
@@ -609,7 +511,7 @@ The barrel (`src/index.ts`) re-exports a curated subset of `@kyneta/schema`, `@k
 | From | Re-exported |
 |------|-------------|
 | `@kyneta/changefeed` | `CHANGEFEED`, `Changeset` (type) |
-| `@kyneta/schema` | `Schema`, `change`, `applyChanges`, `subscribe`, `subscribeNode`, `BoundSchema`, `Op`, `Plain`, `Ref`, `RRef`, `CommitOptions` (types) |
+| `@kyneta/schema` | `Schema`, `batch`, `applyChanges`, `diffText`, `subscribe`, `subscribeNode`, `BoundSchema`, `Op`, `Plain`, `Ref`, `RRef`, `CommitOptions` (types) |
 | `@kyneta/exchange` | `AsyncQueue`, `createLineDocSchema`, `Connectivity`, `DocChange`, `DocId`, `DocInfo`, `ExchangeParams`, `GatePredicate`, `LineListener`, `LineProtocol`, `PeerIdentityDetails`, `Policy`, `PeerSyncState`, `SyncRef`, `TransportFactory` (types and values as applicable) |
 
 This is a convenience, not a hard coupling — direct imports from the upstream packages work identically.
@@ -623,19 +525,18 @@ This is a convenience, not a hard coupling — direct imports from the upstream 
 | `ExternalStore<T>` | `src/store.ts` | `{ subscribe, getSnapshot }` — the `useSyncExternalStore` contract. |
 | `CallableRef` | `src/store.ts` | Callable + `[CHANGEFEED]` structural type. |
 | `useTracked` | `src/use-tracked.ts` | `(thunk) → T` — auto-tracked reactive read over `@kyneta/reactive`. |
-| `useSelector` | `src/use-selector.ts` | `(ref, select) → T` — `useTracked(() => select(ref))`. |
+| `useSelector` | `src/use-selector.ts` | `(ref, select) → T` — `useTracked` over `() => select(ref)`, memoized on its arguments. |
+| `useChangefeed` | `src/use-changefeed.ts` | `(feed) → T` — `useSyncExternalStore` over `feed.current`. |
 | `createSyncStore` | `src/store.ts` | Pure factory: `SyncRef` → `ExternalStore<PeerSyncState[]>`. |
-| `createNullishStore` | `src/store.ts` | No-op store for `null` / `undefined`. |
 | `TextRefLike` | `src/text-adapter.ts` | Structural shape of a text ref for the adapter — `(() => string) & TextRef & HasChangefeed`. Matches the *loose* `[CHANGEFEED]` surface every interpreted ref carries, so any `Ref<TextSchema>` satisfies it without a cast. |
 | `AttachOptions` | `src/text-adapter.ts` | `{ undo?: "prevent" \| "browser" }`. |
 | `attach` | `src/text-adapter.ts` | Imperative bind: element + textRef → detach. |
-| `diffText` | `src/text-adapter.ts` | Pure: `(oldText, newText, cursorHint) → TextChange`. |
 | `transformSelection` | `src/text-adapter.ts` | Pure: `(start, end, instructions) → { start, end }`. |
 | `ExchangeProvider` | `src/exchange-context.tsx` | React context provider. |
 | `useExchange` | `src/exchange-context.tsx` | Context consumer; throws if absent. |
 | `ExchangeProviderProps` | `src/exchange-context.tsx` | `{ exchange, children }`. |
 | `useDocument` | `src/use-document.ts` | `(bound, docId) → Ref<S>`. |
-| `useValue` | `src/use-value.ts` | `(ref) → Plain<S>`; handles null/undefined. |
+| `useValue` | `src/use-value.ts` | `(ref) → Plain<S>` — `useSelector(ref, readValue)`; handles null/undefined. |
 | `useSyncState` | `src/use-sync-state.ts` | `(doc) → PeerSyncState[]`. |
 | `useDocReady` | `src/use-doc-ready.ts` | `(doc, opts?) → boolean` monotonic latch. |
 | `useText` | `src/use-text.ts` | `(textRef, options?) → React.RefCallback`. |
@@ -647,20 +548,22 @@ This is a convenience, not a hard coupling — direct imports from the upstream 
 | File | Role |
 |------|------|
 | `src/index.ts` | Public barrel + curated re-exports from upstream packages. |
-| `src/store.ts` | Pure store factories: `createSyncStore`, `createNullishStore`, `CallableRef`, `ExternalStore`. (`createChangefeedStore` removed in jj:smkurmok — subsumed by `@kyneta/reactive`.) Zero React imports. |
-| `src/use-tracked.ts` | `useTracked` — `useSyncExternalStore` over a `@kyneta/reactive` computation. |
-| `src/use-selector.ts` | `useSelector` — `useTracked(() => select(ref))`. |
-| `src/text-adapter.ts` | Pure text-adapter: `attach`, `diffText`, `transformSelection`, `TextRefLike`, `AttachOptions`. Zero React imports. |
+| `src/store.ts` | `createSyncStore`, `CallableRef`, `ExternalStore`. Zero React imports. |
+| `src/use-tracked.ts` | `useTracked` — `useSyncExternalStore` over a `@kyneta/reactive` computation, through the refresh gate. |
+| `src/use-selector.ts` | `useSelector` — `useTracked` over a thunk memoized on `(ref, select)`. |
+| `src/use-changefeed.ts` | `useChangefeed` — `useSyncExternalStore` over a feed's `current`, subscribed as widely as `current` reads. |
+| `src/text-adapter.ts` | Pure text-adapter: `attach`, `transformSelection`, `TextRefLike`, `AttachOptions`. Zero React imports. |
 | `src/exchange-context.tsx` | `ExchangeProvider`, `useExchange`, `ExchangeProviderProps`. |
-| `src/use-value.ts` | `useValue` — now `useTracked(() => track(ref))` (derivation; nullish passthrough). |
+| `src/use-value.ts` | `useValue` — `useSelector(ref, readValue)`; nullish passthrough. |
 | `src/use-document.ts` | `useDocument` — memoized `exchange.get(docId, bound)`. |
 | `src/use-sync-state.ts` | `useSyncState` — `useSyncExternalStore` wrapper over `createSyncStore`. |
 | `src/use-doc-ready.ts` | `useDocReady` — sugar over `useDocStatus` (`status !== "pending"`). |
 | `src/use-write-refusal.ts` | `useWriteRefusal` — the document's `writeRefusalFeed`, through `useChangefeed`. |
 | `src/use-text.ts` | `useText` — ref callback wrapping `attach`. |
-| `src/__tests__/store.test.ts` | `createNullishStore` + `createSyncStore`. (The `createChangefeedStore` cases moved to `@kyneta/reactive`'s `reactive.test.ts`.) No React. |
+| `src/__tests__/store.test.ts` | `createSyncStore`. No React. |
+| `src/__tests__/identity.test.tsx` | The identity rule: `useValue` across unrelated renders, `React.memo` over a shared subtree, `useTracked` with a `useCallback` thunk, `useChangefeed` over a composite and over `exchange.peers`. |
 | `src/__tests__/use-selector.test.tsx` | `useSelector` — the todos parsimony scenario (text edit → no re-render; done flip → re-render) + no-deps + dispose. |
-| `src/__tests__/text-adapter.test.ts` | `diffText`, `transformSelection`, `attach` — edit detection, selection rebasing, IME composition, undo interception. |
+| `src/__tests__/text-adapter.test.ts` | `transformSelection`, `attach` — edit detection, selection rebasing, IME composition, undo interception. (`diffText`'s cases live with it in `@kyneta/schema`.) |
 | `src/__tests__/collaborative-text.test.ts` | End-to-end: two textareas bound to concurrently-syncing text refs, verifying cursor stability during remote edits. |
 | `src/__tests__/use-value.test.tsx` | `useValue` hook — React Testing Library against real refs. |
 | `src/__tests__/use-document.test.tsx` | `useDocument` hook — memoization and ref stability. |
@@ -669,8 +572,8 @@ This is a convenience, not a hard coupling — direct imports from the upstream 
 
 ## Testing
 
-Pure-core tests (`store.test.ts`, `text-adapter.test.ts`, `collaborative-text.test.ts`) use `createDoc` + `batch()` directly — no React, no jsdom. They exercise the subscription, snapshot, diff, and selection logic independently of React's render cycle. Hook tests (`*.test.tsx`) use React Testing Library + jsdom and verify the thin shell: that the hook passes the right arguments to `useSyncExternalStore`, that ref callbacks fire on mount/unmount.
+Pure-core tests (`store.test.ts`, `text-adapter.test.ts`, `collaborative-text.test.ts`) use `createDoc` + `batch()` directly — no React, no jsdom. Hook tests (`*.test.tsx`) use React Testing Library + jsdom against real refs, counting renders to pin when a hook re-renders and comparing identities to pin when its value is new.
 
 The `collaborative-text.test.ts` file is the realistic end-to-end: two `Bridge`-connected exchanges, two textareas, concurrent typing, selection-stability assertions across remote edits.
 
-**Tests**: 84 passed, 0 skipped across 7 files (`use-value`: 8, `use-text`: 8, `use-document`: 3, `collaborative-text`: 8, `store`: ~25, `text-adapter`: ~26, `exchange-context`: ~6 — approximate per-file breakdown). Run with `cd packages/react && pnpm exec vitest run`.
+Run with `cd packages/react && pnpm exec vitest run`.
