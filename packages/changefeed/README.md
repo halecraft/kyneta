@@ -142,7 +142,7 @@ Creates a protocol object that never emits changes — useful for static data so
 | `ChangefeedProtocol<S, C>` | `RecursiveChangefeedProtocol<S, C>` (adds `subscribeDescendants`) |
 | `Changefeed<S, C>` | `HasRecursiveChangefeed<S, C>` |
 | `hasChangefeed()` | `hasRecursiveChangefeed()`, `getOrCreateChangefeed()` |
-| `createChangefeed()`, `createCallable()` | `expandMapOpsToLeaves()` |
+| `createChangefeed()`, `createCallable()` | `expandProductMapChanges()` (a struct's map event as field writes, for CRDT bridges) |
 
 Consumers import the contract from `@kyneta/changefeed` directly — schema does **not** re-export contract symbols. The import path tells the truth about the dependency.
 

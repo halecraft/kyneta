@@ -38,7 +38,7 @@ import type {
 } from "@kyneta/schema"
 import {
   containerKey,
-  expandMapOpsToLeaves,
+  expandProductMapChanges,
   extendSchemaPathKey,
   fieldAbsPath,
   KIND,
@@ -482,7 +482,7 @@ export function eventsToOps(
     }
   }
 
-  return expandMapOpsToLeaves(ops, schema)
+  return expandProductMapChanges(ops, schema)
 }
 
 // ---------------------------------------------------------------------------

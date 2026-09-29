@@ -380,18 +380,12 @@ export interface Path {
    * produce positional keys. Memoized on first access.
    */
   readonly key: string
-  /** Each segment's `identity`, in order. */
-  readonly segmentKeys: readonly string[]
   /**
-   * `prefixKeys[i]` is the key of the first `i` segments, so
-   * `prefixKeys[0]` is the root's key and `prefixKeys[length] === key`.
-   *
-   * Built by extending the previous key one segment at a time, never by
-   * cutting `key`. A key joins segments with a separator that a segment's
-   * own text may contain, so splitting one can invent a level that does
-   * not exist.
+   * Each segment's `identity`, in order: what the coordinate and subscriber
+   * tries descend by. `key` joins them with a separator that a segment's own
+   * text may contain, so cutting a key can invent a level that does not exist.
    */
-  readonly prefixKeys: readonly string[]
+  readonly segmentKeys: readonly string[]
   /** The segments of this path. */
   readonly segments: readonly Segment[]
   /** Number of segments. */
@@ -447,7 +441,7 @@ export abstract class AbstractPath implements Path {
   }
 
   /**
-   * Memoized, like `prefixKeys` and `key`. Safe because segments are
+   * Memoized, like `key`. Safe because segments are
    * readonly and a segment's key uses only stable identities (`address.id`,
    * not `address.index`).
    */
@@ -457,23 +451,10 @@ export abstract class AbstractPath implements Path {
     return this._segmentKeys
   }
 
-  private _prefixKeys: readonly string[] | undefined
-  get prefixKeys(): readonly string[] {
-    if (this._prefixKeys === undefined) {
-      const keys = this.segmentKeys
-      const prefixes: string[] = [""]
-      let prefix = ""
-      for (let i = 0; i < keys.length; i++) {
-        prefix = i === 0 ? keys[i] : `${prefix}\0${keys[i]}`
-        prefixes.push(prefix)
-      }
-      this._prefixKeys = prefixes
-    }
-    return this._prefixKeys
-  }
-
+  private _key: string | undefined
   get key(): string {
-    return this.prefixKeys[this.segments.length]
+    this._key ??= this.segmentKeys.join("\0")
+    return this._key
   }
 
   read(store: unknown): unknown {

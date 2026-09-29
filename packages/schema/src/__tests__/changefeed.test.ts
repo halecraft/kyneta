@@ -10,7 +10,7 @@ import type {
 import type { Op } from "../index.js"
 import {
   batch,
-  expandMapOpsToLeaves,
+  expandProductMapChanges,
   hasRecursiveChangefeed,
   interpret,
   observation,
@@ -21,6 +21,7 @@ import {
   writable,
 } from "../index.js"
 import { RawPath } from "../path.js"
+import { projectChange } from "../subtree-effect.js"
 
 /** Narrowed helper: return the key variant of RawSegment. */
 function keySeg(
@@ -1039,10 +1040,10 @@ describe("changefeed: edge cases", () => {
 })
 
 // ===========================================================================
-// expandMapOpsToLeaves — container→leaf op expansion
+// expandProductMapChanges — a struct's map event as field writes
 // ===========================================================================
 
-describe("expandMapOpsToLeaves", () => {
+describe("expandProductMapChanges", () => {
   // Schema for tests: settings is a product (expand), peers is a map (preserve)
   const testSchema = Schema.struct({
     title: Schema.text(),
@@ -1060,14 +1061,14 @@ describe("expandMapOpsToLeaves", () => {
     peers: Schema.record(Schema.boolean()),
   })
 
-  it("map op at product path → expanded to leaf replace ops", () => {
+  it("map op at product path → expanded to field replace ops", () => {
     const ops: Op<MapChange>[] = [
       {
         path: RawPath.empty.field("settings"),
         change: { type: "map", set: { a: true } },
       },
     ]
-    const result = expandMapOpsToLeaves(ops, testSchema)
+    const result = expandProductMapChanges(ops, testSchema)
     expect(result).toHaveLength(1)
     expect(result[0].path.key).toBe(
       RawPath.empty.field("settings").field("a").key,
@@ -1075,14 +1076,14 @@ describe("expandMapOpsToLeaves", () => {
     expect(result[0].change).toEqual({ type: "replace", value: true })
   })
 
-  it("map op with multiple keys at product path → N leaf replace ops", () => {
+  it("map op with multiple keys at product path → N field replace ops", () => {
     const ops: Op<MapChange>[] = [
       {
         path: RawPath.empty.field("settings"),
         change: { type: "map", set: { a: true, b: 0, c: "hi" } },
       },
     ]
-    const result = expandMapOpsToLeaves(ops, testSchema)
+    const result = expandProductMapChanges(ops, testSchema)
     expect(result).toHaveLength(3)
     const keys = result.map(r => keySeg(r.path, 1).key).sort()
     expect(keys).toEqual(["a", "b", "c"])
@@ -1091,14 +1092,14 @@ describe("expandMapOpsToLeaves", () => {
     }
   })
 
-  it("map op with delete keys at product path → leaf replace ops with undefined", () => {
+  it("map op with delete keys at product path → field replace ops with undefined", () => {
     const ops: Op<MapChange>[] = [
       {
         path: RawPath.empty.field("settings"),
         change: { type: "map", delete: ["x", "y"] },
       },
     ]
-    const result = expandMapOpsToLeaves(ops, testSchema)
+    const result = expandProductMapChanges(ops, testSchema)
     expect(result).toHaveLength(2)
     expect(result[0].change).toEqual({ type: "replace", value: undefined })
     expect(result[1].change).toEqual({ type: "replace", value: undefined })
@@ -1115,7 +1116,7 @@ describe("expandMapOpsToLeaves", () => {
         change: { type: "sequence", instructions: [{ insert: ["a"] }] },
       },
     ]
-    const result = expandMapOpsToLeaves(ops, testSchema)
+    const result = expandProductMapChanges(ops, testSchema)
     expect(result).toHaveLength(2)
     expect(result).toEqual(ops)
   })
@@ -1135,11 +1136,11 @@ describe("expandMapOpsToLeaves", () => {
         change: { type: "increment", amount: 1 },
       },
     ]
-    const result = expandMapOpsToLeaves(ops, testSchema)
+    const result = expandProductMapChanges(ops, testSchema)
     expect(result).toHaveLength(3)
     // text passes through
     expect(result[0].change.type).toBe("text")
-    // map expanded to leaf replace (settings is a product)
+    // map split into a field replace (settings is a product)
     expect(result[1].path.key).toBe(
       RawPath.empty.field("settings").field("dark").key,
     )
@@ -1155,20 +1156,20 @@ describe("expandMapOpsToLeaves", () => {
         change: { type: "map", set: { alice: true } },
       },
     ]
-    const result = expandMapOpsToLeaves(ops, testSchema)
+    const result = expandProductMapChanges(ops, testSchema)
     expect(result).toHaveLength(1)
     expect(result[0].path.key).toBe(RawPath.empty.field("peers").key)
     expect(result[0].change.type).toBe("map")
   })
 
-  it("map op at root path (length 0) → always expanded (_props)", () => {
+  it("map op at the root expands like any struct's", () => {
     const ops: Op<MapChange>[] = [
       {
         path: RawPath.empty,
-        change: { type: "map", set: { darkMode: true, theme: "dark" } },
+        change: { type: "map", set: { count: 1, peers: {} } },
       },
     ]
-    const result = expandMapOpsToLeaves(ops, testSchema)
+    const result = expandProductMapChanges(ops, testSchema)
     expect(result).toHaveLength(2)
     for (const r of result) {
       expect(r.change.type).toBe("replace")
@@ -1186,7 +1187,7 @@ describe("expandMapOpsToLeaves", () => {
         change: { type: "map", set: { bob: true } },
       },
     ]
-    const result = expandMapOpsToLeaves(ops, testSchema)
+    const result = expandProductMapChanges(ops, testSchema)
     expect(result).toHaveLength(2)
     // settings (product) → expanded
     expect(result[0].change.type).toBe("replace")
@@ -1198,6 +1199,38 @@ describe("expandMapOpsToLeaves", () => {
     expect(result[1].path.key).toBe(RawPath.empty.field("peers").key)
   })
 
+  it("each field write is the map change projected onto that field", () => {
+    const change: MapChange = {
+      type: "map",
+      set: { dark: true, x: "a" },
+      delete: ["y"],
+    }
+    const settings = RawPath.empty.field("settings")
+    const result = expandProductMapChanges(
+      [{ path: settings, change }],
+      testSchema,
+    )
+    for (const op of result) {
+      const relative = op.path.segments.slice(settings.length)
+      expect(op.change).toEqual(projectChange(change, relative))
+    }
+    expect(result.map(op => op.path.format())).toEqual([
+      "settings.dark",
+      "settings.x",
+      "settings.y",
+    ])
+  })
+
+  it("a map op at a path the schema does not fit passes through", () => {
+    const ops: Op<MapChange>[] = [
+      {
+        path: RawPath.empty.field("nowhere"),
+        change: { type: "map", set: { a: true } },
+      },
+    ]
+    expect(expandProductMapChanges(ops, testSchema)).toEqual(ops)
+  })
+
   it("map op at nested record path (record inside list) → preserved", () => {
     const ops: Op<MapChange>[] = [
       {
@@ -1205,7 +1238,7 @@ describe("expandMapOpsToLeaves", () => {
         change: { type: "map", set: { alice: true } },
       },
     ]
-    const result = expandMapOpsToLeaves(ops, testSchema)
+    const result = expandProductMapChanges(ops, testSchema)
     expect(result).toHaveLength(1)
     expect(result[0].change.type).toBe("map")
   })

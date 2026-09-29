@@ -11,7 +11,7 @@ import { describe, expect, it } from "vitest"
 import {
   batch,
   createDoc,
-  expandMapOpsToLeaves,
+  expandProductMapChanges,
   exportSince,
   invert,
   json,
@@ -74,7 +74,7 @@ describe("a clear in the plain algebra", () => {
   })
 })
 
-describe("expandMapOpsToLeaves", () => {
+describe("expandProductMapChanges", () => {
   const Doc = Schema.struct({
     point: Schema.struct({ x: Schema.number(), y: Schema.number() }),
   })
@@ -82,12 +82,12 @@ describe("expandMapOpsToLeaves", () => {
 
   it("refuses a clear at a product path", () => {
     expect(() =>
-      expandMapOpsToLeaves([{ path: point, change: mapClearChange() }], Doc),
+      expandProductMapChanges([{ path: point, change: mapClearChange() }], Doc),
     ).toThrow(/only a record can be cleared/)
   })
 
   it("expands a field named in both lists to its set value, as step does", () => {
-    const ops = expandMapOpsToLeaves(
+    const ops = expandProductMapChanges(
       [{ path: point, change: mapChange(own({ x: 5 }), ["x"]) }],
       Doc,
     )

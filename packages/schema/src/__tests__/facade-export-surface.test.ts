@@ -51,11 +51,11 @@ describe("the changefeed observation layer's internals are not public", () => {
   // the populated protocol outside this package, even though nothing does today.
   // The other three have live external importers — `populated` broadly,
   // `populatedFeed` in @kyneta/exchange's doc-status, and
-  // `expandMapOpsToLeaves` in both CRDT change-mapping bridges.
+  // `expandProductMapChanges` in both CRDT change-mapping bridges.
   it("the populated protocol and the map-op expander stay public", () => {
     expect(schema.POPULATED).toBeDefined()
     expect(typeof schema.populated).toBe("function")
     expect(typeof schema.populatedFeed).toBe("function")
-    expect(typeof schema.expandMapOpsToLeaves).toBe("function")
+    expect(typeof schema.expandProductMapChanges).toBe("function")
   })
 })

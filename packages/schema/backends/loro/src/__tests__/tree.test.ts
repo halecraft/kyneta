@@ -396,15 +396,9 @@ describe("Schema.tree on Loro: subscribe parity", () => {
       ).instructions[0],
     ).toMatchObject({ action: "create", target: id })
 
-    // The per-node data op may be a MapChange or expanded ReplaceChange
-    // depending on the substrate's `expandMapOpsToLeaves` behavior.
-    const dataOp = ops.find(
-      op =>
-        op.path.length >= 2 &&
-        (op.change.type === "map" ||
-          (op.change.type === "replace" &&
-            (op.change as unknown as { value: unknown }).value === "x")),
-    )
-    expect(dataOp).toBeDefined()
+    // An authored write is announced as written: the initial data is one
+    // MapChange at the node, as on the plain substrate.
+    const dataOp = ops.find(op => op.change.type === "map")
+    expect(dataOp?.path.length).toBe(2)
   })
 })

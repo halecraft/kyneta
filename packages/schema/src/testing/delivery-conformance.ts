@@ -10,11 +10,13 @@
 //      and flushes once, so a payload touching N paths is one flush over N
 //      ops. That path is driven by the CRDT event bridges, which is exactly
 //      what a plain-only test misses.
-//   2. Substrates legitimately disagree about op *shape*. `expandMapOpsToLeaves`
-//      turns a product's MapChange into per-key ops on the CRDT bridges, while
-//      the plain substrate dispatches per field directly.
+//   2. Substrates disagree about how ops are grouped into changesets and
+//      ordered within a merge, since a CRDT bridge reconstructs them from a
+//      diff. They agree on grain (the Grain invariant): the bridges split a
+//      struct's map event into field writes (`expandProductMapChanges`), as
+//      `diffOps` does for ephemeral and as a local writer writes.
 //
-// So this suite asserts *invariants*, never literal op lists. Nine hold on
+// So this suite asserts *invariants*, never literal op lists. Ten hold on
 // every substrate:
 //
 //   Cardinality   one changeset per subscribed key per flush
@@ -29,6 +31,8 @@
 //                 exactly when an op the root received lies in its subtree
 //   Delivery      a subscriber hears a write exactly when its read changes,
 //                 coarse writes over it included
+//   Grain         ops come as a local writer made them: a write to a field
+//                 is a change at the field, never at its struct
 //   Signal        the substrate reports a local update iff the ops were
 //                 written here, and then they are not a replay; after
 //                 `commitPending`, an export reports none
@@ -41,7 +45,7 @@ import type { Changeset } from "@kyneta/changefeed"
 import { describe, expect, it } from "vitest"
 import type { Op } from "../changefeed.js"
 import { batch } from "../facade/batch.js"
-import { subscribe } from "../facade/observe.js"
+import { subscribe, subscribeNode } from "../facade/observe.js"
 import { hasSubstrate, SUBSTRATE } from "../native.js"
 import { RawPath } from "../path.js"
 import type { Ref } from "../ref.js"
@@ -567,6 +571,23 @@ export function deliveryConformance(
               else expect(read, field).toBe(reads[field])
             }
           }
+        })
+
+        // =================================================================
+        // Grain
+        // =================================================================
+
+        it("grain: a write to a field is a change at the field, not at its struct", () => {
+          const env = factory()
+          const atStruct: unknown[] = []
+          const atField: unknown[] = []
+          subscribeNode(env.doc.outer, cs => atStruct.push(...cs.changes))
+          subscribeNode(env.doc.outer.x, cs => atField.push(...cs.changes))
+
+          driver.write(env, d => d.outer.x.set(4))
+
+          expect(atField).toHaveLength(1)
+          expect(atStruct).toHaveLength(0)
         })
 
         // =================================================================

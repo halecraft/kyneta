@@ -472,41 +472,30 @@ describe("dead address propagation", () => {
 // CoordinateTrie
 // ===========================================================================
 
-describe("segmentKeys and prefixKeys", () => {
+describe("segmentKeys", () => {
   // A segment whose own text contains the key separator: cutting `key` at
   // separators would invent a level here.
   const tricky = "a\0b"
 
-  function expectPrefixesMatchSlices(path: {
-    readonly length: number
-    readonly prefixKeys: readonly string[]
-    readonly key: string
-    slice(start: number, end?: number): { readonly key: string }
-  }): void {
-    expect(path.prefixKeys).toHaveLength(path.length + 1)
-    for (let i = 0; i <= path.length; i++) {
-      expect(path.prefixKeys[i]).toBe(path.slice(0, i).key)
-    }
-    expect(path.prefixKeys[path.length]).toBe(path.key)
-  }
-
-  it("equal each slice's key on a raw path", () => {
+  it("are each segment's identity on a raw path, and prefix every slice's", () => {
     const path = RawPath.empty.field(tricky).entry("k").item(3).field("x")
     expect(path.segmentKeys).toEqual([tricky, "k", "3", "x"])
-    expectPrefixesMatchSlices(path)
+    for (let i = 0; i <= path.length; i++) {
+      expect(path.slice(0, i).segmentKeys).toEqual(path.segmentKeys.slice(0, i))
+    }
+    expect(path.key).toBe(path.segmentKeys.join("\0"))
   })
 
-  it("equal each slice's key on an addressed path, keying an index by its id", () => {
+  it("key an index by its address id on an addressed path", () => {
     const root = new AddressedPath([], new CoordinateTrie())
     const path = root.field(tricky).item(0).entry("k")
     const index = path.segments[1]
     if (index.kind !== "index") throw new Error("expected an index address")
     expect(path.segmentKeys).toEqual([tricky, `@${index.id}`, "k"])
-    expectPrefixesMatchSlices(path)
   })
 
-  it("the root has one prefix, the empty key", () => {
-    expect(RawPath.empty.prefixKeys).toEqual([""])
+  it("the root has none, and the empty key", () => {
+    expect(RawPath.empty.segmentKeys).toEqual([])
     expect(RawPath.empty.key).toBe("")
   })
 })

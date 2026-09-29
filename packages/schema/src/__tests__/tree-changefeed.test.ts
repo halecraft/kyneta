@@ -10,6 +10,7 @@ import type { Changeset } from "@kyneta/changefeed"
 import { describe, expect, it } from "vitest"
 import type { Op } from "../basic/index.js"
 import { batch, createDoc, Schema, subscribe } from "../basic/index.js"
+import type { MapChange } from "../change.js"
 
 const Outline = Schema.struct({
   tree: Schema.tree(Schema.struct({ label: Schema.string() })),
@@ -25,7 +26,7 @@ function isTreeOp(op: Op): op is Op & {
   return op.change.type === "tree"
 }
 
-function isMapOp(op: Op): op is Op & { change: { type: "map" } } {
+function isMapOp(op: Op): op is Op & { change: MapChange } {
   return op.change.type === "map"
 }
 
@@ -60,12 +61,10 @@ describe("subscribe(doc) on a doc with Schema.tree", () => {
       target: id,
     })
 
-    // MapChange (initial data) or expanded ReplaceChange — accept either
-    // shape (expansion is governed by `expandMapOpsToLeaves`).
-    const dataOps = ops.filter(
-      op => isMapOp(op) || (isReplaceOp(op) && op.change.value === "x"),
-    )
-    expect(dataOps.length).toBeGreaterThanOrEqual(1)
+    // The initial data is written as one MapChange at the node.
+    const dataOps = ops.filter(isMapOp)
+    expect(dataOps).toHaveLength(1)
+    expect(dataOps[0]?.change.set).toEqual({ label: "x" })
   })
 
   it("receives writes to per-node fields (subscribe-after-create symmetry)", () => {

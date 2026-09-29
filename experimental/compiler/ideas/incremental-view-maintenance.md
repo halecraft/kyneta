@@ -165,10 +165,10 @@ for (const item of collection) {
 **Subscription architecture (precise, not firehose):**
 
 1. `collection[CHANGEFEED].subscribe` — node-level structural changes
-1. Per item: subscribe to exactly the leaf refs that `itemDeps` returns (e.g. `recipe.name`, `recipe.vegetarian` — NOT `subscribeTree`)
+1. Per item: subscribe to exactly the leaf refs that `itemDeps` returns (e.g. `recipe.name`, `recipe.vegetarian` — NOT `subscribeDescendants`)
 1. Per external dep: subscribe to each external ref
 
-The compiler determines the exact per-item subscriptions at compile time by analyzing which fields of the loop variable appear in the predicate expression. This avoids the notification storm that `subscribeTree` would cause — the runtime subscribes to precisely the refs that matter.
+The compiler determines the exact per-item subscriptions at compile time by analyzing which fields of the loop variable appear in the predicate expression. This avoids the notification storm that `subscribeDescendants` would cause — the runtime subscribes to precisely the refs that matter.
 
 When an item-dep fires: re-evaluate predicate for that one item. O(1). When an external dep fires: re-evaluate predicate for all items. O(n). When the collection changes structurally: evaluate predicate for new items, manage per-item subscriptions. O(k).
 
@@ -520,7 +520,7 @@ When items are deleted:
 
 **Source 2: Per-item field changes** — targeted `subscribe` on exactly the leaf refs that matter
 
-For each source item `i`, the runtime subscribes to the refs returned by `itemDeps(listRef.at(i))`. For example, if the predicate uses `recipe.name()` and `recipe.vegetarian()`, the runtime subscribes to `recipe.name[CHANGEFEED].subscribe` and `recipe.vegetarian[CHANGEFEED].subscribe`. NOT `subscribeTree`. NOT the whole item. Just the exact leaves.
+For each source item `i`, the runtime subscribes to the refs returned by `itemDeps(listRef.at(i))`. For example, if the predicate uses `recipe.name()` and `recipe.vegetarian()`, the runtime subscribes to `recipe.name[CHANGEFEED].subscribe` and `recipe.vegetarian[CHANGEFEED].subscribe`. NOT `subscribeDescendants`. NOT the whole item. Just the exact leaves.
 
 When any item-dep fires for source item `i`:
 
@@ -543,13 +543,11 @@ When any external dep fires (e.g. `filterText.set("new value")`):
 1. Manage per-item subscriptions: establish for newly-visible items, tear down for newly-hidden items
 1. This is O(n) — but only fires when the external dep changes, not on every collection delta
 
-### 6.4. Why Not subscribeTree
+### 6.4. Why Not subscribeDescendants
 
-`ComposedChangefeed.subscribeTree` on a sequence ref subscribes to ALL descendant changes — every field of every item. For a list of 100 recipes with 5 fields each, that's 500 subscriptions. Every keystroke in any recipe name, every ingredient edit, every vegetarian toggle fires through the tree subscriber.
+`subscribeDescendants` on a sequence ref hears ALL descendant changes: every field of every item. It is one subscription in the subscriber trie, and delivery reaches it in O(depth) per op, but every keystroke in any recipe name, every ingredient edit, every vegetarian toggle is handed to it.
 
-The filteredListRegion's predicate may only depend on 2 of those 5 fields. Using `subscribeTree` would process 3x more notifications than necessary, each one requiring a path-match check to determine relevance.
-
-Worse: `subscribeTree`'s `handleStructuralChange` tears down ALL per-item subscriptions and rebuilds them on every structural change (see `with-changefeed.ts` L506-524). For a 100-item list, that's 500 unsubscribes + 500 re-subscribes on every add/remove.
+The filteredListRegion's predicate may only depend on 2 of those 5 fields. Using `subscribeDescendants` would process 3x more notifications than necessary, each one requiring a path-match check to determine relevance.
 
 The compiler knows at compile time which fields the predicate touches. The runtime subscribes to exactly those fields. This is the advantage of a compiler over a runtime-only approach: **the subscription set is determined by static analysis, not by runtime observation.**
 

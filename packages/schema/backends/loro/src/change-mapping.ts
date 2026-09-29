@@ -37,7 +37,7 @@ import type {
 } from "@kyneta/schema"
 import {
   containerKey,
-  expandMapOpsToLeaves,
+  expandProductMapChanges,
   extendSchemaPathKey,
   fieldAbsPath,
   isMapSchema,
@@ -743,7 +743,8 @@ function counterChangeToDiff(change: IncrementChange): CounterDiff {
  * and the Loro Diff to a kyneta Change.
  *
  * @param batch - The Loro event batch from doc.subscribe()
- * @param schema - The root document schema (used for leaf expansion)
+ * @param schema - The root document schema (to resolve paths and split a
+ *   struct's map event into field writes)
  */
 export function batchToOps(
   batch: LoroEventBatch,
@@ -768,7 +769,7 @@ export function batchToOps(
     }
   }
 
-  return expandMapOpsToLeaves(ops, schema)
+  return expandProductMapChanges(ops, schema)
 }
 
 // ---------------------------------------------------------------------------

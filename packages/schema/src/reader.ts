@@ -270,9 +270,10 @@ export function syncShadow(target: PlainState, source: PlainState): void {
  * construction; it says nothing about the store, which takes the payload and
  * later mutates it. A merge's changesets reach subscribers like any other, so
  * an uncopied replay payload is a live view of the store handed to whoever
- * subscribed. The cost is near zero in practice: `expandMapOpsToLeaves` turns a
- * merge into per-key leaf replaces, which are overwhelmingly scalars, and a
- * scalar short-circuits in ~1ns.
+ * subscribed. The cost is near zero in practice: a merge is announced at the
+ * store's grain (field and key writes, `expandProductMapChanges` and
+ * `diffOps`), whose payloads are overwhelmingly scalars, and a scalar
+ * short-circuits in ~1ns.
  *
  * No batch is exempt. `projection` batches once were, on the grounds that a
  * decay tick's payload was the substrate's own shadow passed to wake

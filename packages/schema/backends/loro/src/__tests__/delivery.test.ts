@@ -4,8 +4,8 @@
 // through it, so this is not re-testing schema's logic. What it pins is that
 // Loro's event bridge feeds that engine the same way the plain substrate does,
 // for what it takes in from a peer and for a write made on the LoroDoc
-// directly. Both are announced through ctx.announce, with an op list that
-// expandMapOpsToLeaves may have spread across many paths.
+// directly. Both are announced through ctx.announce, with a struct's map
+// event split into field writes by expandProductMapChanges.
 
 import { batch, createRef, unwrap } from "@kyneta/schema"
 import {

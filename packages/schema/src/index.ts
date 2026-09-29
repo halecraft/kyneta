@@ -94,7 +94,7 @@ export type {
 } from "./changefeed.js"
 // Changefeed — schema-specific extensions (contract symbols live in @kyneta/changefeed)
 export {
-  expandMapOpsToLeaves,
+  expandProductMapChanges,
   getOrCreateChangefeed,
   hasRecursiveChangefeed,
 } from "./changefeed.js"

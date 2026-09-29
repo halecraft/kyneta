@@ -4,9 +4,10 @@
 // Pure. A state-based merge (the ephemeral substrate's join, a decay sweep, a
 // plain substrate's reset) has no ops of its own: it moves σ from one state
 // to another. Subscribers, addresses and cached reads all key off ops, and
-// delivery walks up from a changed path, never down. So the announcement has
-// to be as fine as the store, one op per field, record key or register that
-// moved, or a subscriber below a coarse op never hears the change.
+// whatever lies below an op is taken as rewritten. So the announcement has to
+// be as fine as the store, one op per field, record key or register that
+// moved, or everything below a coarse op would rebuild and notify whether or
+// not it moved.
 
 import type { ChangeBase } from "./change.js"
 import {

@@ -484,7 +484,8 @@ describe("changefeed fires on merge", () => {
     expect(localOps[0].path.format()).toBe("items[0].done")
     expect(localOps[0].change.type).toBe("replace")
 
-    // Sync to B — the event bridge produces ops via batchToOps + expandMapOpsToLeaves
+    // Sync to B — the event bridge splits the item's map event into field
+    // writes (batchToOps + expandProductMapChanges)
     // Subscribe to B's field changefeed to capture the inbound ops indirectly
     const itemB = [...docB.items][0] as any
     const fieldChanges: unknown[] = []
@@ -537,10 +538,8 @@ describe("changefeed fires on merge", () => {
   })
 
   it("record field changefeed fires on merge (dynamic key insertion)", () => {
-    // MapSchema (record) fields must receive MapChange at their own path
-    // so the map changefeed's handleStructuralChange wires dynamic child
-    // subscriptions. expandMapOpsToLeaves must NOT expand MapChange ops
-    // at map paths — only at product paths.
+    // A record's keys are written at the record, so its map event stays a
+    // MapChange there; expandProductMapChanges splits only a struct's.
     const substrateA = loroSubstrateFactory.create(TestSchema)
     const docA = interpretSubstrate(TestSchema, substrateA)
 

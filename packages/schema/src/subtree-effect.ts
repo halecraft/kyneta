@@ -85,8 +85,8 @@ export function planSubtreeEffect(change: ChangeBase): SubtreeEffect {
  *
  * This is how a subscriber below a coarse write hears it: delivery hands it
  * the projection, at its own relative root, while the op itself, and every
- * ancestor's changeset, stay as written. A removed key reads as
- * `replace(undefined)` here exactly as `expandMapOpsToLeaves` expands it.
+ * ancestor's changeset, stay as written. `expandProductMapChanges` uses the
+ * same projection to split a struct's map event into field writes.
  */
 export function projectChange(
   change: ChangeBase,

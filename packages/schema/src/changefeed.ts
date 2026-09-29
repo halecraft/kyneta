@@ -7,7 +7,7 @@
 //
 // What lives here:
 // - Op<C> — addressed delta (requires Path from interpret.ts)
-// - expandMapOpsToLeaves() — map op expansion (requires Op, ReplaceChange)
+// - expandProductMapChanges() — a struct's map event as field writes
 // - RecursiveChangefeedProtocol<S, C> — tree-level observation (requires Op)
 // - HasRecursiveChangefeed<S, C> — marker for tree-changefeed carriers
 // - hasRecursiveChangefeed() — type guard for tree-changefeed carriers
@@ -20,16 +20,11 @@ import {
   type Changeset,
   hasChangefeed,
 } from "@kyneta/changefeed"
-import {
-  type MapChange,
-  mapChangeEffects,
-  type ReplaceChange,
-  replaceChange,
-  trustAsOwned,
-} from "./change.js"
-import { pathSchema } from "./fold-path.js"
+import { isMapChange } from "./change.js"
+import { walkPath } from "./fold-path.js"
 import type { Path } from "./interpret.js"
 import { KIND, type Schema as SchemaNode } from "./schema.js"
+import { planSubtreeEffect, projectChange } from "./subtree-effect.js"
 
 // ---------------------------------------------------------------------------
 // Re-exports from @kyneta/changefeed used by schema internals
@@ -64,123 +59,50 @@ export interface Op<C extends ChangeBase = ChangeBase> {
 // ---------------------------------------------------------------------------
 
 /**
- * Expand container-level map ops into leaf-level replace ops, informed
- * by the document schema.
+ * Split each `MapChange` at a struct into the field writes it makes.
  *
- * CRDT substrates (Loro, Yjs) fire events at container boundaries —
- * a map/struct container fires a single event with per-key diffs.
- * Products (structs) and maps (records) both produce `MapChange`, but
- * their changefeed contracts differ:
+ * Every announcer states a change at the grain the store keeps it, and a
+ * struct keeps its fields one by one. A writer changes a field with a write at
+ * the field; the plain substrate replays that, and `diffOps` announces it for
+ * ephemeral. Loro and Yjs keep a struct as one map container, so their event
+ * bridges see a map change at the struct; they run this before announcing, so
+ * that on every substrate a write to a field is a change at the field and a
+ * struct-level `subscribeNode` never fires for it.
  *
- * - **Product** (fixed keys): expand `MapChange` → per-key `ReplaceChange`
- *   at child paths. The product changefeed wires static child listeners.
- * - **Map** (dynamic keys): preserve `MapChange` at the map's own path.
- *   The map changefeed needs the structural event for dynamic subscription
- *   management (`handleStructuralChange`).
+ * A `MapChange` whose path resolves to a product becomes, for each field in
+ * its scope (`planSubtreeEffect`), the change as seen from that field
+ * (`projectChange`): a `replace` of the value written there, or
+ * `replace(undefined)` for a removed key. Delivery reaches the subscribers
+ * below a map change by the same two functions. Every other op, a record's
+ * map change included, passes through: a writer writes a record's keys at the
+ * record.
  *
- * The schema determines which case applies. `pathSchema` walks the
- * schema tree to the op's path; the structural kind there decides.
- *
- * Root path (length 0) is always expanded — this covers `_props` scalar
- * fields whose path was stripped by the Loro event bridge.
- *
- * Non-map ops (text, sequence, counter, tree) pass through unchanged.
+ * A clear at a product is refused: its fields are declared, and nothing
+ * clears them.
  */
-export function expandMapOpsToLeaves(
+export function expandProductMapChanges(
   ops: readonly Op[],
   schema: SchemaNode,
-): Op<ReplaceChange | ChangeBase>[] {
-  const result: Op<ReplaceChange | ChangeBase>[] = []
-
-  for (const op of ops) {
-    if (op.change.type !== "map") {
-      result.push(op)
-      continue
+): Op[] {
+  return ops.flatMap(op => {
+    if (!isMapChange(op.change)) return [op]
+    const walk = walkPath(undefined, schema, op.path)
+    if (walk.stop !== "complete" || walk.schema[KIND] !== "product") {
+      return [op]
     }
-
-    // Determine whether to expand based on the schema kind at the op's path.
-    // Products → expand. Maps / Sets / Trees → preserve (defense-in-depth;
-    // sets emit SetChange, trees emit TreeChange — MapChange at those
-    // paths is unreachable post-refactor). Root (length 0) → always expand.
-    if (op.path.length > 0) {
-      const kindAtPath = resolveSchemaKindAtPath(schema, op.path)
-      if (
-        kindAtPath === "map" ||
-        kindAtPath === "set" ||
-        kindAtPath === "tree"
-      ) {
-        result.push(op)
-        continue
-      }
-    }
-
-    const change = op.change as MapChange
-    // A product's fields are declared, so there is nothing a clear could
-    // reach that a delete of each field would not name.
-    if (change.clear) {
+    const effect = planSubtreeEffect(op.change)
+    // Only a clear rewrites a map change's whole scope.
+    if (effect === "all") {
       throw new Error(
-        `expandMapOpsToLeaves: a clear at a product path [${op.path.format()}]; only a record can be cleared.`,
+        `expandProductMapChanges: a clear at the struct "${op.path.format()}"; only a record can be cleared.`,
       )
     }
-
-    // Read through `mapChangeEffects`, so a key named in both lists ends up
-    // set here exactly as `stepMap` leaves it.
-    const { set, remove } = mapChangeEffects(change, [])
-    for (const key of remove) {
-      result.push({
-        path: op.path.field(key),
-        change: replaceChange(undefined),
-      })
-    }
-    for (const [key, value] of Object.entries(set)) {
-      result.push({
-        path: op.path.field(key),
-        // The op's own payload, handed down whole to the leaf it names.
-        change: replaceChange(trustAsOwned(value)),
-      })
-    }
-  }
-
-  return result
-}
-
-/**
- * Walk the schema tree to the given path and return the structural kind.
- *
- * Returns `"product"` for structs (expand), `"map"` for records (preserve),
- * `"set"` for sets (preserve as safety fallback), `"tree"` for `Schema.tree`
- * (preserve), or `"other"` as a fallback (expand as safe default).
- *
- * **Set and Tree handling:** Sets and trees emit their own vocabulary
- * (`SetChange`, `TreeChange`) via the writable transformer, so a
- * `MapChange` reaching one of those paths is unreachable post-refactor.
- * These returns exist so the caller (`expandMapOpsToLeaves`) preserves
- * rather than expands in the defense-in-depth case — splitting a
- * MapChange into per-key replaces at a set/tree path would be incorrect.
- *
- * Pure function — no I/O, no mutation.
- */
-function resolveSchemaKindAtPath(
-  schema: SchemaNode,
-  path: Path,
-): "product" | "map" | "set" | "tree" | "other" {
-  try {
-    // Sum-interior paths return the sum schema (handled structurally by
-    // foldPath's short-circuit) — the kind classifier maps "sum" to
-    // "other" since the variant cannot be determined without a value.
-    // The try/catch still covers structural mismatches (unknown field,
-    // index-on-non-sequence): `walkPath` reports those as a `mismatch`, and
-    // `foldPath` turns a mismatch into a throw.
-    const current = pathSchema(schema, path)
-    if (current[KIND] === "product") return "product"
-    if (current[KIND] === "map") return "map"
-    if (current[KIND] === "set") return "set"
-    if (current[KIND] === "tree") return "tree"
-    return "other"
-  } catch {
-    // Schema walk failed (e.g. unknown field) — safe fallback
-    return "other"
-  }
+    if (effect === "none") return []
+    return effect.keys.map(key => {
+      const path = op.path.field(key)
+      return { path, change: projectChange(op.change, path.segments.slice(-1)) }
+    })
+  })
 }
 
 // ---------------------------------------------------------------------------
