@@ -124,6 +124,32 @@ describe("Exchange storage hydration", () => {
     await exchange.shutdown()
   })
 
+  it("a read taken before the load completes gives way to the loaded state", async () => {
+    const sharedData: InMemoryStoreData = createInMemoryStoreData()
+    const seedBackend = new InMemoryStore(sharedData)
+    await seedBackend.append("doc-1", makeMetaRecord(), UNAUTHORED)
+    await seedBackend.append(
+      "doc-1",
+      makePlainEntirety({ title: "stored", count: 42 }),
+      UNAUTHORED,
+    )
+
+    const exchange = createExchange({
+      principal: "peer-1",
+      store: createInMemoryStore({ sharedData }),
+    })
+    const doc = exchange.get("doc-1", TestDoc)
+    const before = doc()
+    expect(before).toEqual({ title: "", count: 0 })
+
+    await exchange.flush()
+
+    expect(doc()).not.toBe(before)
+    expect(doc()).toEqual({ title: "stored", count: 42 })
+
+    await exchange.shutdown()
+  })
+
   it("exchange.get() returns ref synchronously even with storage", () => {
     const exchange = createExchange({
       principal: "peer-1",

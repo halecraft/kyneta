@@ -378,6 +378,22 @@ describe("state substrate tick() decay sweep", () => {
     unsub()
   })
 
+  it("a read taken before a tick reflects the expired fields after it", () => {
+    const base = Date.now()
+    const substrate = makeSubstrate(base)
+    const ref = makeRef(substrate)
+    const before = ref()
+    expect(before).toEqual({ presence: "online", name: "alice" })
+
+    substrate.tick?.(base + DECAY_MS + 1)
+
+    const after = ref()
+    expect(after).not.toBe(before)
+    expect(after.presence).toBe("")
+    expect(after.name).toBe("alice")
+    expect(after).toEqual(substrate.reader.read(RawPath.empty))
+  })
+
   it("a decay's changeset is marked replay: no writer here authored it", () => {
     const base = Date.now()
     const substrate = makeSubstrate(base)

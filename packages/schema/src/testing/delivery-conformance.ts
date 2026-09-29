@@ -14,14 +14,18 @@
 //      turns a product's MapChange into per-key ops on the CRDT bridges, while
 //      the plain substrate dispatches per field directly.
 //
-// So this suite asserts *invariants*, never literal op lists. Six hold on every
-// substrate:
+// So this suite asserts *invariants*, never literal op lists. Eight hold on
+// every substrate:
 //
 //   Cardinality   one changeset per subscribed key per flush
 //   Containment   every delivered op's relative path lies within the subtree
 //   Order         dispatch order within a changeset; deepest-first across them
 //   Metadata      origin/replay/aborted/source identical across one flush
 //   Conservation  what the root sees equals the union of what everyone sees
+//   Reach         a subscriber below a top-level field hears a write to it,
+//                 and not one to a sibling, however the write arrived
+//   Coherence     a read equals σ after every write, and gets a new identity
+//                 exactly when an op the root received lies in its subtree
 //   Signal        the substrate reports a local update iff the ops were
 //                 written here, and then they are not a replay; after
 //                 `commitPending`, an export reports none
@@ -36,6 +40,7 @@ import type { Op } from "../changefeed.js"
 import { batch } from "../facade/batch.js"
 import { subscribe } from "../facade/observe.js"
 import { hasSubstrate, SUBSTRATE } from "../native.js"
+import { RawPath } from "../path.js"
 import type { Ref } from "../ref.js"
 import { Schema } from "../schema.js"
 import type { Substrate, SubstratePayload, Version } from "../substrate.js"
@@ -53,6 +58,10 @@ import type { Substrate, SubstratePayload, Version } from "../substrate.js"
  * payload to alias — the rest of this fixture is scalars all the way down, so
  * without it the invariant would check the one shape that cannot fail.
  *
+ * `roster` is the presence shape — a record of structs — for the reach
+ * invariant: a subscriber at one entry's field sits below a record key, the
+ * deepest place a state-based merge has to reach.
+ *
  * Every kind here is one all four substrates admit. `ephemeral` accepts the
  * narrowest set — no sequence, set, text or counter — so a fixture that
  * reaches past it cannot run on all four, and a sequence that no assertion
@@ -66,6 +75,7 @@ export const DeliveryFixture = Schema.struct({
   outer: Schema.struct({ x: Schema.number(), y: Schema.number() }),
   entries: Schema.record(Schema.number()),
   blob: Schema.struct({ label: Schema.string(), count: Schema.number() }),
+  roster: Schema.record(Schema.struct({ cursor: Schema.number() })),
 })
 
 // ---------------------------------------------------------------------------
@@ -488,9 +498,77 @@ export function deliveryConformance(
         })
 
         // =================================================================
-        // Local-update signal
+        // Reach
         // =================================================================
 
+        it("reach: a subscriber below a field hears a write to it, and not one to a sibling", () => {
+          const env = factory()
+          driver.write(env, d => {
+            d.roster.set("alice", { cursor: 0 })
+            d.roster.set("bob", { cursor: 0 })
+          })
+          const atX = probe(env.doc.outer.x)
+          const atCursor = probe(env.doc.roster.at("alice")?.cursor)
+
+          driver.write(env, d => d.outer.x.set(5))
+          expect(atX.changesets).toHaveLength(1)
+          expect(atCursor.changesets).toHaveLength(0)
+
+          driver.write(env, d => d.roster.at("alice")?.cursor.set(3))
+          expect(atCursor.changesets).toHaveLength(1)
+          expect(env.doc.roster.at("alice")?.cursor()).toBe(3)
+
+          driver.write(env, d => {
+            d.roster.at("bob")?.cursor.set(4)
+            d.outer.y.set(1)
+          })
+          expect(atCursor.changesets).toHaveLength(1)
+          expect(atX.changesets).toHaveLength(1)
+        })
+
+        // =================================================================
+        // Coherence
+        // =================================================================
+
+        it("coherence: a read equals σ, and is new exactly where an op landed", () => {
+          const env = factory()
+          const fields = ["outer", "entries", "blob", "roster"] as const
+          const writes: ((d: DeliveryDoc) => void)[] = [
+            d => d.outer.x.set(2),
+            d => d.roster.set("alice", { cursor: 1 }),
+            d => d.blob.label.set("z"),
+            d => d.entries.set("k", 4),
+            d => d.roster.at("alice")?.cursor.set(2),
+          ]
+
+          for (const write of writes) {
+            const reads = Object.fromEntries(
+              fields.map(field => [field, env.doc[field]()]),
+            )
+            const atRoot = probe(env.doc)
+            driver.write(env, write)
+
+            expect(env.doc()).toEqual(
+              substrateOf(env.doc).reader.read(RawPath.empty),
+            )
+            const landed = atRoot.paths()
+            for (const field of fields) {
+              const touched = landed.some(
+                path =>
+                  path === "root" ||
+                  path === field ||
+                  path.startsWith(`${field}.`),
+              )
+              const read = env.doc[field]()
+              if (touched) expect(read, field).not.toBe(reads[field])
+              else expect(read, field).toBe(reads[field])
+            }
+          }
+        })
+
+        // =================================================================
+        // Local-update signal
+        // =================================================================
         it("signal: a local update iff the ops were written here", () => {
           const env = factory()
           const localUpdates = countLocalUpdates(env.doc)

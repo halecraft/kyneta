@@ -246,7 +246,8 @@ export class GameLoop {
     // dead, which causes "Ref access on deleted map entry" when the
     // changefeed fires on the receiving side. A single ReplaceChange at
     // the root replaces the entire store cleanly.
-    const carsObject: GameState["cars"] = {}
+    // Built here, so mutable; a read of the document (`GameState`) is not.
+    const carsObject: Record<string, GameState["cars"][string]> = {}
     for (const [peerId, car] of result.cars) {
       carsObject[peerId] = {
         x: car.x,
@@ -260,7 +261,7 @@ export class GameLoop {
       }
     }
 
-    const scoresObject: GameState["scores"] = {}
+    const scoresObject: Record<string, GameState["scores"][string]> = {}
     for (const [peerId, bumps] of this.#scores) {
       const entry = this.#players.get(peerId)
       const departed = this.#departedScores.get(peerId)

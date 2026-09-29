@@ -24,9 +24,10 @@ import {
 } from "../testing/index.js"
 
 /**
- * Two plain-substrate peers over the same schema, both at genesis. B's first
- * write mints its lineage, so the delta since B's genesis carries only what
- * that write produced.
+ * Two plain-substrate peers over the same schema. B starts from A's entirety
+ * for each write, as the other substrates' peers do, so a write can name what
+ * A already holds; the delta since B's start carries only what the write
+ * produced.
  */
 function createPlainEnv(): DeliveryTestEnv {
   const substrateA = plainSubstrateFactory.create(DeliveryFixture)
@@ -35,7 +36,10 @@ function createPlainEnv(): DeliveryTestEnv {
   return {
     doc,
     remoteWrite(fn) {
-      const substrateB = plainSubstrateFactory.create(DeliveryFixture)
+      const substrateB = plainSubstrateFactory.fromEntirety(
+        substrateA.exportEntirety(),
+        DeliveryFixture,
+      )
       const docB = createRef(DeliveryFixture, substrateB) as any
       const before = substrateB.version()
       batch(docB, fn)
