@@ -89,7 +89,7 @@ describe("a record decomposes into one tuple per key", () => {
     applyChangeToStateTree(
       tree,
       peersPath,
-      mapChange({ alice: 1, bob: 2 }),
+      mapChange(own({ alice: 1, bob: 2 })),
       stamp(100),
       Roster,
     )
@@ -108,14 +108,14 @@ describe("a record decomposes into one tuple per key", () => {
     applyChangeToStateTree(
       tree,
       peersPath,
-      mapChange({ alice: 1 }),
+      mapChange(own({ alice: 1 })),
       stamp(100),
       Roster,
     )
     applyChangeToStateTree(
       tree,
       peersPath,
-      mapChange({ bob: 2 }),
+      mapChange(own({ bob: 2 })),
       stamp(200),
       Roster,
     )
@@ -131,14 +131,14 @@ describe("a record decomposes into one tuple per key", () => {
     applyChangeToStateTree(
       tree,
       peersPath,
-      mapChange({ alice: 1, bob: 2 }),
+      mapChange(own({ alice: 1, bob: 2 })),
       stamp(100),
       Roster,
     )
     applyChangeToStateTree(
       tree,
       peersPath,
-      mapChange({ alice: 9 }, ["alice", "bob"]),
+      mapChange(own({ alice: 9 }), ["alice", "bob"]),
       stamp(200),
       Roster,
     )
@@ -185,7 +185,7 @@ describe("a record decomposes into one tuple per key", () => {
       applyChangeToStateTree(
         tree,
         RawPath.empty.field("blob"),
-        mapChange({ a: 1 }),
+        mapChange(own({ a: 1 })),
         stamp(100),
         Blob,
       ),

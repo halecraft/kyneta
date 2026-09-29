@@ -5,6 +5,7 @@ import {
   isRichTextChange,
   KIND,
   normalizeSpans,
+  own,
   richTextChange,
   Schema,
   stepRichText,
@@ -104,7 +105,7 @@ describe("stepRichText", () => {
     expect(
       stepRichText(
         [{ text: "World" }],
-        richTextChange([{ insert: "Hello ", marks: { bold: true } }]),
+        richTextChange([{ insert: "Hello ", marks: own({ bold: true }) }]),
       ),
     ).toEqual([{ text: "Hello ", marks: { bold: true } }, { text: "World" }])
   })
@@ -142,7 +143,7 @@ describe("stepRichText", () => {
     expect(
       stepRichText(
         [{ text: "Hello" }],
-        richTextChange([{ format: 3, marks: { bold: true } }]),
+        richTextChange([{ format: 3, marks: own({ bold: true }) }]),
       ),
     ).toEqual([{ text: "Hel", marks: { bold: true } }, { text: "lo" }])
   })
@@ -152,7 +153,7 @@ describe("stepRichText", () => {
     expect(
       stepRichText(
         [{ text: "AB", marks: { italic: true } }, { text: "CD" }],
-        richTextChange([{ format: 3, marks: { bold: true } }]),
+        richTextChange([{ format: 3, marks: own({ bold: true }) }]),
       ),
     ).toEqual([
       { text: "AB", marks: { italic: true, bold: true } },
@@ -165,7 +166,7 @@ describe("stepRichText", () => {
     expect(
       stepRichText(
         [{ text: "Hello", marks: { bold: true, italic: true } }],
-        richTextChange([{ format: 5, marks: { bold: null } }]),
+        richTextChange([{ format: 5, marks: own({ bold: null }) }]),
       ),
     ).toEqual([{ text: "Hello", marks: { italic: true } }])
   })
@@ -173,7 +174,7 @@ describe("stepRichText", () => {
   it("format removing the last mark produces a plain span (no marks key)", () => {
     const result = stepRichText(
       [{ text: "Hello", marks: { bold: true } }],
-      richTextChange([{ format: 5, marks: { bold: null } }]),
+      richTextChange([{ format: 5, marks: own({ bold: null }) }]),
     )
     expect(result).toEqual([{ text: "Hello" }])
     // Verify the marks key is truly absent, not just empty
@@ -186,7 +187,7 @@ describe("stepRichText", () => {
     expect(
       stepRichText(
         [{ text: "Hello World" }],
-        richTextChange([{ format: 5, marks: { bold: true } }]),
+        richTextChange([{ format: 5, marks: own({ bold: true }) }]),
       ),
     ).toEqual([{ text: "Hello", marks: { bold: true } }, { text: " World" }])
   })

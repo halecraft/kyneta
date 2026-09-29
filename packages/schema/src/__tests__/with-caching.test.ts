@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   interpret,
+  own,
   plainContext,
   plainInterpreter,
   plainReader,
@@ -540,7 +541,7 @@ describe("withCaching: writes through ctx.prepare", () => {
     ctx.runBatch(() => {
       ctx.prepare(
         path,
-        sequenceChange([{ insert: [{ author: "Eve", body: "Hi" }] }]),
+        sequenceChange([{ insert: [own({ author: "Eve", body: "Hi" })] }]),
         { ingress: "author" },
       )
     }, {})

@@ -26,6 +26,7 @@ import {
   interpret,
   mapChange,
   observation,
+  own,
   RawPath,
   readable,
   Schema,
@@ -232,7 +233,7 @@ projectionConformance(
             applyChanges(doc, [
               {
                 path: RawPath.empty.field("peers"),
-                change: mapChange({ dave: false }, ["dave"]),
+                change: mapChange(own({ dave: false }), ["dave"]),
               },
             ]),
         },

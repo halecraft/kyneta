@@ -174,13 +174,13 @@ describe("inverse: groupoid identity — sequence", () => {
 describe("inverse: groupoid identity — map", () => {
   it("set new key", () => {
     const pre = { a: 1 }
-    const c = mapChange({ b: 2 })
+    const c = mapChange(own({ b: 2 }))
     expect(step(step(pre, c), invert(pre, c))).toEqual(pre)
   })
 
   it("set existing key (overwrite)", () => {
     const pre = { a: 1, b: 2 }
-    const c = mapChange({ a: 99 })
+    const c = mapChange(own({ a: 99 }))
     expect(step(step(pre, c), invert(pre, c))).toEqual(pre)
   })
 
@@ -198,13 +198,13 @@ describe("inverse: groupoid identity — map", () => {
 
   it("mixed set + delete", () => {
     const pre = { a: 1, b: 2, c: 3 }
-    const c = mapChange({ a: 99, d: 4 }, ["b"])
+    const c = mapChange(own({ a: 99, d: 4 }), ["b"])
     expect(step(step(pre, c), invert(pre, c))).toEqual(pre)
   })
 
   it("nested-value set deep-clones the pre-state", () => {
     const pre = { obj: { x: 1 } }
-    const c = mapChange({ obj: { x: 2 } })
+    const c = mapChange(own({ obj: { x: 2 } }))
     const inv = invert(pre, c)
     // Mutate pre — inverse should be unaffected
     ;(pre.obj as any).x = 999
@@ -296,7 +296,7 @@ describe("inverse: groupoid identity — richtext", () => {
 
   it("insert with marks", () => {
     const pre: import("../change.js").RichTextDelta = []
-    const c = richTextChange([{ insert: "bold", marks: { bold: true } }])
+    const c = richTextChange([{ insert: "bold", marks: own({ bold: true }) }])
     expect(step(step(pre, c), invert(pre, c))).toEqual(pre)
   })
 

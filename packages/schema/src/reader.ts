@@ -5,7 +5,8 @@
 // (writable, plain, validate, changefeed). Extracted from writable.ts
 // to eliminate cross-module coupling.
 
-import type { ChangeBase, ReplaceChange } from "./change.js"
+import type { ChangeBase } from "./change.js"
+import { mapPayload } from "./change.js"
 import { deepClonePlain } from "./clone.js"
 import { isNonNullObject } from "./guards.js"
 import type { Path } from "./path.js"
@@ -255,11 +256,13 @@ export function syncShadow(target: PlainState, source: PlainState): void {
  * The change to hand the store: either the same object, or one whose payload
  * is a private copy.
  *
- * A `replace` payload arrives holding whatever the caller passed in, and the
- * store writes that value in by reference. Two things then share one object —
- * the op a subscriber will receive, and the subtree inside the store. A later
- * write into that subtree mutates the op, so the op ends up reporting a value
- * the batch never wrote. Copying here severs that.
+ * Every value a change carries (`mapPayload` in `change.ts` says which: a
+ * `replace` value, inserted items, map `set` values, added set members,
+ * rich-text marks) arrives holding whatever the caller passed in, and the
+ * store writes it in by reference. Two things then share one object — the op
+ * a subscriber will receive, and the subtree inside the store. A later write
+ * into that subtree mutates the op, so the op ends up reporting a value the
+ * batch never wrote. Copying here severs that.
  *
  * Replayed changes are copied too. It is tempting to skip them — they were
  * built by the sending peer, so there is no local caller to protect — but that
@@ -288,17 +291,9 @@ export function syncShadow(target: PlainState, source: PlainState): void {
  * `Owned` in `change.ts`.
  */
 export function ownedForStore(change: ChangeBase): ChangeBase {
-  if (change.type !== "replace") return change
-  // Narrowed by the discriminant just above; `ChangeBase` is only `{ type }`,
-  // so the payload is not reachable without saying which change this is.
-  const replace = change as ReplaceChange
-  // Primitives cannot alias, so they never need a copy.
-  if (replace.value === null || typeof replace.value !== "object") return change
-  const copied: ReplaceChange = {
-    ...replace,
-    value: deepClonePlain(replace.value),
-  }
-  return copied
+  // Primitives cannot alias, and `deepClonePlain` returns them as they are, so
+  // a change carrying only primitives comes back unchanged.
+  return mapPayload(change, deepClonePlain)
 }
 
 /**

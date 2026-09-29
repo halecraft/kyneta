@@ -10,7 +10,7 @@
 // keyed-helpers is the install-pattern; the contents are tree-shaped.
 
 import type { ChangeBase, TreeChange, TreeInstruction } from "../change.js"
-import { treeChange } from "../change.js"
+import { mapChange, own, treeChange } from "../change.js"
 import type { ForestNode } from "../forest.js"
 import { nestForest, subtreeIds } from "../forest.js"
 import type { FlatTreeNode, Path } from "../interpret.js"
@@ -236,10 +236,7 @@ export function installTreeWriteOps<T extends object>(
       // Initial data lands as a MapChange at the new node's data path —
       // separate dispatch keeps the create instruction shape stable.
       if (opts?.data && Object.keys(opts.data).length > 0) {
-        ctx.dispatch(path.node(id), {
-          type: "map",
-          set: opts.data,
-        } as ChangeBase)
+        ctx.dispatch(path.node(id), mapChange(own(opts.data)))
       }
       return id
     },

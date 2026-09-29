@@ -19,6 +19,7 @@ import {
   mapChangeEffects,
   mapClearChange,
   merge,
+  own,
   Schema,
   step,
   version,
@@ -35,10 +36,12 @@ describe("mapChangeEffects", () => {
   })
 
   it("keeps what the clear sets", () => {
-    expect(mapChangeEffects(mapClearChange({ a: 1 }), ["a", "b"])).toEqual({
-      set: { a: 1 },
-      remove: ["b"],
-    })
+    expect(mapChangeEffects(mapClearChange(own({ a: 1 })), ["a", "b"])).toEqual(
+      {
+        set: { a: 1 },
+        remove: ["b"],
+      },
+    )
   })
 
   it("removes nothing held when the change is not a clear", () => {
@@ -49,7 +52,7 @@ describe("mapChangeEffects", () => {
   })
 
   it("sets a key named in both lists", () => {
-    expect(mapChangeEffects(mapChange({ a: 1 }, ["a"]), [])).toEqual({
+    expect(mapChangeEffects(mapChange(own({ a: 1 }), ["a"]), [])).toEqual({
       set: { a: 1 },
       remove: [],
     })
@@ -58,12 +61,14 @@ describe("mapChangeEffects", () => {
 
 describe("a clear in the plain algebra", () => {
   it("step leaves only what the clear sets", () => {
-    expect(step({ a: 1, b: 2 }, mapClearChange({ c: 3 }))).toEqual({ c: 3 })
+    expect(step({ a: 1, b: 2 }, mapClearChange(own({ c: 3 })))).toEqual({
+      c: 3,
+    })
   })
 
   it("its inverse restores every entry held before it", () => {
     const pre = { a: 1, b: 2 }
-    const change = mapClearChange({ b: 9, c: 3 })
+    const change = mapClearChange(own({ b: 9, c: 3 }))
     const inverse = defined(invert(pre, change), "the inverse")
     expect(step(step(pre, change), inverse)).toEqual(pre)
   })
@@ -83,7 +88,7 @@ describe("expandMapOpsToLeaves", () => {
 
   it("expands a field named in both lists to its set value, as step does", () => {
     const ops = expandMapOpsToLeaves(
-      [{ path: point, change: mapChange({ x: 5 }, ["x"]) }],
+      [{ path: point, change: mapChange(own({ x: 5 }), ["x"]) }],
       Doc,
     )
     expect(

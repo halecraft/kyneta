@@ -1,4 +1,4 @@
-// step — pure state transitions: (State, Action) → State
+// step — pure state transitions: (State, Change) → State
 //
 // Each step function applies an action to a plain value, producing the
 // next plain value. No CRDT runtime required — this is pure computation.
@@ -53,10 +53,10 @@ function insertItems<T>(target: T[], index: number, items: readonly T[]): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Applies a `TextAction` to a string, producing a new string.
+ * Applies a `TextChange` to a string, producing a new string.
  *
  * ```
- * stepText("Hello", { type: "text", ops: [{ retain: 5 }, { insert: " World" }] })
+ * stepText("Hello", { type: "text", instructions: [{ retain: 5 }, { insert: " World" }] })
  * → "Hello World"
  * ```
  *
@@ -92,10 +92,10 @@ export function stepText(state: string, action: TextChange): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Applies a `SequenceAction` to an array, producing a new array.
+ * Applies a `SequenceChange` to an array, producing a new array.
  *
  * ```
- * stepSequence([1, 2, 3], { type: "sequence", ops: [
+ * stepSequence([1, 2, 3], { type: "sequence", instructions: [
  *   { retain: 1 }, { insert: [10, 20] }, { delete: 1 }
  * ] })
  * → [1, 10, 20, 3]
@@ -141,7 +141,7 @@ function mutateSequence<T>(target: T[], action: SequenceChange<T>): T[] {
 // ---------------------------------------------------------------------------
 
 /**
- * Applies a `MapAction` to a plain object, producing a new object.
+ * Applies a `MapChange` to a plain object, producing a new object.
  *
  * ```
  * stepMap({ a: 1, b: 2 }, { type: "map", set: { a: 10 }, delete: ["b"] })
@@ -184,7 +184,7 @@ function mutateMap<T extends Record<string, unknown>>(
 // ---------------------------------------------------------------------------
 
 /**
- * Applies a `ReplaceAction` — simply returns the new value.
+ * Applies a `ReplaceChange` — simply returns the new value.
  *
  * ```
  * stepReplace(42, { type: "replace", value: 99 })
@@ -200,7 +200,7 @@ export function stepReplace<T>(_state: T, action: ReplaceChange<T>): T {
 // ---------------------------------------------------------------------------
 
 /**
- * Applies an `IncrementAction` to a number.
+ * Applies an `IncrementChange` to a number.
  *
  * ```
  * stepIncrement(10, { type: "increment", amount: 5 })
@@ -490,10 +490,10 @@ function mutateTree(target: unknown[], action: TreeChange): unknown[] {
  * register their own dispatchers.
  *
  * ```
- * step("Hello", { type: "text", ops: [{ retain: 5 }, { insert: " World" }] })
+ * step("Hello", { type: "text", instructions: [{ retain: 5 }, { insert: " World" }] })
  * → "Hello World"
  *
- * step([1, 2, 3], { type: "sequence", ops: [{ retain: 1 }, { delete: 1 }] })
+ * step([1, 2, 3], { type: "sequence", instructions: [{ retain: 1 }, { delete: 1 }] })
  * → [1, 3]
  *
  * step({ a: 1 }, { type: "map", set: { b: 2 } })

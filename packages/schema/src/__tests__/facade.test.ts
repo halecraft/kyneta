@@ -8,6 +8,7 @@ import {
   incrementChange,
   interpret,
   observation,
+  own,
   plainContext,
   populatedFeed,
   RawPath,
@@ -214,7 +215,7 @@ describe("applyChanges: basic behavior", () => {
         path: RawPath.empty.field("messages"),
         change: sequenceChange([
           { retain: 1 },
-          { insert: [{ author: "Bob", body: "Hey" }] },
+          { insert: [own({ author: "Bob", body: "Hey" })] },
         ]),
       },
     ]
@@ -654,7 +655,7 @@ describe("applyChanges: surgical cache invalidation", () => {
       {
         path: RawPath.empty.field("messages"),
         change: sequenceChange([
-          { insert: [{ author: "Eve", body: "First!" }] },
+          { insert: [own({ author: "Eve", body: "First!" })] },
         ]),
       },
     ])

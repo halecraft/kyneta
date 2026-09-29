@@ -1,18 +1,34 @@
 // op-payload-ownership — an op's payload is a snapshot, never a view.
 //
-// A `replace` payload arrives holding whatever the caller passed, and the store
-// writes it in by reference. Without a copy at the store boundary, two things
-// share one object: the op a subscriber receives, and the subtree inside the
-// store. A later write into that subtree then mutates the op, so the op reports
-// a value the batch never wrote.
+// Every value a change carries (a `replace` value, inserted items, map `set`
+// values, added set members, rich-text marks) arrives holding whatever the
+// caller passed, and the store writes it in by reference. Without a copy at
+// the store boundary, two things share one object: the op a subscriber
+// receives, and the subtree inside the store. A later write into that subtree
+// then mutates the op, so the op reports a value the batch never wrote.
 //
 // `ownedForStore` severs that at the store's edge. The caller's half — a caller
-// mutating the object it handed to `.set()` — is enforced separately, by the
+// mutating the object it handed to a write — is enforced separately, by the
 // `Owned` brand on the change constructors.
 
 import { describe, expect, it } from "vitest"
-import type { ReplaceChange } from "../change.js"
-import { own, replaceChange, trustAsOwned } from "../change.js"
+import type {
+  MapChange,
+  ReplaceChange,
+  RichTextChange,
+  SequenceChange,
+  SetChange,
+} from "../change.js"
+import {
+  mapChange,
+  own,
+  replaceChange,
+  richTextChange,
+  sequenceChange,
+  setOpChange,
+  textChange,
+  trustAsOwned,
+} from "../change.js"
 // Everything from one entrypoint: binding compares schema identity, and
 // `../basic/index.js` is a separate module instance whose schemas this
 // entrypoint's binder does not recognise.
@@ -21,8 +37,10 @@ import {
   applyChanges,
   batch,
   createDoc,
+  createRef,
   ephemeral,
   json,
+  plainSubstrateFactory,
   Schema,
   subscribe,
 } from "../index.js"
@@ -143,11 +161,41 @@ describe("ownedForStore", () => {
     expect(ownedForStore(change)).not.toBe(change)
   })
 
-  it("leaves non-replace changes and scalar payloads alone", () => {
+  it("leaves changes that carry no objects alone", () => {
     const scalar = replaceChange(42)
     expect(ownedForStore(scalar)).toBe(scalar)
-    const text = { type: "text" as const, instructions: [] }
+    const text = textChange([{ insert: "x" }])
     expect(ownedForStore(text)).toBe(text)
+    const items = sequenceChange([{ insert: [1, "a"] }])
+    expect(ownedForStore(items)).toBe(items)
+  })
+
+  it("copies every kind of carried value", () => {
+    const item = { n: 1 }
+    const inserted = ownedForStore(
+      sequenceChange([{ retain: 1 }, { insert: [trustAsOwned(item)] }]),
+    ) as SequenceChange
+    const insert = inserted.instructions[1]
+    const insertedItem = insert && "insert" in insert ? insert.insert[0] : null
+    expect(insertedItem).toEqual(item)
+    expect(insertedItem).not.toBe(item)
+
+    const set = ownedForStore(mapChange(trustAsOwned({ k: item }))) as MapChange
+    expect(set.set?.k).toEqual(item)
+    expect(set.set?.k).not.toBe(item)
+
+    const added = ownedForStore(setOpChange([trustAsOwned(item)])) as SetChange
+    expect(added.add?.[0]).toEqual(item)
+    expect(added.add?.[0]).not.toBe(item)
+
+    const marks = { link: { href: "x" } }
+    const marked = ownedForStore(
+      richTextChange([{ format: 1, marks: trustAsOwned(marks) }]),
+    ) as RichTextChange
+    const format = marked.instructions[0]
+    const formatMarks = format && "marks" in format ? format.marks : null
+    expect(formatMarks).toEqual(marks)
+    expect(formatMarks).not.toBe(marks)
   })
 
   it("does not deep-freeze or otherwise alter the payload's contents", () => {
@@ -248,5 +296,100 @@ describe("Owned", () => {
     expect(own(42)).toBe(42)
     expect(own("x")).toBe("x")
     expect(own(null)).toBe(null)
+  })
+})
+
+describe("every write copies the values it is handed", () => {
+  const Kinds = Schema.struct({
+    items: Schema.list(Schema.struct({ n: Schema.number() })),
+    entries: Schema.record(Schema.struct({ n: Schema.number() })),
+    members: Schema.set(Schema.struct({ n: Schema.number() })),
+    outline: Schema.tree(
+      Schema.struct({
+        label: Schema.string(),
+        tags: Schema.list(Schema.string()),
+      }),
+    ),
+    body: Schema.richText({ link: { expand: "none" } }),
+  })
+
+  function kindsDoc() {
+    const substrate = plainSubstrateFactory.create(Kinds)
+    const doc: any = createRef(Kinds, substrate)
+    const ops: Op[] = []
+    subscribe(doc, (cs: any) => ops.push(...cs.changes))
+    return { doc, ops }
+  }
+
+  /** The first value an op carries, whatever its kind. */
+  function carried(op: Op | undefined): unknown {
+    const change = op?.change as {
+      instructions?: readonly { insert?: readonly unknown[]; marks?: unknown }[]
+      set?: Record<string, unknown>
+      add?: readonly unknown[]
+    }
+    const inserted = change.instructions?.find(inst => inst.insert)?.insert
+    if (inserted) return inserted[0]
+    const marks = change.instructions?.find(inst => inst.marks)?.marks
+    if (marks) return marks
+    if (change.set) return Object.values(change.set)[0]
+    return change.add?.[0]
+  }
+
+  it("push and insert", () => {
+    const { doc, ops } = kindsDoc()
+    const pushed = { n: 1 }
+    const inserted = { n: 2 }
+    doc.items.push(pushed)
+    doc.items.insert(0, inserted)
+    pushed.n = 99
+    inserted.n = 99
+
+    expect(doc.items()).toEqual([{ n: 2 }, { n: 1 }])
+    expect(carried(ops[0])).toEqual({ n: 1 })
+    expect(carried(ops[1])).toEqual({ n: 2 })
+  })
+
+  it("map set", () => {
+    const { doc, ops } = kindsDoc()
+    const value = { n: 1 }
+    doc.entries.set("k", value)
+    value.n = 99
+
+    expect(doc.entries()).toEqual({ k: { n: 1 } })
+    expect(carried(ops[0])).toEqual({ n: 1 })
+  })
+
+  it("set add", () => {
+    const { doc, ops } = kindsDoc()
+    const member = { n: 1 }
+    doc.members.add(member)
+    member.n = 99
+
+    expect(doc.members()).toEqual([{ n: 1 }])
+    expect(carried(ops[0])).toEqual({ n: 1 })
+  })
+
+  it("tree create's initial data", () => {
+    const { doc, ops } = kindsDoc()
+    const data = { label: "a", tags: ["x"] }
+    const id = doc.outline.create({ data })
+    data.tags.push("y")
+
+    expect(doc.outline.node(id)()).toEqual({ label: "a", tags: ["x"] })
+    const dataOp = ops.find(op => op.change.type === "map")
+    expect(carried(dataOp)).toEqual("a")
+    expect((dataOp?.change as MapChange | undefined)?.set?.tags).toEqual(["x"])
+  })
+
+  it("rich-text mark", () => {
+    const { doc, ops } = kindsDoc()
+    doc.body.insert(0, "hi")
+    const href = { href: "x" }
+    doc.body.mark(0, 2, "link", href)
+    href.href = "y"
+
+    expect(doc.body()).toEqual([{ text: "hi", marks: { link: { href: "x" } } }])
+    expect(carried(ops[1])).toEqual({ link: { href: "x" } })
   })
 })

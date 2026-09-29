@@ -22,6 +22,8 @@ import type {
   MapChange,
   NodeIdentity,
   Op,
+  Owned,
+  OwnedRichTextInstruction,
   Path,
   ProductSchema,
   ReplaceChange,
@@ -41,11 +43,15 @@ import {
   fieldAbsPath,
   KIND,
   type MaterializedNode,
+  mapChange,
   mapChangeEffects,
   materializeValue,
+  own,
   pathSchema,
   RawPath,
   richTextChange,
+  sequenceChange,
+  trustAsOwned,
 } from "@kyneta/schema"
 import * as Y from "yjs"
 import { resolveYjsType } from "./yjs-resolve.js"
@@ -606,20 +612,28 @@ function textEventToChange(event: Y.YEvent<any>): TextChange {
  * and insert instructions.
  */
 function richTextEventToChange(event: Y.YEvent<any>): RichTextChange {
-  const instructions: RichTextInstruction[] = []
+  // Yjs builds each event's delta, attributes included, for that event
+  // alone, so the marks are unshared.
+  const instructions: OwnedRichTextInstruction[] = []
 
   for (const delta of event.delta) {
     if (delta.retain !== undefined) {
       const attrs = delta.attributes
       if (attrs && Object.keys(attrs).length > 0) {
-        instructions.push({ format: delta.retain as number, marks: attrs })
+        instructions.push({
+          format: delta.retain as number,
+          marks: trustAsOwned(attrs),
+        })
       } else {
         instructions.push({ retain: delta.retain as number })
       }
     } else if (delta.insert !== undefined) {
       const attrs = delta.attributes
       if (attrs && Object.keys(attrs).length > 0) {
-        instructions.push({ insert: delta.insert as string, marks: attrs })
+        instructions.push({
+          insert: delta.insert as string,
+          marks: trustAsOwned(attrs),
+        })
       } else {
         instructions.push({ insert: delta.insert as string })
       }
@@ -639,7 +653,7 @@ function richTextEventToChange(event: Y.YEvent<any>): RichTextChange {
  * arrays are converted to plain objects via `.toJSON()`.
  */
 function arrayEventToChange(event: Y.YEvent<any>): SequenceChange {
-  const instructions: SequenceInstruction[] = []
+  const instructions: SequenceInstruction<Owned<unknown>>[] = []
 
   for (const delta of event.changes.delta) {
     if (delta.retain !== undefined) {
@@ -654,7 +668,7 @@ function arrayEventToChange(event: Y.YEvent<any>): SequenceChange {
     }
   }
 
-  return { type: "sequence", instructions }
+  return sequenceChange(instructions)
 }
 
 /**
@@ -668,7 +682,7 @@ function mapEventToChange(
   event: Y.YEvent<any>,
   binding?: SchemaBinding,
 ): MapChange | null {
-  const set: Record<string, unknown> = {}
+  const set: Record<string, Owned<unknown>> = {}
   const deleteKeys: string[] = []
   let hasSet = false
   let hasDelete = false
@@ -696,11 +710,11 @@ function mapEventToChange(
 
   if (!hasSet && !hasDelete) return null
 
-  return {
-    type: "map",
-    ...(hasSet ? { set } : {}),
-    ...(hasDelete ? { delete: deleteKeys } : {}),
-  }
+  return mapChange(
+    // Built here, of values `extractEventValue` owns.
+    hasSet ? trustAsOwned(set) : undefined,
+    hasDelete ? deleteKeys : undefined,
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -708,15 +722,15 @@ function mapEventToChange(
 // ---------------------------------------------------------------------------
 
 /**
- * Convert a Yjs value from an event into a plain value.
- * Container values (Y.Map, Y.Array, Y.Text) → `.toJSON()`.
- * Plain values → returned as-is.
+ * Convert a Yjs value from an event into a plain value the change may keep.
+ * Container values (Y.Map, Y.Array, Y.Text) → `.toJSON()`, which builds a
+ * fresh value. Plain values are copied: Yjs hands out the value it stores.
  */
-function extractEventValue(value: unknown): unknown {
-  if (value instanceof Y.Map) return value.toJSON()
-  if (value instanceof Y.Array) return value.toJSON()
-  if (value instanceof Y.Text) return value.toJSON()
-  return value
+function extractEventValue(value: unknown): Owned<unknown> {
+  if (value instanceof Y.Map) return trustAsOwned<unknown>(value.toJSON())
+  if (value instanceof Y.Array) return trustAsOwned<unknown>(value.toJSON())
+  if (value instanceof Y.Text) return trustAsOwned<unknown>(value.toJSON())
+  return own(value)
 }
 
 // ---------------------------------------------------------------------------

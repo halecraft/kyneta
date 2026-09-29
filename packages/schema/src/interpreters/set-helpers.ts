@@ -14,7 +14,7 @@
 // Sets do NOT share keyed-helpers' navigation/addressing/caching
 // infrastructure — invalidation is whole-carrier on any `SetChange`.
 
-import { setOpChange } from "../change.js"
+import { own, setOpChange } from "../change.js"
 import { samePlainValue } from "../guards.js"
 import type { Path } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
@@ -121,7 +121,7 @@ export function installSetWriteOps<T extends object>(
 
   Object.defineProperty(result, "add", {
     value: (value: unknown): void => {
-      ctx.dispatch(path, setOpChange([value]))
+      ctx.dispatch(path, setOpChange([own(value)]))
     },
     enumerable: false,
     configurable: true,

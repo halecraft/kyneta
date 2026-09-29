@@ -32,7 +32,7 @@
 // sequence of characters, but characters are not independently
 // addressable refs.
 
-import { richTextChange, sequenceChange, textChange } from "../change.js"
+import { own, richTextChange, sequenceChange, textChange } from "../change.js"
 import type { Path } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
 import { CALL, type Mutable, type NavigableCarrier } from "./bottom.js"
@@ -147,7 +147,10 @@ export function installRichTextWriteOps<T extends object>(
     ctx.dispatch(
       path,
       richTextChange(
-        at(index, marks ? { insert: content, marks } : { insert: content }),
+        at(
+          index,
+          marks ? { insert: content, marks: own(marks) } : { insert: content },
+        ),
       ),
     )
   }
@@ -182,7 +185,7 @@ export function installRichTextWriteOps<T extends object>(
     ctx.dispatch(
       path,
       richTextChange(
-        at(start, { format: end - start, marks: { [key]: value } }),
+        at(start, { format: end - start, marks: own({ [key]: value }) }),
       ),
     )
   }
@@ -191,7 +194,7 @@ export function installRichTextWriteOps<T extends object>(
     ctx.dispatch(
       path,
       richTextChange(
-        at(start, { format: end - start, marks: { [key]: null } }),
+        at(start, { format: end - start, marks: own({ [key]: null }) }),
       ),
     )
   }
@@ -223,12 +226,18 @@ export function installListWriteOps<T extends object>(
 
   ops.push = (...items: unknown[]): void => {
     const length = ctx.reader.arrayLength(path)
-    const change = sequenceChange([{ retain: length }, { insert: items }])
+    const change = sequenceChange([
+      { retain: length },
+      { insert: items.map(item => own(item)) },
+    ])
     ctx.dispatch(path, change)
   }
 
   ops.insert = (index: number, ...items: unknown[]): void => {
-    ctx.dispatch(path, sequenceChange(at(index, { insert: items })))
+    ctx.dispatch(
+      path,
+      sequenceChange(at(index, { insert: items.map(item => own(item)) })),
+    )
   }
 
   ops.delete = (index: number, count: number = 1): void => {

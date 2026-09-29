@@ -22,6 +22,7 @@ import {
   ephemeral,
   lastUpdated,
   mapChange,
+  own,
   Schema,
 } from "../index.js"
 import { RawPath } from "../path.js"
@@ -70,7 +71,7 @@ describe("a delete writes a tombstone", () => {
     applyChangeToStateTree(
       tree,
       peersPath,
-      mapChange({ alice: 1, bob: 2 }),
+      mapChange(own({ alice: 1, bob: 2 })),
       stamp(100),
       Roster,
     )
@@ -248,7 +249,7 @@ describe("tombstones do not accumulate", () => {
       applyChangeToStateTree(
         tree,
         peersPath,
-        mapChange({ alice: cycle }),
+        mapChange(own({ alice: cycle })),
         stamp(cycle * 2),
         Roster,
       )
@@ -284,7 +285,7 @@ describe("deleting an entry whose value is a container", () => {
     applyChangeToStateTree(
       tree,
       peersPath,
-      mapChange({ alice: { x: 1 } }),
+      mapChange(own({ alice: { x: 1 } })),
       stamp(100),
       Cursors,
     )

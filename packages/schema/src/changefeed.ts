@@ -24,6 +24,8 @@ import {
   type MapChange,
   mapChangeEffects,
   type ReplaceChange,
+  replaceChange,
+  trustAsOwned,
 } from "./change.js"
 import { pathSchema } from "./fold-path.js"
 import type { Path } from "./interpret.js"
@@ -117,7 +119,7 @@ export function expandMapOpsToLeaves(
     // reach that a delete of each field would not name.
     if (change.clear) {
       throw new Error(
-        `expandMapOpsToLeaves: a clear at a product path [${op.path.segments.map(segment => String(segment.resolve())).join(".")}]; only a record can be cleared.`,
+        `expandMapOpsToLeaves: a clear at a product path [${op.path.format()}]; only a record can be cleared.`,
       )
     }
 
@@ -127,13 +129,14 @@ export function expandMapOpsToLeaves(
     for (const key of remove) {
       result.push({
         path: op.path.field(key),
-        change: { type: "replace", value: undefined },
+        change: replaceChange(undefined),
       })
     }
     for (const [key, value] of Object.entries(set)) {
       result.push({
         path: op.path.field(key),
-        change: { type: "replace", value },
+        // The op's own payload, handed down whole to the leaf it names.
+        change: replaceChange(trustAsOwned(value)),
       })
     }
   }

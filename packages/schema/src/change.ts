@@ -224,7 +224,7 @@ export function textChange(
 }
 
 export function sequenceChange<T>(
-  instructions: readonly SequenceInstruction<T>[],
+  instructions: readonly SequenceInstruction<Owned<T>>[],
 ): SequenceChange<T> {
   for (const inst of instructions) {
     if (
@@ -238,14 +238,16 @@ export function sequenceChange<T>(
 }
 
 export function mapChange(
-  set?: Record<string, unknown>,
-  del?: string[],
+  set?: Owned<Record<string, unknown>>,
+  del?: readonly string[],
 ): MapChange {
   return { type: "map", set, delete: del }
 }
 
 /** A map change that clears the map, then writes `set` into it. */
-export function mapClearChange(set?: Record<string, unknown>): MapChange {
+export function mapClearChange(
+  set?: Owned<Record<string, unknown>>,
+): MapChange {
   return set === undefined
     ? { type: "map", clear: true }
     : { type: "map", clear: true, set }
@@ -274,6 +276,95 @@ export function mapChangeEffects(
 }
 
 // ---------------------------------------------------------------------------
+// mapPayload — the values a change carries
+// ---------------------------------------------------------------------------
+
+/**
+ * Apply `f` to every value `change` carries: a `replace` value, sequence
+ * `insert` items, map `set` values, set-op `add` members, and rich-text
+ * `marks` (on inserts and formats). Returns `change` itself when `f` returned
+ * every value unchanged; any other change type is returned as is.
+ *
+ * The one definition of "the values a change carries", so the edges that
+ * copy them (`ownedForStore`, an announcer's copy of what it announces)
+ * cannot disagree about which they are. Set-op `remove` members and map
+ * `delete` keys name values rather than carry them, and are left alone.
+ */
+export function mapPayload(
+  change: ChangeBase,
+  f: (value: unknown) => unknown,
+): ChangeBase {
+  switch (change.type) {
+    case "replace": {
+      const replace = change as ReplaceChange
+      const value = f(replace.value)
+      if (value === replace.value) return change
+      const out: ReplaceChange = { ...replace, value }
+      return out
+    }
+    case "sequence": {
+      const sequence = change as SequenceChange
+      const instructions = mapEach(sequence.instructions, inst => {
+        if (!("insert" in inst)) return inst
+        const insert = mapEach(inst.insert, f)
+        return insert === inst.insert ? inst : { insert }
+      })
+      if (instructions === sequence.instructions) return change
+      const out: SequenceChange = { ...sequence, instructions }
+      return out
+    }
+    case "map": {
+      const map = change as MapChange
+      if (map.set === undefined) return change
+      let set: Record<string, unknown> | undefined
+      for (const [key, value] of Object.entries(map.set)) {
+        const mapped = f(value)
+        if (mapped !== value) set ??= { ...map.set }
+        if (set !== undefined) set[key] = mapped
+      }
+      if (set === undefined) return change
+      const out: MapChange = { ...map, set }
+      return out
+    }
+    case "set-op": {
+      const setOp = change as SetChange
+      if (setOp.add === undefined) return change
+      const add = mapEach(setOp.add, f)
+      if (add === setOp.add) return change
+      const out: SetChange = { ...setOp, add }
+      return out
+    }
+    case "richtext": {
+      const richText = change as RichTextChange
+      const instructions = mapEach(richText.instructions, inst => {
+        if (!("marks" in inst) || inst.marks === undefined) return inst
+        const marks = f(inst.marks) as MarkMap
+        return marks === inst.marks ? inst : { ...inst, marks }
+      })
+      if (instructions === richText.instructions) return change
+      const out: RichTextChange = { ...richText, instructions }
+      return out
+    }
+    default:
+      return change
+  }
+}
+
+/** `values.map(f)`, or `values` itself when `f` changed none of them. */
+function mapEach<T, U>(values: readonly T[], f: (value: T) => U): readonly U[] {
+  let out: U[] | undefined
+  for (let i = 0; i < values.length; i++) {
+    const value = values[i]
+    const mapped = f(value)
+    if (out === undefined && (mapped as unknown) !== value) {
+      out = values.slice(0, i) as unknown as U[]
+    }
+    out?.push(mapped)
+  }
+  return out ?? (values as unknown as readonly U[])
+}
+
+// ---------------------------------------------------------------------------
 // Owned — a payload the change layer may keep
 // ---------------------------------------------------------------------------
 
@@ -292,16 +383,27 @@ declare const OWNED: unique symbol
  * default. Every construction site has to say which it is: `own(value)` to copy,
  * or `trustAsOwned(value)` to assert nobody else holds it.
  *
- * Only object payloads carry the brand. A primitive cannot be aliased — there
- * is nothing to hold a reference to — so `replaceChange(1)` stays as it reads,
+ * Object payloads carry the brand, and so do payloads typed `unknown`, which
+ * may be objects. A value typed as a primitive cannot be aliased — there is
+ * nothing to hold a reference to — so `replaceChange(1)` stays as it reads,
  * and the requirement shows up exactly where a real hazard exists.
+ *
+ * Every constructor whose change carries caller values takes them `Owned`:
+ * `replaceChange`, `sequenceChange`, `mapChange`, `mapClearChange`,
+ * `setOpChange` and `richTextChange`. The store makes its own copy of each
+ * (`ownedForStore` in `reader.ts`), so neither the op nor the document shares
+ * a value with the caller.
  *
  * Deliberately *shallow*: one conditional and an intersection. A
  * `DeepReadonly<T>` would express more but recurses through the payload, and
  * this codebase already runs close to the TS2589 instantiation ceiling — see
  * the workarounds in `@kyneta/exchange`.
  */
-export type Owned<T> = T extends object ? T & { readonly [OWNED]: true } : T
+export type Owned<T> = unknown extends T
+  ? T & { readonly [OWNED]: true }
+  : T extends object
+    ? T & { readonly [OWNED]: true }
+    : T
 
 /**
  * Copy a caller-supplied value so the change can keep it.
@@ -347,17 +449,28 @@ export function incrementChange(amount: number): IncrementChange {
  * The invariant lives at the operation boundary, not the constructor.
  */
 export function setOpChange<T>(
-  add?: readonly T[],
+  add?: readonly Owned<T>[],
   remove?: readonly T[],
 ): SetChange<T> {
   return { type: "set-op", add, remove }
 }
 
+/**
+ * A rich-text change. Its `marks` are caller values, so each must be owned:
+ * the instructions a helper builds carry `own(marks)`.
+ */
 export function richTextChange(
-  instructions: readonly RichTextInstruction[],
+  instructions: readonly OwnedRichTextInstruction[],
 ): RichTextChange {
   return { type: "richtext", instructions }
 }
+
+/** A `RichTextInstruction` whose marks, if it has any, are owned. */
+export type OwnedRichTextInstruction =
+  | { readonly retain: number }
+  | { readonly insert: string; readonly marks?: Owned<MarkMap> }
+  | { readonly delete: number }
+  | { readonly format: number; readonly marks: Owned<MarkMap> }
 
 export function isRichTextChange(change: ChangeBase): change is RichTextChange {
   return change.type === "richtext"

@@ -17,7 +17,7 @@
 
 import { randomHex } from "@kyneta/random"
 import type { ChangeBase } from "../change.js"
-import { replaceChange } from "../change.js"
+import { replaceChange, trustAsOwned } from "../change.js"
 import type { Op } from "../changefeed.js"
 import { deepClonePlain } from "../clone.js"
 import { samePlainValue } from "../guards.js"
@@ -792,7 +792,9 @@ export function objectToReplaceOps(state: Record<string, unknown>): Op[] {
   for (const [key, value] of Object.entries(state)) {
     ops.push({
       path: RawPath.empty.field(key),
-      change: replaceChange(value),
+      // Every caller hands over a state it just built or decoded, and keeps
+      // no other use of it.
+      change: replaceChange(trustAsOwned(value)),
     })
   }
   return ops

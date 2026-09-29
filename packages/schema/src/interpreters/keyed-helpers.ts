@@ -5,7 +5,7 @@
 // value-addressed, and install their own narrower surface from
 // `set-helpers.ts`.
 
-import { mapChange, mapClearChange } from "../change.js"
+import { mapChange, mapClearChange, own } from "../change.js"
 import type { Path } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
 import { CALL, type NavigableCarrier } from "./bottom.js"
@@ -25,7 +25,7 @@ export function installKeyedWriteOps<T extends object>(
 ): asserts result is T & KeyedWriteOps {
   Object.defineProperty(result, "set", {
     value: (key: string, value: unknown): void => {
-      const change = mapChange({ [key]: value })
+      const change = mapChange(own({ [key]: value }))
       ctx.dispatch(path, change)
     },
     enumerable: false,

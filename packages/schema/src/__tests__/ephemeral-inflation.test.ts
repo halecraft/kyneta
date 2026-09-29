@@ -186,7 +186,7 @@ describe("a local write dominates every tuple it overwrites", () => {
       const { writer, peer } = write(
         { peers: { alice: tup("x", 500) } },
         peers,
-        mapChange({ alice: "w" }),
+        mapChange(own({ alice: "w" })),
         stamp(100),
         Roster,
       )
@@ -233,7 +233,7 @@ describe("a local write dominates every tuple it overwrites", () => {
       const { writer, peer } = write(
         before(),
         peers,
-        mapChange({ alice: { name: "a" } }),
+        mapChange(own({ alice: { name: "a" } })),
         stamp(100),
         Roster,
       )
@@ -255,7 +255,7 @@ describe("a local write dominates every tuple it overwrites", () => {
       const { writer, peer } = write(
         { rooms: { r1: { a: tup(1, 100), b: tup(2, 100) } } },
         RawPath.empty.field("rooms"),
-        mapChange({ r1: { a: 1 } }),
+        mapChange(own({ r1: { a: 1 } })),
         stamp(200),
         Rooms,
       )
@@ -426,7 +426,7 @@ describe("one change names a key once", () => {
     applyChangeToStateTree(
       tree,
       RawPath.empty.field("peers"),
-      mapChange({ alice: 2 }, ["alice"]),
+      mapChange(own({ alice: 2 }), ["alice"]),
       stamp(500),
       Roster,
     )

@@ -3,6 +3,7 @@ import type { ChangeBase } from "../index.js"
 import {
   incrementChange,
   mapChange,
+  own,
   replaceChange,
   samePlainValue,
   sequenceChange,
@@ -117,7 +118,7 @@ describe("stepSequence", () => {
 
 describe("stepMap", () => {
   it("sets keys", () => {
-    expect(stepMap({ a: 1 }, mapChange({ b: 2 }))).toEqual({ a: 1, b: 2 })
+    expect(stepMap({ a: 1 }, mapChange(own({ b: 2 })))).toEqual({ a: 1, b: 2 })
   })
 
   it("deletes keys", () => {
@@ -127,17 +128,19 @@ describe("stepMap", () => {
   })
 
   it("sets and deletes in one action (delete first, then set)", () => {
-    expect(stepMap({ a: 1, b: 2 }, mapChange({ a: 10 }, ["b"]))).toEqual({
+    expect(stepMap({ a: 1, b: 2 }, mapChange(own({ a: 10 }), ["b"]))).toEqual({
       a: 10,
     })
   })
 
   it("set wins when key is in both set and delete", () => {
-    expect(stepMap({ a: 1 }, mapChange({ a: 99 }, ["a"]))).toEqual({ a: 99 })
+    expect(stepMap({ a: 1 }, mapChange(own({ a: 99 }), ["a"]))).toEqual({
+      a: 99,
+    })
   })
 
   it("handles empty object", () => {
-    expect(stepMap({}, mapChange({ x: 1 }))).toEqual({ x: 1 })
+    expect(stepMap({}, mapChange(own({ x: 1 })))).toEqual({ x: 1 })
   })
 })
 
@@ -183,7 +186,7 @@ describe("step (generic dispatcher)", () => {
   })
 
   it("dispatches map actions", () => {
-    expect(step({ x: 1 }, mapChange({ y: 2 }))).toEqual({ x: 1, y: 2 })
+    expect(step({ x: 1 }, mapChange(own({ y: 2 })))).toEqual({ x: 1, y: 2 })
   })
 
   it("dispatches replace actions", () => {
@@ -361,7 +364,7 @@ const containerCases: {
   {
     name: "map",
     state: () => ({ a: 1, b: 2 }),
-    change: mapChange({ a: 10, c: 3 }, ["b"]),
+    change: mapChange(own({ a: 10, c: 3 }), ["b"]),
   },
   {
     name: "sequence (append)",
@@ -440,7 +443,7 @@ describe("stepInPlace agrees with step", () => {
   it("falls back to the pure arrow when σ's shape contradicts the change", () => {
     // A map change against an array, say — the fast path must not fire on a
     // carrier it cannot advance.
-    expect(stepInPlace([1, 2], mapChange({ a: 1 }))).toEqual({
+    expect(stepInPlace([1, 2], mapChange(own({ a: 1 })))).toEqual({
       0: 1,
       1: 2,
       a: 1,

@@ -19,7 +19,7 @@
 // and without accumulating op-log history.
 
 import type { ChangeBase } from "../change.js"
-import { replaceChange } from "../change.js"
+import { own, replaceChange } from "../change.js"
 import { deepClonePlain } from "../clone.js"
 import { findOpaqueBoundary } from "../fold-path.js"
 import { digestToHex } from "../hash.js"
@@ -505,7 +505,7 @@ export function createStateSubstrate(
         registerPath ?? path,
         registerPath === null
           ? change
-          : replaceChange(deepClonePlain(registerPath.read(shadow))),
+          : replaceChange(own(registerPath.read(shadow))),
         core.nextStamp(Date.now()),
         schema,
       )

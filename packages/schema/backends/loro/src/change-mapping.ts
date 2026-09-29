@@ -20,6 +20,8 @@ import type {
   MapChange,
   NodeIdentity,
   Op,
+  Owned,
+  OwnedRichTextInstruction,
   Path,
   ReplaceChange,
   RichTextChange,
@@ -42,12 +44,15 @@ import {
   isSetSchema,
   KIND,
   type MaterializedNode,
+  mapChange,
   mapChangeEffects,
   materializeValue,
   pathSchema,
   RawPath,
   richTextChange,
+  sequenceChange,
   structuralKind,
+  trustAsOwned,
 } from "@kyneta/schema"
 import type {
   ContainerID,
@@ -913,12 +918,14 @@ function textDiffToChange(diff: TextDiff): TextChange {
  * Converts Loro text deltas (with optional attributes) to richtext instructions.
  */
 function richTextDiffToChange(diff: TextDiff): RichTextChange {
-  const instructions: RichTextInstruction[] = diff.diff.map(
+  // Loro decodes each diff, attributes included, fresh for this event, so
+  // the marks are unshared.
+  const instructions: OwnedRichTextInstruction[] = diff.diff.map(
     (delta: Delta<string>) => {
       if (delta.insert !== undefined) {
         const attrs = delta.attributes
         if (attrs && Object.keys(attrs).length > 0) {
-          return { insert: delta.insert, marks: attrs }
+          return { insert: delta.insert, marks: trustAsOwned(attrs) }
         }
         return { insert: delta.insert }
       }
@@ -928,7 +935,7 @@ function richTextDiffToChange(diff: TextDiff): RichTextChange {
       if (delta.retain !== undefined) {
         const attrs = delta.attributes
         if (attrs && Object.keys(attrs).length > 0) {
-          return { format: delta.retain, marks: attrs }
+          return { format: delta.retain, marks: trustAsOwned(attrs) }
         }
         return { retain: delta.retain }
       }
@@ -946,16 +953,14 @@ function richTextDiffToChange(diff: TextDiff): RichTextChange {
  * not container references.
  */
 function listDiffToChange(diff: ListDiff): SequenceChange {
-  const instructions: SequenceInstruction[] = diff.diff.map(
+  const instructions: SequenceInstruction<Owned<unknown>>[] = diff.diff.map(
     (delta: Delta<(Value | any)[]>) => {
       if (delta.insert !== undefined) {
-        // Convert container objects to plain values
-        const items = (delta.insert as unknown[]).map(item => {
-          if (isPlainProjectable(item)) {
-            return item.toJSON()
-          }
-          return item
-        })
+        // Convert container objects to plain values. Loro decodes every
+        // value in a diff fresh, and `toJSON` builds one, so none is shared.
+        const items = (delta.insert as unknown[]).map(item =>
+          trustAsOwned(isPlainProjectable(item) ? item.toJSON() : item),
+        )
         return { insert: items }
       }
       if (delta.delete !== undefined) {
@@ -967,7 +972,7 @@ function listDiffToChange(diff: ListDiff): SequenceChange {
       throw new Error("listDiffToChange: unknown delta type")
     },
   )
-  return { type: "sequence", instructions }
+  return sequenceChange(instructions)
 }
 
 /**
@@ -1002,14 +1007,11 @@ function mapDiffToChange(diff: MapDiff, binding?: SchemaBinding): MapChange {
     }
   }
 
-  // Built in one expression rather than stamped afterwards: `set` and
-  // `delete` are declared `readonly`, so assigning to them needed an assertion
-  // that dropped every other check with it.
-  return {
-    type: "map",
-    ...(Object.keys(set).length > 0 ? { set } : {}),
-    ...(deleteKeys.length > 0 ? { delete: deleteKeys } : {}),
-  }
+  return mapChange(
+    // Built here; Loro decodes every value in a diff fresh.
+    Object.keys(set).length > 0 ? trustAsOwned(set) : undefined,
+    deleteKeys.length > 0 ? deleteKeys : undefined,
+  )
 }
 
 /**

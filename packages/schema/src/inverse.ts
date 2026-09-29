@@ -22,6 +22,8 @@ import type {
   ChangeBase,
   IncrementChange,
   MapChange,
+  Owned,
+  OwnedRichTextInstruction,
   ReplaceChange,
   RichTextChange,
   RichTextSpan,
@@ -44,8 +46,8 @@ import {
   setOpChange,
   textChange,
   treeChange,
+  trustAsOwned,
 } from "./change.js"
-import { deepClonePlain } from "./clone.js"
 
 // ---------------------------------------------------------------------------
 // invertReplace — value swap
@@ -127,7 +129,7 @@ export function invertSequence<T>(
   pre: readonly T[],
   change: SequenceChange<T>,
 ): SequenceChange<T> {
-  const inverse: SequenceInstruction<T>[] = []
+  const inverse: SequenceInstruction<Owned<T>>[] = []
   const source = pre ?? []
   let preCursor = 0
 
@@ -140,7 +142,7 @@ export function invertSequence<T>(
     } else if ("delete" in op) {
       const segment = source
         .slice(preCursor, preCursor + op.delete)
-        .map(item => deepClonePlain(item))
+        .map(item => own(item))
       inverse.push({ insert: segment })
       preCursor += op.delete
     }
@@ -174,7 +176,7 @@ export function invertMap(
 
   for (const key of Object.keys(set)) {
     if (Object.hasOwn(source, key)) {
-      invertSet[key] = deepClonePlain(source[key])
+      invertSet[key] = own(source[key])
     } else {
       invertDelete.push(key)
     }
@@ -183,14 +185,15 @@ export function invertMap(
   // Removing a key that did not exist was a no-op, and so is its inverse.
   for (const key of remove) {
     if (Object.hasOwn(source, key)) {
-      invertSet[key] = deepClonePlain(source[key])
+      invertSet[key] = own(source[key])
     }
   }
 
   const hasSet = Object.keys(invertSet).length > 0
   const hasDelete = invertDelete.length > 0
   return mapChange(
-    hasSet ? invertSet : undefined,
+    // Built here, of values `own` just copied.
+    hasSet ? trustAsOwned(invertSet) : undefined,
     hasDelete ? invertDelete : undefined,
   )
 }
@@ -206,7 +209,12 @@ export function invertMap(
  * under the value-equality semantics of `stepSet`).
  */
 export function invertSet<T>(change: SetChange<T>): SetChange<T> {
-  return setOpChange<T>(change.remove, change.add)
+  // The removed members become added ones, so they are copied: the forward
+  // change keeps its own.
+  return setOpChange<T>(
+    change.remove?.map(member => own(member)),
+    change.add,
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -228,7 +236,7 @@ export function invertRichText(
   pre: readonly RichTextSpan[],
   change: RichTextChange,
 ): RichTextChange {
-  const inverse: import("./change.js").RichTextInstruction[] = []
+  const inverse: OwnedRichTextInstruction[] = []
   const source = pre ?? []
 
   // Flat cursor into pre-state spans (mirrors stepRichText's structure).
@@ -281,7 +289,7 @@ export function invertRichText(
             restored[key] = null
           }
         }
-        inverse.push({ format: length, marks: restored })
+        inverse.push({ format: length, marks: own(restored) })
       })
     } else if ("insert" in op) {
       inverse.push({ delete: op.insert.length })
@@ -303,7 +311,7 @@ export function invertRichText(
         const text = span.text.slice(start, start + length)
         inverse.push(
           prevMarks && Object.keys(prevMarks).length > 0
-            ? { insert: text, marks: deepClonePlain(prevMarks) }
+            ? { insert: text, marks: own(prevMarks) }
             : { insert: text },
         )
       })

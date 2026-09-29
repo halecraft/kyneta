@@ -4,7 +4,7 @@
 // The Loro and Yjs backends run the same suite from their own packages.
 // `plain` does not participate: σ is the document there, so Π is the identity.
 
-import { mapChange } from "../change.js"
+import { mapChange, own } from "../change.js"
 import { createRef } from "../create-doc.js"
 import { applyChanges, batch } from "../facade/batch.js"
 import { RawPath } from "../path.js"
@@ -106,7 +106,7 @@ function createEphemeralEnv(): ProjectionTestEnv {
           applyChanges(doc, [
             {
               path: RawPath.empty.field("entries"),
-              change: mapChange({ b: 5 }, ["b"]),
+              change: mapChange(own({ b: 5 }), ["b"]),
             },
           ]),
       },
