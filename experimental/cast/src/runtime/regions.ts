@@ -71,6 +71,19 @@ function resolveParent(anchor: Node): Node {
   return parent
 }
 
+/**
+ * A region's parent: its container in container mode, else its anchor's
+ * current parent. Exactly one of the two is set.
+ */
+function regionParent(state: {
+  readonly containerParent: Node | null
+  readonly anchor: Node | null
+}): Node {
+  if (state.containerParent) return state.containerParent
+  if (state.anchor) return resolveParent(state.anchor)
+  throw new Error("A region has neither a container nor an anchor")
+}
+
 // =============================================================================
 // Fragment Handling Helper
 // =============================================================================
@@ -715,24 +728,15 @@ export function listRegion<T>(
     containerParent,
   }
 
-  // Resolve the parent for the current operation. In container mode this
-  // is the stable element; in marker mode it's resolved lazily from the
-  // anchor (which may be in a fragment at initial render time, and in the
-  // real DOM at subscription callback time).
-  const resolveListParent = (): Node => {
-    if (state.containerParent) return state.containerParent
-    return resolveParent(state.anchor!)
-  }
-
   // Plan and execute initial render
   const initialOps = planInitialRender(typedListRef)
-  executeOps(resolveListParent(), state, handlers, initialOps)
+  executeOps(regionParent(state), state, handlers, initialOps)
 
   // Subscribe to changes
   subscribe(
     listRef,
     (change: ChangeBase) => {
-      const parent = resolveListParent()
+      const parent = regionParent(state)
       // Only process sequence changes — other change types trigger full re-render
       if (isSequenceChange(change)) {
         const regionOps = planDeltaOps(state.listRef, change.instructions)
@@ -819,16 +823,6 @@ function findReferenceNode(
     }
   }
   return state.endMarker
-}
-
-/**
- * Resolve the parent node for a filtered list region.
- *
- * @internal
- */
-function resolveFilteredListParent(state: FilteredListState<unknown>): Node {
-  if (state.containerParent) return state.containerParent
-  return resolveParent(state.anchor!)
 }
 
 /**
@@ -950,10 +944,10 @@ function setupItemSubscriptions<T>(
         const isVisible = state.visibility[sourceIndex]
 
         if (shouldBeVisible && !isVisible) {
-          const parent = resolveFilteredListParent(state)
+          const parent = regionParent(state)
           showItem(parent, state, handlers, sourceIndex)
         } else if (!shouldBeVisible && isVisible) {
-          const parent = resolveFilteredListParent(state)
+          const parent = regionParent(state)
           hideItem(parent, state, sourceIndex)
         }
       },
@@ -1032,7 +1026,7 @@ export function filteredListRegion<T>(
 
   // --- Initial render ---
   // Evaluate predicate for each item and render only visible ones.
-  const parent = resolveFilteredListParent(state)
+  const parent = regionParent(state)
   for (let i = 0; i < typedListRef.length; i++) {
     const item = typedListRef.at(i)
     if (item === undefined) continue
@@ -1056,7 +1050,7 @@ export function filteredListRegion<T>(
   subscribe(
     listRef,
     (change: ChangeBase) => {
-      const parent = resolveFilteredListParent(state)
+      const parent = regionParent(state)
 
       if (isSequenceChange(change)) {
         // Process structural delta ops. We handle insert/delete manually
@@ -1159,7 +1153,7 @@ export function filteredListRegion<T>(
     subscribe(
       ref,
       () => {
-        const parent = resolveFilteredListParent(state)
+        const parent = regionParent(state)
         const ops = planFilterUpdate(
           state.visibility,
           handlers.predicate,

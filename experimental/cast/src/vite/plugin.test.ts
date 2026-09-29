@@ -11,8 +11,10 @@ import kynetaPlugin, { type KynetaPluginOptions } from "./plugin.js"
 /** Narrow the plugin return (Vite 6 may return Plugin | Plugin[]) */
 function getPlugin(options?: KynetaPluginOptions) {
   const result = kynetaPlugin(options)
-  if (Array.isArray(result)) return result[0]!
-  return result
+  if (!Array.isArray(result)) return result
+  const [plugin] = result
+  if (plugin === undefined) throw new Error("the plugin returned no plugins")
+  return plugin
 }
 
 describe("Vite Plugin", () => {

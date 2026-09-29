@@ -155,8 +155,7 @@ export function knownPositions(a: Atom, bound: BoundNames): number {
   if (a.terms.length > MAX_MASKABLE_ARITY) return 0
 
   let mask = 0
-  for (let i = 0; i < a.terms.length; i++) {
-    const term = a.terms[i]!
+  for (const [i, term] of a.terms.entries()) {
     if (
       term.kind === "const" ||
       (term.kind === "var" && bound.has(term.name))
@@ -181,9 +180,8 @@ export function knownPositions(a: Atom, bound: BoundNames): number {
  */
 function boundValues(a: Atom, mask: number, sub: Substitution): Value[] {
   const values: Value[] = []
-  for (let i = 0; i < a.terms.length; i++) {
+  for (const [i, term] of a.terms.entries()) {
     if ((mask & (1 << i)) === 0) continue
-    const term = a.terms[i]!
     if (term.kind === "const") {
       values.push(term.value)
     } else if (term.kind === "var") {
@@ -232,8 +230,11 @@ export function matchAtomWithTuple(
   }
 
   let current: Substitution | null = sub
-  for (let i = 0; i < a.terms.length; i++) {
-    current = unifyTermWithValue(a.terms[i]!, tuple[i]!, current)
+  for (const [i, term] of a.terms.entries()) {
+    const value = tuple[i]
+    // Same arity, checked above; a Value may be null but is never undefined.
+    if (value === undefined) return null
+    current = unifyTermWithValue(term, value, current)
     if (current === null) {
       return null
     }

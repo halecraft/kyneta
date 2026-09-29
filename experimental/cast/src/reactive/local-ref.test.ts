@@ -133,9 +133,7 @@ describe("LocalRef", () => {
         const changeset: Changeset<ReplaceChange<number>> =
           handler.mock.calls[0][0]
         expect(changeset.changes).toHaveLength(1)
-        const change = changeset.changes[0]!
-        expect(change.type).toBe("replace")
-        expect(change.value).toBe(1)
+        expect(changeset.changes[0]).toEqual({ type: "replace", value: 1 })
       })
 
       it("fires for each set() call", () => {

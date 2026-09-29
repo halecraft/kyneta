@@ -211,9 +211,7 @@ export function prepareBlocks(markdown: string, file: string): PreparedBlock[] {
  * what lets a reported "Code Block N" be mapped back to its origin.
  */
 export function renderForCompiler(blocks: PreparedBlock[]): string {
-  return blocks
-    .map(b => "```" + b.lang + "\n" + b.source + "\n```")
-    .join("\n\n")
+  return blocks.map(b => `\`\`\`${b.lang}\n${b.source}\n\`\`\``).join("\n\n")
 }
 
 /**

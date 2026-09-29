@@ -5,7 +5,7 @@
  * TypeScript AST into IR nodes.
  */
 
-import { Project, SyntaxKind } from "ts-morph"
+import { Project, type SourceFile, type Statement, SyntaxKind } from "ts-morph"
 import { beforeEach, describe, expect, it } from "vitest"
 import {
   analyzeBuilder,
@@ -42,6 +42,12 @@ function createProject(): Project {
 /**
  * Create a source file with the given code.
  */
+function lastStatement(sourceFile: SourceFile): Statement {
+  const statement = sourceFile.getStatements().at(-1)
+  if (statement === undefined) throw new Error("expected a statement")
+  return statement
+}
+
 function createSourceFile(
   project: Project,
   code: string,
@@ -265,9 +271,9 @@ describe("ComponentFactory detection", () => {
     // Find the Avatar call
     const calls = sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)
     const avatarCall = calls.find(c => c.getExpression().getText() === "Avatar")
-    expect(avatarCall).toBeDefined()
+    if (avatarCall === undefined) throw new Error("expected the call")
 
-    const ir = analyzeElementCall(avatarCall!)
+    const ir = analyzeElementCall(avatarCall)
     expect(ir).not.toBeNull()
     expect(ir?.kind).toBe("element")
     if (ir?.kind === "element") {
@@ -291,9 +297,9 @@ describe("ComponentFactory detection", () => {
 
     const calls = sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)
     const divCall = calls.find(c => c.getExpression().getText() === "div")
-    expect(divCall).toBeDefined()
+    if (divCall === undefined) throw new Error("expected the call")
 
-    const ir = analyzeElementCall(divCall!)
+    const ir = analyzeElementCall(divCall)
     expect(ir).not.toBeNull()
     expect(ir?.kind).toBe("element")
     if (ir?.kind === "element") {
@@ -1652,7 +1658,7 @@ describe("isChangefeedType", () => {
     `,
     )
 
-    const varDecl = sourceFile.getVariableDeclaration("title")!
+    const varDecl = sourceFile.getVariableDeclarationOrThrow("title")
     expect(isChangefeedType(varDecl.getType())).toBe(true)
   })
 
@@ -1665,7 +1671,7 @@ describe("isChangefeedType", () => {
     `,
     )
 
-    const varDecl = sourceFile.getVariableDeclaration("count")!
+    const varDecl = sourceFile.getVariableDeclarationOrThrow("count")
     expect(isChangefeedType(varDecl.getType())).toBe(true)
   })
 
@@ -1678,7 +1684,7 @@ describe("isChangefeedType", () => {
     `,
     )
 
-    const varDecl = sourceFile.getVariableDeclaration("items")!
+    const varDecl = sourceFile.getVariableDeclarationOrThrow("items")
     expect(isChangefeedType(varDecl.getType())).toBe(true)
   })
 
@@ -1690,7 +1696,7 @@ describe("isChangefeedType", () => {
     `,
     )
 
-    const varDecl = sourceFile.getVariableDeclaration("obj")!
+    const varDecl = sourceFile.getVariableDeclarationOrThrow("obj")
     expect(isChangefeedType(varDecl.getType())).toBe(false)
   })
 
@@ -1704,12 +1710,10 @@ describe("isChangefeedType", () => {
     )
 
     expect(
-      // biome-ignore lint/style/noNonNullAssertion: type is guaranteed after getType()
-      isChangefeedType(sourceFile.getVariableDeclaration("a")!.getType()),
+      isChangefeedType(sourceFile.getVariableDeclarationOrThrow("a").getType()),
     ).toBe(false)
     expect(
-      // biome-ignore lint/style/noNonNullAssertion: type is guaranteed after getType()
-      isChangefeedType(sourceFile.getVariableDeclaration("u")!.getType()),
+      isChangefeedType(sourceFile.getVariableDeclarationOrThrow("u").getType()),
     ).toBe(false)
   })
 
@@ -1722,7 +1726,7 @@ describe("isChangefeedType", () => {
     `,
     )
 
-    const varDecl = sourceFile.getVariableDeclaration("maybeRef")!
+    const varDecl = sourceFile.getVariableDeclarationOrThrow("maybeRef")
     expect(isChangefeedType(varDecl.getType())).toBe(true)
   })
 
@@ -1734,7 +1738,7 @@ describe("isChangefeedType", () => {
     `,
     )
 
-    const varDecl = sourceFile.getVariableDeclaration("count")!
+    const varDecl = sourceFile.getVariableDeclarationOrThrow("count")
     expect(isChangefeedType(varDecl.getType())).toBe(false)
   })
 
@@ -1749,7 +1753,7 @@ describe("isChangefeedType", () => {
     `,
     )
 
-    const varDecl = sourceFile.getVariableDeclaration("isOpen")!
+    const varDecl = sourceFile.getVariableDeclarationOrThrow("isOpen")
     expect(isChangefeedType(varDecl.getType())).toBe(true)
   })
 })
@@ -1776,7 +1780,7 @@ describe("analyzeExpression with implicit read (bare ref)", () => {
     `,
     )
 
-    const exprStmt = sourceFile.getStatements().at(-1)!
+    const exprStmt = lastStatement(sourceFile)
     const expr = exprStmt.getChildAtIndex(0)
 
     const result = analyzeExpression(expr as any) as ContentValue
@@ -1798,7 +1802,7 @@ describe("analyzeExpression with implicit read (bare ref)", () => {
     `,
     )
 
-    const exprStmt = sourceFile.getStatements().at(-1)!
+    const exprStmt = lastStatement(sourceFile)
     const expr = exprStmt.getChildAtIndex(0)
 
     const result = analyzeExpression(expr as any) as ContentValue
@@ -1867,7 +1871,7 @@ describe("analyzeExpression with implicit read (bare ref)", () => {
     `,
     )
 
-    const exprStmt = sourceFile.getStatements().at(-1)!
+    const exprStmt = lastStatement(sourceFile)
     const expr = exprStmt.getChildAtIndex(0)
 
     const result = analyzeExpression(expr as any) as ContentValue
@@ -1914,7 +1918,7 @@ describe("dependency subsumption", () => {
     `,
     )
 
-    const exprStmt = sourceFile.getStatements().at(-1)!
+    const exprStmt = lastStatement(sourceFile)
     const expr = exprStmt.getChildAtIndex(0)
     const type = (expr as any).getType()
 
@@ -1931,7 +1935,7 @@ describe("dependency subsumption", () => {
     `,
     )
 
-    const exprStmt = sourceFile.getStatements().at(-1)!
+    const exprStmt = lastStatement(sourceFile)
     const expr = exprStmt.getChildAtIndex(0)
     const type = (expr as any).getType()
 

@@ -152,8 +152,8 @@ function analyzeFirst(project: Project, code: string) {
   const calls = findBuilderCalls(sourceFile)
   expect(calls.length).toBeGreaterThan(0)
   const builder = analyzeBuilder(calls[0])
-  expect(builder).not.toBeNull()
-  return builder!
+  if (builder === null) throw new Error("expected the builder to analyze")
+  return builder
 }
 
 // =============================================================================
