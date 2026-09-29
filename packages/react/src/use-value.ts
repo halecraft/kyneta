@@ -1,33 +1,39 @@
 // use-value — reactive subscription to a ref's current plain value.
 //
-// useValue(ref) returns Plain<S> and re-renders when the ref changes. It is a
-// derivation of useTracked (jj:smkurmok): `useValue(ref) ≡ useTracked(() =>
-// ref())` — the deep-aspect corner of auto-tracking. Reading `ref()` deeply
-// reports a `deep` dependency, so useValue re-renders on any descendant change
-// (the same contract as before), now with version-driven change detection
-// instead of a cached deep snapshot. Materialization (`ref()` → Plain<S>) is
-// intrinsic to useValue's contract; the foundation makes its change *detection*
-// exact, not its cost. To avoid materializing, project with `useSelector`.
+// useValue(ref) is useSelector(ref, readValue): a selector that reads the
+// whole value. Reading `ref()` reports a deep dependency, so useValue
+// re-renders on any change below the ref. The value is the ref's read — a
+// frozen snapshot that keeps its identity until something below the ref
+// changes, and shares every subtree that did not. `readValue` is one
+// module-level function, so the thunk is stable and a re-render for any other
+// reason returns the same value.
 //
 // Uses a single conditional return type to handle null/undefined passthrough:
 //   CallableRef → ReturnType<R>;  null → null;  undefined → undefined.
 
 import { track } from "@kyneta/reactive"
 import type { CallableRef } from "./store.js"
-import { useTracked } from "./use-tracked.js"
+import { useSelector } from "./use-selector.js"
 
-// ---------------------------------------------------------------------------
-// useValue
-// ---------------------------------------------------------------------------
+/**
+ * Read a ref's value. `track` reports plain `HasChangefeed` sources (a
+ * `ReactiveMap`, an index `Collection`) that don't report their own reads;
+ * a schema ref reports itself when called. Nullish passes through untracked.
+ */
+const readValue = (ref: CallableRef | null | undefined): unknown =>
+  ref == null ? ref : track(ref)
 
 /**
  * Subscribe to a ref's current plain value.
  *
- * Returns `Plain<S>` — a plain JS snapshot — and re-renders when the ref (or
+ * Returns `Plain<S>` — a frozen snapshot — and re-renders when the ref (or
  * any descendant) changes. For composite refs this is a deep subscription;
- * for leaf refs, own-node only. Accepts `null` / `undefined` and returns them
- * unchanged (stable hook call count — the nullish case is handled inside the
- * tracked thunk, not via a conditional hook).
+ * for leaf refs, own-node only. The value keeps its identity across renders
+ * until the ref's value changes, and an unchanged part of it keeps its
+ * identity across that change, so `React.memo` children given a part of it
+ * skip re-rendering. Accepts `null` / `undefined` and returns them unchanged
+ * (stable hook call count — the nullish case is handled inside the selector,
+ * not via a conditional hook).
  *
  * ```tsx
  * const title = useValue(doc.title)        // string
@@ -41,10 +47,8 @@ import { useTracked } from "./use-tracked.js"
 export function useValue<R extends CallableRef | null | undefined>(
   ref: R,
 ): R extends CallableRef ? ReturnType<R> : R {
-  // `track` reports plain HasChangefeed sources (ReactiveMap, index Collection)
-  // that don't self-report; for schema refs it is a no-op pass-through (they
-  // self-report deeply when called). Nullish passes through untracked.
-  return useTracked(() =>
-    ref == null ? (ref as unknown) : track(ref as CallableRef),
+  return useSelector<CallableRef | null | undefined, unknown>(
+    ref,
+    readValue,
   ) as R extends CallableRef ? ReturnType<R> : R
 }

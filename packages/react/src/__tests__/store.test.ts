@@ -1,30 +1,10 @@
 // store.test.ts — Tier 1 pure store tests (no React, no jsdom).
 //
-// Tests createNullishStore / createSyncStore
-// independently of React. (createChangefeedStore was removed in jj:smkurmok;
-// its CHANGEFEED→ExternalStore logic — a degenerate single-dependency reactive —
-// is now generalized inside @kyneta/reactive; see that package's reactive.test.ts.)
+// Tests createSyncStore independently of React.
 
 import type { PeerIdentityDetails, SyncRef } from "@kyneta/exchange"
 import { describe, expect, it, vi } from "vitest"
-import { createNullishStore, createSyncStore } from "../store.js"
-
-// ---------------------------------------------------------------------------
-// createNullishStore
-// ---------------------------------------------------------------------------
-
-describe("createNullishStore", () => {
-  it("returns the nullish value and subscribe is a safe no-op", () => {
-    const nullStore = createNullishStore(null)
-    expect(nullStore.getSnapshot()).toBe(null)
-
-    const undefStore = createNullishStore(undefined)
-    expect(undefStore.getSnapshot()).toBe(undefined)
-
-    // subscribe returns a callable unsubscribe, never throws
-    nullStore.subscribe(() => {})()
-  })
-})
+import { createSyncStore } from "../store.js"
 
 // ---------------------------------------------------------------------------
 // createSyncStore

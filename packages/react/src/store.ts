@@ -1,13 +1,12 @@
-// store — pure store factories (Functional Core).
-//
-// Two framework-agnostic functions that translate from kyneta's reactive
-// protocols into the { subscribe, getSnapshot } contract consumed by
-// React's useSyncExternalStore (and any other external-store consumer).
+// store — the external-store contract, and the one source that needs a
+// factory to meet it (Functional Core).
 //
 // Zero React imports. Independently testable with createDoc + batch().
 //
 // createSyncStore(syncRef) — subscribes to SyncRef.onPeerSyncChange(),
-//   caches peerStates for referential stability.
+//   caches peerStates for referential stability. Changefeed sources need no
+//   factory: `useChangefeed` meets the contract with `current` directly, and
+//   everything else goes through `useTracked`.
 
 import type { ChangeBase, ChangefeedProtocol } from "@kyneta/changefeed"
 import { CHANGEFEED } from "@kyneta/changefeed"
@@ -44,37 +43,6 @@ export interface ExternalStore<T> {
  */
 export type CallableRef = ((...args: any[]) => any) & {
   readonly [CHANGEFEED]: ChangefeedProtocol<any, ChangeBase>
-}
-
-// Note: `createChangefeedStore` (the previous CHANGEFEED → ExternalStore
-// adapter, a degenerate single-dependency reactive) was removed in jj:smkurmok.
-// Its deep/shallow `hasRecursiveChangefeed` dispatch is now generalized inside
-// `@kyneta/reactive`'s aspect → primitive resolution (jj:kpywvkpr); `useValue`
-// is now `useTracked(() => ref())`. `createSyncStore` remains — it wraps
-// `SyncRef.onPeerSyncChange` (not a changefeed) and is not subsumable by the
-// reactive runtime.
-
-// ---------------------------------------------------------------------------
-// Nullish no-op store — stable singleton for null/undefined refs
-// ---------------------------------------------------------------------------
-
-const NOOP_UNSUBSCRIBE = () => {}
-const NOOP_SUBSCRIBE = () => NOOP_UNSUBSCRIBE
-
-/**
- * A stable no-op store for null/undefined refs. The snapshot is the
- * nullish value itself (null or undefined). subscribe is a no-op.
- *
- * Exported for use by useValue's nullish branch — ensures hook call
- * count is stable regardless of whether the ref is nullish.
- */
-export function createNullishStore<T extends null | undefined>(
-  value: T,
-): ExternalStore<T> {
-  return {
-    subscribe: NOOP_SUBSCRIBE,
-    getSnapshot: () => value,
-  }
 }
 
 // ---------------------------------------------------------------------------

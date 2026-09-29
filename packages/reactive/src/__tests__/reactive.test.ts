@@ -150,3 +150,62 @@ describe("reactive", () => {
     expect(r.version).toBe(0)
   })
 })
+
+// ---------------------------------------------------------------------------
+// refresh(thunk) — the identity gate
+// ---------------------------------------------------------------------------
+
+describe("refresh(thunk)", () => {
+  it("with the same thunk and no change, returns the same value without running it", () => {
+    const doc: any = createDoc(TodoApp)
+    seed(doc, 2)
+    let runs = 0
+    const thunk = () => {
+      runs++
+      return [...doc.todos].map((t: any) => t.text())
+    }
+    const r = reactive(thunk)
+    expect(runs).toBe(1)
+    const first = r.refresh(thunk)
+    expect(r.refresh(thunk)).toBe(first)
+    expect(runs).toBe(1)
+    r.dispose()
+  })
+
+  it("a new thunk re-runs, and becomes the node's thunk", async () => {
+    const doc: any = createDoc(TodoApp)
+    seed(doc, 2)
+    const r = reactive(() => doc.todos.length)
+    let runs = 0
+    const next = () => {
+      runs++
+      return doc.todos.length * 10
+    }
+    expect(r.refresh(next)).toBe(20)
+    expect(runs).toBe(1)
+    const version = r.version
+
+    // The dependency fires: the flush re-runs the new thunk.
+    doc.todos.push({ id: "t9", text: "x", done: false })
+    await tick()
+    expect(r.version).toBe(version + 1)
+    expect(r()).toBe(30)
+    expect(runs).toBe(2)
+    r.dispose()
+  })
+
+  it("after a write but before the flush, the same thunk re-runs and returns the new value", () => {
+    const doc: any = createDoc(TodoApp)
+    const thunk = () => doc.title()
+    const r = reactive(thunk)
+    expect(r.refresh(thunk)).toBe("")
+    const version = r.version
+
+    batch(doc, (d: any) => d.title.set("new"))
+    // No microtask has run: `version` has not moved, but the node is dirty.
+    expect(r.version).toBe(version)
+    expect(r.refresh(thunk)).toBe("new")
+    expect(r.version).toBe(version)
+    r.dispose()
+  })
+})

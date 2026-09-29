@@ -60,13 +60,29 @@ export interface Reactive<T> extends HasChangefeed<T> {
   /** Observe invalidations (post-coalesce). Returns an unsubscribe. */
   subscribe(cb: () => void): () => void
   /**
-   * Recompute now with the current thunk and return the value, WITHOUT bumping
-   * `version` or notifying. For framework bindings (e.g. `@kyneta/react`'s
-   * `useTracked`) that re-run every render to follow closure-captured state
-   * (props/filter) with no deps array — re-tracking here never loops with
-   * `useSyncExternalStore` because the change token (`version`) is untouched.
+   * The current value for `thunk`, which becomes the node's thunk. Re-runs
+   * (re-tracking, WITHOUT bumping `version` or notifying) only if `thunk` is
+   * not the function last run or a tracked dependency fired since; otherwise
+   * returns the stored value, with its identity.
+   *
+   * For framework bindings (e.g. `@kyneta/react`'s `useTracked`) that call it
+   * every render. The closure is one more input to the computation, and its
+   * identity is its change signal: a thunk that closes over new props is a new
+   * function, and re-runs; the same function has nothing new to say. So a
+   * binding follows props with no dependency list, keeps its value's
+   * identity across renders that changed nothing, and never loops with
+   * `useSyncExternalStore`, because the change token (`version`) is untouched.
+   *
+   * The gate reads `dirty`, not `version`: a dependency marks the node dirty
+   * at once, while `version` only advances on the microtask flush, and a call
+   * in between must not return the stale value.
+   *
+   * A thunk must be pure over its captures and its tracked reads. One that
+   * reads something untracked (`Date.now()`, a mutable ref) returns a stale
+   * value once its identity is stable — the contract of `useMemo` and
+   * `computed` too.
    */
-  refresh(): T
+  refresh(thunk: () => T): T
   /** Tear down all dependency subscriptions and detach from the scheduler. */
   dispose(): void
   /** True after `dispose()`. Lets framework bindings recreate after a teardown (e.g. React StrictMode remount). */
@@ -78,7 +94,8 @@ export interface Reactive<T> extends HasChangefeed<T> {
 // ---------------------------------------------------------------------------
 
 interface ReactiveNode<T> {
-  readonly thunk: () => T
+  /** The computation, replaced when `refresh` is handed a new one. */
+  thunk: () => T
   value: T
   version: number
   dirty: boolean
@@ -259,8 +276,12 @@ export function reactive<T>(thunk: () => T): Reactive<T> {
   })
   r.subscribe = (cb: () => void): (() => void) =>
     protocol.subscribe(cb as (cs: Changeset) => void)
-  r.refresh = (): T => {
-    if (!node.disposed) trackNode(node)
+  r.refresh = (thunk: () => T): T => {
+    if (node.disposed) return node.value
+    if (thunk !== node.thunk || node.dirty) {
+      node.thunk = thunk
+      trackNode(node)
+    }
     return node.value
   }
   r.dispose = (): void => {

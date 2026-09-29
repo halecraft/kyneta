@@ -1,18 +1,25 @@
 // use-changefeed — subscribe a React component to any [CHANGEFEED] source.
 //
-// The [CHANGEFEED] protocol is already the useSyncExternalStore contract:
-// .current (snapshot) and .subscribe() (returns unsubscribe). useChangefeed
-// is the one-liner that bridges them: no intermediate store factory needed.
+// `.current` is the snapshot and a subscription is the change signal, which
+// is the useSyncExternalStore contract once two things hold. `current` must
+// keep its identity until the source changes — the changefeed identity rule,
+// which every kyneta source keeps. And the subscription must cover everything
+// `current` reads: a schema composite's `current` is its whole subtree, so it
+// is subscribed with `subscribeDescendants`, not the own-path `subscribe`.
 
 import type { Changefeed } from "@kyneta/changefeed"
+import { CHANGEFEED } from "@kyneta/changefeed"
+import { hasRecursiveChangefeed } from "@kyneta/schema"
 import { useMemo, useSyncExternalStore } from "react"
 
 /**
  * Subscribe to a {@link Changefeed} and return its current value, re-rendering
- * on each new changeset.
+ * exactly when it changes.
  *
- * This is the general-purpose hook for any `[CHANGEFEED]` source — schema refs,
- * `exchange.peers`, `exchange.documents`, standalone feeds.
+ * The general-purpose hook for any `[CHANGEFEED]` source — schema refs,
+ * `exchange.peers`, `exchange.documents`, standalone feeds. A source that
+ * supports descendant subscriptions (a schema ref) is subscribed with them, so
+ * an edit anywhere below it re-renders, as its `current` reads it.
  *
  * ```tsx
  * // exchange.peers — a ReactiveMap
@@ -24,7 +31,7 @@ import { useMemo, useSyncExternalStore } from "react"
  *
  * // Any schema ref via the changefeed() projector
  * import { changefeed } from "@kyneta/changefeed"
- * const title = useChangefeed(changefeed(doc.title))
+ * const todos = useChangefeed(changefeed(doc.todos))
  * ```
  *
  * @param feed - Any `Changefeed<T, any>` source.
@@ -34,7 +41,9 @@ export function useChangefeed<T>(feed: Changefeed<T, any>): T {
   const store = useMemo(
     () => ({
       subscribe: (onStoreChange: () => void) =>
-        feed.subscribe(() => onStoreChange()),
+        hasRecursiveChangefeed(feed)
+          ? feed[CHANGEFEED].subscribeDescendants(() => onStoreChange())
+          : feed.subscribe(() => onStoreChange()),
       getSnapshot: () => feed.current,
     }),
     [feed],

@@ -1,12 +1,14 @@
 // use-selector — project a ref to a derived value, reactively and parsimoniously.
 //
-// useSelector(ref, select) ≡ useTracked(() => select(ref)). The component
-// re-renders exactly when the nodes `select` actually reads change — not on
-// unrelated edits, and with no deep-JSON materialization unless `select` asks
-// for it. No options: no `scope`, no `watch`, no `isEqual` — auto-tracking
-// (jj:vtpxvkyk + jj:kpywvkpr) subsumes them all.
+// useSelector(ref, select) is useTracked over `() => select(ref)`, with that
+// thunk memoized on `ref` and `select`. The component re-renders exactly when
+// the nodes `select` actually reads change — not on unrelated edits, and with
+// no deep materialization unless `select` asks for it. No options: no `scope`,
+// no `watch`, no `isEqual` — auto-tracking (jj:vtpxvkyk + jj:kpywvkpr)
+// subsumes them all.
 
 import { hasChangefeed } from "@kyneta/changefeed"
+import { useMemo } from "react"
 import { useTracked } from "./use-tracked.js"
 
 /**
@@ -21,14 +23,21 @@ import { useTracked } from "./use-tracked.js"
  * )
  * ```
  *
- * `select` may close over props/state (e.g. `filter`) with no deps array.
+ * The result keeps its identity while `ref` and `select` keep theirs and
+ * nothing `select` read changed. An inline `select` that closes over props is
+ * a new function each render and re-runs, so it follows them with no deps
+ * array; a stable one (React Compiler, `useCallback`) keeps the result stable.
+ * `select` must be pure over what it captures and what it reads.
  *
  * @param ref - Any kyneta ref (or reactive source).
  * @param select - A pure projection reading from `ref`.
  * @returns The selected value, recomputed when its dependencies change.
  */
 export function useSelector<R, T>(ref: R, select: (ref: R) => T): T {
-  const result = useTracked(() => select(ref))
+  // The thunk's identity is useTracked's change signal, so it is keyed on
+  // exactly the hook's own arguments.
+  const thunk = useMemo(() => () => select(ref), [ref, select])
+  const result = useTracked(thunk)
   if (result && hasChangefeed(result)) {
     throw new Error(
       "useSelector must return a projected value (or plain data), not a Kyneta Ref. " +
