@@ -43,7 +43,7 @@ const mapSchema = Schema.struct({
 
 function createTodoDoc(initialTodos: Array<{ text: string; done: boolean }>) {
   const store = { todos: initialTodos }
-  const ctx = plainContext(store)
+  const ctx = plainContext(todoSchema, store)
   const doc = interpret(todoSchema, ctx)
     .with(readable)
     .with(writable)
@@ -54,7 +54,7 @@ function createTodoDoc(initialTodos: Array<{ text: string; done: boolean }>) {
 
 function createMapDoc(initialMetadata: Record<string, string>) {
   const store = { metadata: initialMetadata }
-  const ctx = plainContext(store)
+  const ctx = plainContext(mapSchema, store)
   const doc = interpret(mapSchema, ctx)
     .with(readable)
     .with(writable)
@@ -265,7 +265,7 @@ describe("withAddressing: composition", () => {
 
   it("readable layer includes withAddressing — paths are addressed", () => {
     const store = { todos: [{ text: "test", done: false }] }
-    const ctx = plainContext(store)
+    const ctx = plainContext(todoSchema, store)
     const _doc = interpret(todoSchema, ctx)
       .with(readable)
       .with(writable)
@@ -279,7 +279,7 @@ describe("withAddressing: composition", () => {
 
   it("ctx.rootPath determines path type for entire tree", () => {
     const store = { todos: [{ text: "test", done: false }] }
-    const ctx = plainContext(store)
+    const ctx = plainContext(todoSchema, store)
     const doc = interpret(todoSchema, ctx)
       .with(readable)
       .with(writable)

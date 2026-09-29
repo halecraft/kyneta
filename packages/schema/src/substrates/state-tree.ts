@@ -1320,6 +1320,10 @@ export function writeProduct(
  * seen them all. So is a product at a dynamic key, whose existence is itself
  * last-writer-wins. A product at a declared key is written field by field
  * into the container already there.
+ *
+ * So a horizon is raised exactly where `planSubtreeEffect` says a change
+ * rewrote a subtree at a dynamic position, and nowhere else;
+ * `ephemeral-subtree-effect.test.ts` pins that law.
  */
 function writeNode(
   value: unknown,

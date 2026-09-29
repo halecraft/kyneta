@@ -176,13 +176,13 @@ log(`
   const roStore = doc() as Record<string, unknown>
   const roDoc: RRef<typeof ProjectSchema> = interpret(
     ProjectSchema,
-    plainContext(roStore),
+    plainContext(ProjectSchema, roStore),
   )
     .with(readable)
     .done()
 
   log(`
-    const roDoc = interpret(schema, plainContext(store)).with(readable).done()
+    const roDoc = interpret(schema, plainContext(schema, store)).with(readable).done()
 
     roDoc.name() → "${roDoc.name()}"
     roDoc.tasks.at(0)?.title() → "${roDoc.tasks.at(0)?.title()}"

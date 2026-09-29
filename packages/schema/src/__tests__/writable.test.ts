@@ -85,7 +85,7 @@ function createStructuralDoc(storeOverrides: Record<string, unknown> = {}) {
     metadata: { version: 1 },
     ...storeOverrides,
   }
-  const ctx = plainContext(store)
+  const ctx = plainContext(structuralDocSchema, store)
   const doc = interpret(structuralDocSchema, ctx)
     .with(readable)
     .with(writable)
@@ -110,7 +110,7 @@ describe("writable: product lazy getters", () => {
       settings: { darkMode: true, fontSize: 16 },
       metadata: { version: 1 },
     }
-    const ctx = plainContext(store)
+    const ctx = plainContext(structuralDocSchema, store)
     const doc = interpret(structuralDocSchema, ctx)
       .with(readable)
       .with(writable)
@@ -198,7 +198,7 @@ describe("writable: product .set()", () => {
       settings: { darkMode: false, fontSize: 14 },
       metadata: { version: 1 },
     }
-    const ctx = plainContext(store)
+    const ctx = plainContext(structuralDocSchema, store)
     const doc = interpret(structuralDocSchema, ctx)
       .with(readable)
       .with(writable)
@@ -313,7 +313,7 @@ describe("writable: batch() blocks", () => {
       x: Schema.number(),
       y: Schema.number(),
     })
-    const ctx = plainContext(store)
+    const ctx = plainContext(schema, store)
     const doc = interpret(schema, ctx).with(readable).with(writable).done()
 
     const flushed = batch(doc, d => {
@@ -329,7 +329,7 @@ describe("writable: batch() blocks", () => {
   it("dispatch applies immediately outside any batch() block (auto-commit)", () => {
     const store = { x: 0 }
     const schema = Schema.struct({ x: Schema.number() })
-    const ctx = plainContext(store)
+    const ctx = plainContext(schema, store)
     const doc = interpret(schema, ctx).with(readable).with(writable).done()
 
     doc.x.set(42)
@@ -351,7 +351,7 @@ describe("writable: discriminated sum", () => {
 
   it("dispatches to the correct variant based on store discriminant", () => {
     const store = { item: { type: "image", url: "pic.png" } }
-    const ctx = plainContext(store)
+    const ctx = plainContext(schema, store)
     const doc = interpret(schema, ctx).with(readable).with(writable).done()
 
     // Should produce the "image" variant ref with a .url field
@@ -360,7 +360,7 @@ describe("writable: discriminated sum", () => {
 
   it("falls back to first variant when discriminant is missing", () => {
     const store = { item: {} }
-    const ctx = plainContext(store)
+    const ctx = plainContext(schema, store)
     const doc = interpret(schema, ctx).with(readable).with(writable).done()
 
     // First variant is "text" which has a .body field
@@ -369,7 +369,7 @@ describe("writable: discriminated sum", () => {
 
   it("falls back to first variant when store value is not an object", () => {
     const store = { item: 42 }
-    const ctx = plainContext(store)
+    const ctx = plainContext(schema, store)
     const doc = interpret(schema, ctx).with(readable).with(writable).done()
 
     expect(typeof (doc as any).item.body).toBe("function")
@@ -377,7 +377,7 @@ describe("writable: discriminated sum", () => {
 
   it(".set() switches variant and re-dispatches cached field", () => {
     const store = { item: { type: "text", body: "hello" } }
-    const ctx = plainContext(store)
+    const ctx = plainContext(schema, store)
     const doc = interpret(schema, ctx).with(readable).with(writable).done()
 
     expect((doc as any).item.type).toBe("text")
@@ -401,7 +401,7 @@ describe("writable: nullable (positional sum)", () => {
 
   it("null store value dispatches to the null variant", () => {
     const store = { bio: null }
-    const ctx = plainContext(store)
+    const ctx = plainContext(schema, store)
     const doc = interpret(schema, ctx).with(readable).with(writable).done()
 
     // The null variant is a scalar ref whose () returns null
@@ -410,7 +410,7 @@ describe("writable: nullable (positional sum)", () => {
 
   it("non-null store value dispatches to the inner variant", () => {
     const store = { bio: "Hello world" }
-    const ctx = plainContext(store)
+    const ctx = plainContext(schema, store)
     const doc = interpret(schema, ctx).with(readable).with(writable).done()
 
     expect(doc.bio()).toBe("Hello world")
@@ -418,7 +418,7 @@ describe("writable: nullable (positional sum)", () => {
 
   it("mutation on the inner ref works", () => {
     const store = { bio: "old" }
-    const ctx = plainContext(store)
+    const ctx = plainContext(schema, store)
     const doc = interpret(schema, ctx).with(readable).with(writable).done()
 
     ;(doc.bio as any).set("new")
@@ -459,7 +459,7 @@ function createAnnotatedDoc(storeOverrides: Record<string, unknown> = {}) {
     metadata: { version: 1 },
     ...storeOverrides,
   }
-  const ctx = plainContext(store)
+  const ctx = plainContext(annotatedDocSchema, store)
   const doc = interpret(annotatedDocSchema, ctx)
     .with(readable)
     .with(writable)
@@ -624,7 +624,7 @@ describe("writable: invalidate-before-dispatch", () => {
 
   function createCachedListDoc(items: Array<{ name: string }>) {
     const store = { items }
-    const ctx = plainContext(store)
+    const ctx = plainContext(listSchema, store)
     const doc = interpret(listSchema, ctx).with(readable).with(writable).done()
     return { doc, store, ctx }
   }
@@ -698,7 +698,7 @@ describe("writable: cacheless stack", () => {
       items: Schema.list(Schema.struct({ name: Schema.string() })),
     })
     const store = { items: [{ name: "a" }] }
-    const ctx = plainContext(store)
+    const ctx = plainContext(schema, store)
     const doc = interpret(schema, cachelessInterpreter, ctx) as unknown as Ref<
       typeof schema
     >
@@ -711,7 +711,7 @@ describe("writable: cacheless stack", () => {
   it("map .set() works without caching", () => {
     const schema = Schema.struct({ meta: Schema.record(Schema.number()) })
     const store = { meta: { a: 1 } }
-    const ctx = plainContext(store)
+    const ctx = plainContext(schema, store)
     const doc = interpret(schema, cachelessInterpreter, ctx) as unknown as Ref<
       typeof schema
     >
@@ -723,7 +723,7 @@ describe("writable: cacheless stack", () => {
   it("scalar .set() works without caching", () => {
     const schema = Schema.struct({ n: Schema.number() })
     const store = { n: 0 }
-    const ctx = plainContext(store)
+    const ctx = plainContext(schema, store)
     const doc = interpret(schema, cachelessInterpreter, ctx) as unknown as Ref<
       typeof schema
     >
@@ -767,7 +767,7 @@ describe("writable: write-only stack", () => {
   it("ref() throws (no call behavior configured)", () => {
     const schema = Schema.number()
     const store = {} as any
-    const ctx = plainContext(store)
+    const ctx = plainContext(schema, store)
     const ref = interpret(schema, writeOnlyInterpreter, ctx) as any
 
     expect(() => ref()).toThrow("No call behavior configured")
@@ -1214,7 +1214,7 @@ it("[TRANSACT] is present on cacheless stack refs", () => {
     n: Schema.number(),
   })
   const store = { n: 0 }
-  const ctx = plainContext(store)
+  const ctx = plainContext(schema, store)
   const doc = interpret(schema, cachelessInterpreter, ctx) as unknown as Ref<
     typeof schema
   >
@@ -1258,7 +1258,7 @@ describe("writable: the prepare pipeline", () => {
 
   function setup() {
     const store = { n: 1 }
-    const ctx = plainContext(store)
+    const ctx = plainContext(schema, store)
     interpret(schema, interp, ctx)
     return ctx
   }

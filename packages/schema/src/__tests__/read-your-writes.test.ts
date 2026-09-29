@@ -20,7 +20,7 @@ function buildDoc<S extends ReturnType<typeof Schema.struct>>(
   seed: Record<string, unknown>,
 ) {
   const store = { ...seed }
-  const ctx = plainContext(store)
+  const ctx = plainContext(schema, store)
   const doc = interpret(schema, ctx)
     .with(readable)
     .with(writable)

@@ -1,11 +1,6 @@
 // text-adapter — textarea ↔ TextRef binding.
 //
-// Two pure functions (functional core) and one imperative shell:
-//
-//   diffText(oldText, newText, cursorHint) → TextChange
-//     Compares two strings to find the single contiguous edit, using
-//     the cursor position to disambiguate ambiguous diffs within runs
-//     of identical characters.
+// One pure function (functional core) and one imperative shell:
 //
 //   transformSelection(selStart, selEnd, instructions) → { start, end }
 //     Rebases a selection range through a set of text instructions,
@@ -17,7 +12,8 @@
 //     surgically applied via setRangeText() with selection rebasing.
 //     IME composition is handled; undo is intercepted by default. With
 //     `options.refusal`, the element is read-only while the text refuses
-//     edits, and stays bound.
+//     edits, and stays bound. A local edit becomes a `TextChange` through
+//     `diffText` from `@kyneta/schema`.
 //
 // No React imports — this module is framework-agnostic.
 
@@ -28,11 +24,10 @@ import {
 } from "@kyneta/changefeed"
 import {
   batch,
+  diffText,
   isTextChange,
-  type TextChange,
   type TextInstruction,
   type TextRef,
-  textChange,
   textInstructionsToPatches,
   transformIndex,
 } from "@kyneta/schema"
@@ -60,68 +55,6 @@ export type TextRefLike = (() => string) & TextRef & HasChangefeed
 // ===========================================================================
 // Functional Core
 // ===========================================================================
-
-// ---------------------------------------------------------------------------
-// diffText — single contiguous edit detection
-// ---------------------------------------------------------------------------
-
-/**
- * Compare two strings and produce a `TextChange` describing the single
- * contiguous edit that transforms `oldText` into `newText`.
- *
- * The `cursorHint` parameter (typically `element.selectionStart` after
- * the input event) disambiguates when the edit falls within a run of
- * identical characters. For example, inserting `'a'` into `"aaa"` is
- * ambiguous — the cursor tells us *where* the insertion happened.
- *
- * Algorithm:
- * 1. Scan from the left for a common prefix, bounded by `cursorHint`
- *    so the edit is placed at or before the cursor.
- * 2. Scan from the right for a common suffix, not overlapping the prefix.
- * 3. The region between prefix and suffix is the edit range.
- *
- * @param oldText  - The text before the edit (from `textRef()`).
- * @param newText  - The text after the edit (from `element.value`).
- * @param cursorHint - `element.selectionStart` after the input event.
- * @returns A `TextChange` with retain/delete/insert instructions.
- */
-export function diffText(
-  oldText: string,
-  newText: string,
-  cursorHint: number,
-): TextChange {
-  if (oldText === newText) return textChange([])
-
-  const oldLen = oldText.length
-  const newLen = newText.length
-
-  // Common prefix, bounded by cursorHint to disambiguate within identical runs.
-  let prefixLen = 0
-  const maxPrefix = Math.min(oldLen, newLen, cursorHint)
-  while (prefixLen < maxPrefix && oldText[prefixLen] === newText[prefixLen]) {
-    prefixLen++
-  }
-
-  // Common suffix, not overlapping with prefix.
-  let suffixLen = 0
-  const maxSuffix = Math.min(oldLen - prefixLen, newLen - prefixLen)
-  while (
-    suffixLen < maxSuffix &&
-    oldText[oldLen - 1 - suffixLen] === newText[newLen - 1 - suffixLen]
-  ) {
-    suffixLen++
-  }
-
-  const deleteLen = oldLen - prefixLen - suffixLen
-  const insertText = newText.slice(prefixLen, newLen - suffixLen)
-
-  const instructions: TextInstruction[] = []
-  if (prefixLen > 0) instructions.push({ retain: prefixLen })
-  if (deleteLen > 0) instructions.push({ delete: deleteLen })
-  if (insertText.length > 0) instructions.push({ insert: insertText })
-
-  return textChange(instructions)
-}
 
 // ---------------------------------------------------------------------------
 // transformSelection — rebase a selection range through instructions

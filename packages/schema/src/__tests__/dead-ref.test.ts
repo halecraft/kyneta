@@ -15,7 +15,7 @@ describe("dead ref", () => {
       items: Schema.list(Schema.string()),
     })
     const store = { items: ["a", "b"] }
-    const ctx = plainContext(store)
+    const ctx = plainContext(s, store)
     const doc = interpret(s, ctx)
       .with(readable)
       .with(writable)

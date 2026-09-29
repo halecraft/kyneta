@@ -81,7 +81,7 @@ function createChatDoc(storeOverrides: Record<string, unknown> = {}) {
     metadata: { version: 1 },
     ...storeOverrides,
   }
-  const ctx = plainContext(store)
+  const ctx = plainContext(chatDocSchema, store)
   const doc = interpret(chatDocSchema, ctx)
     .with(readable)
     .with(writable)
@@ -634,7 +634,7 @@ describe("changefeed: batch() block integration", () => {
       x: Schema.number(),
       y: Schema.number(),
     })
-    const ctx = plainContext(store)
+    const ctx = plainContext(schema, store)
     const doc = interpret(schema, ctx)
       .with(readable)
       .with(writable)
@@ -698,7 +698,7 @@ describe("changefeed: batch() block integration", () => {
       x: Schema.number(),
       y: Schema.number(),
     })
-    const ctx = plainContext(store)
+    const ctx = plainContext(schema, store)
     const doc = interpret(schema, ctx)
       .with(readable)
       .with(writable)
@@ -724,7 +724,7 @@ describe("changefeed: batch() block integration", () => {
       x: Schema.number(),
       y: Schema.number(),
     })
-    const ctx = plainContext(store)
+    const ctx = plainContext(schema, store)
     const doc = interpret(schema, ctx)
       .with(readable)
       .with(writable)
@@ -759,7 +759,7 @@ describe("changefeed: batched notification", () => {
       x: Schema.number(),
       y: Schema.number(),
     })
-    const ctx = plainContext(store)
+    const ctx = plainContext(schema, store)
     const doc = interpret(schema, ctx)
       .with(readable)
       .with(writable)
@@ -804,7 +804,7 @@ describe("changefeed: batched notification", () => {
       x: Schema.number(),
       y: Schema.number(),
     })
-    const ctx = plainContext(store)
+    const ctx = plainContext(schema, store)
     const doc = interpret(schema, ctx)
       .with(readable)
       .with(writable)
@@ -855,7 +855,7 @@ describe("changefeed: batched notification", () => {
       x: Schema.number(),
       y: Schema.number(),
     })
-    const ctx = plainContext(store)
+    const ctx = plainContext(schema, store)
     const doc = interpret(schema, ctx)
       .with(readable)
       .with(writable)
@@ -888,7 +888,7 @@ describe("changefeed: batched notification", () => {
       x: Schema.number(),
       y: Schema.number(),
     })
-    const ctx = plainContext(store)
+    const ctx = plainContext(schema, store)
     const doc = interpret(schema, ctx)
       .with(readable)
       .with(writable)
@@ -967,7 +967,7 @@ describe("changefeed: edge cases", () => {
   it("subscribe on leaf ref at scalar path fires on set", () => {
     const schema = Schema.struct({ n: Schema.number() })
     const store = { n: 42 }
-    const ctx = plainContext(store)
+    const ctx = plainContext(schema, store)
     const doc = interpret(schema, ctx)
       .with(readable)
       .with(writable)
@@ -989,7 +989,7 @@ describe("changefeed: edge cases", () => {
       items: Schema.list(Schema.string()),
     })
     const store = { items: [] as string[] }
-    const ctx = plainContext(store)
+    const ctx = plainContext(schema, store)
     const doc = interpret(schema, ctx)
       .with(readable)
       .with(writable)
@@ -1004,7 +1004,7 @@ describe("changefeed: edge cases", () => {
       labels: Schema.record(Schema.string()),
     })
     const store = { labels: {} }
-    const ctx = plainContext(store)
+    const ctx = plainContext(schema, store)
     const doc = interpret(schema, ctx)
       .with(readable)
       .with(writable)
@@ -1223,7 +1223,7 @@ describe("changefeed: flush boundary enforcement", () => {
   it("batch() propagates subscriber error, not secondary abort error", () => {
     const store = { x: 0 }
     const schema = Schema.struct({ x: Schema.number() })
-    const ctx = plainContext(store)
+    const ctx = plainContext(schema, store)
     const doc = interpret(schema, ctx)
       .with(readable)
       .with(writable)
@@ -1250,7 +1250,7 @@ describe("changefeed: flush boundary enforcement", () => {
       x: Schema.number(),
       y: Schema.number(),
     })
-    const ctx = plainContext(store)
+    const ctx = plainContext(schema, store)
     const doc = interpret(schema, ctx)
       .with(readable)
       .with(writable)

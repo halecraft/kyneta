@@ -63,7 +63,7 @@ const todoSchema = Schema.struct({
 function createDoc(initial?: Record<string, unknown>) {
   const defaults = Zero.structural(todoSchema) as Record<string, unknown>
   const store = { ...defaults } as Record<string, unknown>
-  const ctx = plainContext(store)
+  const ctx = plainContext(todoSchema, store)
   const doc = interpret(todoSchema, ctx)
     .with(readable)
     .with(writable)

@@ -18,7 +18,7 @@ import type { Plain } from "../interpreter-types.js"
 
 function createSetDoc(schema: SchemaNode, initial: unknown): any {
   const store = { tags: initial }
-  const ctx = plainContext(store as Record<string, unknown>)
+  const ctx = plainContext(schema, store as Record<string, unknown>)
   return (interpret as any)(schema, ctx)
     .with(readable)
     .with(writable)

@@ -57,7 +57,7 @@ function createSeed() {
 // otherwise share its nested containers and see each other's writes.
 function createChatDoc(storeOverrides: Record<string, unknown> = {}) {
   const store = { ...createSeed(), ...deepClonePlain(storeOverrides) }
-  const ctx = plainContext(store)
+  const ctx = plainContext(chatDocSchema, store)
   const doc = interpret(chatDocSchema, ctx)
     .with(readable)
     .with(writable)

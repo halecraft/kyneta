@@ -1369,6 +1369,7 @@ function createSubstrateWithLineage(lineage: string) {
   const doc = { ...(Zero.structural(TestSchema) as object) }
   return createPlainSubstrate(
     doc,
+    TestSchema,
     createPlainClock(lineage),
     EMPTY_HISTORY,
     ALWAYS_AUTHOR,

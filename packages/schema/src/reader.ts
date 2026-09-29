@@ -277,10 +277,10 @@ export function syncShadow(target: PlainState, source: PlainState): void {
  * No batch is exempt. `projection` batches once were, on the grounds that a
  * decay tick's payload was the substrate's own shadow passed to wake
  * subscribers and never read, so copying a whole presence document per tick
- * was waste. A tick now names the fields its re-projection moved and carries
- * their values, which subscribers do read — the exemption became exactly the
- * alias this function exists to sever, and the waste it avoided is bounded by
- * the diff rather than by the document.
+ * was waste. A tick now announces the ops that turn σ into its re-projection
+ * (`diffOps`) and carries their values, which subscribers do read — the
+ * exemption became exactly the alias this function exists to sever, and the
+ * waste it avoided is bounded by the diff rather than by the document.
  *
  * Deliberately a transform rather than a `shouldCopy()` predicate. Four
  * substrates call this; a predicate would let a caller ask the question and

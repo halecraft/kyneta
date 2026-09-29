@@ -58,7 +58,7 @@ const nestedSchema = Schema.struct({
 
 function createTodoDoc(initialTodos: Array<{ text: string; done: boolean }>) {
   const store = { todos: initialTodos }
-  const ctx = plainContext(store)
+  const ctx = plainContext(todoSchema, store)
   const doc = interpret(todoSchema, ctx)
     .with(readable)
     .with(writable)
@@ -69,7 +69,7 @@ function createTodoDoc(initialTodos: Array<{ text: string; done: boolean }>) {
 
 function createMapDoc(initialMetadata: Record<string, string>) {
   const store = { metadata: initialMetadata }
-  const ctx = plainContext(store)
+  const ctx = plainContext(mapSchema, store)
   const doc = interpret(mapSchema, ctx)
     .with(readable)
     .with(writable)
@@ -80,7 +80,7 @@ function createMapDoc(initialMetadata: Record<string, string>) {
 
 function createSetDoc(initialTags: string[]) {
   const store = { tags: initialTags }
-  const ctx = plainContext(store)
+  const ctx = plainContext(setSchema, store)
   const doc = interpret(setSchema, ctx)
     .with(readable)
     .with(writable)
@@ -91,7 +91,7 @@ function createSetDoc(initialTags: string[]) {
 
 function createMovableDoc(initialItems: Array<{ name: string }>) {
   const store = { items: initialItems }
-  const ctx = plainContext(store)
+  const ctx = plainContext(movableSchema, store)
   const doc = interpret(movableSchema, ctx)
     .with(readable)
     .with(writable)
@@ -102,7 +102,7 @@ function createMovableDoc(initialItems: Array<{ name: string }>) {
 
 function createNestedDoc(groups: Array<{ items: Array<{ name: string }> }>) {
   const store = { groups }
-  const ctx = plainContext(store)
+  const ctx = plainContext(nestedSchema, store)
   const doc = interpret(nestedSchema, ctx)
     .with(readable)
     .with(writable)
@@ -399,7 +399,7 @@ describe("[REMOVE]: read-only stack", () => {
     const store = {
       todos: [{ text: "a", done: false }],
     }
-    const ctx = plainContext(store)
+    const ctx = plainContext(todoSchema, store)
     const doc = interpret(todoSchema, ctx)
       .with(readable)
       .with(observation)

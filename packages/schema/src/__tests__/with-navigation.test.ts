@@ -438,7 +438,7 @@ describe("withNavigation: navigate + write stack", () => {
       count: Schema.number(),
     })
     const store = { title: "hello", count: 0 }
-    const ctx = plainContext(store)
+    const ctx = plainContext(schema, store)
     const doc = interpret(schema, navWriteInterp, ctx) as any
 
     expect(Object.keys(doc)).toContain("title")
@@ -450,7 +450,7 @@ describe("withNavigation: navigate + write stack", () => {
       title: Schema.string(),
     })
     const store = { title: "hello" }
-    const ctx = plainContext(store)
+    const ctx = plainContext(schema, store)
     const doc = interpret(schema, navWriteInterp, ctx) as any
 
     expect(() => doc.title()).toThrow("No call behavior configured")
@@ -461,7 +461,7 @@ describe("withNavigation: navigate + write stack", () => {
       title: Schema.string(),
     })
     const store: Record<string, unknown> = { title: "hello" }
-    const ctx = plainContext(store)
+    const ctx = plainContext(schema, store)
     const doc = interpret(schema, navWriteInterp, ctx) as any
 
     doc.title.set("world")
@@ -473,7 +473,7 @@ describe("withNavigation: navigate + write stack", () => {
       items: Schema.list(Schema.struct({ name: Schema.string() })),
     })
     const store = { items: [{ name: "a" }, { name: "b" }] }
-    const ctx = plainContext(store)
+    const ctx = plainContext(schema, store)
     const doc = interpret(schema, navWriteInterp, ctx) as any
 
     expect(doc.items.length).toBe(2)
@@ -493,7 +493,7 @@ describe("withNavigation: navigate + write stack", () => {
       items: Schema.list(Schema.string()),
     })
     const store = { items: ["a", "b"] }
-    const ctx = plainContext(store)
+    const ctx = plainContext(schema, store)
     const doc = interpret(schema, navWriteInterp, ctx) as any
 
     doc.items.push("c")
@@ -505,7 +505,7 @@ describe("withNavigation: navigate + write stack", () => {
       title: Schema.text(),
     })
     const store = { title: "hello" }
-    const ctx = plainContext(store)
+    const ctx = plainContext(schema, store)
     const doc = interpret(schema, navWriteInterp, ctx) as any
 
     doc.title.update("world")
@@ -517,7 +517,7 @@ describe("withNavigation: navigate + write stack", () => {
       labels: Schema.record(Schema.string()),
     })
     const store = { labels: { color: "red" } }
-    const ctx = plainContext(store)
+    const ctx = plainContext(schema, store)
     const doc = interpret(schema, navWriteInterp, ctx) as any
 
     doc.labels.set("size", "large")

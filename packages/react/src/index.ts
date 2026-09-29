@@ -28,7 +28,7 @@ export {
 } from "./store.js"
 // Text adapter (framework-agnostic textarea ↔ TextRef binding)
 export type { AttachOptions, TextRefLike } from "./text-adapter.js"
-export { attach, diffText, transformSelection } from "./text-adapter.js"
+export { attach, transformSelection } from "./text-adapter.js"
 export { useChangefeed } from "./use-changefeed.js"
 export { useDocReady } from "./use-doc-ready.js"
 export { useDocStatus } from "./use-doc-status.js"
@@ -66,6 +66,7 @@ export type {
 export {
   applyChanges,
   batch,
+  diffText,
   Schema,
   subscribe,
   subscribeNode,

@@ -154,7 +154,7 @@ describe("ownedForStore", () => {
 
   it("exempts nothing \u2014 a decay tick's payload is copied like any other", () => {
     // The exemption `projection` used to carry was justified by a payload that
-    // was the whole shadow and that nobody read. A tick now names the fields
+    // was the whole shadow and that nobody read. A tick now announces the ops
     // its re-projection moved and carries their values, which subscribers do
     // read, so the exemption had become the alias this function severs.
     const change = replaceChange(own(value))

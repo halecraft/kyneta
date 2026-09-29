@@ -1434,7 +1434,7 @@ describe("type-level: fluent builder .done() infers correct tier", () => {
   })
 
   it(".with(readable).with(writable).done() → RWRef<S>", () => {
-    const ctx = plainContext({ x: 0, y: 0 })
+    const ctx = plainContext(pointSchema, { x: 0, y: 0 })
     const result = interpret(pointSchema, ctx)
       .with(readable)
       .with(writable)
@@ -1443,7 +1443,7 @@ describe("type-level: fluent builder .done() infers correct tier", () => {
   })
 
   it(".with(readable).with(writable).with(observation).done() → Ref<S>", () => {
-    const ctx = plainContext({ x: 0, y: 0 })
+    const ctx = plainContext(pointSchema, { x: 0, y: 0 })
     const result = interpret(pointSchema, ctx)
       .with(readable)
       .with(writable)
@@ -1453,7 +1453,7 @@ describe("type-level: fluent builder .done() infers correct tier", () => {
   })
 
   it("full-stack result has [TRANSACT] and [CHANGEFEED]", () => {
-    const ctx = plainContext({ x: 0, y: 0 })
+    const ctx = plainContext(pointSchema, { x: 0, y: 0 })
     const result = interpret(pointSchema, ctx)
       .with(readable)
       .with(writable)
@@ -1618,7 +1618,7 @@ describe("type-level: batch() callback infers draft type from fluent-built doc",
   })
 
   it("full-stack .done() result is accepted by batch() without cast", () => {
-    const ctx = plainContext({
+    const ctx = plainContext(docSchema, {
       title: "",
       count: 0,
       items: [],
@@ -1635,7 +1635,7 @@ describe("type-level: batch() callback infers draft type from fluent-built doc",
   })
 
   it("callback parameter d has typed field access (not any)", () => {
-    const ctx = plainContext({
+    const ctx = plainContext(docSchema, {
       title: "",
       count: 0,
       items: [],
@@ -1662,7 +1662,7 @@ describe("type-level: batch() callback infers draft type from fluent-built doc",
   })
 
   it("RWRef .done() result is accepted by batch() (has HasTransact)", () => {
-    const ctx = plainContext({
+    const ctx = plainContext(docSchema, {
       title: "",
       count: 0,
       items: [],
@@ -1683,7 +1683,7 @@ describe("type-level: fluent results are accepted by facade functions", () => {
   const schema = Schema.struct({ x: Schema.number() })
 
   it("subscribeNode() accepts Ref<S> field from full-stack .done()", () => {
-    const ctx = plainContext({ x: 0 })
+    const ctx = plainContext(schema, { x: 0 })
     const doc = interpret(schema, ctx)
       .with(readable)
       .with(writable)
@@ -1695,7 +1695,7 @@ describe("type-level: fluent results are accepted by facade functions", () => {
   })
 
   it("subscribe() accepts Ref<S> from full-stack .done()", () => {
-    const ctx = plainContext({ x: 0 })
+    const ctx = plainContext(schema, { x: 0 })
     const doc = interpret(schema, ctx)
       .with(readable)
       .with(writable)

@@ -71,7 +71,7 @@ function createWritableDoc(
   schema: Parameters<typeof interpret>[0],
   store: Record<string, unknown>,
 ) {
-  const ctx = plainContext(store)
+  const ctx = plainContext(schema, store)
   const doc = interpret(schema, withWritable(cachedInterp), ctx) as any
   return { doc, store, ctx }
 }
@@ -489,7 +489,7 @@ describe("withCaching: writes through ctx.prepare", () => {
         { author: "Bob", body: "World" },
       ],
     }
-    const ctx = plainContext(store)
+    const ctx = plainContext(docSchema, store)
     const doc = interpret(docSchema, fullInterpreter, ctx) as any
     return { doc, store, ctx }
   }

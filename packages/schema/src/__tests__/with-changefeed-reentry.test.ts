@@ -33,7 +33,7 @@ function buildPlainDoc<S extends ReturnType<typeof Schema.struct>>(
   schema: S,
   initial: Record<string, unknown>,
 ) {
-  const ctx = plainContext({ ...initial })
+  const ctx = plainContext(schema, { ...initial })
   return interpret(schema, ctx)
     .with(readable)
     .with(writable)
@@ -174,12 +174,14 @@ describe("with-changefeed: cross-doc cascade with shared lease", () => {
 
     const substrateA = createPlainSubstrate(
       { v: 0 },
+      schemaA,
       createPlainClock("testA"),
       EMPTY_HISTORY,
       ALWAYS_AUTHOR,
     )
     const substrateB = createPlainSubstrate(
       { v: 0 },
+      schemaB,
       createPlainClock("testB"),
       EMPTY_HISTORY,
       ALWAYS_AUTHOR,

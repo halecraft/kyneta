@@ -87,7 +87,7 @@ describe("fluent: interpret(schema, ctx).with(...).done()", () => {
 
   it("readable + writable produces mutable refs without observation", () => {
     const store = { x: 0, y: 0 }
-    const ctx = plainContext(store)
+    const ctx = plainContext(pointSchema, store)
     const doc = interpret(pointSchema, ctx).with(readable).with(writable).done()
 
     doc.x.set(42)
@@ -105,7 +105,7 @@ describe("fluent: interpret(schema, ctx).with(...).done()", () => {
       settings: { darkMode: false, fontSize: 14 },
       metadata: { version: 1 },
     }
-    const ctx = plainContext(store)
+    const ctx = plainContext(chatDocSchema, store)
 
     const doc = interpret(chatDocSchema, ctx)
       .with(readable)
@@ -152,7 +152,7 @@ describe("fluent: interpret(schema, ctx).with(...).done()", () => {
 describe("fluent: batch() block", () => {
   it("eager writes, batched delivery, and changefeed notification work through fluent-built refs", () => {
     const store = { x: 0, y: 0 }
-    const ctx = plainContext(store)
+    const ctx = plainContext(pointSchema, store)
     const doc = interpret(pointSchema, ctx)
       .with(readable)
       .with(writable)
@@ -184,7 +184,7 @@ describe("fluent: batch() block", () => {
 describe("fluent: builder branching", () => {
   it("two branches from the same builder produce independent results", () => {
     const store1 = { x: 0, y: 0 }
-    const ctx1 = plainContext(store1)
+    const ctx1 = plainContext(pointSchema, store1)
 
     // Create a base builder and branch it
     const base = interpret(pointSchema, ctx1).with(readable)
@@ -194,7 +194,7 @@ describe("fluent: builder branching", () => {
 
     // Branch B: readable + writable (has mutation)
     const store2 = { x: 0, y: 0 }
-    const ctx2 = plainContext(store2)
+    const ctx2 = plainContext(pointSchema, store2)
     const mutable = interpret(pointSchema, ctx2)
       .with(readable)
       .with(writable)
@@ -288,7 +288,7 @@ describe("fluent: error handling", () => {
 describe("fluent: three-arg interpret regression", () => {
   it("interpret(schema, interpreter, ctx) still works", () => {
     const store = { x: 10, y: 20 }
-    const ctx = plainContext(store)
+    const ctx = plainContext(pointSchema, store)
     const interp = withWritable(
       withCaching(withReadable(withNavigation(bottomInterpreter))),
     )

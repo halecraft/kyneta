@@ -21,6 +21,7 @@
 import type { ChangeBase } from "../change.js"
 import { own, replaceChange } from "../change.js"
 import { deepClonePlain } from "../clone.js"
+import { diffOps } from "../diff-ops.js"
 import { findOpaqueBoundary } from "../fold-path.js"
 import { digestToHex } from "../hash.js"
 import type { Path } from "../interpret.js"
@@ -52,7 +53,7 @@ import type {
 } from "../substrate.js"
 import { BACKING_DOC } from "../substrate.js"
 import { createLocalUpdateSignal } from "./local-update-signal.js"
-import { DEFAULT_LINEAGE, movedRootKeys, objectToReplaceOps } from "./plain.js"
+import { DEFAULT_LINEAGE } from "./plain.js"
 import {
   applyChangeToStateTree,
   type Container,
@@ -410,39 +411,35 @@ export function createStateSubstrate(
 
   /**
    * The tree moved without a local write: re-project σ from it and tell
-   * subscribers which root fields changed.
+   * subscribers what changed.
    *
    * Both ways that happens — a peer's merge and a decay sweep — need the
    * same two steps, and differ only in the `origin` they announce under.
    *
-   * The announcement names the root fields that actually moved. Delivery
-   * notifies a changed path's *ancestors*, so one blanket op at the root
-   * reaches root subscribers
-   * and nobody else — a presence roster's per-entry subscribers would never
-   * hear a peer arrive or expire. Naming every field instead would wake
-   * subscribers whose subtree nothing touched, which for a roster is most of
-   * them, on every tick and every sync.
+   * The announcement is what a local writer would have written to get from
+   * σ to the projection (`diffOps`): one op per declared field, record key
+   * or register that moved. Delivery notifies a changed path's *ancestors*,
+   * so a coarser op would reach nobody below it — a presence roster's
+   * per-entry subscribers would never hear a peer arrive, move or expire —
+   * and naming everything would wake subscribers whose subtree nothing
+   * touched, on every tick and every sync.
    *
    * σ is written here, before announcing: an announcement never reaches
-   * `prepare`. The announcement still has to go through the writable
-   * context, which seals the moved ops as one batch and delivers it.
+   * `prepare`. Each op's payload is `diffOps`'s own copy, and σ takes
+   * another (`ownedForStore`), so σ, the op and the tree's register values
+   * share nothing. The announcement still has to go through the writable
+   * context, which seals the ops as one batch and delivers it.
    */
   function announceReprojection(now: number, origin?: string): void {
-    const next = projectStateTree(currentTree, schema, now)
-    const moved: PlainState = {}
-    // Each moved value is copied twice: once into σ, once into the op that
-    // subscribers receive. The projection shares register values with the
-    // tree, and σ and the op must not share them with each other.
-    for (const key of movedRootKeys(shadow, next)) {
-      moved[key] = deepClonePlain(next[key])
-      shadow[key] = deepClonePlain(next[key])
+    const ops = diffOps(
+      schema,
+      shadow,
+      projectStateTree(currentTree, schema, now),
+    )
+    for (const { path, change } of ops) {
+      applyChange(shadow, path, ownedForStore(change))
     }
-    // A state image of what changed, turned into ops by the same primitive
-    // the plain substrate absorbs an entirety payload with.
-    substrate.context().announce(objectToReplaceOps(moved), {
-      origin,
-      local: false,
-    })
+    substrate.context().announce(ops, { origin, local: false })
   }
 
   const substrate = {

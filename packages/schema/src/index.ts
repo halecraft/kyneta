@@ -59,6 +59,7 @@ export {
   advanceAddresses,
   advanceIndex,
   applyTextInstructions,
+  diffText,
   foldInstructions,
   incrementChange,
   isIncrementChange,

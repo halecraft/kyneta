@@ -20,7 +20,7 @@ import type { ChangeBase } from "../change.js"
 import { replaceChange, trustAsOwned } from "../change.js"
 import type { Op } from "../changefeed.js"
 import { deepClonePlain } from "../clone.js"
-import { samePlainValue } from "../guards.js"
+import { diffOps } from "../diff-ops.js"
 import type { Path } from "../interpret.js"
 import type { WritableContext } from "../interpreters/writable.js"
 import { buildWritableContext } from "../interpreters/writable.js"
@@ -293,7 +293,9 @@ const STILL_LOADING =
  *
  * `prepare` mutates `doc` eagerly, so the core's `materialize` is `() => doc`.
  * `history` must describe `doc`: its log replayed onto the trimmed base
- * produces `doc`. `plainSubstrateFactory` is the schema-aware entry point.
+ * produces `doc`. `schema` is `doc`'s: a reset announces what it moved by
+ * diffing the two states under it. `plainSubstrateFactory` is the
+ * schema-aware entry point.
  *
  * `authoring` gives the reason authored writes are refused, if any: while the
  * document's own history is still loading (a plain merge does not commute with
@@ -304,6 +306,7 @@ const STILL_LOADING =
  */
 export function createPlainSubstrate(
   doc: PlainState,
+  schema: SchemaNode,
   clock: PlainClock,
   history: PlainHistory,
   authoring: Authoring,
@@ -336,12 +339,10 @@ export function createPlainSubstrate(
       })
     },
     adopt(state) {
-      // Every schema-defined top-level field is present in the incoming
-      // entirety (built from Zero.structural on the sender), so replacing the
-      // fields that moved supersedes what the doc held without wiping it.
-      const moved: PlainState = {}
-      for (const key of movedRootKeys(doc, state)) moved[key] = state[key]
-      const ops = objectToReplaceOps(moved)
+      // Announce what a local writer would have written to get from `doc` to
+      // `state`, per field, record key and register, so every subscriber
+      // below a moved value hears it. A field `state` lacks reads as its zero.
+      const ops = diffOps(schema, doc, state)
       applyOps(doc, ops)
       substrate.context().announce(ops, {
         origin: options?.origin,
@@ -748,13 +749,17 @@ export function createPlainReplica(clock: PlainClock): Replica<PlainVersion> {
  * Useful in tests where you don't need the substrate reference:
  *
  * ```ts
- * const ctx = plainContext(doc)
+ * const ctx = plainContext(schema, doc)
  * const ref = interpret(schema, ctx).with(readable).with(writable).done()
  * ```
  */
-export function plainContext(doc: PlainState): WritableContext {
+export function plainContext(
+  schema: SchemaNode,
+  doc: PlainState,
+): WritableContext {
   return createPlainSubstrate(
     doc,
+    schema,
     createPlainClock("test"),
     EMPTY_HISTORY,
     ALWAYS_AUTHOR,
@@ -766,27 +771,13 @@ export function plainContext(doc: PlainState): WritableContext {
 // ---------------------------------------------------------------------------
 
 /**
- * Build one `ReplaceChange` op per top-level key in a state object.
+ * One `replace` op per top-level key in a state object.
  *
- * Every path that turns a whole state image into changes goes through here:
- * entirety payloads (`payloadBatches`, `resetPlan`), `buildUpgrade`'s
- * structural defaults, and the ephemeral substrate's announcement of what a
- * merge or a decay sweep moved.
+ * For a whole-document answer rather than a change: `delta()` in
+ * `@kyneta/schema/basic` hands back an entirety this way, and `buildUpgrade`
+ * applies structural defaults with it. A state that replaces another is
+ * announced with `diffOps`, which names only what moved.
  */
-/**
- * The root fields whose value differs between `current` and `next`.
- *
- * Only `next`'s keys are compared. The root is a product, so every state of
- * one schema has the same root keys. A whole state image that replaces
- * another announces these and no others: naming every field would wake
- * subscribers whose subtree nothing touched.
- */
-export function movedRootKeys(current: PlainState, next: PlainState): string[] {
-  return Object.keys(next).filter(
-    key => !(key in current) || !samePlainValue(current[key], next[key]),
-  )
-}
-
 export function objectToReplaceOps(state: Record<string, unknown>): Op[] {
   const ops: Op[] = []
   for (const [key, value] of Object.entries(state)) {
@@ -992,6 +983,7 @@ function buildUpgrade(
   const doc = deepClonePlain(replica[BACKING_DOC])
   const substrate = createPlainSubstrate(
     doc,
+    schema,
     createPlainClock(replica.version().lineage),
     history(),
     authoring,

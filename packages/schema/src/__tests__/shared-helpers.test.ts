@@ -49,7 +49,7 @@ describe("movable list has the same write surface as sequence", () => {
 
   function createDoc(schema: any) {
     const store = { items: [{ name: "a" }] }
-    const ctx = plainContext(store)
+    const ctx = plainContext(schema, store)
     // Cast avoids TS2589 — the fluent builder produces deeply recursive
     // types when S is widened to `any`. Same pattern as createRef().
     const doc = (interpret as any)(schema, ctx)
@@ -95,7 +95,7 @@ describe("set kind has a value-addressed write surface", () => {
 
   function createSetDoc(initial: string[]) {
     const store = { tags: initial }
-    const ctx = plainContext(store)
+    const ctx = plainContext(setSchema, store)
     // Cast avoids TS2589 — same pattern as above and createRef().
     const doc = (interpret as any)(setSchema, ctx)
       .with(readable)

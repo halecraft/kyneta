@@ -574,7 +574,7 @@ describe("readable: composition with withChangefeed", () => {
       count: Schema.counter(),
     })
     // withChangefeed needs WritableContext (extends RefContext)
-    const ctx = plainContext(store)
+    const ctx = plainContext(schema, store)
     const enriched = withChangefeed(withWritable(readableInterpreter))
     const doc = interpret(schema, enriched, ctx) as any
 

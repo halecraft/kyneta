@@ -761,6 +761,73 @@ export function transformIndex(
 }
 
 // ---------------------------------------------------------------------------
+// diffText — the single contiguous edit between two strings
+// ---------------------------------------------------------------------------
+
+/**
+ * Compare two strings and produce a `TextChange` describing the single
+ * contiguous edit that transforms `oldText` into `newText`.
+ *
+ * Minimal in the sense that matters to positions: everything outside the edit
+ * is retained, so `transformIndex` carries a cursor there through unmoved.
+ *
+ * The `cursorHint` (an editor's `selectionStart` after an input event)
+ * disambiguates when the edit falls within a run of identical characters.
+ * Inserting `'a'` into `"aaa"` is ambiguous; the cursor says where it
+ * happened. Without a hint the common prefix is unbounded, which places the
+ * edit as far right as the strings allow.
+ *
+ * Algorithm:
+ * 1. Scan from the left for a common prefix, bounded by `cursorHint` when
+ *    given, so the edit is placed at or before the cursor.
+ * 2. Scan from the right for a common suffix, not overlapping the prefix.
+ * 3. The region between prefix and suffix is the edit range.
+ *
+ * @param oldText - The text before the edit.
+ * @param newText - The text after the edit.
+ * @param cursorHint - Where the cursor sits after the edit, if known.
+ * @returns A `TextChange` with retain/delete/insert instructions.
+ */
+export function diffText(
+  oldText: string,
+  newText: string,
+  cursorHint?: number,
+): TextChange {
+  if (oldText === newText) return textChange([])
+
+  const oldLen = oldText.length
+  const newLen = newText.length
+
+  // Common prefix, bounded by the cursor hint to disambiguate within
+  // identical runs.
+  let prefixLen = 0
+  const maxPrefix = Math.min(oldLen, newLen, cursorHint ?? Infinity)
+  while (prefixLen < maxPrefix && oldText[prefixLen] === newText[prefixLen]) {
+    prefixLen++
+  }
+
+  // Common suffix, not overlapping with prefix.
+  let suffixLen = 0
+  const maxSuffix = Math.min(oldLen - prefixLen, newLen - prefixLen)
+  while (
+    suffixLen < maxSuffix &&
+    oldText[oldLen - 1 - suffixLen] === newText[newLen - 1 - suffixLen]
+  ) {
+    suffixLen++
+  }
+
+  const deleteLen = oldLen - prefixLen - suffixLen
+  const insertText = newText.slice(prefixLen, newLen - suffixLen)
+
+  const instructions: TextInstruction[] = []
+  if (prefixLen > 0) instructions.push({ retain: prefixLen })
+  if (deleteLen > 0) instructions.push({ delete: deleteLen })
+  if (insertText.length > 0) instructions.push({ insert: insertText })
+
+  return textChange(instructions)
+}
+
+// ---------------------------------------------------------------------------
 // advanceAddresses — imperative shell for bulk address advancement
 // ---------------------------------------------------------------------------
 

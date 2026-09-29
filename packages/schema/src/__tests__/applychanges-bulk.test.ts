@@ -36,7 +36,7 @@ describe("applyChanges bulk perf-sanity", () => {
     const schema = Schema.struct({
       n: Schema.number(),
     })
-    const ctx = plainContext({ n: 0 })
+    const ctx = plainContext(schema, { n: 0 })
     const doc = interpret(schema, ctx)
       .with(readable)
       .with(writable)
