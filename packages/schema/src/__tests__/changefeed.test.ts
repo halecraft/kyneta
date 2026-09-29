@@ -151,24 +151,20 @@ describe("changefeed: current value", () => {
 // ---------------------------------------------------------------------------
 
 describe("changefeed: composite current snapshot isolation", () => {
-  it("product CHANGEFEED.current returns a fresh snapshot — mutating it does not corrupt the store", () => {
+  it("product CHANGEFEED.current is one frozen snapshot until the product changes", () => {
     const { doc, store } = createChatDoc()
     const cf = getChangefeed(doc.settings)
 
-    const snap1 = cf.current as Record<string, unknown>
-    snap1.darkMode = true
-    snap1.fontSize = 99
-
-    // Store must be unaffected
+    const snap = cf.current as Record<string, unknown>
+    expect(() => {
+      snap.darkMode = true
+    }).toThrow(TypeError)
     expect((store.settings as any).darkMode).toBe(false)
-    expect((store.settings as any).fontSize).toBe(14)
+    expect(cf.current).toBe(snap)
 
-    // Second access returns a clean snapshot
-    const snap2 = cf.current as Record<string, unknown>
-    expect(snap2).toEqual({ darkMode: false, fontSize: 14 })
-
-    // Distinct references each access
-    expect(cf.current).not.toBe(cf.current)
+    doc.settings.darkMode.set(true)
+    expect(cf.current).not.toBe(snap)
+    expect(cf.current).toEqual({ darkMode: true, fontSize: 14 })
   })
 })
 

@@ -252,7 +252,7 @@ export function installListWriteOps<T extends object>(
 
 /** Install the CALL slot (array snapshot) and `.get(i)` onto a sequence ref. */
 export interface SequenceReadable {
-  readonly [CALL]: () => unknown[]
+  readonly [CALL]: () => readonly unknown[]
   readonly get: (index: number) => unknown
 }
 
@@ -267,9 +267,10 @@ export function installSequenceReadable<T extends object>(
   const navigable = result as NavigableCarrier<number>
 
   // Snapshot goes through result.at(i) — not the raw item closure —
-  // to respect caching/addressing identity.
+  // to respect caching/addressing identity. Each item's value is frozen by
+  // its own read; the array is frozen here.
   Object.defineProperty(result, CALL, {
-    value: (): unknown[] => {
+    value: (): readonly unknown[] => {
       const len = ctx.reader.arrayLength(path)
       const snapshot: unknown[] = []
       for (let i = 0; i < len; i++) {
@@ -278,7 +279,7 @@ export function installSequenceReadable<T extends object>(
           typeof child === "function" ? (child as () => unknown)() : child,
         )
       }
-      return snapshot
+      return Object.freeze(snapshot)
     },
     enumerable: true,
     configurable: true,

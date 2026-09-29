@@ -99,7 +99,7 @@ export {
   hasRecursiveChangefeed,
 } from "./changefeed.js"
 // Clone — the shared deep-copy primitive (leaf module, no imports)
-export { deepClonePlain } from "./clone.js"
+export { deepClonePlain, frozenClone } from "./clone.js"
 export type {
   CoordinateNode,
   SequenceAddressTable,

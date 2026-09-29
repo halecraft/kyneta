@@ -4,10 +4,12 @@
 // carriers (i.e. withNavigation(bottomInterpreter) or anything above
 // it) and:
 //
-// 1. Fills the [CALL] slot:
-//    - Leaf nodes (scalar, text, counter): `() => readByPath(store, path)`
-//    - Composite nodes (product, sequence, map): folds child values through
-//      the carrier's navigation surface to produce a fresh snapshot
+// 1. Fills the [CALL] slot, with frozen values that share nothing with σ:
+//    - Leaf nodes (scalar, text, counter, set, richtext): the value at the
+//      path, an object value copied and frozen (`frozenClone`)
+//    - Composite nodes (product, sequence, map, tree): fold child values
+//      through the carrier's navigation surface, and freeze the container
+//      the fold builds. Each child value is already frozen by its own read.
 // 2. Adds .get() convenience methods:
 //    - Sequence: .get(i) returns plain value (equivalent to .at(i)?.())
 //    - Map: .get(key) returns plain value (equivalent to .at(key)?.())
@@ -17,9 +19,11 @@
 // NOT provided here — that's withNavigation's job. withReadable assumes
 // navigation is already in place and builds on top of it.
 //
-// Caching is NOT provided here — that's withCaching's job.
-// This means `ref.title !== ref.title` (each access forces the thunk).
+// Caching is NOT provided here — that's withCaching's job, which memoizes
+// these reads. Without it `ref.title !== ref.title` (each access forces the
+// thunk) and `ref() !== ref()`.
 
+import { frozenClone } from "../clone.js"
 import type {
   FlatTreeNode,
   Interpreter,
@@ -40,7 +44,6 @@ import type {
   TextSchema,
   TreeSchema,
 } from "../schema.js"
-
 import type { HasNavigation, HasRead } from "./bottom.js"
 import { CALL, markRead } from "./bottom.js"
 import { installKeyedReadable } from "./keyed-helpers.js"
@@ -98,7 +101,7 @@ export function withReadable<A extends HasNavigation>(
     // ---------------------------------------------------------------------
     scalar(ctx: RefContext, path: Path, schema: ScalarSchema): A & HasRead {
       const result = Object.assign(base.scalar(ctx, path, schema), {
-        [CALL]: () => ctx.reader.read(path),
+        [CALL]: () => frozenClone(ctx.reader.read(path)),
         // Hint-aware toPrimitive for template literal coercion
         [Symbol.toPrimitive]: (hint: string) => {
           const v = ctx.reader.read(path)
@@ -127,15 +130,15 @@ export function withReadable<A extends HasNavigation>(
 
       const result = Object.assign(carrier, {
         // Fill CALL slot — fold child values through the carrier's navigation
-        // surface (property getters) to produce a fresh snapshot. This goes
-        // through withCaching's memoized getters when present.
+        // surface (property getters), which goes through withCaching's
+        // memoized getters when present, and freeze the result.
         [CALL]: () => {
           const snapshot: Record<string, unknown> = {}
           for (const key of Object.keys(fields)) {
             const child = byFieldName[key]
             snapshot[key] = typeof child === "function" ? child() : child
           }
-          return snapshot
+          return Object.freeze(snapshot)
         },
       })
 
@@ -267,7 +270,7 @@ export function withReadable<A extends HasNavigation>(
     // RichText: callable returning string, text-specific toPrimitive.
     richtext(ctx: RefContext, path: Path, schema: RichTextSchema): A & HasRead {
       const result = Object.assign(base.richtext(ctx, path, schema), {
-        [CALL]: () => ctx.reader.read(path),
+        [CALL]: () => frozenClone(ctx.reader.read(path)),
         [Symbol.toPrimitive]: (_hint: string) => {
           const v = ctx.reader.read(path)
           if (Array.isArray(v)) {

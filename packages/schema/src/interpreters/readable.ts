@@ -39,7 +39,7 @@ import type { NavigableMapRef, NavigableSequenceRef } from "./navigable.js"
 type ReadableDiscriminantProductRef<
   F extends Record<string, Schema>,
   D extends string,
-> = (() => { [K in keyof F]: Plain<F[K]> }) & {
+> = (() => { readonly [K in keyof F]: Plain<F[K]> }) & {
   readonly [K in keyof F]: K extends D ? Plain<F[K]> : Readable<F[K]>
 }
 
@@ -55,12 +55,12 @@ export type { RefContext } from "../interpreter-types.js"
  *
  * Extends `NavigableSequenceRef<T>` (structural addressing: `.at()`,
  * `.length`, `[Symbol.iterator]`) and adds reading concerns:
- * - Call signature `(): V[]` returns a plain array snapshot
+ * - Call signature `(): readonly V[]` returns a frozen array snapshot
  * - `.get(i)` returns the plain value at index (not a ref)
  */
 export interface ReadableSequenceRef<T = unknown, V = unknown>
   extends NavigableSequenceRef<T> {
-  (): V[]
+  (): readonly V[]
   /** Read the plain value at index. Returns undefined for out-of-bounds. */
   get: (index: number) => V | undefined
 }
@@ -71,13 +71,14 @@ export interface ReadableSequenceRef<T = unknown, V = unknown>
  * Extends `NavigableMapRef<T>` (structural addressing: `.at()`, `.has()`,
  * `.keys()`, `.size`, `.entries()`, `.values()`, `[Symbol.iterator]`) and
  * adds reading concerns:
- * - Call signature `(): Record<string, V>` returns a plain record snapshot
+ * - Call signature `(): Readonly<Record<string, V>>` returns a frozen record
+ *   snapshot
  * - `.get(key)` returns the plain value at key (not a ref)
  */
 export interface ReadableMapRef<T = unknown, V = unknown>
   extends NavigableMapRef<T> {
-  /** Callable: returns a deep plain snapshot of the entire map. */
-  (): Record<string, V>
+  /** Callable: returns a frozen deep snapshot of the entire map. */
+  (): Readonly<Record<string, V>>
   /** Read the plain value at key. Returns undefined if key is not in the store. Equivalent to `.at(key)?.()`. */
   get(key: string): V | undefined
 }
@@ -121,15 +122,15 @@ export interface ReadableTreeRef<I extends Schema> {
  * child refs, no `.at(value)`. Membership is content-equal (via
  * `samePlainValue`), not identity.
  *
- * - Call signature `(): V[]` returns a plain array snapshot — matches
- *   `Plain<SetSchema<I>> = Plain<I>[]`.
+ * - Call signature `(): readonly V[]` returns a frozen array snapshot —
+ *   matches `Plain<SetSchema<I>> = readonly Plain<I>[]`.
  * - `.has(value)` runs structural-equality membership check.
  * - `.size` reports member count.
  * - `[Symbol.iterator]` iterates plain values (not refs).
  */
 export interface ReadableSetRef<V = unknown> {
-  /** Callable: returns a deep plain snapshot of the set as an array. */
-  (): V[]
+  /** Callable: returns a frozen deep snapshot of the set as an array. */
+  (): readonly V[]
   /** Structural-equality membership query (uses `samePlainValue`). */
   has(value: V): boolean
   /** Member count. */
@@ -177,7 +178,7 @@ export type Readable<S extends Schema> =
               ? (() => V) & { [Symbol.toPrimitive](hint: string): V | string }
               : // --- Product ---
                 S extends ProductSchema<infer F>
-                ? (() => { [K in keyof F]: Plain<F[K]> }) & {
+                ? (() => { readonly [K in keyof F]: Plain<F[K]> }) & {
                     readonly [K in keyof F]: Readable<F[K]>
                   }
                 : // --- Sequence ---

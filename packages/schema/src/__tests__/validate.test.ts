@@ -14,6 +14,7 @@ import {
   Zero,
 } from "../index.js"
 import { RawPath } from "../path.js"
+import type { DeepReadonly } from "./deep-readonly.js"
 
 // Helper: run validation without triggering Plain<S> type resolution.
 // Avoids TS2589 ("excessively deep") when used inside expect(() => ...).toThrow()
@@ -875,14 +876,16 @@ describe("validate: type narrowing", () => {
       count: Schema.number(),
     })
     const result = validate(s, { title: "hi", count: 1 })
-    expectTypeOf(result).toEqualTypeOf<{ title: string; count: number }>()
+    expectTypeOf(result).toEqualTypeOf<
+      DeepReadonly<{ title: string; count: number }>
+    >()
   })
 
   it("tryValidate ok branch has Plain type", () => {
     const s = Schema.struct({ x: Schema.string() })
     const result = tryValidate(s, { x: "hi" })
     if (result.ok) {
-      expectTypeOf(result.value).toEqualTypeOf<{ x: string }>()
+      expectTypeOf(result.value).toEqualTypeOf<DeepReadonly<{ x: string }>>()
     }
   })
 
@@ -906,7 +909,9 @@ describe("validate: type narrowing", () => {
       items: Schema.list(Schema.number()),
     })
     const result = validate(s, { title: "x", items: [1] })
-    expectTypeOf(result).toEqualTypeOf<{ title: string; items: number[] }>()
+    expectTypeOf(result).toEqualTypeOf<
+      DeepReadonly<{ title: string; items: number[] }>
+    >()
   })
 
   it("validate narrows nullable", () => {

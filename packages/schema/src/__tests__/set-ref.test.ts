@@ -15,6 +15,7 @@ import {
   writable,
 } from "../index.js"
 import type { Plain } from "../interpreter-types.js"
+import type { DeepReadonly } from "./deep-readonly.js"
 
 function createSetDoc(schema: SchemaNode, initial: unknown): any {
   const store = { tags: initial }
@@ -114,6 +115,8 @@ describe("Type-level: Plain<set> matches the runtime call signature", () => {
     const schema = Schema.struct({
       tags: Schema.set(Schema.string()),
     })
-    expectTypeOf<Plain<typeof schema>>().toEqualTypeOf<{ tags: string[] }>()
+    expectTypeOf<Plain<typeof schema>>().toEqualTypeOf<
+      DeepReadonly<{ tags: string[] }>
+    >()
   })
 })

@@ -157,9 +157,9 @@ export type DiscriminantProductRef<
   M extends RefMode,
   N extends NativeMap = UnknownNativeMap,
 > = Wrap<
-  (() => { [K in keyof F]: Plain<F[K]> }) & {
+  (() => { readonly [K in keyof F]: Plain<F[K]> }) & {
     readonly [K in keyof F]: K extends D ? Plain<F[K]> : Readable<F[K]>
-  } & ProductRef<{ [K in keyof F]: Plain<F[K]> }>,
+  } & ProductRef<{ readonly [K in keyof F]: Plain<F[K]> }>,
   M,
   N["sum"]
 >
@@ -253,9 +253,9 @@ export type SchemaRef<
                 : // --- Product ---
                   S extends ProductSchema<infer F>
                   ? Wrap<
-                      (() => { [K in keyof F]: Plain<F[K]> }) & {
+                      (() => { readonly [K in keyof F]: Plain<F[K]> }) & {
                         readonly [K in keyof F]: SchemaRef<F[K], M, N>
-                      } & ProductRef<{ [K in keyof F]: Plain<F[K]> }>,
+                      } & ProductRef<{ readonly [K in keyof F]: Plain<F[K]> }>,
                       M,
                       N["struct"]
                     >
@@ -338,9 +338,9 @@ export type SchemaRef<
 export type DocRef<S extends Schema, N extends NativeMap = UnknownNativeMap> =
   S extends ProductSchema<infer F>
     ? Wrap<
-        (() => { [K in keyof F]: Plain<F[K]> }) & {
+        (() => { readonly [K in keyof F]: Plain<F[K]> }) & {
           readonly [K in keyof F]: SchemaRef<F[K], "rwc", N>
-        } & ProductRef<{ [K in keyof F]: Plain<F[K]> }>,
+        } & ProductRef<{ readonly [K in keyof F]: Plain<F[K]> }>,
         "rwc",
         N["root"]
       >

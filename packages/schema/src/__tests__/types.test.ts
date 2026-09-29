@@ -74,6 +74,7 @@ import {
   writable,
 } from "../index.js"
 import { withChangefeed } from "../interpreters/with-changefeed.js"
+import type { DeepReadonly } from "./deep-readonly.js"
 
 // ---------------------------------------------------------------------------
 // Strict narrowing tests — toEqualTypeOf finds the REAL boundaries where
@@ -350,7 +351,7 @@ describe("type-level: Writable<S> for products and structs", () => {
       {
         readonly name: ScalarRef<string>
         readonly active: ScalarRef<boolean>
-      } & ProductRef<{ name: string; active: boolean }>
+      } & ProductRef<{ readonly name: string; readonly active: boolean }>
     >()
   })
 
@@ -359,7 +360,7 @@ describe("type-level: Writable<S> for products and structs", () => {
     expectTypeOf<Result>().toHaveProperty("set")
     expectTypeOf<Result["set"]>().toBeFunction()
     expectTypeOf<Result["set"]>().toEqualTypeOf<
-      (value: { x: number }) => void
+      (value: { readonly x: number }) => void
     >()
   })
 })
@@ -399,11 +400,13 @@ describe("type-level: Writable<S> for struct", () => {
         readonly settings: {
           readonly darkMode: ScalarRef<boolean>
           readonly fontSize: ScalarRef<number>
-        } & ProductRef<{ darkMode: boolean; fontSize: number }>
-      } & ProductRef<{
-        title: string
-        settings: { darkMode: boolean; fontSize: number }
-      }>
+        } & ProductRef<DeepReadonly<{ darkMode: boolean; fontSize: number }>>
+      } & ProductRef<
+        DeepReadonly<{
+          title: string
+          settings: { darkMode: boolean; fontSize: number }
+        }>
+      >
     >()
   })
 })
@@ -440,7 +443,7 @@ describe("type-level: Writable<S> end-to-end structural schema", () => {
       {
         readonly darkMode: ScalarRef<boolean>
         readonly fontSize: ScalarRef<number>
-      } & ProductRef<{ darkMode: boolean; fontSize: number }>
+      } & ProductRef<{ readonly darkMode: boolean; readonly fontSize: number }>
     >()
 
     // Record (dynamic keys) — Map-like mutation interface
@@ -496,10 +499,12 @@ describe("type-level: Plain<S> for products and structs", () => {
       active: Schema.boolean(),
     })
     type Result = Plain<typeof s>
-    expectTypeOf<Result>().toEqualTypeOf<{
-      name: string
-      active: boolean
-    }>()
+    expectTypeOf<Result>().toEqualTypeOf<
+      DeepReadonly<{
+        name: string
+        active: boolean
+      }>
+    >()
   })
 
   it("Plain<struct with scalars> maps to plain types", () => {
@@ -508,10 +513,12 @@ describe("type-level: Plain<S> for products and structs", () => {
       count: Schema.number(),
     })
     type Result = Plain<typeof s>
-    expectTypeOf<Result>().toEqualTypeOf<{
-      title: string
-      count: number
-    }>()
+    expectTypeOf<Result>().toEqualTypeOf<
+      DeepReadonly<{
+        title: string
+        count: number
+      }>
+    >()
   })
 })
 
@@ -519,7 +526,7 @@ describe("type-level: Plain<S> for sequences", () => {
   it("Plain<list(string())> = string[]", () => {
     const s = Schema.list(Schema.string())
     type Result = Plain<typeof s>
-    expectTypeOf<Result>().toEqualTypeOf<string[]>()
+    expectTypeOf<Result>().toEqualTypeOf<DeepReadonly<string[]>>()
   })
 
   it("Plain<list(struct({...}))> has typed item objects", () => {
@@ -530,7 +537,9 @@ describe("type-level: Plain<S> for sequences", () => {
       }),
     )
     type Result = Plain<typeof s>
-    expectTypeOf<Result>().toEqualTypeOf<{ name: string; body: string }[]>()
+    expectTypeOf<Result>().toEqualTypeOf<
+      DeepReadonly<{ name: string; body: string }[]>
+    >()
   })
 })
 
@@ -538,13 +547,17 @@ describe("type-level: Plain<S> for maps", () => {
   it("Plain<record(plain.number())> = { [key: string]: number }", () => {
     const s = Schema.record(Schema.number())
     type Result = Plain<typeof s>
-    expectTypeOf<Result>().toEqualTypeOf<{ [key: string]: number }>()
+    expectTypeOf<Result>().toEqualTypeOf<
+      DeepReadonly<{ [key: string]: number }>
+    >()
   })
 
   it("Plain<record(plain.any())> = { [key: string]: unknown }", () => {
     const s = Schema.record(Schema.any())
     type Result = Plain<typeof s>
-    expectTypeOf<Result>().toEqualTypeOf<{ [key: string]: unknown }>()
+    expectTypeOf<Result>().toEqualTypeOf<
+      DeepReadonly<{ [key: string]: unknown }>
+    >()
   })
 })
 
@@ -559,14 +572,16 @@ describe("type-level: Plain<S> for struct", () => {
       }),
     })
     type Result = Plain<typeof s>
-    expectTypeOf<Result>().toEqualTypeOf<{
-      title: string
-      count: number
-      settings: {
-        darkMode: boolean
-        fontSize: number
-      }
-    }>()
+    expectTypeOf<Result>().toEqualTypeOf<
+      DeepReadonly<{
+        title: string
+        count: number
+        settings: {
+          darkMode: boolean
+          fontSize: number
+        }
+      }>
+    >()
   })
 })
 
@@ -596,19 +611,23 @@ describe("type-level: Plain<S> end-to-end structural schema", () => {
 
     // Nested sequence of structs → typed object array
     expectTypeOf<Doc["messages"]>().toEqualTypeOf<
-      { author: string; body: string }[]
+      DeepReadonly<{ author: string; body: string }[]>
     >()
 
     // Nested struct → typed object
-    expectTypeOf<Doc["settings"]>().toEqualTypeOf<{
-      darkMode: boolean
-      fontSize: number
-    }>()
+    expectTypeOf<Doc["settings"]>().toEqualTypeOf<
+      DeepReadonly<{
+        darkMode: boolean
+        fontSize: number
+      }>
+    >()
 
     // Record (dynamic keys)
-    expectTypeOf<Doc["metadata"]>().toEqualTypeOf<{
-      [key: string]: unknown
-    }>()
+    expectTypeOf<Doc["metadata"]>().toEqualTypeOf<
+      DeepReadonly<{
+        [key: string]: unknown
+      }>
+    >()
   })
 })
 
@@ -661,7 +680,7 @@ describe("type-level: Writable<S> for first-class types", () => {
       {
         readonly title: TextRef
         readonly count: CounterRef
-      } & ProductRef<{ title: string; count: number }>
+      } & ProductRef<{ readonly title: string; readonly count: number }>
     >()
   })
 })
@@ -695,7 +714,7 @@ describe("type-level: Writable<S> end-to-end schema with first-class types", () 
       {
         readonly darkMode: ScalarRef<boolean>
         readonly fontSize: ScalarRef<number>
-      } & ProductRef<{ darkMode: boolean; fontSize: number }>
+      } & ProductRef<{ readonly darkMode: boolean; readonly fontSize: number }>
     >()
 
     expectTypeOf<Doc["metadata"]>().toEqualTypeOf<WritableMapRef<unknown>>()
@@ -720,7 +739,7 @@ describe("type-level: Plain<S> for movable list", () => {
   it("Plain<movableList(string())> = string[]", () => {
     const s = Schema.movableList(Schema.string())
     type Result = Plain<typeof s>
-    expectTypeOf<Result>().toEqualTypeOf<string[]>()
+    expectTypeOf<Result>().toEqualTypeOf<DeepReadonly<string[]>>()
   })
 
   it("Plain<movableList(struct({...}))> = typed object[]", () => {
@@ -731,7 +750,9 @@ describe("type-level: Plain<S> for movable list", () => {
       }),
     )
     type Result = Plain<typeof s>
-    expectTypeOf<Result>().toEqualTypeOf<{ id: number; label: string }[]>()
+    expectTypeOf<Result>().toEqualTypeOf<
+      DeepReadonly<{ id: number; label: string }[]>
+    >()
   })
 })
 
@@ -759,17 +780,21 @@ describe("type-level: Plain<S> end-to-end schema with first-class types", () => 
     expectTypeOf<Doc["count"]>().toEqualTypeOf<number>()
 
     expectTypeOf<Doc["messages"]>().toEqualTypeOf<
-      { author: string; body: string }[]
+      DeepReadonly<{ author: string; body: string }[]>
     >()
 
-    expectTypeOf<Doc["settings"]>().toEqualTypeOf<{
-      darkMode: boolean
-      fontSize: number
-    }>()
+    expectTypeOf<Doc["settings"]>().toEqualTypeOf<
+      DeepReadonly<{
+        darkMode: boolean
+        fontSize: number
+      }>
+    >()
 
-    expectTypeOf<Doc["metadata"]>().toEqualTypeOf<{
-      [key: string]: unknown
-    }>()
+    expectTypeOf<Doc["metadata"]>().toEqualTypeOf<
+      DeepReadonly<{
+        [key: string]: unknown
+      }>
+    >()
   })
 })
 
@@ -820,10 +845,12 @@ describe("type-level: Plain<S> for constrained scalars", () => {
       count: Schema.number(),
     })
     type Result = Plain<typeof s>
-    expectTypeOf<Result>().toEqualTypeOf<{
-      visibility: "public" | "private"
-      count: number
-    }>()
+    expectTypeOf<Result>().toEqualTypeOf<
+      DeepReadonly<{
+        visibility: "public" | "private"
+        count: number
+      }>
+    >()
   })
 })
 
@@ -1921,13 +1948,15 @@ describe("type-level: nullable composite — inner is a product, not a scalar", 
   it("Ref<nullable(struct({ x: string() }))> call returns { x: string } | null", () => {
     type Result = Ref<typeof nullableStructSchema>
     type CallReturn = Result extends (...args: any[]) => infer R ? R : never
-    expectTypeOf<CallReturn>().toEqualTypeOf<{ x: string } | null>()
+    expectTypeOf<CallReturn>().toEqualTypeOf<
+      DeepReadonly<{ x: string } | null>
+    >()
   })
 
   it("Ref<nullable(struct({ x: string() }))> has .set({ x: string } | null)", () => {
     type Result = Ref<typeof nullableStructSchema>
     type SetParam = Result extends { set: (value: infer P) => void } ? P : never
-    expectTypeOf<SetParam>().toEqualTypeOf<{ x: string } | null>()
+    expectTypeOf<SetParam>().toEqualTypeOf<DeepReadonly<{ x: string } | null>>()
   })
 })
 
@@ -1970,7 +1999,7 @@ describe("type-level: Plain<S> regression guards for sums", () => {
     type Expected =
       | { type: "text"; body: string }
       | { type: "image"; url: string; caption: string }
-    expectTypeOf<Result>().toEqualTypeOf<Expected>()
+    expectTypeOf<Result>().toEqualTypeOf<DeepReadonly<Expected>>()
   })
 })
 

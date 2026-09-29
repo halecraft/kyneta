@@ -671,9 +671,7 @@ describe("full workflow", () => {
     expect(doc2.count()).toBe(42)
 
     // Both items should be present (order determined by Yjs conflict resolution)
-    const items1 = doc1.items() as string[]
-    const items2 = doc2.items() as string[]
-    expect(items1.sort()).toEqual(["from-1", "from-2"])
-    expect(items2.sort()).toEqual(["from-1", "from-2"])
+    expect([...doc1.items()].sort()).toEqual(["from-1", "from-2"])
+    expect([...doc2.items()].sort()).toEqual(["from-1", "from-2"])
   })
 })

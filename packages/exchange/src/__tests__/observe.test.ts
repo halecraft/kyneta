@@ -650,7 +650,7 @@ describe("observe — integration (two peers, one bridge)", () => {
     const now = hist?.valueAt?.(ex.docHistory("h")?.summary().version ?? "")
     expect(JSON.stringify(past)).not.toEqual(JSON.stringify(now))
     // The live doc is untouched by time-travel (fork-based).
-    expect((doc as { items: () => unknown[] }).items()).toHaveLength(2)
+    expect(doc.items()).toHaveLength(2)
 
     // Yjs: summary only (no `valueAt` — needs gc:false).
     const YDoc = yjs.bind(Schema.struct({ text: Schema.text() }))

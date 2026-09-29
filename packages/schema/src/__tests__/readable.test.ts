@@ -133,67 +133,45 @@ describe("readable: callable refs", () => {
   // Snapshot isolation — composite ref() returns fresh objects (not store refs)
   // ---------------------------------------------------------------------------
 
-  it("product ref() returns a fresh snapshot — mutating it does not corrupt the store", () => {
+  it("product ref() returns a frozen snapshot", () => {
     const { doc, store } = createReadOnlyDoc()
-    const snap1 = doc.settings()
-    snap1.darkMode = true
-    snap1.fontSize = 99
-
-    // Store must be unaffected
+    const snap = doc.settings()
+    expect(Object.isFrozen(snap)).toBe(true)
+    expect(() => {
+      snap.darkMode = true
+    }).toThrow(TypeError)
     expect((store.settings as any).darkMode).toBe(false)
-    expect((store.settings as any).fontSize).toBe(14)
-
-    // Second call returns a clean snapshot, not the mutated copy
-    const snap2 = doc.settings()
-    expect(snap2).toEqual({ darkMode: false, fontSize: 14 })
-
-    // Distinct references each time
+    // A read-only stack caches nothing: nothing would tell a cached read it
+    // is stale. Each read is a fresh value.
     expect(doc.settings()).not.toBe(doc.settings())
   })
 
-  it("sequence ref() returns a fresh snapshot — mutating it does not corrupt the store", () => {
-    const { doc, store } = createReadOnlyAnnotatedDoc()
+  it("sequence ref() returns a frozen snapshot", () => {
+    const { doc } = createReadOnlyAnnotatedDoc()
     const snap = doc.messages()
-    snap.push({ author: "Evil", body: "Injected" })
-
-    // Store must be unaffected
-    expect((store.messages as any[]).length).toBe(1)
-
-    // Second call returns a clean snapshot
+    expect(() => snap.push({ author: "Evil", body: "Injected" })).toThrow(
+      TypeError,
+    )
     expect(doc.messages()).toEqual([{ author: "Alice", body: "Hi" }])
-
-    // Distinct references each time
-    expect(doc.messages()).not.toBe(doc.messages())
   })
 
-  it("map ref() returns a fresh snapshot — mutating it does not corrupt the store", () => {
-    const { doc, store } = createReadOnlyDoc()
+  it("map ref() returns a frozen snapshot", () => {
+    const { doc } = createReadOnlyDoc()
     const snap = doc.metadata()
-    ;(snap as any).evil = 999
-
-    // Store must be unaffected
-    expect(Object.keys(store.metadata as object)).toEqual(["version"])
-
-    // Second call returns a clean snapshot
+    expect(() => {
+      ;(snap as any).evil = 999
+    }).toThrow(TypeError)
     expect(doc.metadata()).toEqual({ version: 1 })
-
-    // Distinct references each time
-    expect(doc.metadata()).not.toBe(doc.metadata())
   })
 
-  it("doc ref() returns a deeply fresh snapshot — nested objects are distinct from store", () => {
+  it("doc ref() is frozen all the way down, and shares nothing with the store", () => {
     const { doc, store } = createReadOnlyDoc()
     const snap = doc()
-    // Mutate nested object in the snapshot
-    ;(snap as any).settings.darkMode = true
-
-    // Store must be unaffected
-    expect((store.settings as any).darkMode).toBe(false)
-    // Fresh call returns clean data
-    expect(doc()).toEqual({
-      settings: { darkMode: false, fontSize: 14 },
-      metadata: { version: 1 },
-    })
+    expect(Object.isFrozen((snap as any).settings)).toBe(true)
+    expect((snap as any).settings).not.toBe(store.settings)
+    expect(() => {
+      ;(snap as any).settings.darkMode = true
+    }).toThrow(TypeError)
   })
 
   it("typeof every ref is 'function'", () => {

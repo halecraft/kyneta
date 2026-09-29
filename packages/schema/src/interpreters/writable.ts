@@ -84,7 +84,7 @@ import { installTreeWriteOps } from "./tree-helpers.js"
  */
 type WritableDiscriminantProductRef<F extends Record<string, Schema>> = {
   readonly [K in keyof F]: Plain<F[K]>
-} & ProductRef<{ [K in keyof F]: Plain<F[K]> }>
+} & ProductRef<{ readonly [K in keyof F]: Plain<F[K]> }>
 
 // ---------------------------------------------------------------------------
 // TRANSACT symbol — composability hook for discovering a ref's context
@@ -229,6 +229,13 @@ export interface WritableContext extends RefContext {
   /** Register a layer's `prepare` stage, once per context: a second call
    *  with the same `layer` is ignored. */
   readonly addPrepareStage: (layer: symbol, stage: PrepareStage) => void
+  /**
+   * Whether a `prepare` call is in progress. Between its stages, σ and each
+   * layer's per-coordinate state can disagree — a stage that already ran
+   * has settled, one still to run has not — so anything a stage's callbacks
+   * cause to be read must be computed from σ, not served from a cache.
+   */
+  readonly preparing: boolean
   /** Deliver one sealed batch. The base does nothing; the changefeed layer
    *  wraps it. Called in seal order by the context's delivery dispatcher. */
   deliver: (batch: SealedBatch) => void
@@ -271,7 +278,8 @@ export interface WritableContext extends RefContext {
  */
 export function hasPreparePipeline(
   ctx: RefContext,
-): ctx is RefContext & Pick<WritableContext, "addPrepareStage" | "deliver"> {
+): ctx is RefContext &
+  Pick<WritableContext, "addPrepareStage" | "deliver" | "preparing"> {
   return (
     "addPrepareStage" in ctx &&
     typeof ctx.addPrepareStage === "function" &&
@@ -383,6 +391,9 @@ export function buildWritableContext(
     delivery().dispatch({ type: "deliver", batch })
   }
 
+  // How many `prepare` calls are in progress (`ctx.preparing`).
+  let preparing = 0
+
   // Each layer's stage, keyed by the layer so registering twice is a no-op.
   // Stages within a phase commute, so the Map's insertion order carries no
   // meaning.
@@ -418,19 +429,31 @@ export function buildWritableContext(
       throw new Error("ctx.prepare called outside runBatch or announce")
     }
     const path = resolve(rawPath)
-    for (const stage of stages.values()) stage.before?.(path, change, options)
-    switch (options.ingress) {
-      case "author":
-        substrate.prepare(path, change, recordInverse)
-        break
-      case "compensate":
-        substrate.prepare(path, change, null)
-        break
-      case "announce":
-        break
+    preparing++
+    try {
+      for (const stage of stages.values()) {
+        stage.before?.(path, change, options)
+      }
+      switch (options.ingress) {
+        case "author":
+          substrate.prepare(path, change, recordInverse)
+          break
+        case "compensate":
+          substrate.prepare(path, change, null)
+          break
+        case "announce":
+          break
+      }
+      trace.push({
+        op: { path, change },
+        authored: options.ingress === "author",
+      })
+      for (const stage of stages.values()) {
+        stage.after?.(path, change, options)
+      }
+    } finally {
+      preparing--
     }
-    trace.push({ op: { path, change }, authored: options.ingress === "author" })
-    for (const stage of stages.values()) stage.after?.(path, change, options)
   }
 
   // Base deliver: nothing to deliver to. The changefeed layer wraps it.
@@ -555,6 +578,9 @@ export function buildWritableContext(
     reader: substrate.reader,
     prepare,
     addPrepareStage,
+    get preparing() {
+      return preparing > 0
+    },
     deliver,
     runBatch,
     announce,
@@ -754,7 +780,7 @@ export type Writable<S extends Schema> =
                 : // --- Product ---
                   S extends ProductSchema<infer F>
                   ? { readonly [K in keyof F]: Writable<F[K]> } & ProductRef<{
-                      [K in keyof F]: Plain<F[K]>
+                      readonly [K in keyof F]: Plain<F[K]>
                     }>
                   : // --- Sequence ---
                     S extends SequenceSchema<infer _I>

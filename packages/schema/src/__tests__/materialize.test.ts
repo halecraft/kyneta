@@ -7,6 +7,7 @@ import {
   Schema,
 } from "../index.js"
 import type { Path } from "../interpret.js"
+import type { DeepReadonly } from "./deep-readonly.js"
 
 // ---------------------------------------------------------------------------
 // Mock resolver helper
@@ -243,10 +244,12 @@ describe("createMaterializeInterpreter", () => {
       tags: Schema.set(Schema.string()),
       meta: Schema.record(Schema.string()),
     })
-    expectTypeOf<Plain<typeof schema>>().toEqualTypeOf<{
-      tags: string[]
-      meta: { [key: string]: string }
-    }>()
+    expectTypeOf<Plain<typeof schema>>().toEqualTypeOf<
+      DeepReadonly<{
+        tags: string[]
+        meta: { [key: string]: string }
+      }>
+    >()
   })
 
   // ── Regression: sequence and movable use the same array-collector ───────

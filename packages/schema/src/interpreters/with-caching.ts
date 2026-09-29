@@ -9,12 +9,16 @@
 //   carrier kept on the child's coordinate in the context's `CoordinateTrie`,
 //   so a child has one carrier while it exists.
 // - Sum: memoizes each variant's carrier.
+// - Reads: every node's `[CALL]` value is kept on its coordinate (`read-cache`)
+//   until a change reaches it, on a writable stack. Unchanged subtrees are
+//   shared from one read to the next.
 //
-// Nothing here reacts to changes. Addresses advance, die and revive in
-// withAddressing's prepare stage, taking the carriers kept on their nodes
-// with them, and a memoized carrier stays valid across changes because it
-// reads through its path.
+// Carriers need nothing when a change lands: addresses advance, die and
+// revive in withAddressing's prepare stage, taking the carriers kept on their
+// nodes with them, and a memoized carrier reads through its path. Reads do:
+// this layer's own `after` stage clears the ones a change made stale.
 
+import { coordinatePath } from "../coordinate-trie.js"
 import type {
   FlatTreeNode,
   Interpreter,
@@ -22,6 +26,7 @@ import type {
   SumVariants,
 } from "../interpret.js"
 import { INTERPRETER, type RefContext } from "../interpreter-types.js"
+import { invalidateReads, readAt, storeRead } from "../read-cache.js"
 import type {
   CounterSchema,
   MapSchema,
@@ -35,12 +40,55 @@ import type {
   TextSchema,
   TreeSchema,
 } from "../schema.js"
-
 import type { HasAddressing, HasCaching } from "./bottom.js"
-import { markCaching } from "./bottom.js"
+import { CALL, markCaching } from "./bottom.js"
 import { installKeyedCaching } from "./keyed-helpers.js"
 import { installSequenceCaching } from "./sequence-helpers.js"
 import { cachedTreeNodes } from "./tree-helpers.js"
+import { hasPreparePipeline } from "./writable.js"
+
+// ---------------------------------------------------------------------------
+// Reads — the `[CALL]` memo and the stage that invalidates it
+// ---------------------------------------------------------------------------
+
+/** The key this layer registers its prepare stage under. */
+const CACHING_STAGE: unique symbol = Symbol("kyneta:caching-stage")
+
+/**
+ * Memoize `result`'s read on its coordinate.
+ *
+ * Only on a writable stack: a read-only stack has no pipeline, so nothing
+ * would ever tell a cached read it is stale, and its reads stay fresh values
+ * (frozen all the same, by `withReadable`). Primitive values are never
+ * stored — they have no identity to keep — and a read made while a `prepare`
+ * is in progress is computed from σ and not stored, because the caches have
+ * not all settled yet (`WritableContext.preparing`).
+ */
+function cacheReads(ctx: RefContext, path: Path, result: object): void {
+  if (!hasPreparePipeline(ctx)) return
+  const at = coordinatePath(ctx, path)
+  ctx.addPrepareStage(CACHING_STAGE, {
+    after: (changed, change) =>
+      invalidateReads(at.trie, coordinatePath(ctx, changed), change),
+  })
+
+  const read = (result as { readonly [CALL]: () => unknown })[CALL]
+  Object.defineProperty(result, CALL, {
+    value: (): unknown => {
+      if (ctx.preparing) return read()
+      const cached = readAt(at.trie, at)
+      if (cached !== undefined) return cached
+      const value = read()
+      if (typeof value === "object" && value !== null) {
+        storeRead(at.trie, at, value)
+      }
+      return value
+    },
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  })
+}
 
 // ---------------------------------------------------------------------------
 // withCaching — the interposition transformer
@@ -70,9 +118,11 @@ export function withCaching<A extends HasAddressing>(
   return {
     [INTERPRETER]: true,
     // --- Scalar ---------------------------------------------------------------
-    // No caching needed for scalars — pass through.
+    // A scalar's read is cached only when it is an object (`.json()`, `any`).
     scalar(ctx: RefContext, path: Path, schema: ScalarSchema): A & HasCaching {
-      return base.scalar(ctx, path, schema) as A & HasCaching
+      const result = base.scalar(ctx, path, schema)
+      cacheReads(ctx, path, result)
+      return result as A & HasCaching
     },
 
     // --- Product ---------------------------------------------------------------
@@ -118,12 +168,13 @@ export function withCaching<A extends HasAddressing>(
         })
       }
 
+      cacheReads(ctx, path, result)
       markCaching(result)
       return result
     },
 
     // --- Sequence ---------------------------------------------------------------
-    // Delegate to address table for identity-preserving lookup.
+    // One carrier per child, kept on its coordinate.
     sequence(
       ctx: RefContext,
       path: Path,
@@ -133,11 +184,12 @@ export function withCaching<A extends HasAddressing>(
       const baseItem = item as (index: number) => A
       const result = base.sequence(ctx, path, schema, baseItem)
       installSequenceCaching(result, ctx, path)
+      cacheReads(ctx, path, result)
       return result as A & HasCaching
     },
 
     // --- Map -------------------------------------------------------------------
-    // Delegate to address table for identity-preserving lookup.
+    // One carrier per child, kept on its coordinate.
     map(
       ctx: RefContext,
       path: Path,
@@ -147,6 +199,7 @@ export function withCaching<A extends HasAddressing>(
       const baseItem = item as (key: string) => A
       const result = base.map(ctx, path, schema, baseItem)
       installKeyedCaching(result, ctx, path)
+      cacheReads(ctx, path, result)
       return result as A & HasCaching
     },
 
@@ -197,13 +250,13 @@ export function withCaching<A extends HasAddressing>(
     },
 
     // --- Text ------------------------------------------------------------------
-    // No caching needed for text — pass through.
+    // A text's read is a string, which has no identity to keep — pass through.
     text(ctx: RefContext, path: Path, schema: TextSchema): A & HasCaching {
       return base.text(ctx, path, schema) as A & HasCaching
     },
 
     // --- Counter ---------------------------------------------------------------
-    // No caching needed for counter — pass through.
+    // A counter's read is a number, which has no identity to keep — pass through.
     counter(
       ctx: RefContext,
       path: Path,
@@ -213,9 +266,8 @@ export function withCaching<A extends HasAddressing>(
     },
 
     // --- Set -------------------------------------------------------------------
-    // Sets are leaf-shaped: no per-member child refs, so no address-table
-    // cache. Every call to `()` re-reads through `ctx.reader`. Pass through
-    // (same pattern as text/counter).
+    // Sets are leaf-shaped: no per-member child refs. The members are read,
+    // and cached, whole.
     set(
       ctx: RefContext,
       path: Path,
@@ -223,7 +275,9 @@ export function withCaching<A extends HasAddressing>(
       item: (key: string) => A & HasCaching,
     ): A & HasCaching {
       const baseItem = item as (key: string) => A
-      return base.set(ctx, path, schema, baseItem) as A & HasCaching
+      const result = base.set(ctx, path, schema, baseItem)
+      cacheReads(ctx, path, result)
+      return result as A & HasCaching
     },
 
     // --- Tree ------------------------------------------------------------------
@@ -237,12 +291,13 @@ export function withCaching<A extends HasAddressing>(
       node: (id: string) => A & HasCaching,
     ): A & HasCaching {
       const cached = cachedTreeNodes(ctx, path, node as (id: string) => A)
-      return base.tree(ctx, path, schema, cached.nodes, cached.node) as A &
-        HasCaching
+      const result = base.tree(ctx, path, schema, cached.nodes, cached.node)
+      cacheReads(ctx, path, result)
+      return result as A & HasCaching
     },
 
     // --- Movable ---------------------------------------------------------------
-    // Delegate to address table for identity-preserving lookup (like sequence).
+    // One carrier per item, kept on its coordinate (like sequence).
     movable(
       ctx: RefContext,
       path: Path,
@@ -252,17 +307,20 @@ export function withCaching<A extends HasAddressing>(
       const baseItem = item as (index: number) => A
       const result = base.movable(ctx, path, schema, baseItem)
       installSequenceCaching(result, ctx, path)
+      cacheReads(ctx, path, result)
       return result as A & HasCaching
     },
 
     // --- RichText --------------------------------------------------------------
-    // No caching needed for richtext — pass through.
+    // A rich-text read is a delta, an object, cached like any other.
     richtext(
       ctx: RefContext,
       path: Path,
       schema: RichTextSchema,
     ): A & HasCaching {
-      return base.richtext(ctx, path, schema) as A & HasCaching
+      const result = base.richtext(ctx, path, schema)
+      cacheReads(ctx, path, result)
+      return result as A & HasCaching
     },
   }
 }

@@ -135,6 +135,14 @@ export interface RefContext {
  * Use `Plain<S>` for `toJSON()` return types, serialization boundaries,
  * snapshot types, and anywhere you need the "just data" shape of a schema.
  *
+ * Readonly throughout: a read is a frozen snapshot shared by every consumer,
+ * so mutating one is a type error here and a `TypeError` at runtime. Copy one
+ * (`structuredClone`) to get something to mutate. The modifiers sit inside
+ * each clause rather than in a wrapping `DeepReadonly`, which would recurse
+ * again through the result and push instantiation depth toward TS2589. A
+ * `.json()` scalar keeps its declared type `V` for the same reason, though its
+ * value is frozen too.
+ *
  * ```ts
  * const s = Schema.struct({
  *   title: Schema.string(),
@@ -151,11 +159,11 @@ export interface RefContext {
  *
  * type Doc = Plain<typeof s>
  * // = {
- * //     title: string
- * //     count: number
- * //     items: { name: string; done: boolean }[]
- * //     settings: { darkMode: boolean }
- * //     metadata: { [key: string]: unknown }
+ * //     readonly title: string
+ * //     readonly count: number
+ * //     readonly items: readonly { readonly name: string; readonly done: boolean }[]
+ * //     readonly settings: { readonly darkMode: boolean }
+ * //     readonly metadata: { readonly [key: string]: unknown }
  * //   }
  * ```
  */
@@ -168,23 +176,23 @@ export type Plain<S extends Schema> =
       : S extends CounterSchema
         ? number
         : S extends SetSchema<infer I>
-          ? Plain<I>[]
+          ? readonly Plain<I>[]
           : S extends TreeSchema<infer Inner>
             ? readonly PlainFlatTreeNode<Inner>[]
             : S extends MovableSequenceSchema<infer I>
-              ? Plain<I>[]
+              ? readonly Plain<I>[]
               : // --- Scalar ---
                 S extends ScalarSchema<infer _K, infer V>
                 ? V
                 : // --- Product ---
                   S extends ProductSchema<infer F>
-                  ? { [K in keyof F]: Plain<F[K]> }
+                  ? { readonly [K in keyof F]: Plain<F[K]> }
                   : // --- Sequence ---
                     S extends SequenceSchema<infer I>
-                    ? Plain<I>[]
+                    ? readonly Plain<I>[]
                     : // --- Map ---
                       S extends MapSchema<infer I>
-                      ? { [key: string]: Plain<I> }
+                      ? { readonly [key: string]: Plain<I> }
                       : // --- Sum ---
                         S extends PositionalSumSchema<infer V>
                         ? Plain<V[number]>

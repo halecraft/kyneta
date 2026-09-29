@@ -748,6 +748,7 @@ describe("writable: write-only stack", () => {
       reader: store,
       prepare: (path, change) => dispatched.push({ path, change }),
       addPrepareStage: () => {},
+      preparing: false,
       deliver: () => {},
       runBatch: work => {
         work()
@@ -812,7 +813,7 @@ describe("writable: mutation + read integration", () => {
     expect(msg.author()).toBe("Bob")
   })
 
-  it("product ref() returns updated fresh snapshot after .set()", () => {
+  it("product ref() returns the updated snapshot after .set()", () => {
     const { doc, store } = createStructuralDoc()
     // Mutate via the writable API
     doc.settings.set({ darkMode: true, fontSize: 20 })
@@ -821,10 +822,13 @@ describe("writable: mutation + read integration", () => {
     const snap = doc.settings()
     expect(snap).toEqual({ darkMode: true, fontSize: 20 })
 
-    // Snapshot is still isolated — mutating it does not corrupt the store
-    snap.darkMode = false
+    // The snapshot is frozen, and stays the read until the next write
+    expect(() => {
+      // @ts-expect-error — a read is readonly, and frozen at runtime too
+      snap.darkMode = false
+    }).toThrow(TypeError)
     expect((store.settings as any).darkMode).toBe(true)
-    expect(doc.settings()).toEqual({ darkMode: true, fontSize: 20 })
+    expect(doc.settings()).toBe(snap)
   })
 
   it("map mutation: .set(key, value) dispatches change", () => {
@@ -1230,6 +1234,7 @@ it("[TRANSACT] is present on write-only stack refs", () => {
     reader: plainReader(store),
     prepare: (path, change) => dispatched.push({ path, change }),
     addPrepareStage: () => {},
+    preparing: false,
     deliver: () => {},
     runBatch: work => {
       work()

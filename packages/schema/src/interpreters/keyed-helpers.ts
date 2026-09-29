@@ -61,7 +61,7 @@ export function installKeyedWriteOps<T extends object>(
 
 /** Install the CALL slot (record snapshot) and `.get(key)` onto a keyed ref. */
 export interface KeyedReadable {
-  readonly [CALL]: () => Record<string, unknown>
+  readonly [CALL]: () => Readonly<Record<string, unknown>>
   readonly get: (key: string) => unknown
 }
 
@@ -78,9 +78,10 @@ export function installKeyedReadable<T extends object>(
   const navigable = result as NavigableCarrier<string>
 
   // Snapshot goes through result.at(key) — not the raw item closure —
-  // to respect caching/addressing identity.
+  // to respect caching/addressing identity. Each entry's value is frozen by
+  // its own read; the record is frozen here.
   Object.defineProperty(result, CALL, {
-    value: (): Record<string, unknown> => {
+    value: (): Readonly<Record<string, unknown>> => {
       const keys = ctx.reader.keys(path)
       const snapshot: Record<string, unknown> = {}
       for (const key of keys) {
@@ -88,7 +89,7 @@ export function installKeyedReadable<T extends object>(
         snapshot[key] =
           typeof child === "function" ? (child as () => unknown)() : child
       }
-      return snapshot
+      return Object.freeze(snapshot)
     },
     enumerable: true,
     configurable: true,

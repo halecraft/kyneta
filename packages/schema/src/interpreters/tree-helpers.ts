@@ -144,28 +144,29 @@ export function installTreeReadable<T extends object>(
   })
 
   // `()` returns the flat-forest plain shape (`Plain<TreeSchema<I>>`),
-  // with each node's `data` forced to plain via its `[CALL]`. Forcing here
-  // (instead of returning live refs) is what makes `ref()` a snapshot.
+  // with each node's `data` forced to plain via its `[CALL]`, and every
+  // record and the array frozen. Each `data` is frozen by its own read.
   Object.defineProperty(result, CALL, {
     enumerable: true,
     configurable: true,
     writable: true,
     value: (): unknown => {
       const topology = ctx.reader.forestTopology(path)
-      return topology.map(t => {
+      const records = topology.map(t => {
         const childRef = node(t.id)
         const data =
           childRef !== undefined &&
           typeof (childRef as { [CALL]?: () => unknown })[CALL] === "function"
             ? (childRef as { [CALL]: () => unknown })[CALL]()
             : childRef
-        return {
+        return Object.freeze({
           id: t.id,
           parent: t.parent,
           index: t.index,
           data,
-        }
+        })
       })
+      return Object.freeze(records)
     },
   })
 }
