@@ -12,7 +12,7 @@ const part = (
   cid: ContainerID,
   diff: Diff,
   state: LoroGathered["state"],
-): LoroGathered => ({ cid, to: cid, diff, state })
+): LoroGathered => ({ to: cid, diff, state })
 
 describe("planLoroRevert", () => {
   it("rebases a text inverse over what changed since, by content", () => {

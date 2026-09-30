@@ -14,6 +14,8 @@ import type {
   BoundSchema,
   CommitOptions,
   Edit,
+  Op,
+  Path,
   Remap,
   Revertible,
   RevertibleCommit,
@@ -21,9 +23,15 @@ import type {
   Version,
 } from "@kyneta/schema"
 import {
+  applyChanges,
   base64ToUint8Array,
-  batch,
+  diffSequence,
   editOf,
+  own,
+  RawPath,
+  replaceChange,
+  samePlainValue,
+  sequenceChange,
   TYPING_GAP,
   uint8ArrayToBase64,
 } from "@kyneta/schema"
@@ -105,8 +113,8 @@ export function pushStep(
 
 /**
  * `step` moved from `from`'s list, as `redo` onto the other list (dropped
- * when nothing of it applied), with every part left rewritten by `rewrite`
- * and the note cleared.
+ * when nothing of it applied), every step left rewritten by `rewrite`, and
+ * the note cleared. `redo` is already current: its revert made it so.
  */
 export function moveStep(
   stack: StoredStack,
@@ -115,15 +123,44 @@ export function moveStep(
   redo: Step | undefined,
   rewrite: (part: Part) => Part,
 ): StoredStack {
-  const source = from === "undo" ? stack.undo : stack.redo
-  const target = from === "undo" ? stack.redo : stack.undo
   const each = (steps: readonly Step[]) =>
     steps.map(s => ({ ...s, parts: s.parts.map(rewrite) }))
+  const source = from === "undo" ? stack.undo : stack.redo
+  const target = from === "undo" ? stack.redo : stack.undo
   const left = each(source.filter(s => s.id !== step.id))
-  const right = each(redo === undefined ? target : [...target, redo])
+  const right = [...each(target), ...(redo === undefined ? [] : [redo])]
   return from === "undo"
     ? { undo: left, redo: right, pending: null }
     : { undo: right, redo: left, pending: null }
+}
+
+/**
+ * The ops that take the stack at `at` from `before` to `after`: each list's
+ * shortest edit (`diffSequence`) and the note, if it changed. A write is as
+ * large as what changed, not as large as the stack.
+ */
+export function stackOps(
+  at: Path,
+  before: StoredStack,
+  after: StoredStack,
+): Op[] {
+  const ops: Op[] = []
+  for (const list of ["undo", "redo"] as const) {
+    const instructions = diffSequence(before[list], after[list], samePlainValue)
+    if (instructions.length === 0) continue
+    // Each inserted step is copied: a step read from the document is frozen.
+    const owned = instructions.map(i =>
+      "insert" in i ? { insert: i.insert.map(step => own(step)) } : i,
+    )
+    ops.push({ path: at.field(list), change: sequenceChange(owned) })
+  }
+  if (!samePlainValue(before.pending, after.pending)) {
+    ops.push({
+      path: at.field("pending"),
+      change: replaceChange(own(after.pending)),
+    })
+  }
+  return ops
 }
 
 // ---------------------------------------------------------------------------
@@ -157,10 +194,14 @@ export async function createUndoStack(
       pending: value.pending as unknown as Note | null,
     }
   }
-  const write = (stack: StoredStack) => {
-    batch(doc, (d: any) => d.stacks.set(key, stack))
+  const at = RawPath.empty.field("stacks").entry(key)
+  /** Write the stack's move from what it holds to `next`, in one batch. */
+  const write = (next: StoredStack) => {
+    applyChanges(doc, stackOps(at, read(), next))
   }
-  if (!doc.stacks.has(key)) write({ undo: [], redo: [], pending: null })
+  if (!doc.stacks.has(key)) {
+    doc.stacks.set(key, { undo: [], redo: [], pending: null })
+  }
 
   // --- The program loop ---------------------------------------------------
 

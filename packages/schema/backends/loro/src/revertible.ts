@@ -303,8 +303,6 @@ export type GatheredState =
 
 /** One container of a record's inverse, with what was gathered of it. */
 export interface LoroGathered {
-  /** The container as the inverse names it. */
-  readonly cid: ContainerID
   /** Where it lives now, through the record's aliases. */
   readonly to: ContainerID
   readonly diff: Diff
@@ -487,7 +485,7 @@ export function createLoroRevertible(host: LoroRevertibleHost): LoroRevertible {
       const to = aliasOf(cid, record.aliases)
       const now = containerIn(doc, to)
       const was = then.getContainerById(cid)
-      return { cid, to, diff, state: stateOf(diff, was, now, record.aliases) }
+      return { to, diff, state: stateOf(diff, was, now, record.aliases) }
     })
   }
 
