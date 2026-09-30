@@ -177,6 +177,25 @@ with new ids.
     the pre-state gives the same ids per index (Y1), for arrays as well as
     text.
 
+## Fourth round: a step of several commits to one text
+
+Reported downstream (Pineta): typing a word (one commit per keystroke,
+grouped into one step), undoing it and redoing it gave `Goerom` for `Gomore`;
+undoing a word backspaced a key at a time did the same.
+
+28. **A `Y.Text` insert goes past the tombstones to its right**
+    (`minimizeAttributeChanges` steps over deleted items); a `Y.Array` insert
+    goes before them. A deleted run anchored to its own first item resolves
+    to the index where its tombstone sits, which is right for one run. For
+    several runs deleted one commit at a time, restoring the last deleted
+    (`m`) puts `m'` past the tombstones `[m][o][r][e]`, and the next run's
+    anchor, the tombstone `o`, resolves to before `m'`: each restore lands
+    before the one above it, reversing the word. The remap cannot help, since
+    `o`'s anchor names `o`, which is not re-created until its own restore.
+    Anchoring each run just after the item before it (`assoc: -1`) and
+    rewriting that id through the remap makes `o` land after `m'`. Loro and
+    plain documents were not affected. The conformance suite now covers it.
+
 ## What this settles
 
 - **Yjs:** anchors and ids through the public API for text and sequences. A

@@ -58,7 +58,7 @@ describe("an undo stack", () => {
     expect(places.place()).toBe("column")
   })
 
-  it("typing is grouped by the typing policy", async () => {
+  it("typing is grouped by the typing policy, and redoes in order", async () => {
     const exchange = createExchange({ schemas: [CardDoc] })
     const { card } = open(exchange)
     let t = 0
@@ -78,6 +78,11 @@ describe("an undo stack", () => {
     expect(card.text()).toBe("hi ")
     await stack.undo()
     expect(card.text()).toBe("")
+    // A step of several keystrokes redoes in order.
+    await stack.redo()
+    expect(card.text()).toBe("hi ")
+    await stack.redo()
+    expect(card.text()).toBe("hi to")
     stack.dispose()
   })
 

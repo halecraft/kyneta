@@ -44,9 +44,9 @@ import {
 } from "./capture.js"
 import {
   destabilize,
+  gapAfter,
   idAt,
   locate,
-  resolveAnchor,
   stabilize,
   stateOf,
   type Tree,
@@ -174,8 +174,7 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
     const stable = stabilize(tree, path)
     if (stable === null) return
     const target = typeAt(tree, path)
-    if (isSequenceChange(change)) {
-      const list = target instanceof Y.Array ? target : null
+    if (isSequenceChange(change) && target instanceof Y.Array) {
       draft.deleted.push(
         ...deletedItems(
           tree,
@@ -183,7 +182,7 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
           path,
           change,
           (pre ?? []) as unknown[],
-          list,
+          target,
           stage,
         ),
       )
@@ -512,7 +511,7 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
       deleted: record.deleted.map(run => ({
         container: container(run.container),
         back: [...unitsOf(run.ids)].some(alive),
-        gap: run.anchor === null ? null : resolveAnchor(doc, run.anchor),
+        gap: gapAfter(doc, run.after),
       })),
       marks: record.marks.map(mark => {
         const key = container(mark.container)

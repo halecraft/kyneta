@@ -215,6 +215,40 @@ export function undoConformance(
           expect(s.doc.cards()).toEqual([{ name: "hi", done: false }])
         })
 
+        it("a step of several commits to one text or list undoes and redoes in order", () => {
+          const s = new Stack(env, env.create())
+          s.step(d => {
+            d.title.insert(0, "Go")
+            d.tags.push("a", "b", "c", "d")
+          })
+          // Keystrokes, one commit each: typed, then backspaced.
+          s.step(d => {
+            for (const c of "more") d.title.insert(d.title().length, c)
+          })
+          s.step(d => {
+            for (let i = 0; i < 4; i++) d.title.delete(d.title().length - 1, 1)
+            for (let i = 0; i < 3; i++) d.tags.delete(1, 1)
+          })
+          settle(s)
+          expect(s.undo()).toBe(true)
+          expect(s.doc.title()).toBe("Gomore")
+          expect(s.doc.tags()).toEqual(["a", "b", "c", "d"])
+          settle(s)
+          expect(s.undo()).toBe(true)
+          expect(s.doc.title()).toBe("Go")
+          settle(s)
+          expect(s.redo()).toBe(true)
+          expect(s.doc.title()).toBe("Gomore")
+          settle(s)
+          expect(s.redo()).toBe(true)
+          expect(s.doc.title()).toBe("Go")
+          expect(s.doc.tags()).toEqual(["a"])
+          settle(s)
+          expect(s.undo()).toBe(true)
+          expect(s.doc.title()).toBe("Gomore")
+          expect(s.doc.tags()).toEqual(["a", "b", "c", "d"])
+        })
+
         it("undoing everything and redoing everything is exact", () => {
           const s = new Stack(env, env.create())
           s.step(d => {

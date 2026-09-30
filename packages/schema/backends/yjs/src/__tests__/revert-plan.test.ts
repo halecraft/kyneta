@@ -27,7 +27,7 @@ const container = (length: number, marks: Record<string, unknown>[] = []) =>
 const run = (text: string, clock = 10): DeletedRun => ({
   container: [{ field: "title" }],
   ids: [{ client: 1, clock, length: text.length }],
-  anchor: null,
+  after: null,
   content: { kind: "text", text },
   nested: [],
 })

@@ -444,7 +444,7 @@ A record names content by Yjs identity, which survives edits, merges, gc and a r
 | Part | What it holds | How a revert uses it |
 |---|---|---|
 | `inserted` | The ids this peer inserted into a text or list, by container | Deletes the ones still alive, so text a collaborator typed among them survives |
-| `deleted` | Each run it deleted: ids in document order, an anchor, the content (with marks), and the ids of texts inside a deleted list item | Re-inserts the content at the anchor, unless some of its ids are alive again |
+| `deleted` | Each run it deleted: ids in document order, the id of the item before it (`after`), the content (with marks), and the ids of texts inside a deleted list item | Re-inserts the content just after that item, unless some of its ids are alive again |
 | `values` | Each map key or scalar it wrote: what it wrote, what was there | Restores the old value only while the key still holds what was written |
 | `marks` | Each character it marked, per key: what it set, what was there | Restores per character, only where the character still holds what was set |
 
@@ -454,6 +454,7 @@ A container inside a list is addressed by a `StablePath`: its Kyneta path with e
 - **Deleted rich text takes its marks from σ before the transaction.** Yjs renders deleted text without its formatting.
 - **Marks are undone by state, never by deleting format items.** Yjs's own manager deletes the format items it inserted, and a peer's closing boundary then re-bolds text that was never bold (finding 18).
 - **A revert gathers, plans, applies, settles.** `gather` reads what the record names as the document holds it now (`YjsGathered`: containers and their lengths, where each live id sits, whether a deleted run is back, what each value holds). `planYjsRevert(record, gathered)` decides purely: which inserts to delete, which runs to restore where, which marks and values still hold what was written. The plan applies as one authored batch, dispatched inside out (a change inside a list item before the list moves), carrying the caller's `origin` and `source`; its own record is the redo. `remapOfLanded` pairs, purely, the ids each restored run landed with.
+- **A deleted run re-inserts after the item before it, not at its own tombstone.** A `Y.Text` insert goes past the tombstones to its right, so in a step of several deletions from one text (a word backspaced a key at a time) each restore anchored to its own tombstone would land before the one restored just above it. The item before is rewritten through the remap like every other id, so it names what an earlier revert in the step re-created (finding 28).
 - **Remap.** A restored run's new ids are read back at the indices it landed on, and paired with its old ones in order; texts inside a restored list item pair the same way. `rewrite` substitutes them in every older record.
 - **`position`** is `{ clientID, clock }`. The delete clock makes even a delete-only revert advance it, so `authoredSince` sees every revert.
 - **Only public API.** `src/__tests__/yjs-surface.test.ts` pins every Yjs call the module makes: relative positions, `isDeleted` over `snapshot`, `getState`, the transaction's fields, `YEvent.changes`, and `toDelta` over snapshots.

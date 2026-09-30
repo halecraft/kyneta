@@ -68,6 +68,50 @@ describe("relative positions", () => {
     expect(abs).toEqual(expect.objectContaining({ index: 4, type: text }))
   })
 
+  it("resolve just after an item, live or deleted, after a reload", () => {
+    const { doc, text } = textDoc("hello")
+    const l = Y.relativePositionToJSON(
+      Y.createRelativePositionFromTypeIndex(text, 2, 0),
+    ) as { item: { client: number; clock: number } }
+    const after = () =>
+      Y.createAbsolutePositionFromRelativePosition(
+        Y.createRelativePositionFromJSON({ item: l.item, assoc: -1 }),
+        reload(doc),
+      )?.index
+    expect(after()).toBe(3)
+    text.delete(1, 3)
+    expect(after()).toBe(1)
+  })
+
+  it("a text insert goes past the tombstones to its right; an array insert before them", () => {
+    const { text } = textDoc("abc")
+    const b = Y.relativePositionToJSON(
+      Y.createRelativePositionFromTypeIndex(text, 1, 0),
+    ) as { item: { client: number; clock: number } }
+    text.delete(1, 1)
+    text.insert(1, "X")
+    // "b"'s tombstone resolves before the X inserted at its index.
+    const at = Y.createAbsolutePositionFromRelativePosition(
+      Y.createRelativePositionFromJSON({ item: b.item, assoc: 0 }),
+      text.doc as Y.Doc,
+    )?.index
+    expect(at).toBe(1)
+    const doc = new Y.Doc()
+    const list = doc.getMap("root").set("l", new Y.Array<string>())
+    list.insert(0, ["a", "b", "c"])
+    const item = Y.relativePositionToJSON(
+      Y.createRelativePositionFromTypeIndex(list, 1, 0),
+    ) as { item: { client: number; clock: number } }
+    list.delete(1, 1)
+    list.insert(1, ["X"])
+    expect(
+      Y.createAbsolutePositionFromRelativePosition(
+        Y.createRelativePositionFromJSON({ item: item.item, assoc: 0 }),
+        doc,
+      )?.index,
+    ).toBe(2)
+  })
+
   it("name the item at an index of an array", () => {
     const doc = new Y.Doc()
     const list = doc.getMap("root").set("l", new Y.Array<number>())

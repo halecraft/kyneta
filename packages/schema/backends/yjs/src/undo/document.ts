@@ -48,9 +48,12 @@ export function locate(
   return abs === null ? null : { type: abs.type, index: abs.index }
 }
 
-export function resolveAnchor(doc: Y.Doc, anchor: unknown): number | null {
+/** The index just after item `after` (deleted or not), or 0 for null: where
+ *  a deleted run re-inserts. Null when the item is gone. */
+export function gapAfter(doc: Y.Doc, after: Id | null): number | null {
+  if (after === null) return 0
   const abs = Y.createAbsolutePositionFromRelativePosition(
-    Y.createRelativePositionFromJSON(anchor),
+    Y.createRelativePositionFromJSON({ item: after, assoc: -1 }),
     doc,
   )
   return abs === null ? null : abs.index

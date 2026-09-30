@@ -195,7 +195,7 @@ export function deletedItems(
   path: Path,
   change: ChangeBase,
   pre: readonly unknown[],
-  list: Y.Array<unknown> | null,
+  list: Y.Array<unknown>,
   stage: Stage,
 ): DeletedRun[] {
   if (!isSequenceChange(change)) return []
@@ -212,7 +212,7 @@ export function deletedItems(
     } else {
       const ids: Id[] = []
       const nested: NestedIds[] = []
-      if (list !== null && stage === "before") {
+      if (stage === "before") {
         for (let i = 0; i < op.delete; i++) {
           const id = idAt(list, source + i)
           if (id !== null) ids.push(id)
@@ -226,19 +226,12 @@ export function deletedItems(
           }
         }
       }
-      const first = ids[0]
+      // The list as read: before the change, or after it.
       const at = stage === "before" ? source : target
       out.push({
         container,
         ids: toRuns(ids),
-        anchor:
-          first !== undefined
-            ? { item: first, assoc: 0 }
-            : list !== null
-              ? Y.relativePositionToJSON(
-                  Y.createRelativePositionFromTypeIndex(list, at, 0),
-                )
-              : null,
+        after: at === 0 ? null : idAt(list, at - 1),
         content: {
           kind: "sequence",
           items: own(pre.slice(source, source + op.delete)),
@@ -301,14 +294,14 @@ export function textChanges(
   const deleted: DeletedRun[] = []
   const inserted: Id[] = []
   let open:
-    | { ids: Id[]; text: string; spans: RichTextSpan[]; first: Id }
+    | { ids: Id[]; text: string; spans: RichTextSpan[]; after: Id | null }
     | undefined
   const close = () => {
     if (open === undefined) return
     deleted.push({
       container,
       ids: toRuns(open.ids),
-      anchor: { item: open.first, assoc: 0 },
+      after: open.after,
       content:
         marks === null
           ? { kind: "text", text: open.text }
@@ -317,13 +310,16 @@ export function textChanges(
     })
     open = undefined
   }
-  // Where the walk is in the text as it was before the transaction.
+  // Where the walk is in the text as it was before the transaction, and in
+  // the text as it is now.
   let index = 0
+  let now = 0
   for (const run of textRuns(text, Y.snapshot(doc), previous)) {
     const { id } = run
     if (run.type === "same" || id === null) {
       close()
       index += run.insert.length
+      now += run.insert.length
       continue
     }
     const ids = Array.from({ length: run.insert.length }, (_, k) => ({
@@ -333,6 +329,7 @@ export function textChanges(
     if (run.type === "added") {
       close()
       inserted.push(...ids)
+      now += run.insert.length
       continue
     }
     // Removed: by this transaction, or earlier (then not part of `before`).
@@ -340,7 +337,12 @@ export function textChanges(
       close()
       continue
     }
-    open ??= { ids: [], text: "", spans: [], first: id }
+    open ??= {
+      ids: [],
+      text: "",
+      spans: [],
+      after: now === 0 ? null : idAt(text, now - 1),
+    }
     open.ids.push(...ids)
     open.text += run.insert
     for (let k = 0; k < run.insert.length; k++) {

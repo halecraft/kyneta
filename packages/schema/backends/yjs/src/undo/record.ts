@@ -93,8 +93,13 @@ export interface DeletedRun {
   /** The deleted items, in document order. Empty when unknown: a list
    *  deleted directly on the `Y.Doc` has no public order. */
   readonly ids: readonly IdRun[]
-  /** Where to re-insert: a relative position, as JSON. */
-  readonly anchor: unknown
+  /** Where to re-insert: just after this item, or at the container's start
+   *  when null. It is the item that preceded the run, not the run's own
+   *  first item: a text re-inserts past a run of tombstones, so a run
+   *  anchored to its own tombstone would land before a neighbour that an
+   *  earlier revert in the same step just re-created. The neighbour's id is
+   *  rewritten with the rest, and so names that re-creation. */
+  readonly after: Id | null
   readonly content: RunContent
   readonly nested: readonly NestedIds[]
 }
@@ -174,6 +179,7 @@ export function rewriteYjsRecord(record: YjsRecord, remap: Remap): YjsRecord {
     deleted: record.deleted.map(r => ({
       ...r,
       container: rewritePath(r.container, remap),
+      after: r.after === null ? null : rewriteId(r.after, remap),
       ids: rewriteRuns(r.ids, remap),
       nested: r.nested.map(n => ({ ...n, ids: rewriteRuns(n.ids, remap) })),
     })),
