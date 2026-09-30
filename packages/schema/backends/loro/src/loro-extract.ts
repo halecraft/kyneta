@@ -3,7 +3,11 @@
 // These functions are used by the materialize interpreter and other
 // Loro internals to convert Loro containers into plain values.
 
-import type { RichTextDelta, RichTextSpan } from "@kyneta/schema"
+import {
+  normalizeSpans,
+  type RichTextDelta,
+  type RichTextSpan,
+} from "@kyneta/schema"
 import type { Delta } from "loro-crdt"
 import { hasKind, isLoroCounter, isLoroList, isLoroMap } from "./loro-guards.js"
 
@@ -65,5 +69,8 @@ export function loroDeltaToRichTextDelta(
       }
     }
   }
-  return spans
+  // Loro may split text whose marks agree (after a mark is removed, say),
+  // where a local write's step keeps one span: normalize, so a
+  // re-materialized shadow reads as the stepped one does.
+  return normalizeSpans(spans)
 }

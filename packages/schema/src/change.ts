@@ -951,6 +951,40 @@ export function textInstructionsToPatches(
   return result
 }
 
+/** One contiguous edit: `deleted` characters removed at `index`, then
+ *  `inserted` put there. */
+export interface SingleEdit {
+  readonly index: number
+  readonly inserted: string
+  readonly deleted: number
+}
+
+/**
+ * The single contiguous edit `instructions` make, or `undefined` if they
+ * make none or several. A replacement is one edit: a delete and an insert at
+ * the same offset, as `diffText` produces.
+ */
+export function singleEdit(
+  instructions: readonly TextInstruction[],
+): SingleEdit | undefined {
+  const patches = textInstructionsToPatches(instructions)
+  const [first, second] = patches
+  if (first === undefined || patches.length > 2) return undefined
+  if (second === undefined) {
+    return first.kind === "insert"
+      ? { index: first.offset, inserted: first.text, deleted: 0 }
+      : { index: first.offset, inserted: "", deleted: first.count }
+  }
+  if (
+    first.kind === "delete" &&
+    second.kind === "insert" &&
+    second.offset === first.offset
+  ) {
+    return { index: first.offset, inserted: second.text, deleted: first.count }
+  }
+  return undefined
+}
+
 // ---------------------------------------------------------------------------
 // applyTextInstructions — replay a text delta onto a live TextRef
 // ---------------------------------------------------------------------------

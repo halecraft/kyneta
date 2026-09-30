@@ -3,7 +3,11 @@
 // These functions are used by both the reader (yjsReader) and the
 // materialize interpreter to convert Yjs shared types into plain values.
 
-import type { RichTextDelta, RichTextSpan } from "@kyneta/schema"
+import {
+  normalizeSpans,
+  type RichTextDelta,
+  type RichTextSpan,
+} from "@kyneta/schema"
 import * as Y from "yjs"
 
 /**
@@ -48,5 +52,7 @@ export function yTextToRichTextDelta(ytext: Y.Text): RichTextDelta {
         : { text: d.insert }
     spans.push(span)
   }
-  return spans
+  // Normalized, as `loroDeltaToRichTextDelta` is, so a re-materialized
+  // shadow reads as a stepped one does.
+  return normalizeSpans(spans)
 }

@@ -6,8 +6,8 @@
 //   applyDiff dispatch), satisfying the projection law `σ ≡ Π(λ)` at
 //   every prepare boundary.
 // - `runBatch` brackets the prepare-loop-plus-flush block with a single
-//   `doc.commit()` per outermost logical action (depth-counter design;
-//   inner re-entrant batch()s collapse into the outer commit).
+//   `doc.commit()` per outermost logical action. A `batch()` a subscriber
+//   issues runs after that commit, as its own.
 // - `afterBatch` flushes the coalescing buffer.
 // - Persistent doc.subscribe() event bridge for external changes: it
 //   re-materialises σ from λ (CRDT merge is a lattice join that has no
@@ -20,6 +20,10 @@
 //   Loro's pre-commit hook fires synchronously inside `doc.commit()`,
 //   before the subscribe event. Every commit from the start of `work()`
 //   through the pre-commit of `runBatch`'s final commit is ours.
+// - Undo (`revertible`, from `./revertible.js`): the pre-commit hook gives
+//   each local commit's frontiers, and the bridge reports the commit. An
+//   undo is applied with `applyDiff` through `commitNative`, whose origin
+//   and echo token the bridge carries onto its local announcement.
 //
 // The event bridge contract: wrapping a LoroDoc in a kyneta substrate
 // means subscribing to the kyneta doc observes ALL mutations to the
@@ -35,6 +39,7 @@
 import {
   applyChange,
   BACKING_DOC,
+  type BatchOutcome,
   buildWritableContext,
   type ChangeBase,
   type CommitOptions,
@@ -101,6 +106,7 @@ import {
 import { PROPS_KEY, resolveContainer } from "./loro-resolve.js"
 import { materializeLoroShadow } from "./materialize.js"
 import { LoroPosition, toLoroSide } from "./position.js"
+import { createLoroRevertible } from "./revertible.js"
 import { LoroVersion } from "./version.js"
 
 // ---------------------------------------------------------------------------
@@ -224,6 +230,28 @@ export function createLoroSubstrate(
   // The merge's origin, for the event bridge to put on the import's batch.
   // `doc.import` takes no origin of its own.
   let pendingImportOrigin: string | undefined
+
+  // A native commit a local caller asked for (an undo's `applyDiff`): the
+  // bridge announces it, carrying the caller's origin and echo token.
+  let pendingNative: CommitOptions | undefined
+
+  // The outcome of the authored batch whose commit is closing, for undo.
+  let authoredOutcome: BatchOutcome | undefined
+
+  const revertible = createLoroRevertible({
+    doc: doc as unknown as LoroDoc,
+    commitNative(work, options) {
+      pendingNative = options
+      try {
+        work()
+        doc.commit(
+          options.origin !== undefined ? { origin: options.origin } : undefined,
+        )
+      } finally {
+        pendingNative = undefined
+      }
+    },
+  })
 
   // Lazy-built WritableContext (same pattern as PlainSubstrate).
   let cachedCtx: WritableContext | undefined
@@ -448,11 +476,14 @@ export function createLoroSubstrate(
       applyDiffGroup(doc, group)
     },
 
-    afterBatch(): void {
+    afterBatch(outcome: BatchOutcome): void {
       // Drain the coalescing buffer. `runBatch` owns the commit
       // boundary — we apply diffs here but do NOT commit.
       flushCoalesceBuffer()
+      authoredOutcome = outcome
     },
+
+    revertible,
 
     runBatch(work: () => void, options: CommitOptions): void {
       // Ctx-level outermost detection (frameStarts.length === 0)
@@ -629,6 +660,7 @@ export function createLoroSubstrate(
   // --- Event bridge (registered once at construction) ---
 
   doc.subscribePreCommit(e => {
+    revertible.committing(e.changeMeta)
     if (capture === "off") return
     const tail = e.changeMeta.counter + e.changeMeta.length - 1
     ourCommits.add(`${e.changeMeta.peer}:${tail}`)
@@ -642,7 +674,12 @@ export function createLoroSubstrate(
     // iterating is robust to any future Loro version vector changes.
     if (batch.by === "local") {
       for (const f of batch.to) {
-        if (ourCommits.delete(`${f.peer}:${f.counter}`)) return
+        if (ourCommits.delete(`${f.peer}:${f.counter}`)) {
+          const outcome = authoredOutcome
+          authoredOutcome = undefined
+          revertible.committed(f, outcome?.ops ?? [], outcome?.aborted ?? false)
+          return
+        }
       }
     }
 
@@ -664,6 +701,13 @@ export function createLoroSubstrate(
         ? (pendingImportOrigin ?? batch.origin)
         : batch.origin
 
+    // Undo records a direct local commit as it would an authored one.
+    if (batch.by === "local") {
+      const peer = doc.peerIdStr
+      const tail = batch.to.find(f => f.peer === peer)
+      if (tail !== undefined) revertible.committed(tail, ops, false)
+    }
+
     // Lazily ensure the context is built
     const ctx = substrate.context()
 
@@ -672,7 +716,13 @@ export function createLoroSubstrate(
     // composition would double-count, so σ is re-materialised from λ in
     // one Π pass, and only then announced.
     syncShadow(shadow, materializeLoroShadow(doc, schema, binding))
-    ctx.announce(ops, { origin, local: batch.by === "local" })
+    const local = batch.by === "local"
+    ctx.announce(ops, {
+      origin:
+        local && pendingNative !== undefined ? pendingNative.origin : origin,
+      local,
+      source: local ? pendingNative?.source : undefined,
+    })
   })
 
   return substrate

@@ -404,7 +404,7 @@ Two reasons, and they apply to every substrate. Text typed before loading is wri
 
 The controlled pattern for text fields in React re-renders the component on every keystroke, sets `value={...}` on the element, and fights natively with IME composition, autocorrect, selection state, and browser undo. Every one of those concerns must be re-solved per application.
 
-The uncontrolled pattern — register a `ref` callback, bind natively — avoids all of it. The adapter handles IME composition events, rebases selection through remote edits, and intercepts `Cmd+Z` / `Ctrl+Z` so the CRDT owns undo semantics. No React re-renders are involved; the DOM is authoritative for display, the CRDT is authoritative for state, and the adapter reconciles them.
+The uncontrolled pattern — register a `ref` callback, bind natively — avoids all of it. The adapter handles IME composition events, rebases selection through remote edits, and sends undo and redo to an undo stack (or swallows them), so undo acts on the document rather than on the element's value. No React re-renders are involved; the DOM is authoritative for display, the CRDT is authoritative for state, and the adapter reconciles them.
 
 If the application needs to read the text reactively (for a character counter, for example), use `useValue(textRef)` in a *separate* component that re-renders only on text changes. The counter component can re-render freely without touching the editor.
 
@@ -412,12 +412,21 @@ If the application needs to read the text reactively (for a character counter, f
 
 ```ts
 interface UseTextOptions {
-  undo?: "prevent" | "browser"   // default: "prevent"
+  undo?: UndoTarget | "prevent" | "browser"   // default: "prevent"
+}
+
+interface UndoTarget {                         // an UndoStack from @kyneta/exchange is one
+  typing(fn: () => void): void
+  undo(options?: CommitOptions): Promise<boolean>
+  redo(options?: CommitOptions): Promise<boolean>
 }
 ```
 
-- `"prevent"` — intercept `Cmd+Z` / `Ctrl+Z`. The CRDT owns undo (or the application does via `@kyneta/schema`'s undo machinery, future).
-- `"browser"` — let native undo fire. Appropriate for single-user scenarios where the browser's undo stack is adequate.
+- **An `UndoTarget`** — Cmd/Ctrl+Z and the `historyUndo` input event undo through it; Cmd/Ctrl+Shift+Z, Ctrl+Y and `historyRedo` redo. Every keystroke's write runs inside `target.typing`, which joins it to the step before while the user keeps typing in one place. The undo is asked for with a per-`attach` token (`source`), distinct from the echo token: its changeset is patched into the element like a remote edit, and then the caret goes to the end of its last insert or the place of its last delete, instead of being rebased.
+- **`"prevent"`** — swallow undo and redo. The browser's own undo works on the element's value, which the document moves under it.
+- **`"browser"`** — let the browser undo, for a text nobody else edits.
+
+`UndoTarget` is structural and declared in the adapter, which stays free of `@kyneta/exchange`.
 
 ### What `useText` is NOT
 
@@ -478,9 +487,9 @@ attach(
 
 Three responsibilities:
 
-1. **Local edits → CRDT.** Register an `input` event listener. On each event, call `diffText(oldText, newText, selectionStart)` → feed the `TextChange` into `batch(textRef, fn, { source: ownSource })`, where `ownSource` is a per-`attach()` `Symbol("text-adapter:echo")` minted in the closure.
-2. **Remote edits → DOM.** Subscribe to `textRef[CHANGEFEED]`. Skip changesets whose `cs.source === ownSource` (echoes of our own writes). For all other changesets, apply each `TextChange` surgically via `element.setRangeText(...)` and rebase the selection via `transformSelection`.
-3. **Edge cases.** Handle IME composition (`compositionstart` / `compositionend`), intercept `keydown` for undo when `undo: "prevent"`.
+1. **Local edits → CRDT.** Register an `input` event listener. On each event, call `diffText(oldText, newText, selectionStart)`, read its one edit with `singleEdit`, and write it with `batch(textRef, fn, { source: ownSource })` (inside `undo.typing` when there is an undo target), where `ownSource` is a per-`attach()` `Symbol("text-adapter:echo")` minted in the closure.
+2. **Remote edits → DOM.** Subscribe to `textRef[CHANGEFEED]`. Skip changesets whose `cs.source === ownSource` (echoes of our own writes). For all other changesets, apply each `TextChange` surgically via `element.setRangeText(...)` and rebase the selection via `transformSelection`, or, for an undo this binding asked for, put the caret at the edit.
+3. **Edge cases.** Handle IME composition (`compositionstart` / `compositionend`), and route undo and redo keys and input events per `undo`.
 
 ### Echo suppression — identity-typed `source` token
 
@@ -529,7 +538,8 @@ This is a convenience, not a hard coupling — direct imports from the upstream 
 | `useChangefeed` | `src/use-changefeed.ts` | `(feed) → T` — `useSyncExternalStore` over `feed.current`. |
 | `createSyncStore` | `src/store.ts` | Pure factory: `SyncRef` → `ExternalStore<PeerSyncState[]>`. |
 | `TextRefLike` | `src/text-adapter.ts` | Structural shape of a text ref for the adapter — `(() => string) & TextRef & HasChangefeed`. Matches the *loose* `[CHANGEFEED]` surface every interpreted ref carries, so any `Ref<TextSchema>` satisfies it without a cast. |
-| `AttachOptions` | `src/text-adapter.ts` | `{ undo?: "prevent" \| "browser" }`. |
+| `AttachOptions` | `src/text-adapter.ts` | `{ undo?: UndoTarget \| "prevent" \| "browser"; refusal? }`. |
+| `UndoTarget` | `src/text-adapter.ts` | Where undo goes: `typing`, `undo`, `redo`. |
 | `attach` | `src/text-adapter.ts` | Imperative bind: element + textRef → detach. |
 | `transformSelection` | `src/text-adapter.ts` | Pure: `(start, end, instructions) → { start, end }`. |
 | `ExchangeProvider` | `src/exchange-context.tsx` | React context provider. |
@@ -541,7 +551,7 @@ This is a convenience, not a hard coupling — direct imports from the upstream 
 | `useDocReady` | `src/use-doc-ready.ts` | `(doc, opts?) → boolean` monotonic latch. |
 | `useText` | `src/use-text.ts` | `(textRef, options?) → React.RefCallback`. |
 | `useWriteRefusal` | `src/use-write-refusal.ts` | `(doc) → WriterRefusedError \| undefined`. |
-| `UseTextOptions` | `src/use-text.ts` | `{ undo?: "prevent" \| "browser" }`. |
+| `UseTextOptions` | `src/use-text.ts` | `{ undo?: UndoTarget \| "prevent" \| "browser" }`. |
 
 ## File Map
 
@@ -563,7 +573,7 @@ This is a convenience, not a hard coupling — direct imports from the upstream 
 | `src/__tests__/store.test.ts` | `createSyncStore`. No React. |
 | `src/__tests__/identity.test.tsx` | The identity rule: `useValue` across unrelated renders, `React.memo` over a shared subtree, `useTracked` with a `useCallback` thunk, `useChangefeed` over a composite and over `exchange.peers`. |
 | `src/__tests__/use-selector.test.tsx` | `useSelector` — the todos parsimony scenario (text edit → no re-render; done flip → re-render) + no-deps + dispose. |
-| `src/__tests__/text-adapter.test.ts` | `transformSelection`, `attach` — edit detection, selection rebasing, IME composition, undo interception. (`diffText`'s cases live with it in `@kyneta/schema`.) |
+| `src/__tests__/text-adapter.test.ts` | `transformSelection`, `attach` — edit detection, selection rebasing, IME composition, undo to a target and its caret, undo interception. (`diffText`'s cases live with it in `@kyneta/schema`.) |
 | `src/__tests__/collaborative-text.test.ts` | End-to-end: two textareas bound to concurrently-syncing text refs, verifying cursor stability during remote edits. |
 | `src/__tests__/use-value.test.tsx` | `useValue` hook — React Testing Library against real refs. |
 | `src/__tests__/use-document.test.tsx` | `useDocument` hook — memoization and ref stability. |

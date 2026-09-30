@@ -24,6 +24,7 @@ Consumed by applications that bind schemas with `loro.bind(schema)`. Not importe
 - How does an external `doc.import()` notify kyneta subscribers? → [The event bridge](#the-event-bridge)
 - How do cursors stay stable across concurrent edits? → [`LoroPosition`](#loroposition)
 - Why is a `PeerID` 64 bits wide, past what a JS number holds? → [`PeerID` width](#peerid-width)
+- How is a commit undone, after others edited and after a reload? → [Undo](#undo)
 
 ## Vocabulary
 
@@ -341,7 +342,7 @@ The ctx-level `WritableContext.runBatch` invokes `substrate.runBatch` only at th
 
 - **Not a streaming write.** Each transaction is at most a handful of `applyDiff` calls (structural inserts apply immediately; plain MapDiffs coalesce into one per container per batch).
 - **Not transactional in Loro's sense.** Loro has its own transaction semantics; kyneta's `batch(doc, fn)` is an interpreter-stack transaction that commits a bundle of Loro writes atomically *from kyneta's perspective*. Loro ops can still interleave concurrently with other peers.
-- **Not reversible from the substrate.** There is no undo buffer in the substrate. Undo is an application concern.
+- **Not where undo lives.** The write path records nothing for undo beyond what Loro's history keeps; undo reads that history. See [Undo](#undo).
 
 ---
 
@@ -431,6 +432,34 @@ The choice of `VersionVector` (not `Frontiers`) is deliberate: `VersionVector` t
 Source: `src/substrate.ts` → `advance` on `createLoroSubstrate` and `createLoroReplica`.
 
 Both follow `planAdvance` from `@kyneta/schema`, and throw only for a target beyond the current version. A relay's replica trims to a shallow snapshot at the target's frontiers; its `baseVersion()` is then `shallowSinceVV()`, at or just behind the target. A target behind or concurrent with the base cannot be placed, and trims nothing. A live substrate never trims: importing a shallow snapshot means a new `LoroDoc`, and editor bindings and `unwrap` callers hold its containers. Its `baseVersion()` is `shallowSinceVV()` of the document it holds, which is shallow only if it loaded a shallow snapshot. Compacting a live document still replaces its storage with the whole document.
+
+---
+
+## Undo
+
+Source: `src/revertible.ts` (`createLoroRevertible`), wired in `src/substrate.ts`. The model is `packages/schema/TECHNICAL.md` § Undo; the measurements, `docs/findings/undo-probes.md`.
+
+A record is one local commit's frontiers, taken from the pre-commit hook: the document's version before it (`deps`) and its last op. Loro keeps every op, so everything else is read from history at undo time, after a reload as well:
+
+- **The inverse** is `diff(after, before)`.
+- **What happened since is read by content**, not by op identity: the document forked at `after` (`forkAt`) against the document now. A text is compared with `diffString`, a list with `diffSequence` (Myers), and the inverse is rebased over the result with `rebaseChange`. By op identity, text a revert restored is new text, and an older step's inverse would miss it: "type, delete, undo, undo" would leave the typing. By content it is back where it was.
+- **A map key or a tree node's parent** is restored only while it still holds what the commit left there (`planValueRestores`). Loro's own manager overwrites a later write by someone else; this does not.
+- **A counter** always reverts.
+- **A container no longer there** takes its inverse as it is: `applyDiff` fills a container the same group re-creates, and leaves one gone for good alone.
+
+The revert is applied with `applyDiff` in one commit, inside `commitNative`, which carries the caller's `origin` and `source` to the event bridge's local announcement (`AnnounceOptions.source`). It is not written through `changeToDiff`: that filters out the `create` which restores a deleted tree node (see [Tree write path](#tree-write-path)).
+
+- **Remap.** Restoring a deleted container re-creates it with a new id, and so does restoring a deleted tree node, whose data map is a container of its own. A restored value is walked at the place it landed and paired with the old containers the inverse named; a restored node is the one now at the parent and index its `create` named, and its data map pairs with the old node's. `rewrite` adds an alias (`{ from, to }`, a container id or a tree id) to every older record, and its diffs, tree moves included, are aimed at the new container or node.
+- **`position`** is this peer's version-vector entry and the frontiers, so `recovered` can rebuild a crashed revert's record as this peer's first change after it.
+- **A shallow snapshot** cuts `diff` off: a record older than it reverts to null.
+
+### Known limit: movable-list moves
+
+A movable list's diff has no moves: Loro reports it as a `list` diff, and undoing a move deletes the item and inserts a copy. The item loses its identity, so when a peer concurrently moves the original, the list ends up with it twice. Loro's own manager does the same (findings 10, 4f, 6e). Kyneta cannot yet express a move (`move()` is "future" in `sequence-helpers.ts`); undoing a move as a move needs that first.
+
+### Rich-text spans are normalized
+
+`loroDeltaToRichTextDelta` merges adjacent spans whose marks agree. Loro's `toDelta` can split them (after a mark is removed, for instance) where a local write's `stepRichText` keeps one span, and a re-materialized shadow must read as the stepped one does (σ ≡ Π(λ)).
 
 ---
 
@@ -536,6 +565,8 @@ The low 53 bits of the `PeerID` are the same peer id's Yjs `clientID` (`yjsClien
 | `src/loro-guards.ts` | `hasKind` / `isLoroContainer` / `isLoroDoc` runtime guards. |
 | `src/version.ts` | `LoroVersion` (wraps `VersionVector`). |
 | `src/position.ts` | `LoroPosition` (wraps `Cursor`), `fromLoroSide`, `toLoroSide`. |
+| `src/revertible.ts` | Undo: records as frontiers, their revert from history, remap as aliases. |
+| `src/__tests__/undo.test.ts` | The shared undo suite (`undoConformance`), a record older than a shallow snapshot, and a tree node renamed, moved and deleted, undone back to where it was. |
 | `src/native-map.ts` | `LoroNativeMap` type-level functor. |
 | `src/__tests__/create.test.ts` | End-to-end: `createDoc(loro.bind(schema))` → read/write round-trips. |
 | `src/__tests__/substrate.test.ts` | Substrate contract conformance (subset of the `@kyneta/schema` suite). |

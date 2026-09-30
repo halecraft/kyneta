@@ -20,6 +20,13 @@ export {
   projectionConformance,
 } from "./projection-conformance.js"
 export {
+  type UndoConformanceOptions,
+  UndoFixture,
+  type UndoPeer,
+  type UndoTestEnv,
+  undoConformance,
+} from "./undo-conformance.js"
+export {
   type VersionConformanceOptions,
   versionConformance,
 } from "./version-conformance.js"

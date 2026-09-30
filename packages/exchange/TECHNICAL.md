@@ -35,6 +35,7 @@ Imported by applications to construct the top-level sync graph; by `@kyneta/reac
 - How do reactive `peers` / `documents` collections behave? → [Reactive collections](#reactive-collections)
 - How do I tell an empty document from one that has not loaded? → [Document readiness](#document-readiness--a-conjunction-over-layers)
 - How do I write a document's defaults exactly once? → [Document readiness](#document-readiness--a-conjunction-over-layers)
+- How does undo span documents, survive a reload, and survive a crash mid-undo? → [Undo stacks](#undo-stacks)
 
 ## Vocabulary
 
@@ -1336,6 +1337,34 @@ One limitation, until a retention policy:
 
 ---
 
+## Undo stacks
+
+Source: `src/undo/schema.ts`, `src/undo/undo-program.ts`, `src/undo/stack.ts`. Each substrate's undo (`Substrate.revertible`) is `@kyneta/schema`'s TECHNICAL.md § Undo; this is the stack over it.
+
+```ts
+const stack = await createUndoStack({ exchange, docId: "undo:tab-1", key: "cards", scope: id => id.startsWith("card:") })
+stack.gesture(() => { batch(card, …); batch(places, …) })   // one step
+stack.typing(() => batch(text, …))                          // joins the step before by the typing policy
+await stack.undo()                                           // false when nothing stands
+```
+
+- **A step is one gesture across documents**: a list of parts, one per commit, each a document id, what opens it again (schema hash, replica type, sync mode, resolved through the Exchange's Capabilities registry), and the substrate's record in its codec. Undo reverts a step's parts last first, and pushes what that returned as the step to redo.
+- **Scope is explicit.** The stack hears the local commits of every interpreted document in `scope`, but only inside `gesture`/`typing`, or on a document it `follow`s (an editor binding's direct writes, grouped by the typing policy). A commit anywhere else is someone else's write to rebase over. The stack's own document is never in scope. Capturing every revertible document would catch `Line` outboxes and the writes subscribers make in reaction, which react again to the undo.
+- **Grouping is the stack's**, not a native manager's: time windows would merge distinct gestures, and a step across documents needs exactly one native step per gesture per document. The open step stays in memory and is written when another step starts, before an undo or redo, and when the typing gap elapses.
+- **The stack lives in a serialized document** (`UndoDoc`, `json.bind`), so the Store stores, syncs and compacts it, and the one-writer rule of [Serialized documents](#serialized-documents-one-writer-seat-per-storage) guarantees one runtime pops a stack: per tab or per device is only which document id the app gives it. Without a Store the stack lasts the session. The undo document is compacted every `COMPACT_EVERY` (200) writes.
+- **Every revert's remap rewrites the records left**, in the step being undone and in both lists, in the same write that moves the step. Records always name live identities; nothing global is kept.
+- **A step nothing of which still stands is dropped silently**, and the one below it is tried.
+
+### Crash safety: the write-ahead note
+
+Undoing a step writes a note first (the step, the direction, and each document's `revertible.position()`), waits until the undo document is stored (`whenPersisted`), then reverts every part and, in one write, moves the step and clears the note. A load that finds a note finishes it: each document that has authored anything since its noted position was reverted (nothing else authors between the note and the revert, and each CRDT's causality means its clock cannot pass the position without the revert's own op), so the part is taken from `revertible.recovered`; a document that has not is reverted now. No step is applied twice. If the user writes to a document during the store write, a crash then drops that step instead of reverting it: the safe direction.
+
+### The program and its shell
+
+The decisions are `undoProgram`, a pure program in the manner of the store program: grouping, depth, skipping, the order of an undo (`begin` → `note` → `revert` → `resolve`) and recovery, with effects as data. `stack.ts` executes them. Commits are heard inside their substrate's commit, where nothing may write, so they are queued and fed to the program once `gesture`/`typing` returns, or in a microtask for a followed document.
+
+---
+
 ## Compaction and lineage boundaries
 
 Source: `src/synchronizer.ts` → `#executeImportDocData`, `governance.ts` → `canReset`.
@@ -1431,6 +1460,9 @@ For durability guarantees, use the `cohort` predicate to prevent compaction past
 | `src/line.ts` | `Line`, `LineProtocol`, envelope schema, ack-based pruning. |
 | `src/async-queue.ts` | Bounded async queue used by `Line`. |
 | `src/when-peer.ts` | `whenPeer`: find a peer's seat by predicate. |
+| `src/undo/schema.ts` | `UndoSchema`, `UndoDoc`: the document an undo stack lives in; `Part`, `Step`, `Note`. |
+| `src/undo/undo-program.ts` | `undoProgram`: an undo stack's decisions, pure. |
+| `src/undo/stack.ts` | `createUndoStack`: the shell; `pushStep`, `moveStep`. |
 | `src/interpret.ts` | Pure phase classifier: `DocPhase`, `InterpretAction`, `planInterpretation`. The one rule all three interpretation doors consult. |
 | `src/sync.ts` | `sync(doc)` helper + `registerSync`. |
 | `src/types.ts` | `DocChange`, `DocInfo`, `PeerChange`, `PeerDocSyncState`, `PeerState`, `PeerSyncState`, `Connectivity`. |

@@ -5,18 +5,20 @@
 //
 //   step(step(state, change), invert(state, change)) = state
 //
-// — the groupoid identity law `c ∘ c⁻¹ = id` in coordinates. See the
-// plan's "Algebraic framing" subsection for the bigger picture; this
-// module is the per-type table of reverse arrows.
+// — the groupoid identity law `c ∘ c⁻¹ = id` in coordinates. This module is
+// the per-type table of reverse arrows.
 //
 // Inverses are pure: they depend on the pre-state at the change's target
 // path and the change itself. Substrates capture σ at the target path
-// before applying the forward change, compute the inverse, push it on
-// the active runBatch frame's stack, then apply. On abort, the bracket
-// replays inverses LIFO inside the same commit — observers see one
-// batched event with net-zero delta.
+// before applying the forward change, compute the inverse, and record it on
+// the active runBatch frame. If the block throws, the bracket replays the
+// frame's inverses LIFO inside the same commit, and observers see one
+// batched event with net-zero delta. If it succeeds, they reach the
+// substrate's `afterBatch`, which keeps what undo needs.
 //
-// Context: jj:ryquprut (three-primitive substrate refactor).
+// An inverse is written in the coordinates of the state right after its
+// change, so it is exact only until someone else edits the same text or
+// list; undo later rebases it (see TECHNICAL.md § Undo).
 
 import type {
   ChangeBase,

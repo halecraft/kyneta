@@ -22,7 +22,11 @@ export type { CallableRef, ExternalStore } from "./store.js"
 // testable): it wraps SyncRef.onPeerSyncChange, which is not a changefeed.
 export { createSyncStore } from "./store.js"
 // Text adapter (framework-agnostic textarea ↔ TextRef binding)
-export type { AttachOptions, TextRefLike } from "./text-adapter.js"
+export type {
+  AttachOptions,
+  TextRefLike,
+  UndoTarget,
+} from "./text-adapter.js"
 export { attach, transformSelection } from "./text-adapter.js"
 export { useChangefeed } from "./use-changefeed.js"
 export { useDocReady } from "./use-doc-ready.js"

@@ -28,6 +28,7 @@ Imported by every other Kyneta package that touches documents: the CRDT backends
 - When does `ref()` return a new object, and when the same one? → [Read identity](#read-identity)
 - When does a ref report `deleted`, and when does it come back? → [The coordinate trie](#the-coordinate-trie)
 - In what order do layers see a change? → [The prepare pipeline](#the-prepare-pipeline)
+- How is a write undone after others have edited since, and after a reload? → [Undo](#undo)
 
 ---
 
@@ -308,7 +309,7 @@ interface Replica<V> extends ReplicaLike {
 interface SubstratePrepare {
   readonly reader: Reader
   prepare(path: Path, change: ChangeBase, recordInverse: RecordInverseFn | null): void
-  afterBatch(): void
+  afterBatch(outcome: BatchOutcome): void
   runBatch?(work: () => void, options: CommitOptions): void
 }
 
@@ -317,6 +318,7 @@ interface Substrate<V> extends Replica<V>, SubstratePrepare {
   subscribeLocalUpdates(listener: () => void): () => void
   commitPending(): void
   tick?(now: number): void
+  readonly revertible?: Revertible
 }
 ```
 
@@ -345,6 +347,7 @@ A `Substrate` adds interpretation:
 - `subscribeLocalUpdates(listener)` → the local-update signal, below.
 - `commitPending()` → commit any local operations the native document holds uncommitted, so the signal reports them now.
 - `tick(now)` → optional heartbeat for time-based projections (ephemeral decay).
+- `revertible` → undo records of local commits, and their revert. Plain, Loro and Yjs provide it; ephemeral does not. See [Undo](#undo).
 
 ### The local-update signal
 
@@ -373,7 +376,7 @@ The substrate boundary knows nothing about provenance: `prepare`, `afterBatch` a
 2. Advance σ via `applyChange(shadow, path, change)`.
 3. Advance λ via the substrate-native path (Loro: applyDiff or coalescing buffer; Yjs: applyChangeToYjs inside the ambient transact).
 
-The inverse stack belongs to the bracket primitive (`WritableContext.runBatch`'s wrapper). On the bracket's depth-0 success release, the frame's inverse range is discarded, `afterBatch` runs, and the batch is sealed. On a throw, the catch path replays the frame's inverses LIFO through `ctx.prepare(path, inverse, { ingress: "compensate" })`, which reaches the substrate with `recordInverse === null`, then seals the batch with `aborted: true`, then rethrows. The bracket's commit contains forward + inverse ops with net-zero delta when the outermost throws.
+The inverse stack belongs to the bracket primitive (`WritableContext.runBatch`'s wrapper). On the bracket's depth-0 success release, the frame's range goes to `afterBatch(outcome)` and is cleared, and the batch is sealed. `outcome` holds the ops that survived (a frame that threw inside an outer one took its entries with it) and their inverses, paired: each entry keeps its forward change beside its inverse. A revertible substrate builds the batch's undo record from it; an aborted batch passes `{ ops: [], inverses: [], aborted: true }`. On a throw, the catch path replays the frame's inverses LIFO through `ctx.prepare(path, inverse, { ingress: "compensate" })`, which reaches the substrate with `recordInverse === null`, then seals the batch with `aborted: true`, then rethrows. The bracket's commit contains forward + inverse ops with net-zero delta when the outermost throws.
 
 This is how `batch(doc, d => { d.title.insert(0, "hi"); d.items.push(x); })` becomes one atomic changefeed emission with read-your-writes inside the block, and how a throwing block becomes one batched native event with net-zero delta plus one `Changeset` with `aborted: true`.
 
@@ -1206,7 +1209,7 @@ Under the three-primitive substrate contract, `ctx.runBatch` is **one bracket pr
 
 2. **Seal handler** — fires exactly once at the depth 1→0 transition, inside the bracket. It runs `substrate.afterBatch()` and seals the batch: success path `{ ...opts, ingress: "author" }`, catch path with `aborted: true`. Inner frames push/pop without sealing — the depth-0 release is the single seal per outermost block. Delivery happens after the bracket closes (see below).
 
-3. **Inverse-stack handler** — every successful authored `prepare` pushes an `InverseEntry` (path + reverse arrow). On throw, the frame's range is replayed LIFO through `ctx.prepare(path, inverse, { ingress: "compensate" })`, which hands the substrate no recorder, so the inverse of an inverse is never recorded. External observers see one batched native event whose ops net to zero.
+3. **Inverse-stack handler** — every successful authored `prepare` pushes an `InverseEntry` (path + reverse arrow), with the forward change beside it. On throw, the frame's range is replayed LIFO through `ctx.prepare(path, inverse, { ingress: "compensate" })`, which hands the substrate no recorder, so the inverse of an inverse is never recorded. External observers see one batched native event whose ops net to zero. On success the outermost range goes to `afterBatch`, for undo.
 
 The three handlers are co-extensive — they all open and close at the same boundary. Every authored write goes through `ctx.runBatch` (`batch`, `applyChanges`, or `dispatch`'s auto-commit); `announce` bypasses it, because the substrate has already applied those ops and there is nothing to bracket.
 
@@ -1293,7 +1296,9 @@ The change algebra `⟨State, Change, step⟩` is extended into a groupoid by `i
 | `richtext` | OT inverse with mark restoration |
 | `tree` | per-instruction inverse with pre-state topology lookup; reversed instruction order for LIFO undo |
 
-Substrates read `pre = path.read(σ)` before applying the forward change — no copy, because `invert` snapshots whatever it retains — compute the inverse, and push it onto the active runBatch frame's stack via the `recordInverse` callback `prepare` receives for a forward write. On throw, the bracket's catch path replays inverses LIFO inside the same commit — observers see one batched event with net-zero delta.
+Substrates read `pre = path.read(σ)` before applying the forward change — no copy, because `invert` snapshots whatever it retains — compute the inverse, and push it onto the active runBatch frame's stack via the `recordInverse` callback `prepare` receives for a forward write. On throw, the bracket's catch path replays inverses LIFO inside the same commit — observers see one batched event with net-zero delta. On success they reach `afterBatch`, where the plain substrate keeps them as the batch's undo record and the Yjs substrate takes the content a revert must restore from them.
+
+An inverse is written in the coordinates of the state right after its op, so it is exact only until someone else edits the same text or list. Undo later is [Undo](#undo): positions rebased, values compared.
 
 ### The projection law
 
@@ -1412,18 +1417,18 @@ type BatchOptions =                                   // SealedBatch.options
 interface PrepareOptions { ingress: PrepareIngress }  // ctx.prepare
 interface CommitOptions { origin?: string; source?: unknown } // batch, applyChanges, runBatch
 interface MergeOptions { origin?: string }            // merge, resetFromEntirety
-interface AnnounceOptions extends MergeOptions { local: boolean } // ctx.announce
+interface AnnounceOptions extends MergeOptions { local: boolean; source?: unknown } // ctx.announce
 ```
 
 | ingress | how it arrives | `substrate.prepare` | `batch()` return value | `substrate.afterBatch` | `local` | `Changeset.replay` |
 |---|---|---|---|---|---|---|
 | `author` | `dispatch` (inside `runBatch`, or auto-committing) | `(path, change, recordInverse)` | forward op | at the depth-0 seal | — | `false` |
 | `compensate` | the undo handler inside `runBatch` | `(path, change, null)` | not returned | (the author seal) | — | — |
-| `announce` | `ctx.announce(ops, { origin, local })` | not called | not returned | not called | `true` for a native write the event bridge reports; `false` for a merge, a reset or a decay tick | `!local` |
+| `announce` | `ctx.announce(ops, { origin, local, source? })` | not called | not returned | not called | `true` for a native write the event bridge reports; `false` for a merge, a reset or a decay tick | `!local` |
 
 `local` is required on every announcement, as `ingress` is on every batch, so no caller can leave it to a default.
 
-The union encodes two contracts. Only an authored batch carries `source` (an echo token names a local caller and never survives a merge), and only an authored batch can be `aborted`.
+The union encodes two contracts. An echo token names a local caller and never survives a merge: `source` comes from an authored batch, or from a local announcement of a write a local caller asked the substrate to make natively (a Loro undo, applied with `applyDiff`). Only an authored batch can be `aborted`.
 
 `BatchOptions` does not extend `BatchMetadata`. The four `Changeset` channels are derived from it by one pure function, `changesetMetadata` (`with-changefeed.ts`), at delivery:
 
@@ -1431,7 +1436,7 @@ The union encodes two contracts. Only an authored batch carries `source` (an ech
 
 - **`replay`** — `!(author || local)`: true iff no writer on this peer made the ops (a `merge` payload, a reset, an ephemeral decay tick). A write on the native document that a CRDT's event bridge reports, an editor binding's for instance, was made here, so it is not a replay. **User-facing APIs (`batch`, `applyChanges`) cannot produce it**: they only ever build `author` batches.
 
-- **`source`** — identity-typed echo-suppression token. Compared with `===` by subscribers that issued the change. Unlike `origin` (app vocabulary) and `replay` (kyneta-internal), `source` is a kyneta-managed handshake between writer and reader: the originating `batch()` caller mints a token (`Symbol("...")` or `{}`), passes it via `options.source`, and the same token round-trips to `Changeset.source` so the caller's subscriber can identify and skip its own writes. The schema layer NEVER branches on `source`'s identity. An announcement has no `source`, so any value reaching a subscriber is from a local `batch()` on this peer.
+- **`source`** — identity-typed echo-suppression token. Compared with `===` by subscribers that issued the change. Unlike `origin` (app vocabulary) and `replay` (kyneta-internal), `source` is a kyneta-managed handshake between writer and reader: the originating `batch()` caller mints a token (`Symbol("...")` or `{}`), passes it via `options.source`, and the same token round-trips to `Changeset.source` so the caller's subscriber can identify and skip its own writes. The schema layer NEVER branches on `source`'s identity. A merge's announcement has no `source`, so any value reaching a subscriber is from a local caller on this peer.
 
 - **`aborted`** — kyneta-internal outcome directive. See §"`Changeset.aborted`" above.
 
@@ -1446,6 +1451,61 @@ The "schema layer and exchange never branch on origin's value" invariant is **st
 Kyneta is a translucent layer over the underlying CRDT, and the user-facing origin slot — `batch.origin` in Loro, `transaction.origin` in Yjs — is reserved for `options.origin` round-trip. Providers and ecosystem libraries (Yjs `UndoManager.addTrackedOrigin`, `y-websocket`, `y-indexeddb`) depend on that slot being app-controlled; a Kyneta sentinel there would force every app to fork those tools or accept Kyneta as opaque to its own ecosystem. So the substrate's "is this commit mine?" discriminator travels through the CRDT's own event machinery instead: Loro's pre-commit hook, Yjs's `transaction.meta`. Each is substrate-shaped and documented in its backend's TECHNICAL.md.
 
 **The limit of commit-level discrimination.** Mixing raw CRDT mutations with Kyneta `batch()` calls inside one atomic unit — a Yjs `transact` body, or Loro pending ops before a Kyneta-issued commit — is unsupported: the raw mutations are absorbed into the own-commit skip and never bridged to the changefeed, so σ misses them. They are still pushed and persisted, because the local-update signal covers the whole commit. Use separate transacts or commits. No origin-free approach can do better without op-level provenance, which neither CRDT exposes.
+
+---
+
+## Undo
+
+Source: `src/substrate.ts` (`Revertible`), `src/rebase.ts`, `src/restore.ts`, `src/diff-sequence.ts`, `src/typing.ts`, `src/substrates/plain-revertible.ts`, `src/testing/undo-conformance.ts`; each backend's `revertible.ts`; the stack in `@kyneta/exchange` (`src/undo/`). The measurements behind it are `docs/findings/undo-probes.md`.
+
+Undo is selective: it reverses this runtime's operations as they now stand among everyone's. A stored inverse cannot do that on its own. It is written in the coordinates of the state right after its op, so once a collaborator edits earlier in the same text it deletes the wrong characters.
+
+### The model
+
+A substrate's `revertible` records every local commit and reverts one:
+
+```ts
+interface Revertible<R> {
+  subscribeCommits(listener: (commit: { record: R; ops: readonly Op[] }) => void): () => void
+  revert(record: R, options: CommitOptions): { redo: R; remap: Remap } | null
+  recovered(record: R, position: Uint8Array): { redo: R; remap: Remap }
+  rewrite(record: R, remap: Remap): R
+  position(): Uint8Array
+  authoredSince(position: Uint8Array): boolean
+  readonly codec: RecordCodec<R>
+}
+```
+
+- **A record names content by identity**, and encodes to bytes, so it survives a reload.
+- **`revert` is its own inverse.** It applies the reverse of a record as one local commit, and returns that commit's own record: reverting it redoes. There is no redo logic anywhere.
+- **`revert` returns a remap.** Neither CRDT can undelete, so restoring deleted content creates new items or containers. The remap pairs the old identities with the new ones, and `rewrite` aims every older record at the new ones. Without it, "type, delete, undo, undo" does nothing on the second undo.
+- **`position` and `authoredSince`** let a stack finish a revert a crash interrupted: a replica that has authored anything since the position noted before the revert was reverted, by each CRDT's own causality. `recovered` rebuilds what the revert returned.
+- **Never recorded:** a merge, an aborted batch, a commit with no effect (a Yjs delete-clock tick), and `revert`'s own commit.
+- **A record that is plain JSON** encodes with `jsonRecordCodec()`; the Yjs and Loro records are.
+
+### Positions are rebased; values are compared
+
+- **A text or list edit** is carried past what happened since. `rebaseChange(change, over)` is the operational transform of a text, sequence or rich-text change, with `change` winning insert ties: a restored deletion goes before what a peer typed at its edge, as both CRDTs' own undo managers do. `rebase.test.ts` checks it against an identity model of two concurrent edits.
+- **A value** (a map key, a scalar, a mark, a tree node's parent) is restored only while it still holds what the undone step wrote: `planValueRestores`, over `samePlainValue`. A peer's later write wins; so does one's own later write, until it is undone in turn, when the value holds the earlier step's again.
+- **A counter** commutes: its inverse always applies.
+
+### Three substrates, three records
+
+- **Plain** has one writer, so its undo is a strict stack. A record is the batch's ops and inverses and the log heads before and after it. A revert applies exactly when the head is where the step left it. The remap renames the head the revert produced as the position before the step, so the step below reverts next. A write outside the stack moves the head somewhere no record names, and ends undo past it.
+- **Yjs** is identity-based, on Yjs's public API. See its TECHNICAL.md § Undo.
+- **Loro** is history-based: the inverse is `diff(after, before)`, and what happened since is read by content, the document forked at `after` against the document now. See its TECHNICAL.md § Undo.
+
+`undoConformance` (`@kyneta/schema/testing`) runs the same scenarios against all three, live and after a reload.
+
+### Typing
+
+`continuesStep(previous, next)` decides whether a keystroke joins the undo step before it: the same text, inside the gap (`TYPING_GAP`, 1000 ms), the same kind of edit, the caret where the last edit left it, and no word boundary. `editOf(op, at)` reads the one contiguous edit a text op makes, through `singleEdit`, which the React text adapter also uses.
+
+### What undo is NOT
+
+- **Not the native undo managers.** Each covers one document, neither survives a reload, and they disagree: Loro's overwrites a later write by someone else, Yjs's skips it and, through Kyneta, corrupts formatting when a peer types inside a mark.
+- **Not for types outside the schema.** y-prosemirror's `XmlFragment` has no shadow to read an inverse from.
+- **Not the stack.** Grouping steps across documents, keeping them in a document, and crash recovery live in `@kyneta/exchange`'s `createUndoStack`.
 
 ---
 
@@ -1590,12 +1650,14 @@ A `Position` is a substrate-mediated stable reference to a location inside text 
 
 ```
 interface Position {
-  resolve(): number
-  transform(change: Change): void
+  readonly side: Side
+  resolve(): number | null
+  encode(): Uint8Array
+  transform(instructions: readonly Instruction[]): void
 }
 ```
 
-`resolve()` returns the current integer index. `transform(change)` updates the position to reflect the given change — critical for substrates that don't store positions as first-class citizens (plain, ephemeral) where the caller drives the update explicitly.
+`resolve()` returns the current integer index, or `null` once the anchored item is gone. `transform(instructions)` updates the position to reflect the given change — critical for substrates that don't store positions as first-class citizens (plain, ephemeral) where the caller drives the update explicitly.
 
 ### `Side`: boundary bias
 
@@ -2243,6 +2305,13 @@ The worked example is `__countCachedReads` (`src/read-cache.ts`), a backdoor for
 | `src/guards.ts` | `isNonNullObject`, `isPropertyHost`. |
 | `src/base64.ts` | Platform-agnostic base64. |
 | `src/substrates/plain.ts` | Plain substrate + factories. |
+| `src/substrates/plain-revertible.ts` | The plain substrate's undo: the strict stack. |
+| `src/substrates/op-codec.ts` | Ops as JSON-safe values, for the plain log and plain undo records. |
+| `src/rebase.ts` | `rebaseChange`: a positional change carried past another. |
+| `src/restore.ts` | `planValueRestores`: which values an undo may put back. |
+| `src/diff-sequence.ts` | `diffString`, `diffSequence`: the shortest edit between two sequences (Myers). |
+| `src/typing.ts` | `editOf`, `continuesStep`: when a keystroke joins the undo step before it. |
+| `src/testing/undo-conformance.ts` | `undoConformance`, the shared undo suite, and its `UndoFixture`. |
 | `src/substrates/ephemeral.ts`, `substrates/state-tree.ts` | ~570 + ~770 | Ephemeral substrate: CvRDT field-level LWW and its state space. |
 | `src/basic/index.ts` | — | Test-only helpers (re-exports). |
 | `src/sync.ts` | `version`, `exportEntirety`, `exportSince`, `merge` — generic over `ref[SUBSTRATE]`. |

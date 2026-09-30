@@ -49,6 +49,7 @@ export type {
   SequenceChange,
   SequenceInstruction,
   SetChange,
+  SingleEdit,
   TextChange,
   TextInstruction,
   TextPatch,
@@ -80,6 +81,7 @@ export {
   richTextChange,
   sequenceChange,
   setOpChange,
+  singleEdit,
   // Constructors
   textChange,
   textInstructionsToPatches,
@@ -108,6 +110,8 @@ export { CoordinateTrie } from "./coordinate-trie.js"
 // Create-doc — generic document construction for any substrate
 export { createDoc, createDocAs, createRef } from "./create-doc.js"
 export { describe } from "./describe.js"
+// Undo — rebasing positions, restoring values, grouping typing
+export { diffSequence, diffString } from "./diff-sequence.js"
 // Doc-position algebra — flat↔document-tree position mapping for editor bindings
 export type { ResolvedDocPosition } from "./doc-position.js"
 export {
@@ -327,7 +331,7 @@ export {
   TRANSACT,
   withWritable,
 } from "./interpreters/writable.js"
-// Inverse — reverse arrows for the change groupoid (atomic abort)
+// Inverse — reverse arrows for the change groupoid (abort and undo)
 export {
   invert,
   invertIncrement,
@@ -447,6 +451,7 @@ export {
   syncShadow,
   writeByPath,
 } from "./reader.js"
+export { rebaseChange } from "./rebase.js"
 // Ref tier types — parameterized recursive refs for composed interpreter stacks
 export type {
   DocRef,
@@ -458,6 +463,8 @@ export type {
   SchemaRef,
   Wrap,
 } from "./ref.js"
+export type { ValueRestore } from "./restore.js"
+export { planValueRestores } from "./restore.js"
 export type {
   CounterSchema,
   DiscriminatedSumSchema,
@@ -538,6 +545,7 @@ export type {
   AnnounceOptions,
   BatchIngress,
   BatchOptions,
+  BatchOutcome,
   CommitOptions,
   DevtoolsHistory,
   DevtoolsHistorySummary,
@@ -546,18 +554,24 @@ export type {
   HasDevtoolsHistory,
   HasTreeNodeAllocation,
   HydrationHandle,
+  InverseEntry,
   MergeOptions,
   MetadataAxis,
   MetadataMismatch,
   PrepareIngress,
   PrepareOptions,
   ReadCapability,
+  RecordCodec,
   RecordInverseFn,
+  Remap,
   Replica,
   ReplicaFactory,
   ReplicaFactoryLike,
   ReplicaLike,
   ReplicaType,
+  Reverted,
+  Revertible,
+  RevertibleCommit,
   Substrate,
   SubstrateFactory,
   SubstratePayload,
@@ -577,6 +591,7 @@ export {
   hasBackingDoc,
   hasDevtoolsHistory,
   hasTreeNodeAllocation,
+  jsonRecordCodec,
   mismatchForInterpretation,
   mismatchForSync,
   planAdvance,
@@ -627,6 +642,8 @@ export {
   withoutTracking,
   withReadScope,
 } from "./tracking.js"
+export type { Edit } from "./typing.js"
+export { continuesStep, editOf, TYPING_GAP } from "./typing.js"
 export type { HasNativeAny } from "./unwrap.js"
 // Unwrap — typed escape hatch for accessing the native container backing a ref
 export { unwrap } from "./unwrap.js"

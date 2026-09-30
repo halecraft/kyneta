@@ -20,6 +20,10 @@
 // - Per-transaction meta mark (`KYNETA_MARK`, one per substrate) inscribed
 //   from inside the transact body to ignore our own writes; survives Yjs's
 //   nested-transact collapse so external wrapping is handled correctly.
+// - Undo (`revertible`, from `./revertible.js`): `prepare`, `afterBatch` and
+//   the bridge feed it what each local transaction did, the bridge before
+//   it re-materialises σ, so a direct write's inverse is read from the state
+//   before it.
 //
 // The event bridge contract: wrapping a Y.Doc in a kyneta substrate
 // means subscribing to the kyneta doc observes ALL mutations to the
@@ -37,6 +41,7 @@
 // The binding is threaded to the reader, event bridge, and write path.
 
 import type {
+  BatchOutcome,
   ChangeBase,
   CommitOptions,
   MergeOptions,
@@ -82,6 +87,7 @@ import { applyChangeToYjs, eventsToOps } from "./change-mapping.js"
 import { materializeYjsShadow } from "./materialize.js"
 import { ensureContainers } from "./populate.js"
 import { toYjsAssoc, YjsPosition } from "./position.js"
+import { createYjsRevertible } from "./revertible.js"
 import { YjsVersion } from "./version.js"
 import { resolveYjsType } from "./yjs-resolve.js"
 
@@ -204,6 +210,17 @@ export function createYjsSubstrate(
   const shadow: PlainState = materializeYjsShadow(doc, schema, binding)
   const reader: Reader = plainReader(shadow)
 
+  // Undo records of local transactions. Gathers nothing until someone
+  // subscribes to commits or a revert runs.
+  const revertible = createYjsRevertible({
+    doc,
+    rootMap,
+    schema,
+    binding,
+    shadow,
+    context: () => substrate.context(),
+  })
+
   // --- Coalescer helpers ---
 
   /**
@@ -318,6 +335,7 @@ export function createYjsSubstrate(
         // captures. Copying here as well protected nothing and cost a deep
         // clone of the written subtree on every local write.
         recordInverse(path, invert(path.read(shadow), change))
+        revertible.preparing(path, change)
       }
 
       // Local write — σ advances eagerly. CRDT-side writes happen
@@ -340,15 +358,19 @@ export function createYjsSubstrate(
       // lets the observeDeep bridge below recognise and skip the events we
       // generate here, so the changefeed isn't fired twice.
       applyChangeToYjs(rootMap, schema, path, change, binding)
+      if (recordInverse) revertible.prepared(path, change)
     },
 
-    afterBatch(): void {
+    afterBatch(outcome: BatchOutcome): void {
       // Drain the json-boundary coalescer. Runs inside
       // the ambient Y.transact from `runBatch`; the transact closes
       // when `runBatch`'s body returns, emitting one batched
       // observeDeep event for the whole logical action.
       flushJsonBoundaryBuffer()
+      revertible.ended(outcome)
     },
+
+    revertible,
 
     runBatch(work: () => void, options: CommitOptions): void {
       // Yjs's native transact nesting collapses inner re-entrant
@@ -362,6 +384,7 @@ export function createYjsSubstrate(
       // and round-trips to the changefeed layer.
       doc.transact(tr => {
         tr.meta.set(KYNETA_MARK, true)
+        revertible.opened(tr)
         work()
       }, options.origin)
     },
@@ -522,13 +545,18 @@ export function createYjsSubstrate(
     // via `tr.meta.set` inside the transact body. The mark survives Yjs's
     // nested-transact collapse, so external code wrapping `batch()` in
     // its own Y.transact is correctly classified as own.
-    if (transaction.meta.get(KYNETA_MARK)) {
-      return
-    }
+    const own = transaction.meta.get(KYNETA_MARK) === true
 
     // Convert Yjs events → kyneta Ops
-    const ops = eventsToOps(events, schema, binding)
-    if (ops.length === 0) {
+    const ops = own ? [] : eventsToOps(events, schema, binding)
+
+    // Undo reads a transaction's deleted text before gc, and a direct
+    // write's inverse from σ before it is re-materialised below.
+    if (revertible.active && transaction.local) {
+      revertible.observed(events, transaction, own ? null : ops)
+    }
+
+    if (own || ops.length === 0) {
       return
     }
 

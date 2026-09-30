@@ -395,6 +395,96 @@ describe("attach", () => {
     })
   })
 
+  describe("undo to a target", () => {
+    /** A target that records its calls, and on undo deletes what
+     *  `restore` names, as the stack would, with the caller's token. */
+    function fakeTarget(doc: ReturnType<typeof createTestDoc>) {
+      const calls: string[] = []
+      const target = {
+        typing(fn: () => void) {
+          calls.push("typing")
+          fn()
+        },
+        async undo(options?: { source?: unknown }) {
+          calls.push("undo")
+          batch(doc.title, (t: any) => t.delete(0, 2), {
+            source: options?.source,
+          })
+          return true
+        },
+        async redo(options?: { source?: unknown }) {
+          calls.push("redo")
+          batch(doc.title, (t: any) => t.insert(1, "xy"), {
+            source: options?.source,
+          })
+          return true
+        },
+      }
+      return { target, calls }
+    }
+
+    const key = (init: KeyboardEventInit) =>
+      new KeyboardEvent("keydown", { cancelable: true, ...init })
+
+    it("sends the keys and the history input types to it", () => {
+      const doc = createTestDoc("abcdef")
+      const input = createMockInput()
+      const { target, calls } = fakeTarget(doc)
+      const detach = attach(input, doc.title, { undo: target })
+
+      const undo = key({ key: "z", metaKey: true })
+      input.dispatchEvent(undo)
+      expect(undo.defaultPrevented).toBe(true)
+      input.dispatchEvent(key({ key: "Z", metaKey: true, shiftKey: true }))
+      input.dispatchEvent(key({ key: "y", ctrlKey: true }))
+      input.dispatchEvent(
+        new InputEvent("beforeinput", {
+          inputType: "historyUndo",
+          cancelable: true,
+        }),
+      )
+      input.dispatchEvent(
+        new InputEvent("beforeinput", {
+          inputType: "historyRedo",
+          cancelable: true,
+        }),
+      )
+      expect(calls).toEqual(["undo", "redo", "redo", "undo", "redo"])
+      detach()
+    })
+
+    it("writes typing through it", () => {
+      const doc = createTestDoc("ab")
+      const input = createMockInput()
+      const { target, calls } = fakeTarget(doc)
+      const detach = attach(input, doc.title, { undo: target })
+      input.value = "abc"
+      input.selectionStart = 3
+      input.dispatchEvent(new Event("input"))
+      expect(calls).toEqual(["typing"])
+      expect(doc.title()).toBe("abc")
+      detach()
+    })
+
+    it("puts the caret at what an undo or redo it asked for changed", () => {
+      const doc = createTestDoc("abcdef")
+      const input = createMockInput()
+      const { target } = fakeTarget(doc)
+      const detach = attach(input, doc.title, { undo: target })
+      input.selectionStart = 6
+      input.selectionEnd = 6
+
+      input.dispatchEvent(key({ key: "z", metaKey: true }))
+      expect(input.value).toBe("cdef")
+      expect([input.selectionStart, input.selectionEnd]).toEqual([0, 0])
+
+      input.dispatchEvent(key({ key: "z", metaKey: true, shiftKey: true }))
+      expect(input.value).toBe("cxydef")
+      expect([input.selectionStart, input.selectionEnd]).toEqual([3, 3])
+      detach()
+    })
+  })
+
   describe("selection range rebase with non-collapsed selection", () => {
     it("preserves selection range through remote insert before selection", () => {
       const doc = createTestDoc("hello world")

@@ -14,7 +14,12 @@
 
 import { hydrated, whenHydrated, writeRefusalFeed } from "@kyneta/exchange"
 import { useCallback, useRef } from "react"
-import { attach, attachWhenLoaded, type TextRefLike } from "./text-adapter.js"
+import {
+  attach,
+  attachWhenLoaded,
+  type TextRefLike,
+  type UndoTarget,
+} from "./text-adapter.js"
 
 // ---------------------------------------------------------------------------
 // UseTextOptions
@@ -22,10 +27,11 @@ import { attach, attachWhenLoaded, type TextRefLike } from "./text-adapter.js"
 
 export interface UseTextOptions {
   /**
-   * Undo behavior. Default: `"prevent"` (intercepts Cmd+Z / Ctrl+Z).
-   * Set to `"browser"` for single-user scenarios where native undo is desired.
+   * Where undo and redo go: an undo stack (`createUndoStack` from
+   * `@kyneta/exchange`), nowhere (`"prevent"`, the default), or the browser
+   * (`"browser"`, for a text nobody else edits). See `AttachOptions.undo`.
    */
-  undo?: "prevent" | "browser"
+  undo?: UndoTarget | "prevent" | "browser"
 }
 
 // ---------------------------------------------------------------------------
@@ -59,7 +65,8 @@ export interface UseTextOptions {
  *   preservation. Echo suppression skips changesets whose `source`
  *   matches the binding's own token.
  * - IME composition is handled safely (deferred to `compositionend`).
- * - Browser undo is intercepted by default (overridable via `options.undo`).
+ * - Undo and redo go to `options.undo`'s stack, grouped by typing, with the
+ *   caret put at what they changed. Without a stack they are swallowed.
  *
  * The hook does **not** trigger re-renders on text changes. The textarea
  * is an uncontrolled element managed imperatively. For reactive reads

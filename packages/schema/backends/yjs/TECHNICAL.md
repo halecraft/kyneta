@@ -24,6 +24,8 @@ Consumed by applications that bind schemas with `yjs.bind(schema)`. Not imported
 - Why is the peer's own `clientID` claimed *after* hydration, not at construction? → [`clientID` and the order it is claimed in](#clientid-and-the-order-it-is-claimed-in)
 - Why is a `clientID` 53 bits wide when Yjs's own ids are 32? → [`clientID` width](#clientid-width)
 - How does a remote `Y.applyUpdate` notify kyneta subscribers? → [The event bridge](#the-event-bridge)
+- Why does a default `Y.UndoManager` undo other peers' edits? → [Using `Y.UndoManager`](#using-yundomanager)
+- How is a write undone, after others edited and after a reload? → [Undo](#undo)
 
 ## Vocabulary
 
@@ -399,9 +401,23 @@ Yjs's `Transaction.meta: Map<any, any>` is a public per-transaction Map. Writing
 | Empty transact | `beforeTransaction` fires, `observeDeep` does NOT fire. No issue: mark is just data on a soon-to-be-GC'd Transaction. |
 
 Three properties this gives us:
-1. `transaction.origin` is preserved as a transparent pass-through for `options.origin` — providers and `UndoManager.addTrackedOrigin` see the app's intent, not a kyneta sentinel.
+1. `transaction.origin` is preserved as a transparent pass-through for `options.origin` — providers and `UndoManager.addTrackedOrigin` see the app's intent, not a kyneta sentinel. Origin alone does not tell a local write from a merge, though; see [Using `Y.UndoManager`](#using-yundomanager).
 2. External-wrap is correctly classified as own — strict improvement over the `KYNETA_ORIGIN` string design.
 3. No string namespace to collide with — external code can use any string origin without triggering kyneta's bridge-skip.
+
+### Using `Y.UndoManager`
+
+Kyneta's own undo ([Undo](#undo)) is the supported path: it spans documents, survives a reload, and leaves formatting a peer typed inside a mark alone. For an app that uses Yjs's manager anyway: a `Y.UndoManager` with its defaults records other peers' edits as undoable. It tracks transactions whose origin is `null`, and `null` is what both a local write and a merge carry when no origin is given: `merge(doc, payload)` passes `undefined` to `Y.applyUpdate`, which defaults it to `null`. The exchange always merges with `origin: "sync"`, but any other caller of `merge` may not. Kyneta's delete clock also commits local `null`-origin transactions, on the top-level `kyneta.clock` text.
+
+Tell local from remote by `transaction.local`, which a merge sets to `false`, and scope the manager to the schema's root map:
+
+```ts
+const undo = new Y.UndoManager(ydoc.getMap("root"), {
+  captureTransaction: tr => tr.local,
+})
+```
+
+Measured on a merge without an origin: with the defaults the first undo removed the peer's text; with this configuration it removed only the local writes.
 
 ### Known limitation: mixed mode
 
@@ -416,6 +432,37 @@ Before announcing (`ctx.announce`), the bridge re-materializes the `PlainState` 
 - **Not a polling loop.** `observeDeep` is Yjs's own push-based event API.
 - **Not filtered.** Every event Yjs emits reaches `eventsToOps`; subscription-level filtering is the interpreter-stack's concern.
 - **Not subject to ordering constraints.** Yjs emits events synchronously within the transaction that caused them. The bridge fires in whatever stack frame Yjs used.
+
+---
+
+## Undo
+
+Source: `src/revertible.ts` (`createYjsRevertible`), wired in `src/substrate.ts`. The model is `packages/schema/TECHNICAL.md` § Undo; the measurements, `docs/findings/undo-probes.md`.
+
+A record names content by Yjs identity, which survives edits, merges, gc and a reload:
+
+| Part | What it holds | How a revert uses it |
+|---|---|---|
+| `inserted` | The ids this peer inserted into a text or list, by container | Deletes the ones still alive, so text a collaborator typed among them survives |
+| `deleted` | Each run it deleted: ids in document order, an anchor, the content (with marks), and the ids of texts inside a deleted list item | Re-inserts the content at the anchor, unless some of its ids are alive again |
+| `values` | Each map key or scalar it wrote: what it wrote, what was there | Restores the old value only while the key still holds what was written |
+| `marks` | Each character it marked, per key: what it set, what was there | Restores per character, only where the character still holds what was set |
+
+A container inside a list is addressed by a `StablePath`: its Kyneta path with each list index replaced by the list item's id, resolved at revert time through a relative position.
+
+- **Capture has two routes, one builder.** A Kyneta batch is gathered in `prepare` (the σ before each op, the ids of doomed list items, the clocks around each insert), a direct write in the event bridge before `syncShadow` (σ still holds the state before it). Both end in `afterTransaction`, which emits the record unless the batch aborted or it has no effect. Text deletions come from the same place for both: `toDelta` over the snapshot before the transaction and now (`computeYChange` names each removed item, in document order), read before gc.
+- **Deleted rich text takes its marks from σ before the transaction.** Yjs renders deleted text without its formatting.
+- **Marks are undone by state, never by deleting format items.** Yjs's own manager deletes the format items it inserted, and a peer's closing boundary then re-bolds text that was never bold (finding 18).
+- **A revert is an authored batch**, dispatched inside out (a change inside a list item before the list moves), carrying the caller's `origin` and `source`. Its own record is the redo.
+- **Remap.** A restored run's new ids are read back at the indices it landed on, and paired with its old ones in order; texts inside a restored list item pair the same way. `rewrite` substitutes them in every older record.
+- **`position`** is `{ clientID, clock }`. The delete clock makes even a delete-only revert advance it, so `authoredSince` sees every revert.
+- **Only public API.** `src/__tests__/yjs-surface.test.ts` pins every Yjs call the module makes: relative positions, `isDeleted` over `snapshot`, `getState`, the transaction's fields, `YEvent.changes`, and `toDelta` over snapshots.
+
+### Known gaps
+
+- **A list deleted by a direct write restores without a remap.** Yjs's public API gives no document order for its deleted items, so older steps inside those items are skipped.
+- **A crashed revert that restored several runs** is recovered without a remap, for the same reason.
+- **Types outside the schema** (y-prosemirror's `XmlFragment`) are not recorded: there is no shadow to read their inverse from.
 
 ---
 
@@ -527,6 +574,10 @@ This is the same mechanism as the Loro backend, exercised with a narrower law se
 | `src/reader.ts` | `yjsReader` — reads via `resolveYjsType` + per-type extraction. |
 | `src/version.ts` | `YjsVersion`: the state vector, its lattice operations, serialisation. |
 | `src/position.ts` | `YjsPosition` (wraps `Y.RelativePosition`), `toYjsAssoc`. |
+| `src/revertible.ts` | Undo: records by Yjs identity, their revert, remap and rewrite. |
+| `src/__tests__/undo.test.ts` | The shared undo suite (`undoConformance`). |
+| `src/__tests__/yjs-surface.test.ts` | Every Yjs call undo depends on, pinned. |
+| `src/__tests__/compose-edits.test.ts` | `composeEdits`, the pure planning of a revert's positional edits. |
 | `src/native-map.ts` | `YjsNativeMap` type-level functor. |
 | `src/__tests__/create.test.ts` | End-to-end: `createDoc(yjs.bind(schema))` → read/write round-trips. |
 | `src/__tests__/substrate.test.ts` | Substrate contract conformance (subset of the `@kyneta/schema` suite). |
@@ -553,6 +604,7 @@ Run with `cd packages/schema/backends/yjs && pnpm exec vitest run`.
 
 - **Outbound** (`applyRichTextChange`): Same delta format as Loro — `format(N, marks)` → `{ retain: N, attributes: marks }`.
 - **Inbound** (`richTextEventToChange`): `YTextEvent.delta` entries with `attributes` → `format` instructions; without → plain `retain`.
+- **Materialized** (`yTextToRichTextDelta`): adjacent spans whose marks agree are merged (`normalizeSpans`), so a re-materialized shadow reads as a stepped one does.
 
 Yjs does not require explicit mark style configuration (unlike Loro's `configTextStyle()`). Formatting attributes are always inclusive by default. This is an asymmetry between the two substrates.
 

@@ -501,7 +501,7 @@ export function eventsToOps(
  * absent from `binding.inverse` — without the schema walk it would be
  * misclassified as an entry and then reported as a path mismatch.
  */
-function yjsPathToKynetaPath(
+export function yjsPathToKynetaPath(
   yjsPath: (string | number)[],
   rootSchema: SchemaNode,
   binding?: SchemaBinding,

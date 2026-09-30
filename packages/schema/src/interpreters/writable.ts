@@ -52,7 +52,9 @@ import type {
 import type {
   AnnounceOptions,
   BatchOptions,
+  BatchOutcome,
   CommitOptions,
+  InverseEntry,
   PrepareOptions,
   SubstratePrepare,
 } from "../substrate.js"
@@ -240,7 +242,7 @@ export interface WritableContext extends RefContext {
    * frame captured (what `batch()` returns).
    *
    * The outermost frame is one native commit: it runs inside
-   * `substrate.runBatch`, calls `substrate.afterBatch()` and seals before the
+   * `substrate.runBatch`, calls `substrate.afterBatch(outcome)` and seals before the
    * commit, and is delivered after it. If `work` throws, the frame's recorded
    * inverses are applied LIFO (`ingress: "compensate"`), and at the outermost
    * frame the batch is sealed with `aborted: true` before the error is
@@ -315,6 +317,7 @@ export function seal(
   return { options, ops: trace.map(entry => entry.op) }
 }
 
+const ABORTED: BatchOutcome = { ops: [], inverses: [], aborted: true }
 const AUTHOR: PrepareOptions = { ingress: "author" }
 const COMPENSATE: PrepareOptions = { ingress: "compensate" }
 const ANNOUNCE: PrepareOptions = { ingress: "announce" }
@@ -344,7 +347,8 @@ type DeliveryMsg = { readonly type: "deliver"; readonly batch: SealedBatch }
  * The substrate sees only authored ops and their compensations:
  * - `substrate.prepare(path, change, recordInverse)` — apply the change to
  *   σ and λ; for a forward op, record its inverse on the active frame.
- * - `substrate.afterBatch()` — end of an authored batch, inside the bracket
+ * - `substrate.afterBatch(outcome)` — end of an authored batch, inside the
+ *   bracket, with the ops that survived and their inverses
  *   (plain logs the batch; CRDT substrates drain their coalescing buffers).
  * - `substrate.runBatch?(body, options)` — optional native bracket, invoked
  *   around the outermost frame.
@@ -359,9 +363,16 @@ export function buildWritableContext(
   // frameStarts.length IS the canonical depth counter: 0 means "no
   // frame open" (auto-commit territory), 1 means "outermost frame open,"
   // > 1 means "nested re-entry."
-  type InverseEntry = { path: Path; inverse: ChangeBase }
-  const inverseStack: InverseEntry[] = []
+  //
+  // Each entry keeps its forward change beside the inverse. A frame that
+  // throws inside an outer one takes its entries with it, so at the
+  // outermost release the stack holds exactly the ops that survived, paired
+  // with their inverses: what `afterBatch` receives.
+  const inverseStack: (InverseEntry & { readonly change: ChangeBase })[] = []
   const frameStarts: number[] = []
+
+  // The forward change `substrate.prepare` is applying, for `recordInverse`.
+  let forwardChange: ChangeBase | undefined
 
   // One trace per open batch. An announcement made while an authored batch
   // is open pushes its own trace, so neither batch captures the other's ops.
@@ -370,7 +381,10 @@ export function buildWritableContext(
   // Substrates call this after computing a forward op's inverse; it pushes
   // onto the active frame's stack range.
   const recordInverse = (path: Path, inverse: ChangeBase): void => {
-    inverseStack.push({ path, inverse })
+    if (forwardChange === undefined) {
+      throw new Error("recordInverse called outside substrate.prepare")
+    }
+    inverseStack.push({ path, inverse, change: forwardChange })
   }
 
   // Delivers sealed batches in seal order. Created on first use so that it
@@ -431,9 +445,16 @@ export function buildWritableContext(
         stage.before?.(path, change, options)
       }
       switch (options.ingress) {
-        case "author":
-          substrate.prepare(path, change, recordInverse)
+        case "author": {
+          const outer = forwardChange
+          forwardChange = change
+          try {
+            substrate.prepare(path, change, recordInverse)
+          } finally {
+            forwardChange = outer
+          }
           break
+        }
         case "compensate":
           substrate.prepare(path, change, null)
           break
@@ -501,7 +522,7 @@ export function buildWritableContext(
           }
           inverseStack.length = frameStart
           if (frameStarts.length === 0) {
-            substrate.afterBatch()
+            substrate.afterBatch(ABORTED)
             sealAndRelease(trace, { ...opts, ingress: "author", aborted: true })
           }
         } catch (compErr: any) {
@@ -516,9 +537,15 @@ export function buildWritableContext(
       captured = authoredSince(trace, from)
       if (frameStarts.length === 0) {
         // Inner frames' inverses stay on the stack across inner pops; the
-        // outermost release is where the whole block's range is discarded.
+        // outermost release hands the whole block's range to the substrate,
+        // which keeps what undo needs, and clears it.
+        const ops = inverseStack.map(e => ({ path: e.path, change: e.change }))
+        const inverses = inverseStack.map(e => ({
+          path: e.path,
+          inverse: e.inverse,
+        }))
         inverseStack.length = 0
-        substrate.afterBatch()
+        substrate.afterBatch({ ops, inverses, aborted: false })
         sealAndRelease(trace, { ...opts, ingress: "author" })
       }
     }

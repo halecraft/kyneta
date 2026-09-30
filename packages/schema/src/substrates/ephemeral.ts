@@ -42,6 +42,7 @@ import {
 } from "../reader.js"
 import type { Schema as SchemaNode } from "../schema.js"
 import type {
+  BatchOutcome,
   MergeOptions,
   RecordInverseFn,
   Replica,
@@ -508,7 +509,7 @@ export function createStateSubstrate(
       )
     },
 
-    afterBatch(): void {
+    afterBatch(_outcome: BatchOutcome): void {
       // The install counter advances as each leaf lands, so a batch has no
       // bookkeeping left to reconcile when it ends. What remains is to say
       // whether it wrote anything.

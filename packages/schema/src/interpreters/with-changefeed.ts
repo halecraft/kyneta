@@ -288,7 +288,9 @@ export function planDelivery(
  * The metadata a sealed batch puts on each `Changeset`. `replay` is true iff
  * no writer on this peer made the ops: false for an authored batch and for a
  * native local write the bridge announces, true for what a merge, reset or
- * tick brought in. Only an authored batch carries `source` and `aborted`.
+ * tick brought in. Only an authored batch can be `aborted`. `source` comes
+ * from an authored batch, or from a local announcement of a write a local
+ * caller asked the substrate to make natively (a Loro undo).
  */
 export function changesetMetadata(options: BatchOptions): BatchMetadata {
   switch (options.ingress) {
@@ -304,7 +306,9 @@ export function changesetMetadata(options: BatchOptions): BatchMetadata {
         origin: options.origin,
         replay: !options.local,
         aborted: undefined,
-        source: undefined,
+        // A merge has no local caller, so only a local announcement carries
+        // one's token.
+        source: options.local ? options.source : undefined,
       }
   }
 }

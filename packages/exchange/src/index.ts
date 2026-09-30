@@ -323,3 +323,17 @@ export {
 // ---------------------------------------------------------------------------
 
 export { AsyncQueue } from "./async-queue.js"
+
+// ---------------------------------------------------------------------------
+// Undo — a stack of gestures across documents, kept in a document
+// ---------------------------------------------------------------------------
+
+export type {
+  Direction,
+  Note,
+  Part,
+  Step,
+} from "./undo/schema.js"
+export { UndoDoc, UndoSchema } from "./undo/schema.js"
+export type { UndoStack, UndoStackParams } from "./undo/stack.js"
+export { createUndoStack } from "./undo/stack.js"

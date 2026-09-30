@@ -10,7 +10,9 @@
 //     Binds an HTMLInputElement or HTMLTextAreaElement to a TextRef.
 //     Local edits flow into the CRDT via batch(); remote edits are
 //     surgically applied via setRangeText() with selection rebasing.
-//     IME composition is handled; undo is intercepted by default. With
+//     IME composition is handled. Undo and redo go to an `UndoTarget` (an
+//     undo stack from `@kyneta/exchange`) when one is given, and are
+//     otherwise swallowed by default. With
 //     `options.refusal`, the element is read-only while the text refuses
 //     edits, and stays bound. A local edit becomes a `TextChange` through
 //     `diffText` from `@kyneta/schema`.
@@ -24,8 +26,10 @@ import {
 } from "@kyneta/changefeed"
 import {
   batch,
+  type CommitOptions,
   diffText,
   isTextChange,
+  singleEdit,
   type TextInstruction,
   type TextRef,
   textInstructionsToPatches,
@@ -91,19 +95,30 @@ export function transformSelection(
 // attach — bind an element to a TextRef
 // ---------------------------------------------------------------------------
 
+/**
+ * Where undo goes. An `UndoStack` from `@kyneta/exchange` is one; the adapter
+ * names only what it calls, and so stays free of the exchange.
+ */
+export interface UndoTarget {
+  /** Run a keystroke's write, joining the typing step before it or not. */
+  typing(fn: () => void): void
+  undo(options?: CommitOptions): Promise<boolean>
+  redo(options?: CommitOptions): Promise<boolean>
+}
+
 /** Options for {@link attach}. */
 export interface AttachOptions {
   /**
-   * Undo handling strategy.
+   * Where undo and redo go.
    *
-   * - `"prevent"` (default): intercept Cmd/Ctrl+Z and `historyUndo`/
-   *   `historyRedo` input types. The CRDT's own undo stack (when wired)
-   *   should handle undo instead of the browser's built-in mechanism,
-   *   which operates on DOM state that diverges from CRDT state.
-   * - `"browser"`: allow native undo/redo (useful for simple forms
-   *   where CRDT undo is not wired).
+   * - An {@link UndoTarget}: Cmd/Ctrl+Z and `historyUndo` undo through it,
+   *   Cmd/Ctrl+Shift+Z, Ctrl+Y and `historyRedo` redo, and typing is written
+   *   through its `typing`. After an undo or redo the caret sits at the edit.
+   * - `"prevent"` (default): swallow them. The browser's own undo works on
+   *   the element's value, which the document can move under it.
+   * - `"browser"`: let the browser undo, for a text nobody else edits.
    */
-  undo?: "prevent" | "browser"
+  undo?: UndoTarget | "prevent" | "browser"
 
   /**
    * Why the text refuses edits, or `undefined` when it does not. While its
@@ -133,8 +148,8 @@ export interface AttachOptions {
  * events are suppressed; the final committed text is captured on
  * `compositionend`.
  *
- * **Undo**: By default, native undo/redo is intercepted to prevent
- * DOM state from diverging from CRDT state. See {@link AttachOptions.undo}.
+ * **Undo**: Undo and redo go where {@link AttachOptions.undo} says: an undo
+ * stack, nowhere (the default), or the browser.
  *
  * @param element  - The input or textarea element to bind.
  * @param textRef  - A text ref satisfying {@link TextRefLike}.
@@ -146,7 +161,8 @@ export function attach(
   textRef: TextRefLike,
   options?: AttachOptions,
 ): () => void {
-  const undoMode = options?.undo ?? "prevent"
+  const undo = options?.undo ?? "prevent"
+  const target = typeof undo === "string" ? undefined : undo
   let composing = false
 
   // Read-only while refused, on top of whatever the element was already.
@@ -163,6 +179,9 @@ export function attach(
   // Per-attach() identity-typed echo token. Minted fresh per binding so
   // composed adapters / multiple textareas on the same ref don't collide.
   const ownSource = Symbol("text-adapter:echo")
+  // The token of undos and redos this binding asks for: patched in like a
+  // remote edit, then the caret goes to the edit.
+  const undoSource = Symbol("text-adapter:undo")
 
   // -----------------------------------------------------------------------
   // 1. Initial state projection
@@ -178,14 +197,15 @@ export function attach(
   const unsubscribe = cf.subscribe((changeset: Changeset) => {
     // Echo suppression — skip changesets we produced.
     if (changeset.source === ownSource) return
+    const undone = changeset.source === undoSource
 
     for (const c of changeset.changes) {
       if (isTextChange(c)) {
         const selStart = element.selectionStart ?? 0
         const selEnd = element.selectionEnd ?? 0
 
-        // Apply surgical patches via setRangeText to preserve undo stack
-        // and avoid full-value replacement flicker.
+        // Apply surgical patches via setRangeText, which keeps the
+        // selection and avoids replacing the whole value.
         const patches = textInstructionsToPatches(c.instructions)
         for (const patch of patches) {
           if (patch.kind === "insert") {
@@ -205,10 +225,21 @@ export function attach(
           }
         }
 
-        // Rebase the user's selection through the remote edit.
-        const rebased = transformSelection(selStart, selEnd, c.instructions)
-        element.selectionStart = rebased.start
-        element.selectionEnd = rebased.end
+        const last = patches.at(-1)
+        if (undone && last !== undefined) {
+          // An undo or redo this element asked for: the caret goes to it.
+          const caret =
+            last.kind === "insert"
+              ? last.offset + last.text.length
+              : last.offset
+          element.selectionStart = caret
+          element.selectionEnd = caret
+        } else {
+          // Rebase the user's selection through the remote edit.
+          const rebased = transformSelection(selStart, selEnd, c.instructions)
+          element.selectionStart = rebased.start
+          element.selectionEnd = rebased.end
+        }
       } else {
         // Non-text change (e.g., full replace via .update()) — fall back
         // to wholesale value replacement.
@@ -236,30 +267,22 @@ export function attach(
     }
 
     const cursor = element.selectionStart ?? newText.length
-    const delta = diffText(oldText, newText, cursor)
-    if (delta.instructions.length === 0) return
-
-    // Extract the edit position and content from the instruction stream.
-    // diffText always produces at most: retain? + delete? + insert?
-    let offset = 0
-    let deleteCount = 0
-    let insertText = ""
-    for (const op of delta.instructions) {
-      if ("retain" in op) offset = op.retain
-      else if ("delete" in op) deleteCount = op.delete
-      else if ("insert" in op) insertText = op.insert
-    }
+    const edit = singleEdit(diffText(oldText, newText, cursor).instructions)
+    if (edit === undefined) return
 
     // Apply via batch() tagged with our source token so the resulting
     // echo through cf.subscribe() can be identified and skipped.
-    batch(
-      textRef,
-      (ref: any) => {
-        if (deleteCount > 0) ref.delete(offset, deleteCount)
-        if (insertText) ref.insert(offset, insertText)
-      },
-      { source: ownSource },
-    )
+    const write = () =>
+      batch(
+        textRef,
+        (ref: any) => {
+          if (edit.deleted > 0) ref.delete(edit.index, edit.deleted)
+          if (edit.inserted) ref.insert(edit.index, edit.inserted)
+        },
+        { source: ownSource },
+      )
+    if (target === undefined) write()
+    else target.typing(write)
   }
 
   element.addEventListener("input", onInput)
@@ -282,27 +305,32 @@ export function attach(
   element.addEventListener("compositionend", onCompositionEnd)
 
   // -----------------------------------------------------------------------
-  // 5. Undo interception
+  // 5. Undo
   // -----------------------------------------------------------------------
 
+  const history = (direction: "undo" | "redo"): void => {
+    if (target === undefined) return
+    const run = direction === "undo" ? target.undo : target.redo
+    void run.call(target, { source: undoSource })
+  }
+
   const onKeyDown = (e: Event): void => {
-    if (undoMode === "browser") return
+    if (undo === "browser") return
     const ke = e as KeyboardEvent
-    const mod = ke.metaKey || ke.ctrlKey
-    if (mod && (ke.key === "z" || ke.key === "Z")) {
-      e.preventDefault()
-    }
+    if (!(ke.metaKey || ke.ctrlKey)) return
+    const key = ke.key.toLowerCase()
+    const redo = (key === "z" && ke.shiftKey) || (key === "y" && ke.ctrlKey)
+    if (key !== "z" && !redo) return
+    e.preventDefault()
+    history(redo ? "redo" : "undo")
   }
 
   const onBeforeInput = (e: Event): void => {
-    if (undoMode === "browser") return
-    const inputEvent = e as InputEvent
-    if (
-      inputEvent.inputType === "historyUndo" ||
-      inputEvent.inputType === "historyRedo"
-    ) {
-      e.preventDefault()
-    }
+    if (undo === "browser") return
+    const { inputType } = e as InputEvent
+    if (inputType !== "historyUndo" && inputType !== "historyRedo") return
+    e.preventDefault()
+    history(inputType === "historyUndo" ? "undo" : "redo")
   }
 
   element.addEventListener("keydown", onKeyDown)

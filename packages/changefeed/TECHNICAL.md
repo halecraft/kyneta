@@ -149,7 +149,7 @@ The fields are **orthogonal**: a tagged local write that throws can simultaneous
 
 An `unknown` value compared with `===`. Supplied by the originating `batch()` via `options.source`, propagated unchanged to the delivered `Changeset.source`. Used by subscribers (notably `@kyneta/react`'s `text-adapter`) that need to recognize their own writes — string-based discrimination via `origin` is unreliable because `origin` is app-level free vocabulary that callers may set to anything (or omit). The identity-typed token gives writer and reader a kyneta-managed handshake that cannot collide with app-level vocabulary.
 
-A batch with `replay: true` never carries `source` — any value reaching a subscriber is therefore from a local `batch()` call on this peer.
+A batch with `replay: true` never carries `source` — any value reaching a subscriber is therefore from a local caller on this peer: a `batch()`, or a write a local caller asked the substrate to make natively and the substrate then announced (a Loro undo, applied with `applyDiff`, carries the caller's token this way).
 
 Context: jj:wpvtoxmw.
 

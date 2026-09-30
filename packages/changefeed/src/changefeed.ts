@@ -103,7 +103,8 @@ export interface BatchMetadata {
    * its own writes from someone else's).
    *
    * A batch with `replay: true` never carries `source` — any value reaching
-   * a subscriber is therefore from a local `batch()` on this peer.
+   * a subscriber is therefore from a local caller on this peer: a `batch()`,
+   * or an undo the substrate applied natively for one.
    *
    * @example
    * const mySource = Symbol("my-binding")

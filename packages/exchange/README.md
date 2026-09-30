@@ -671,6 +671,35 @@ Chat.listen(exchange).onReceive((reply, receiver) => {
 - **A `Line` to a stored server survives its restart.** The server returns with the same seat and resumes from its store, and the client's `Line` carries on, with nothing lost or delivered twice. A server without a store (or with Prisma, whose every open is a new seat) is a new seat after a restart: clients find it with `whenPeer` and open new `Line`s, and anything in flight to the old seat is lost.
 - **`Line` documents to a seat that never returns stay stored** on its peer, and every store-less session is a new seat. Nothing removes them yet.
 
+### Undo
+
+`createUndoStack` undoes this peer's own writes, as they now stand among everyone's: text a collaborator typed inside yours survives your undo, and a value someone changed since is left alone. One step is one gesture, across as many documents as it wrote.
+
+<!-- Not compiled: assumes documents the shared prelude does not declare. -->
+<!-- ts-docs-verifier:ignore -->
+```ts
+import { createUndoStack } from "@kyneta/exchange"
+
+const stack = await createUndoStack({
+  exchange,
+  docId: `undo:${tabId}`,             // the document the stack lives in
+  key: "cards",                       // which stack in it
+  scope: docId => docId.startsWith("card:") || docId === "places",
+})
+
+stack.gesture(() => {
+  card.text.insert(0, "hello")        // one step, over two documents
+  places.place.set("column")
+})
+await stack.undo()                    // both undone; false when nothing stands
+await stack.redo()
+```
+
+- **Typing** goes through `stack.typing(fn)`, which joins a keystroke to the step before it while the user keeps typing in one place (`useText(ref, { undo: stack })` does this). Direct writes by an editor binding are grouped the same way with `stack.follow(docId)`.
+- **The stack is a document.** With a Store it survives a reload, and a crash in the middle of an undo is finished on the next load without applying anything twice. Without one it lasts the session. The document is serialized, so one runtime writes it: give each tab its own id for per-tab undo, or share one over a device's Store.
+- **What there is to undo** is a read of that document: `stack.doc.stacks.at("cards")`.
+- Plain, Loro and Yjs documents are undoable; ephemeral ones are not.
+
 ### Escape Hatches
 
 Reach the native document or container behind a ref when you need to, for

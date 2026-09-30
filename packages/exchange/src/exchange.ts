@@ -1213,6 +1213,14 @@ export class Exchange {
   }
 
   /**
+   * @internal The replica and schema registry, which an undo stack reads to
+   * open a document it recorded before a reload.
+   */
+  get capabilities(): Capabilities {
+    return this.#capabilities
+  }
+
+  /**
    * The local imperative shell backing this Exchange.
    *
    * Exposed for advanced use cases (standalone document creation, direct

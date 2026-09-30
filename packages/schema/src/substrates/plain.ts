@@ -40,6 +40,7 @@ import {
 } from "../reader.js"
 import type { Schema as SchemaNode } from "../schema.js"
 import type {
+  BatchOutcome,
   HasBackingDoc,
   HydrationHandle,
   MergeOptions,
@@ -59,6 +60,8 @@ import {
 } from "../version-vector.js"
 import { Zero } from "../zero.js"
 import { createLocalUpdateSignal } from "./local-update-signal.js"
+import { deserializeOps, type SerializedOp, serializeOps } from "./op-codec.js"
+import { createPlainRevertible } from "./plain-revertible.js"
 
 // ---------------------------------------------------------------------------
 // PlainVersion — monotonic integer version marker
@@ -351,6 +354,14 @@ export function createPlainSubstrate(
     },
   })
 
+  const revertible = createPlainRevertible({
+    head: () => core.version().serialize(),
+    isPast: position =>
+      core.version().compare(plainReplicaFactory.parseVersion(position)) ===
+      "ahead",
+    context: () => substrate.context(),
+  })
+
   const substrate = {
     [BACKING_DOC]: doc,
 
@@ -381,8 +392,9 @@ export function createPlainSubstrate(
       pendingOps.push({ path: path.toRaw(), change })
     },
 
-    afterBatch(): void {
+    afterBatch(outcome: BatchOutcome): void {
       if (pendingOps.length === 0) return
+      const before = core.version().serialize()
       // Mint a REAL lineage on the first authored flush. Only authored
       // batches reach here: a merge appends to the log directly, so taking
       // in a peer's ops never claims an identity. Minting before the append
@@ -391,8 +403,11 @@ export function createPlainSubstrate(
         clock.adopt(mintLineage(Date.now()))
       }
       core.append(pendingOps.splice(0))
+      revertible.captured(outcome, before, core.version().serialize())
       localUpdates.notify()
     },
+
+    revertible,
 
     subscribeLocalUpdates: localUpdates.subscribe,
 
@@ -1104,69 +1119,4 @@ export const plainSubstrateFactory: SubstrateFactory<PlainVersion> = {
   },
 
   replica: plainReplicaFactory,
-}
-
-// ---------------------------------------------------------------------------
-// Op serialization — convert between Path objects and JSON-safe arrays
-// ---------------------------------------------------------------------------
-
-/** A JSON-safe representation of a path segment. */
-type SerializedSegment =
-  | { type: "field"; field: string }
-  | { type: "entry"; entry: string }
-  | { type: "index"; index: number }
-
-/** A JSON-safe representation of an Op. */
-interface SerializedOp {
-  path: SerializedSegment[]
-  change: ChangeBase
-}
-
-/**
- * Convert Ops with Path objects into JSON-safe form for serialization.
- * Extracts segments and produces plain `{ type, field/entry/index }` objects.
- *
- * `seg.resolve()` here never throws: the log holds only `RawPath` ops —
- * local writes are frozen via `path.toRaw()` in `prepare`, merged ops are
- * already raw from `deserializeOps` — and `RawSegment.resolve()` is total.
- * The dead-`Address` hazard was the *input*, fixed there, not here. jj:mlurlzqt
- */
-function serializeOps(ops: readonly Op[]): SerializedOp[] {
-  return ops.map(op => ({
-    path: op.path.segments.map(seg => {
-      if (seg.role === "field") {
-        return { type: "field" as const, field: seg.resolve() as string }
-      }
-      if (seg.role === "entry") {
-        return { type: "entry" as const, entry: seg.resolve() as string }
-      }
-      return { type: "index" as const, index: seg.resolve() as number }
-    }),
-    change: op.change,
-  }))
-}
-
-/**
- * Reconstruct Ops with RawPath objects from JSON-parsed data.
- * Converts plain `{ type, field/entry/index }` arrays back into RawPath instances.
- */
-function deserializeOps(raw: SerializedOp[]): Op[] {
-  return raw.map(op => ({
-    path: deserializePath(op.path),
-    change: op.change,
-  }))
-}
-
-function deserializePath(segments: SerializedSegment[]): RawPath {
-  let path = RawPath.empty
-  for (const seg of segments) {
-    if (seg.type === "field") {
-      path = path.field(seg.field)
-    } else if (seg.type === "entry") {
-      path = path.entry(seg.entry)
-    } else {
-      path = path.item(seg.index)
-    }
-  }
-  return path
 }

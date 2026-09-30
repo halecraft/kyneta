@@ -54,7 +54,8 @@ Zero runtime dependencies.
 | **Typed reads** | `doc.title()` returns `string`, `doc()` returns the full plain snapshot — frozen, and the same object until something in it changes, sharing every subtree that did not. Copy one (`structuredClone`) to mutate it |
 | **Typed writes** | `.set()`, `.insert()`, `.increment()`, `.push()`, `.delete()` — each ref knows its mutation surface |
 | **Batching** | `batch(doc, d => { … })` → `Op[]` — group writes into one atomic commit + one notification (a single write needs no wrapper); returns the captured ops for sync |
-| **Sync** | `applyChanges(docB, ops)` — apply ops from another doc, network, or undo stack |
+| **Sync** | `applyChanges(docB, ops)` — apply ops from another doc or the network |
+| **Undo** | Plain, Loro and Yjs documents record every local commit for undo, and revert one as it now stands among others' edits; `createUndoStack` in `@kyneta/exchange` groups them into steps |
 | **Observation** | `subscribe(doc, cb)` for tree-level, `subscribeNode(ref, cb)` for leaf-level |
 | **Self-removal** | `remove(ref)` — a child ref removes itself from its parent container |
 | **Version tracking** | `version(doc)`, `delta(doc, fromVersion)`, `exportEntirety(doc)` |
@@ -171,7 +172,7 @@ A write that rewrites a subtree reaches the subscribers inside it too: a struct'
 
 Within a changeset, `changes` are in the order they were written. That makes the list a faithful log: a root subscriber's `changes` are exactly the `Op[]` that `batch()` returned, and handing them to `applyChanges()` on another document reproduces the same writes. Deeper subscribers are called before shallower ones.
 
-Ops are yours to keep. A change's payload is a snapshot taken when the write was dispatched, so you can queue one for a later network send, hold it for an undo stack, or forward it to another document, and it will still describe what was written. Neither a later write nor the caller that supplied the value can reach back and alter it.
+Ops are yours to keep. A change's payload is a snapshot taken when the write was dispatched, so you can queue one for a later network send, or forward it to another document, and it will still describe what was written. Neither a later write nor the caller that supplied the value can reach back and alter it.
 
 Origin provenance (`{ origin: "sync" }`) flows through from `batch()` and `applyChanges()`.
 

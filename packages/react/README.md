@@ -293,6 +293,16 @@ const refusal = useWriteRefusal(doc)
 return <input disabled={refusal !== undefined} value={title} onChange={onChange} />
 ```
 
+### Undo in a text field
+
+Give `useText` an undo stack (`createUndoStack` from `@kyneta/exchange`) and Cmd/Ctrl+Z undoes, Cmd/Ctrl+Shift+Z and Ctrl+Y redo, typing joins a step while the user keeps typing in one place, and the caret goes to what was undone. Without one, `useText` swallows undo (`"prevent"`), since the browser's own undo works on the element's value, which the document moves under it; `undo: "browser"` lets it through for a text nobody else edits.
+
+<!-- Not compiled: a fragment from inside a component. -->
+<!-- ts-docs-verifier:ignore -->
+```tsx
+<textarea ref={useText(card.text, { undo: stack })} />
+```
+
 ### Re-exports
 
 `@kyneta/react` re-exports a curated subset so most app code only needs one import:
@@ -419,7 +429,7 @@ This fires only when `response` changes — not when `prompt` or `status` change
 | `useValue` overloads | 12+ TypeScript overloads | Single conditional return type |
 | Framework abstraction | `FrameworkHooks` DI + factory pattern | None — CHANGEFEED is the framework boundary |
 | Text input hooks | `useCollaborativeText` (beforeinput) | `useText` — an uncontrolled `<input>`/`<textarea>` bound through `attach` |
-| Undo/redo | `useUndoManager` | Deferred (future work) |
+| Undo/redo | `useUndoManager` | `useText(ref, { undo: stack })`, over `createUndoStack` from `@kyneta/exchange`: selective, across documents, durable |
 
 ## License
 

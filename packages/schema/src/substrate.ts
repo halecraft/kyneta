@@ -36,6 +36,7 @@
 // Context: jj:wmyomqzw (SubstratePrepare), jj:wqoqzzpp (Substrate)
 
 import type { ChangeBase } from "./change.js"
+import type { Op } from "./changefeed.js"
 import type { Path } from "./interpret.js"
 import type { WritableContext } from "./interpreters/writable.js"
 import type { Reader } from "./reader.js"
@@ -621,9 +622,14 @@ export interface MergeOptions {
  * true iff this peer authored the ops, which is the case for a write made on
  * the native document that the substrate's event bridge reports. A merge, a
  * reset and a decay tick announce with `local: false`.
+ *
+ * `source` is the echo token of a local caller whose write the substrate
+ * made natively and then announced, as a Loro undo does with `applyDiff`. It
+ * means nothing without `local: true`: a merge has no local caller.
  */
 export interface AnnounceOptions extends MergeOptions {
   readonly local: boolean
+  readonly source?: unknown
 }
 
 /**
@@ -647,9 +653,28 @@ export interface PrepareOptions {
 
 /**
  * Records the inverse of a change on the active `runBatch` frame. The bracket
- * replays recorded inverses LIFO if the block throws.
+ * replays recorded inverses LIFO if the block throws, and otherwise hands
+ * them to `afterBatch`, where a substrate keeps what it needs for undo.
  */
 export type RecordInverseFn = (path: Path, inverse: ChangeBase) => void
+
+/** One recorded inverse: the reverse arrow of one authored op, at its path. */
+export interface InverseEntry {
+  readonly path: Path
+  readonly inverse: ChangeBase
+}
+
+/**
+ * What an authored batch did, as `afterBatch` receives it. `ops` are the
+ * authored ops (what `batch()` returns) and `inverses` their reverse arrows,
+ * both in the order they were made. An aborted batch has neither: its
+ * compensations have already undone it.
+ */
+export interface BatchOutcome {
+  readonly ops: readonly Op[]
+  readonly inverses: readonly InverseEntry[]
+  readonly aborted: boolean
+}
 
 // ---------------------------------------------------------------------------
 // SubstratePrepare — mutation primitives for the WritableContext
@@ -689,9 +714,10 @@ export interface SubstratePrepare {
    * version and log.
    *
    * For PlainSubstrate: mints the lineage on the first authored flush and
-   * logs the batch. For CRDT substrates: drains the coalescing buffer.
+   * logs the batch. For CRDT substrates: drains the coalescing buffer. A
+   * revertible substrate also builds the batch's undo record from `outcome`.
    */
-  afterBatch(): void
+  afterBatch(outcome: BatchOutcome): void
 
   /**
    * Optional transaction-boundary bracket for authored batches.
@@ -789,6 +815,84 @@ export interface Substrate<V extends Version = Version>
    * `tickInterval` milliseconds.
    */
   tick?(now: number): void
+
+  /** Undo support. Absent on substrates without undo (ephemeral). */
+  readonly revertible?: Revertible
+}
+
+// ---------------------------------------------------------------------------
+// Revertible — undo records for local commits
+// ---------------------------------------------------------------------------
+
+/** One local commit, as its substrate records it for undo. */
+export interface RevertibleCommit<R> {
+  readonly record: R
+  /** What the commit did, in Kyneta's terms: what undo grouping reads. */
+  readonly ops: readonly Op[]
+}
+
+/**
+ * Old identity → the identity a revert re-created in its place. Neither CRDT
+ * can undelete, so undoing a deletion inserts new items or containers; a
+ * remap lets older records follow them. The strings are the substrate's own
+ * (Yjs item ids, Loro container ids, plain log positions).
+ */
+export type Remap = ReadonlyMap<string, string>
+
+/** What reverting a record produced. */
+export interface Reverted<R> {
+  /** The record of the revert's own commit: reverting it redoes. */
+  readonly redo: R
+  readonly remap: Remap
+}
+
+/** A substrate's record type, encoded for storage. */
+export interface RecordCodec<R> {
+  encode(record: R): Uint8Array
+  decode(bytes: Uint8Array): R
+}
+
+/** The codec of a record that is plain JSON. */
+export function jsonRecordCodec<R>(): RecordCodec<R> {
+  return {
+    encode: record => new TextEncoder().encode(JSON.stringify(record)),
+    decode: bytes => JSON.parse(new TextDecoder().decode(bytes)) as R,
+  }
+}
+
+/**
+ * Undo, as one substrate provides it: a record of every local commit, and
+ * the operation that reverses one as it now stands.
+ *
+ * `revert` is its own inverse on records: the record it returns reverts the
+ * revert. So one operation serves undo and redo.
+ */
+export interface Revertible<R = unknown> {
+  /**
+   * Call `listener` after every local commit that has an effect. Never for a
+   * merge, an aborted batch, a commit with no effect, or `revert`'s own
+   * commit. Fires synchronously, before the commit's changeset is delivered
+   * or after it, depending on the substrate.
+   */
+  subscribeCommits(listener: (commit: RevertibleCommit<R>) => void): () => void
+  /**
+   * Reverse `record` as it now stands, as one local commit carrying
+   * `options`. Null when nothing of it still stands.
+   */
+  revert(record: R, options: CommitOptions): Reverted<R> | null
+  /**
+   * What `revert(record)` produced, for a revert this replica applied after
+   * `position` and a crash kept from recording. Nothing else authored in
+   * between, so what this replica authored since `position` is the revert.
+   */
+  recovered(record: R, position: Uint8Array): Reverted<R>
+  /** `record`, naming what `remap` re-created in place of what it named. */
+  rewrite(record: R, remap: Remap): R
+  /** This replica's own authoring position. */
+  position(): Uint8Array
+  /** Whether this replica has authored anything since `position`. */
+  authoredSince(position: Uint8Array): boolean
+  readonly codec: RecordCodec<R>
 }
 
 // ---------------------------------------------------------------------------
