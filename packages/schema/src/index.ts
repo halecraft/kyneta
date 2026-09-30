@@ -465,6 +465,8 @@ export type {
 } from "./ref.js"
 export type { ValueRestore } from "./restore.js"
 export { planValueRestores } from "./restore.js"
+export type { PartReverted, StepReverted } from "./revert-step.js"
+export { revertStep } from "./revert-step.js"
 export type {
   CounterSchema,
   DiscriminatedSumSchema,

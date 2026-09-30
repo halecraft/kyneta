@@ -13,6 +13,7 @@
 
 import { describe, expect, it } from "vitest"
 import { batch } from "../facade/batch.js"
+import { revertStep } from "../revert-step.js"
 import { Schema } from "../schema.js"
 import type {
   Remap,
@@ -115,28 +116,27 @@ class Stack {
 
   #move(from: unknown[][], to: unknown[][]): boolean {
     const revertible = revertibleOf(this.peer)
+    const rewrite = (record: unknown, _by: unknown, remap: Remap) =>
+      revertible.rewrite(record, remap)
     for (let parts = from.pop(); parts !== undefined; parts = from.pop()) {
-      // Last first. Each revert's remap reaches every record still waiting,
-      // in this step as in the others, before the next one reverts.
-      const waiting = [...parts]
-      const done: unknown[] = []
-      for (let record = waiting.pop(); record !== undefined; ) {
-        const result = revertible.revert(record, {})
-        if (result !== null) {
-          const remap: Remap = result.remap
-          const rewrite = (step: unknown[]) =>
-            step.map(r => revertible.rewrite(r, remap))
-          done.push(result.redo)
-          waiting.splice(0, waiting.length, ...rewrite(waiting))
-          done.splice(0, done.length, ...rewrite(done))
-          for (const list of [this.undos, this.redos]) {
-            list.splice(0, list.length, ...list.map(rewrite))
-          }
-        }
-        record = waiting.pop()
+      const { redo, remaps } = revertStep(
+        parts,
+        record => revertible.revert(record, {}),
+        rewrite,
+      )
+      for (const list of [this.undos, this.redos]) {
+        list.splice(
+          0,
+          list.length,
+          ...list.map(step =>
+            step.map(r =>
+              remaps.reduce((acc, { by, remap }) => rewrite(acc, by, remap), r),
+            ),
+          ),
+        )
       }
-      if (done.length > 0) {
-        to.push(done)
+      if (redo.length > 0) {
+        to.push([...redo])
         return true
       }
     }

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import { singleEdit, textChange } from "../change.js"
 import { RawPath } from "../path.js"
 import { planValueRestores } from "../restore.js"
+import { revertStep } from "../revert-step.js"
 import { continuesStep, type Edit, editOf } from "../typing.js"
 
 describe("singleEdit", () => {
@@ -121,5 +122,27 @@ describe("continuesStep", () => {
     ],
   ])("%s → %s", (_name, previous, next, expected) => {
     expect(continuesStep(previous, next)).toBe(expected)
+  })
+})
+
+describe("revertStep", () => {
+  it("reverts last first, and rewrites what waits and what is done through each remap", () => {
+    const order: string[] = []
+    const { redo, remaps } = revertStep(
+      ["a", "b", "c"],
+      part => {
+        order.push(part)
+        // "b" stands no more; "c" re-creates what "a" names.
+        if (part === "b") return null
+        return {
+          redo: `redo(${part})`,
+          remap: new Map(part === "c" ? [["a", "a'"]] : []),
+        }
+      },
+      (part, _by, remap) => remap.get(part) ?? part,
+    )
+    expect(order).toEqual(["c", "b", "a'"])
+    expect(redo).toEqual(["redo(c)", "redo(a')"])
+    expect(remaps.map(r => r.by)).toEqual(["c", "a'"])
   })
 })

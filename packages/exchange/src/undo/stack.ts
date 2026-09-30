@@ -19,6 +19,7 @@ import type {
   Remap,
   Revertible,
   RevertibleCommit,
+  StepReverted,
   Substrate,
   Version,
 } from "@kyneta/schema"
@@ -30,6 +31,7 @@ import {
   own,
   RawPath,
   replaceChange,
+  revertStep,
   samePlainValue,
   sequenceChange,
   TYPING_GAP,
@@ -378,44 +380,36 @@ export async function createUndoStack(
     step: Step,
     attempt: (part: Part, record: unknown) => ReturnType<Revertible["revert"]>,
   ): boolean => {
-    const waiting = [...step.parts]
-    const done: Part[] = []
-    const remaps: { docId: string; remap: Remap }[] = []
+    const rewrite = (part: Part, by: Part, remap: Remap) =>
+      rewritePart(part, by.docId, remap)
     reverting = true
+    let reverted: StepReverted<Part>
     try {
-      for (let part = waiting.pop(); part !== undefined; part = waiting.pop()) {
-        const revertible = revertibleOf(part.docId)
-        const record = revertible.codec.decode(base64ToUint8Array(part.record))
-        const result = attempt(part, record)
-        if (result === null) continue
-        done.push({
-          ...part,
-          record: uint8ArrayToBase64(revertible.codec.encode(result.redo)),
-        })
-        const { docId } = part
-        const { remap } = result
-        remaps.push({ docId, remap })
-        waiting.splice(
-          0,
-          waiting.length,
-          ...waiting.map(p => rewritePart(p, docId, remap)),
-        )
-        done.splice(
-          0,
-          done.length,
-          ...done.map(p => rewritePart(p, docId, remap)),
-        )
-      }
+      reverted = revertStep(
+        step.parts,
+        part => {
+          const revertible = revertibleOf(part.docId)
+          const record = revertible.codec.decode(
+            base64ToUint8Array(part.record),
+          )
+          const result = attempt(part, record)
+          if (result === null) return null
+          const redo = uint8ArrayToBase64(revertible.codec.encode(result.redo))
+          return { redo: { ...part, record: redo }, remap: result.remap }
+        },
+        rewrite,
+      )
     } finally {
       reverting = false
     }
-    const redo = done.length > 0 ? { id: step.id, parts: done } : undefined
+    const { remaps } = reverted
+    const redo =
+      reverted.redo.length > 0
+        ? { id: step.id, parts: [...reverted.redo] }
+        : undefined
     write(
       moveStep(read(), direction, step, redo, part =>
-        remaps.reduce(
-          (p, { docId, remap }) => rewritePart(p, docId, remap),
-          part,
-        ),
+        remaps.reduce((p, { by, remap }) => rewrite(p, by, remap), part),
       ),
     )
     return redo !== undefined

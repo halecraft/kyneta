@@ -1482,6 +1482,7 @@ interface Revertible<R> {
 - **`position` and `authoredSince`** let a stack finish a revert a crash interrupted: a replica that has authored anything since the position noted before the revert was reverted, by each CRDT's own causality. `recovered` rebuilds what the revert returned.
 - **Never recorded:** a merge, an aborted batch, a commit with no effect (a Yjs delete-clock tick), and `revert`'s own commit.
 - **A record that is plain JSON** encodes with `jsonRecordCodec()`; the Yjs and Loro records are.
+- **A step is undone by `revertStep`**: its parts last first, each revert's remap reaching every part still waiting and every redo part already made. The exchange's stack and `undoConformance`'s stack both use it, so the suite tests the algorithm that ships.
 
 ### Positions are rebased; values are compared
 
@@ -2308,6 +2309,7 @@ The worked example is `__countCachedReads` (`src/read-cache.ts`), a backdoor for
 | `src/substrates/plain-revertible.ts` | The plain substrate's undo: the strict stack. |
 | `src/substrates/op-codec.ts` | Ops as JSON-safe values, for the plain log and plain undo records. |
 | `src/rebase.ts` | `rebaseChange`: a positional change carried past another. |
+| `src/revert-step.ts` | `revertStep`: a step's parts reverted last first, remaps reaching the rest. |
 | `src/restore.ts` | `planValueRestores`: which values an undo may put back. |
 | `src/diff-sequence.ts` | `diffString`, `diffSequence`: the shortest edit between two sequences (Myers). |
 | `src/typing.ts` | `editOf`, `continuesStep`: when a keystroke joins the undo step before it. |
