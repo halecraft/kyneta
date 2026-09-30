@@ -1454,7 +1454,6 @@ For durability guarantees, use the `cohort` predicate to prevent compaction past
 | `src/synchronizer.ts` | Shell. Dispatch queue, registered-document map, effect interpreter, emit methods (`#emitPeerSyncChanges`, `#emitStateAdvanced`, `#emitDocEvents`, `#emitPeerEvents`), `declareVacant` / `hasReconciled` / `reconciledMatching` / `connectivity` / `awaitReconciliation`, transport + storage integration. |
 | `src/session-program.ts` | Pure session program: `SessionModel`, inputs, effects, `updateSession`, transition collapse. |
 | `src/sync-program.ts` | Pure sync program: `SyncModel`, `DocEntry`, inputs, effects, `updateSync`, per-message handlers. |
-| `src/program-types.ts` | Shared `Transition` and `collapse` helper for both programs. |
 | `src/governance.ts` | `Policy`, `GatePredicate`, `EpochBoundaryPredicate`, `Governance`, `composeGate`. |
 | `src/capabilities.ts` | `Capabilities`, `ReplicaKey`, `ReplicaEntry`, `DEFAULT_REPLICAS`, `createCapabilities`. |
 | `src/line.ts` | `Line`, `LineProtocol`, envelope schema, ack-based pruning. |

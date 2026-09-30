@@ -6,19 +6,10 @@
 // truth: the program keeps only what is not written yet (the open step) and
 // what is in flight.
 
+import type { Program } from "@kyneta/machine"
 import type { CommitOptions, Edit } from "@kyneta/schema"
 import { continuesStep } from "@kyneta/schema"
 import type { Direction, Note, Part, Request, Step } from "./schema.js"
-
-// ---------------------------------------------------------------------------
-// Program — local, matching @kyneta/machine's Program, as the store
-// program's is: the exchange does not depend on @kyneta/machine.
-// ---------------------------------------------------------------------------
-
-export type Program<Msg, Model, Fx> = {
-  init: [Model, ...Fx[]]
-  update(msg: Msg, model: Model): [Model, ...Fx[]]
-}
 
 /** How a commit reached the stack. */
 export type Via = "gesture" | "typing" | "follow"

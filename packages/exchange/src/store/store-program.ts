@@ -18,20 +18,9 @@
 //
 // Every transition is pure: new Map for each model, no mutation.
 
+import type { Program } from "@kyneta/machine"
 import type { DocId } from "@kyneta/transport"
 import type { WriterRefusedError } from "./seats.js"
-
-// ---------------------------------------------------------------------------
-// Program — local definition matching @kyneta/machine's Program type.
-// The exchange package does not depend on @kyneta/machine; defining the
-// type here keeps the dependency graph clean.
-// ---------------------------------------------------------------------------
-
-type Program<Msg, Model, Fx> = {
-  init: [Model, ...Fx[]]
-  update(msg: Msg, model: Model): [Model, ...Fx[]]
-  done?(model: Model): void
-}
 
 // ---------------------------------------------------------------------------
 // DocPhase — per-document lifecycle state
