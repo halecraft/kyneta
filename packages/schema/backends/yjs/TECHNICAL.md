@@ -437,7 +437,7 @@ Before announcing (`ctx.announce`), the bridge re-materializes the `PlainState` 
 
 ## Undo
 
-Source: `src/revertible.ts` (`createYjsRevertible`), wired in `src/substrate.ts`. The model is `packages/schema/TECHNICAL.md` § Undo; the measurements, `docs/findings/undo-probes.md`.
+Source: `src/undo/` — `record.ts` (the record, its rewrite and codec), `document.ts` (what is read of the `Y.Doc`), `capture.ts` (a transaction's draft), `plan.ts` (the pure revert planning) and `revertible.ts` (`createYjsRevertible`, the shell), wired in `src/substrate.ts`. The model is `packages/schema/TECHNICAL.md` § Undo; the measurements, `docs/findings/undo-probes.md`.
 
 A record names content by Yjs identity, which survives edits, merges, gc and a reload:
 
@@ -574,7 +574,11 @@ This is the same mechanism as the Loro backend, exercised with a narrower law se
 | `src/reader.ts` | `yjsReader` — reads via `resolveYjsType` + per-type extraction. |
 | `src/version.ts` | `YjsVersion`: the state vector, its lattice operations, serialisation. |
 | `src/position.ts` | `YjsPosition` (wraps `Y.RelativePosition`), `toYjsAssoc`. |
-| `src/revertible.ts` | Undo: records by Yjs identity, their revert, remap and rewrite. |
+| `src/undo/record.ts` | Undo records by Yjs identity: their shape, `rewriteYjsRecord`, the codec. |
+| `src/undo/document.ts` | What undo reads of a `Y.Doc`: ids at indices, where an id sits, a text's ids in order, stable paths. The Yjs surface `yjs-surface.test.ts` pins. |
+| `src/undo/capture.ts` | What a local transaction did: value, mark and list-deletion writes, a text's deletions and insertions. |
+| `src/undo/plan.ts` | A revert's decisions, pure: `planYjsRevert`, `composeEdits`, `remapOfLanded`. |
+| `src/undo/revertible.ts` | `createYjsRevertible`: drafts, gather, apply, settle. |
 | `src/__tests__/undo.test.ts` | The shared undo suite (`undoConformance`). |
 | `src/__tests__/yjs-surface.test.ts` | Every Yjs call undo depends on, pinned. |
 | `src/__tests__/revert-plan.test.ts` | `planYjsRevert`, `composeEdits` and `remapOfLanded` on hand-built gathered state, with no document. |

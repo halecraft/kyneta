@@ -20,7 +20,7 @@
 // - Per-transaction meta mark (`KYNETA_MARK`, one per substrate) inscribed
 //   from inside the transact body to ignore our own writes; survives Yjs's
 //   nested-transact collapse so external wrapping is handled correctly.
-// - Undo (`revertible`, from `./revertible.js`): `prepare`, `afterBatch` and
+// - Undo (`revertible`, from `./undo/revertible.js`): `prepare`, `afterBatch` and
 //   the bridge feed it what each local transaction did, the bridge before
 //   it re-materialises σ, so a direct write's inverse is read from the state
 //   before it.
@@ -87,7 +87,7 @@ import { applyChangeToYjs, eventsToOps } from "./change-mapping.js"
 import { materializeYjsShadow } from "./materialize.js"
 import { ensureContainers } from "./populate.js"
 import { toYjsAssoc, YjsPosition } from "./position.js"
-import { createYjsRevertible } from "./revertible.js"
+import { createYjsRevertible } from "./undo/revertible.js"
 import { YjsVersion } from "./version.js"
 import { resolveYjsType } from "./yjs-resolve.js"
 

@@ -1,6 +1,6 @@
 // yjs-surface.test — every Yjs call undo depends on, pinned.
 //
-// Undo (`src/revertible.ts`) is built on Yjs's public API alone, so that a
+// Undo (`src/undo/`) is built on Yjs's public API alone, so that a
 // Yjs upgrade cannot break it silently. Each case here exercises one call
 // the way undo uses it; an upgrade that changes one fails here first. Each
 // runs with gc on, and across a reload where undo relies on that.

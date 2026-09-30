@@ -11,13 +11,12 @@ import {
 import { describe, expect, it } from "vitest"
 import {
   composeEdits,
-  type DeletedRun,
   type GatheredContainer,
   planYjsRevert,
   remapOfLanded,
   type YjsGathered,
-  type YjsRecord,
-} from "../revertible.js"
+} from "../undo/plan.js"
+import type { DeletedRun, YjsRecord } from "../undo/record.js"
 
 const title = RawPath.empty.field("title")
 const container = (length: number, marks: Record<string, unknown>[] = []) =>
