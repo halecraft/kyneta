@@ -453,7 +453,7 @@ A container inside a list is addressed by a `StablePath`: its Kyneta path with e
 - **Capture has two routes, one builder.** A Kyneta batch is gathered in `prepare` (the σ before each op, the ids of doomed list items, the clocks around each insert), a direct write in the event bridge before `syncShadow` (σ still holds the state before it). Both end in `afterTransaction`, which emits the record unless the batch aborted or it has no effect. Text deletions come from the same place for both: `toDelta` over the snapshot before the transaction and now (`computeYChange` names each removed item, in document order), read before gc.
 - **Deleted rich text takes its marks from σ before the transaction.** Yjs renders deleted text without its formatting.
 - **Marks are undone by state, never by deleting format items.** Yjs's own manager deletes the format items it inserted, and a peer's closing boundary then re-bolds text that was never bold (finding 18).
-- **A revert is an authored batch**, dispatched inside out (a change inside a list item before the list moves), carrying the caller's `origin` and `source`. Its own record is the redo.
+- **A revert gathers, plans, applies, settles.** `gather` reads what the record names as the document holds it now (`YjsGathered`: containers and their lengths, where each live id sits, whether a deleted run is back, what each value holds). `planYjsRevert(record, gathered)` decides purely: which inserts to delete, which runs to restore where, which marks and values still hold what was written. The plan applies as one authored batch, dispatched inside out (a change inside a list item before the list moves), carrying the caller's `origin` and `source`; its own record is the redo. `remapOfLanded` pairs, purely, the ids each restored run landed with.
 - **Remap.** A restored run's new ids are read back at the indices it landed on, and paired with its old ones in order; texts inside a restored list item pair the same way. `rewrite` substitutes them in every older record.
 - **`position`** is `{ clientID, clock }`. The delete clock makes even a delete-only revert advance it, so `authoredSince` sees every revert.
 - **Only public API.** `src/__tests__/yjs-surface.test.ts` pins every Yjs call the module makes: relative positions, `isDeleted` over `snapshot`, `getState`, the transaction's fields, `YEvent.changes`, and `toDelta` over snapshots.
@@ -577,7 +577,7 @@ This is the same mechanism as the Loro backend, exercised with a narrower law se
 | `src/revertible.ts` | Undo: records by Yjs identity, their revert, remap and rewrite. |
 | `src/__tests__/undo.test.ts` | The shared undo suite (`undoConformance`). |
 | `src/__tests__/yjs-surface.test.ts` | Every Yjs call undo depends on, pinned. |
-| `src/__tests__/compose-edits.test.ts` | `composeEdits`, the pure planning of a revert's positional edits. |
+| `src/__tests__/revert-plan.test.ts` | `planYjsRevert`, `composeEdits` and `remapOfLanded` on hand-built gathered state, with no document. |
 | `src/native-map.ts` | `YjsNativeMap` type-level functor. |
 | `src/__tests__/create.test.ts` | End-to-end: `createDoc(yjs.bind(schema))` → read/write round-trips. |
 | `src/__tests__/substrate.test.ts` | Substrate contract conformance (subset of the `@kyneta/schema` suite). |

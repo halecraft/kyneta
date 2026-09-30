@@ -265,6 +265,152 @@ function isTreeDiff(diff: unknown): diff is TreeDiff {
 }
 
 // ---------------------------------------------------------------------------
+// Revert planning, pure over what was gathered
+// ---------------------------------------------------------------------------
+
+/** A tree node a revert moves, deletes or re-creates, now and at `after`. */
+export interface GatheredNode {
+  /** Whether the node, under its current id, is there and not deleted. */
+  readonly live: boolean
+  readonly parent: TreeID | undefined
+  /** Its parent at `after`, under its id then. */
+  readonly placed: TreeID | undefined
+}
+
+/** What a container's revert decides by. */
+export type GatheredState =
+  /** The container is gone now. */
+  | { readonly kind: "gone" }
+  /** It was not there at `after`. */
+  | { readonly kind: "unknown" }
+  | { readonly kind: "text"; readonly was: string; readonly now: string }
+  | {
+      readonly kind: "list"
+      readonly was: readonly unknown[]
+      readonly now: readonly unknown[]
+    }
+  | {
+      readonly kind: "map"
+      /** The keys the inverse touches, at `after` and now. */
+      readonly was: Readonly<Record<string, unknown>>
+      readonly now: Readonly<Record<string, unknown>>
+    }
+  | {
+      readonly kind: "tree"
+      readonly nodes: Readonly<Record<string, GatheredNode>>
+    }
+  | { readonly kind: "other" }
+
+/** One container of a record's inverse, with what was gathered of it. */
+export interface LoroGathered {
+  /** The container as the inverse names it. */
+  readonly cid: ContainerID
+  /** Where it lives now, through the record's aliases. */
+  readonly to: ContainerID
+  readonly diff: Diff
+  readonly state: GatheredState
+}
+
+/** The diffs that revert a record, decided from what was gathered of each
+ *  container. Null when nothing of the record still stands. */
+export function planLoroRevert(
+  aliases: readonly Alias[],
+  gathered: readonly LoroGathered[],
+): [ContainerID, unknown][] | null {
+  const group: [ContainerID, unknown][] = []
+  const alias = <I extends string>(id: I | undefined) =>
+    id === undefined ? undefined : aliasOf(id, aliases)
+
+  for (const { to, diff, state } of gathered) {
+    // Gone: either re-created by a restore in this same group, which
+    // `applyDiff` fills from these diffs, or gone for good, which a diff to
+    // it leaves as it is.
+    if (state.kind === "gone") {
+      group.push([to, diff])
+      continue
+    }
+    if (state.kind === "unknown") continue
+
+    if (diff.type === "text" && state.kind === "text") {
+      // Built here, of plain retain/insert/delete instructions.
+      const over = richTextChange(
+        diffString(state.was, state.now) as OwnedRichTextInstruction[],
+      )
+      const change = rebaseChange(textToChange(diff.diff), over)
+      const text = change === null ? [] : changeToText(change)
+      if (text.length > 0) group.push([to, { type: "text", diff: text }])
+      continue
+    }
+
+    if (diff.type === "list" && state.kind === "list") {
+      const over = sequenceChange(
+        trustAsOwned(
+          diffSequence(state.was, state.now, samePlainValue),
+        ) as SequenceInstruction<Owned<unknown>>[],
+      )
+      const change = rebaseChange(listToChange(diff.diff), over)
+      const list = change === null ? [] : changeToList(change)
+      if (list.length > 0) group.push([to, { type: "list", diff: list }])
+      continue
+    }
+
+    if (diff.type === "map" && state.kind === "map") {
+      const kept = planValueRestores(
+        Object.entries(diff.updated).map(([key, previous]) => ({
+          key,
+          wrote: state.was[key],
+          previous,
+          current: state.now[key],
+        })),
+      )
+      if (kept.length === 0) continue
+      group.push([
+        to,
+        {
+          type: "map",
+          updated: Object.fromEntries(kept.map(p => [p.key, p.previous])),
+        },
+      ])
+      continue
+    }
+
+    if (diff.type === "tree" && state.kind === "tree") {
+      const items: TreeDiffItem[] = []
+      for (const item of diff.diff) {
+        const node = state.nodes[item.target]
+        const target = aliasOf(item.target, aliases)
+        if (item.action === "create") {
+          if (node === undefined || !node.live) {
+            items.push({ ...item, target, parent: alias(item.parent) })
+          }
+          continue
+        }
+        if (node === undefined || !node.live) continue
+        if (item.action === "delete") {
+          items.push({ ...item, target, oldParent: alias(item.oldParent) })
+          continue
+        }
+        // A node someone moved since stays where they put it.
+        if (node.parent !== alias(node.placed)) continue
+        items.push({
+          ...item,
+          target,
+          parent: alias(item.parent),
+          oldParent: alias(item.oldParent),
+        })
+      }
+      if (items.length > 0) group.push([to, { type: "tree", diff: items }])
+      continue
+    }
+
+    // A counter commutes: its inverse always applies.
+    group.push([to, diff])
+  }
+
+  return group.length === 0 ? null : group
+}
+
+// ---------------------------------------------------------------------------
 // Codec and position
 // ---------------------------------------------------------------------------
 
@@ -324,130 +470,79 @@ export function createLoroRevertible(host: LoroRevertibleHost): LoroRevertible {
     return deleted ? undefined : container
   }
 
-  interface Plan {
-    readonly group: [ContainerID, unknown][]
-    readonly restores: Restore[]
-  }
-
   /**
-   * Gather what `record` concerns, at `after` and now, and decide the
-   * revert. Null when nothing of it still stands, or `diff` cannot reach it.
+   * Read what `record` concerns, at `after` and now. Null when `diff`
+   * cannot reach it: behind a shallow snapshot's start.
    */
-  function planRevert(record: LoroRecord): Plan | null {
+  function gather(record: LoroRecord): LoroGathered[] | null {
     let inverse: [ContainerID, Diff][]
     let then: LoroDoc
     try {
       inverse = doc.diff([...record.after], [...record.before], false)
       then = doc.forkAt([...record.after])
     } catch {
-      // Behind a shallow snapshot's start.
       return null
     }
-    const group: [ContainerID, unknown][] = []
-
-    for (const [cid, diff] of inverse) {
+    return inverse.map(([cid, diff]) => {
       const to = aliasOf(cid, record.aliases)
       const now = containerIn(doc, to)
       const was = then.getContainerById(cid)
-      if (now === undefined) {
-        // Gone: either re-created by a restore in this same group, which
-        // `applyDiff` fills from these diffs, or gone for good, which a diff
-        // to it leaves as it is.
-        group.push([to, diff])
-        continue
-      }
-      if (was === undefined) continue
+      return { cid, to, diff, state: stateOf(diff, was, now, record.aliases) }
+    })
+  }
 
-      if (diff.type === "text") {
-        const since = diffString(
-          (was as unknown as { toString(): string }).toString(),
-          (now as unknown as { toString(): string }).toString(),
-        )
-        // Built here, of plain retain/insert/delete instructions.
-        const over = richTextChange(since as OwnedRichTextInstruction[])
-        const change = rebaseChange(textToChange(diff.diff), over)
-        const text = change === null ? [] : changeToText(change)
-        if (text.length > 0) group.push([to, { type: "text", diff: text }])
-        continue
-      }
-
-      if (diff.type === "list") {
+  /** What a revert of `diff` decides by, read from the container at
+   *  `after` (`was`) and now. */
+  function stateOf(
+    diff: Diff,
+    was: Container | undefined,
+    now: Container | undefined,
+    aliases: readonly Alias[],
+  ): GatheredState {
+    if (now === undefined) return { kind: "gone" }
+    if (was === undefined) return { kind: "unknown" }
+    switch (diff.type) {
+      case "text":
+        return {
+          kind: "text",
+          was: (was as unknown as { toString(): string }).toString(),
+          now: (now as unknown as { toString(): string }).toString(),
+        }
+      case "list": {
         const items = (list: Container) =>
           ((list as unknown as { toArray(): unknown[] }).toArray() ?? []).map(
             plain,
           )
-        const over = sequenceChange(
-          trustAsOwned(
-            diffSequence(items(was), items(now), samePlainValue),
-          ) as SequenceInstruction<Owned<unknown>>[],
-        )
-        const change = rebaseChange(listToChange(diff.diff), over)
-        const list = change === null ? [] : changeToList(change)
-        if (list.length > 0) group.push([to, { type: "list", diff: list }])
-        continue
+        return { kind: "list", was: items(was), now: items(now) }
       }
-
-      if (diff.type === "map") {
+      case "map": {
         const get = (map: Container, key: string) =>
           plain((map as unknown as { get(key: string): unknown }).get(key))
-        const kept = planValueRestores(
-          Object.entries(diff.updated).map(([key, previous]) => ({
-            key,
-            wrote: get(was, key),
-            previous,
-            current: get(now, key),
-          })),
-        )
-        if (kept.length === 0) continue
-        group.push([
-          to,
-          {
-            type: "map",
-            updated: Object.fromEntries(kept.map(p => [p.key, p.previous])),
-          },
-        ])
-        continue
+        const keys = Object.keys(diff.updated)
+        return {
+          kind: "map",
+          was: Object.fromEntries(keys.map(k => [k, get(was, k)])),
+          now: Object.fromEntries(keys.map(k => [k, get(now, k)])),
+        }
       }
-
-      if (diff.type === "tree") {
+      case "tree": {
         const nowTree = now as unknown as TreeLike
         const thenTree = was as unknown as TreeLike
-        const alias = <I extends string>(id: I | undefined) =>
-          id === undefined ? undefined : aliasOf(id, record.aliases)
-        const items: TreeDiffItem[] = []
+        const nodes: Record<string, GatheredNode> = {}
         for (const item of diff.diff) {
           // A node an earlier revert re-created answers to its new id.
-          const target = aliasOf(item.target, record.aliases)
-          const node = nowTree.getNodeByID(target)
-          if (item.action === "create") {
-            if (node === undefined || node.isDeleted()) {
-              items.push({ ...item, target, parent: alias(item.parent) })
-            }
-            continue
+          const node = nowTree.getNodeByID(aliasOf(item.target, aliases))
+          nodes[item.target] = {
+            live: node !== undefined && !node.isDeleted(),
+            parent: node?.parent()?.id,
+            placed: thenTree.getNodeByID(item.target)?.parent()?.id,
           }
-          if (node === undefined || node.isDeleted()) continue
-          if (item.action === "delete") {
-            items.push({ ...item, target, oldParent: alias(item.oldParent) })
-            continue
-          }
-          const placed = alias(thenTree.getNodeByID(item.target)?.parent()?.id)
-          if (node.parent()?.id !== placed) continue
-          items.push({
-            ...item,
-            target,
-            parent: alias(item.parent),
-            oldParent: alias(item.oldParent),
-          })
         }
-        if (items.length > 0) group.push([to, { type: "tree", diff: items }])
-        continue
+        return { kind: "tree", nodes }
       }
-
-      // A counter commutes: its inverse always applies.
-      group.push([to, diff])
+      default:
+        return { kind: "other" }
     }
-
-    return group.length === 0 ? null : { group, restores: restoresOf(group) }
   }
 
   /** Pair each restored container, and those inside it, with its new id. */
@@ -527,14 +622,16 @@ export function createLoroRevertible(host: LoroRevertibleHost): LoroRevertible {
     },
 
     revert(record, options) {
-      const plan = planRevert(record)
-      if (plan === null) return null
+      const gathered = gather(record)
+      const group =
+        gathered === null ? null : planLoroRevert(record.aliases, gathered)
+      if (group === null) return null
       reverting = { record: null }
       try {
-        host.commitNative(() => applyDiffGroup(doc, plan.group), options)
+        host.commitNative(() => applyDiffGroup(doc, group), options)
         const redo = reverting.record
         if (redo === null) return null
-        return { redo, remap: remapOf(plan.restores) }
+        return { redo, remap: remapOf(restoresOf(group)) }
       } finally {
         reverting = undefined
       }

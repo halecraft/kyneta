@@ -447,6 +447,8 @@ A record is one local commit's frontiers, taken from the pre-commit hook: the do
 - **A counter** always reverts.
 - **A container no longer there** takes its inverse as it is: `applyDiff` fills a container the same group re-creates, and leaves one gone for good alone.
 
+The revert gathers, then plans. `gather` reads each container of the inverse at `after` and now (`LoroGathered`: its text, its items, the values of the keys the inverse touches, each tree node's liveness and parents); `planLoroRevert(aliases, gathered)` decides the diffs purely, and is tested with no document (`src/__tests__/revert-plan.test.ts`).
+
 The revert is applied with `applyDiff` in one commit, inside `commitNative`, which carries the caller's `origin` and `source` to the event bridge's local announcement (`AnnounceOptions.source`). It is not written through `changeToDiff`: that filters out the `create` which restores a deleted tree node (see [Tree write path](#tree-write-path)).
 
 - **Remap.** Restoring a deleted container re-creates it with a new id, and so does restoring a deleted tree node, whose data map is a container of its own. A restored value is walked at the place it landed and paired with the old containers the inverse named; a restored node is the one now at the parent and index its `create` named, and its data map pairs with the old node's. `rewrite` adds an alias (`{ from, to }`, a container id or a tree id) to every older record, and its diffs, tree moves included, are aimed at the new container or node.
@@ -566,6 +568,7 @@ The low 53 bits of the `PeerID` are the same peer id's Yjs `clientID` (`yjsClien
 | `src/version.ts` | `LoroVersion` (wraps `VersionVector`). |
 | `src/position.ts` | `LoroPosition` (wraps `Cursor`), `fromLoroSide`, `toLoroSide`. |
 | `src/revertible.ts` | Undo: records as frontiers, their revert from history, remap as aliases. |
+| `src/__tests__/revert-plan.test.ts` | `planLoroRevert` on hand-built gathered state, with no document. |
 | `src/__tests__/undo.test.ts` | The shared undo suite (`undoConformance`), a record older than a shallow snapshot, and a tree node renamed, moved and deleted, undone back to where it was. |
 | `src/native-map.ts` | `LoroNativeMap` type-level functor. |
 | `src/__tests__/create.test.ts` | End-to-end: `createDoc(loro.bind(schema))` → read/write round-trips. |

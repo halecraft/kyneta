@@ -821,6 +821,210 @@ export function composeEdits(
 }
 
 // ---------------------------------------------------------------------------
+// Revert planning, pure over what was gathered
+// ---------------------------------------------------------------------------
+
+/** A container a record touches, as it is now. */
+export interface GatheredContainer {
+  readonly path: RawPath
+  readonly kind: string
+  readonly length: number
+  /** Each character's marks, for a rich text. */
+  readonly marks: readonly Record<string, unknown>[]
+}
+
+/**
+ * What a record names, as the document holds it now: everything a revert
+ * decides by. Containers are named by their path's key; `null` is one that
+ * is gone.
+ */
+export interface YjsGathered {
+  readonly containers: ReadonlyMap<string, GatheredContainer>
+  /** Per inserted run: where the ids still alive in its container sit. */
+  readonly inserted: readonly {
+    readonly container: string | null
+    readonly indices: readonly number[]
+  }[]
+  /** Per deleted run: whether any of its ids is alive again, and where its
+   *  anchor resolves. */
+  readonly deleted: readonly {
+    readonly container: string | null
+    readonly back: boolean
+    readonly gap: number | null
+  }[]
+  /** Per mark: where the characters still alive in its container sit. */
+  readonly marks: readonly {
+    readonly container: string | null
+    readonly indices: readonly number[]
+  }[]
+  /** Per value: where it is now, and what it holds. */
+  readonly values: readonly {
+    readonly path: RawPath | null
+    readonly current: Slot
+  }[]
+}
+
+export interface YjsPlan {
+  /** The revert's changes, a change inside a list item before the list. */
+  readonly ops: readonly { path: RawPath; change: ChangeBase }[]
+  /** Each restored run, and where in its container it starts. */
+  readonly placed: readonly {
+    readonly container: RawPath
+    readonly run: DeletedRun
+    readonly at: number
+  }[]
+}
+
+/** The revert of `record`, decided from what `gathered` says of it. Null
+ *  when nothing of it still stands. */
+export function planYjsRevert(
+  record: YjsRecord,
+  gathered: YjsGathered,
+): YjsPlan | null {
+  const edits = new Map<string, Edit[]>()
+  const editsAt = (key: string) => {
+    let list = edits.get(key)
+    if (list === undefined) {
+      list = []
+      edits.set(key, list)
+    }
+    return list
+  }
+
+  // My inserts that are still there.
+  for (const { container, indices } of gathered.inserted) {
+    if (container === null) continue
+    for (const index of indices)
+      editsAt(container).push({ kind: "delete", index })
+  }
+
+  // What I deleted, unless it is already back.
+  record.deleted.forEach((run, i) => {
+    const at = gathered.deleted[i]
+    if (at === undefined || at.container === null || at.back || at.gap === null)
+      return
+    editsAt(at.container).push({
+      kind: "insert",
+      gap: at.gap,
+      content: run.content,
+      restores: run,
+    })
+  })
+
+  // Marks that still hold what I set.
+  record.marks.forEach((mark, i) => {
+    const at = gathered.marks[i]
+    if (at === undefined || at.container === null) return
+    const container = gathered.containers.get(at.container)
+    if (container === undefined) return
+    for (const index of at.indices) {
+      const marks = container.marks[index] ?? {}
+      const held = Object.hasOwn(marks, mark.key) ? marks[mark.key] : null
+      const kept = planValueRestores([
+        {
+          key: index,
+          wrote: mark.wrote,
+          previous: mark.previous,
+          current: held,
+        },
+      ])
+      if (kept.length === 0) continue
+      editsAt(at.container).push({
+        kind: "format",
+        index,
+        key: mark.key,
+        value: mark.previous,
+      })
+    }
+  })
+
+  const ops: { path: RawPath; change: ChangeBase }[] = []
+  const placed: { container: RawPath; run: DeletedRun; at: number }[] = []
+
+  // Values that still hold what I wrote.
+  record.values.forEach((write, i) => {
+    const at = gathered.values[i]
+    if (at === undefined || at.path === null) return
+    const kept = planValueRestores([
+      {
+        key: at.path,
+        wrote: write.wrote === null ? ABSENT : write.wrote.value,
+        previous: write.previous,
+        current: at.current === null ? ABSENT : at.current.value,
+      },
+    ])
+    if (kept.length > 0) ops.push(restoreValue(at.path, write.previous))
+  })
+
+  for (const [key, list] of edits) {
+    const container = gathered.containers.get(key)
+    if (container === undefined) continue
+    const composed = composeEdits(container.kind, container.length, list)
+    ops.push({ path: container.path, change: composed.change })
+    for (const p of composed.placed) {
+      placed.push({ container: container.path, ...p })
+    }
+  }
+
+  if (ops.length === 0) return null
+  // Inside out: a change inside a list item applies before the list moves.
+  ops.sort((a, b) => b.path.length - a.path.length)
+  return { ops, placed }
+}
+
+/** A restored run, and the ids it now has: its own, and each nested
+ *  text's. */
+export interface Landed {
+  readonly run: DeletedRun
+  readonly fresh: readonly Id[]
+  readonly nested: readonly {
+    readonly nested: NestedIds
+    readonly ids: readonly IdRun[]
+  }[]
+}
+
+/** The remap of a revert: each restored run's old ids paired, in order,
+ *  with the ids it landed with, where the counts agree. */
+export function remapOfLanded(landed: readonly Landed[]): Remap {
+  const remap = new Map<string, string>()
+  const pairAll = (old: readonly Id[], fresh: readonly Id[]) => {
+    if (old.length !== fresh.length) return
+    old.forEach((id, k) => {
+      const to = fresh[k]
+      if (to !== undefined) remap.set(idKey(id), idKey(to))
+    })
+  }
+  for (const { run, fresh, nested } of landed) {
+    pairAll([...unitsOf(run.ids)], fresh)
+    for (const n of nested) {
+      pairAll([...unitsOf(n.nested.ids)], [...unitsOf(n.ids)])
+    }
+  }
+  return remap
+}
+
+/** The change that puts `previous` back at `path`: a map key removed or set,
+ *  or a field replaced. */
+function restoreValue(
+  path: RawPath,
+  previous: Slot,
+): { path: RawPath; change: ChangeBase } {
+  const last = path.segments.at(-1)
+  if (last !== undefined && last.role === "entry") {
+    const parent = path.slice(0, path.segments.length - 1) as RawPath
+    const key = last.resolve() as string
+    // A value this revert read from its own record.
+    return previous === null
+      ? { path: parent, change: mapChange(undefined, [key]) }
+      : {
+          path: parent,
+          change: mapChange(trustAsOwned({ [key]: own(previous.value) })),
+        }
+  }
+  return { path, change: replaceChange(own(previous?.value)) }
+}
+
+// ---------------------------------------------------------------------------
 // Codec
 // ---------------------------------------------------------------------------
 
@@ -1115,7 +1319,7 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
     },
 
     revert(record, options) {
-      const plan = planRevert(record)
+      const plan = planYjsRevert(record, gather(record))
       if (plan === null) return null
       const ctx = host.context()
       reverting = { record: null }
@@ -1124,7 +1328,7 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
           for (const { path, change } of plan.ops) ctx.dispatch(path, change)
         }, options)
         const redo = reverting.record ?? EMPTY
-        return { redo, remap: remapOf(plan) }
+        return { redo, remap: remapOfLanded(landed(plan)) }
       } finally {
         reverting = undefined
       }
@@ -1203,178 +1407,108 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
     }
   }
 
-  interface Plan {
-    readonly ops: readonly { path: RawPath; change: ChangeBase }[]
-    readonly placed: readonly {
-      container: RawPath
-      run: DeletedRun
-      at: number
-    }[]
-  }
-
-  /** Gather what the record names as it stands, and decide the revert. */
-  function planRevert(record: YjsRecord): Plan | null {
+  /** Read what `record` names as the document holds it now. */
+  function gather(record: YjsRecord): YjsGathered {
     const deletedNow = Y.snapshot(doc).ds
     const alive = (id: Id) =>
       !Y.isDeleted(deletedNow, Y.createID(id.client, id.clock))
-    const byContainer = new Map<
-      string,
-      { path: RawPath; kind: string; edits: Edit[] }
-    >()
-    const editsAt = (path: RawPath) => {
-      const key = path.key
-      let entry = byContainer.get(key)
-      if (entry === undefined) {
-        entry = { path, kind: kindAt(tree, path), edits: [] }
-        byContainer.set(key, entry)
-      }
-      return entry.edits
-    }
-
-    // My inserts that are still there.
-    for (const run of record.inserted) {
-      const path = destabilize(tree, run.container, deletedNow)
-      if (path === null) continue
-      const container = typeAt(tree, path)
-      for (const id of unitsOf(run.ids)) {
-        if (!alive(id)) continue
-        const at = locate(doc, id)
-        if (at === null || at.type !== container) continue
-        editsAt(path).push({ kind: "delete", index: at.index })
-      }
-    }
-
-    // What I deleted, unless it is already back.
-    for (const run of record.deleted) {
-      if ([...unitsOf(run.ids)].some(alive)) continue
-      const path = destabilize(tree, run.container, deletedNow)
-      if (path === null || run.anchor === null) continue
-      const gap = resolveAnchor(doc, run.anchor)
-      if (gap === null) continue
-      editsAt(path).push({
-        kind: "insert",
-        gap,
-        content: run.content,
-        restores: run,
-      })
-    }
-
-    // Marks that still hold what I set.
-    for (const mark of record.marks) {
-      const path = destabilize(tree, mark.container, deletedNow)
-      if (path === null) continue
-      const container = typeAt(tree, path)
-      const spans = (path.read(host.shadow) ?? []) as RichTextSpan[]
-      const current = charMarks(spans)
-      for (const id of unitsOf(mark.ids)) {
-        if (!alive(id)) continue
-        const at = locate(doc, id)
-        if (at === null || at.type !== container) continue
-        const i = at.index
-        const marks = current[i] ?? {}
-        const held = Object.hasOwn(marks, mark.key) ? marks[mark.key] : null
-        if (
-          planValueRestores([
-            {
-              key: i,
-              wrote: mark.wrote,
-              previous: mark.previous,
-              current: held,
-            },
-          ]).length === 0
-        )
-          continue
-        editsAt(path).push({
-          kind: "format",
-          index: i,
-          key: mark.key,
-          value: mark.previous,
+    const containers = new Map<string, GatheredContainer>()
+    /** A container's key, noting its kind and length, or null if gone. */
+    const container = (stable: StablePath): string | null => {
+      const path = destabilize(tree, stable, deletedNow)
+      if (path === null) return null
+      if (!containers.has(path.key)) {
+        const kind = kindAt(tree, path)
+        const current = path.read(host.shadow)
+        const length =
+          kind === "text"
+            ? String(current ?? "").length
+            : kind === "richtext"
+              ? ((current ?? []) as RichTextSpan[]).reduce(
+                  (n, span) => n + span.text.length,
+                  0,
+                )
+              : ((current ?? []) as unknown[]).length
+        const spans = kind === "richtext" ? (current as RichTextSpan[]) : []
+        containers.set(path.key, {
+          path,
+          kind,
+          length,
+          marks: charMarks(spans ?? []),
         })
       }
+      return path.key
     }
-
-    const ops: { path: RawPath; change: ChangeBase }[] = []
-    const placed: { container: RawPath; run: DeletedRun; at: number }[] = []
-
-    // Values that still hold what I wrote.
-    for (const write of record.values) {
-      const path = destabilize(tree, write.path, deletedNow)
-      if (path === null) continue
-      const current = readSlot(path)
-      const kept = planValueRestores([
-        {
-          key: path,
-          wrote: write.wrote === null ? ABSENT : write.wrote.value,
-          previous: write.previous,
-          current: current === null ? ABSENT : current.value,
-        },
-      ])
-      if (kept.length === 0) continue
-      ops.push(restoreValue(path, write.previous))
+    /** Where each id still alive in the container sits. */
+    const indices = (key: string | null, ids: readonly IdRun[]) => {
+      const at = key === null ? undefined : containers.get(key)
+      if (at === undefined) return []
+      const type = typeAt(tree, at.path)
+      const out: { id: Id; index: number }[] = []
+      for (const id of unitsOf(ids)) {
+        if (!alive(id)) continue
+        const where = locate(doc, id)
+        if (where !== null && where.type === type) {
+          out.push({ id, index: where.index })
+        }
+      }
+      return out
     }
-
-    for (const { path, kind, edits } of byContainer.values()) {
-      const current = path.read(host.shadow)
-      const length =
-        kind === "text"
-          ? String(current ?? "").length
-          : kind === "richtext"
-            ? ((current ?? []) as RichTextSpan[]).reduce(
-                (n, s) => n + s.text.length,
-                0,
-              )
-            : ((current ?? []) as unknown[]).length
-      const composed = composeEdits(kind, length, edits)
-      ops.push({ path, change: composed.change })
-      for (const p of composed.placed) placed.push({ container: path, ...p })
+    return {
+      containers,
+      inserted: record.inserted.map(run => {
+        const key = container(run.container)
+        return {
+          container: key,
+          indices: indices(key, run.ids).map(u => u.index),
+        }
+      }),
+      deleted: record.deleted.map(run => ({
+        container: container(run.container),
+        back: [...unitsOf(run.ids)].some(alive),
+        gap: run.anchor === null ? null : resolveAnchor(doc, run.anchor),
+      })),
+      marks: record.marks.map(mark => {
+        const key = container(mark.container)
+        return {
+          container: key,
+          indices: indices(key, mark.ids).map(u => u.index),
+        }
+      }),
+      values: record.values.map(write => {
+        const path = destabilize(tree, write.path, deletedNow)
+        return { path, current: path === null ? null : readSlot(path) }
+      }),
     }
-
-    if (ops.length === 0) return null
-    // Inside out: a change inside a list item applies before the list moves.
-    ops.sort((a, b) => b.path.length - a.path.length)
-    return { ops, placed }
   }
 
-  /** The ids the revert gave what it restored, paired with the old ones. */
-  function remapOf(plan: Plan): Remap {
-    const remap = new Map<string, string>()
-    for (const { container, run, at } of plan.placed) {
+  /** What the revert gave each run it restored, read where it landed. */
+  function landed(plan: YjsPlan): Landed[] {
+    return plan.placed.map(({ container, run, at }) => {
       const type = typeAt(tree, container)
-      if (!(type instanceof Y.Text) && !(type instanceof Y.Array)) continue
-      const old = [...unitsOf(run.ids)]
-      const length = contentLength(run.content)
       const fresh: Id[] = []
-      for (let k = 0; k < length; k++) {
-        const id = idAt(type, at + k)
-        if (id !== null) fresh.push(id)
+      if (type instanceof Y.Text || type instanceof Y.Array) {
+        for (let k = 0; k < contentLength(run.content); k++) {
+          const id = idAt(type, at + k)
+          if (id !== null) fresh.push(id)
+        }
       }
-      if (old.length === fresh.length) {
-        old.forEach((id, k) => {
-          remap.set(idKey(id), idKey(fresh[k] as Id))
-        })
-      }
-      // Texts inside restored list items.
-      if (!(type instanceof Y.Array)) continue
-      const itemSchema = itemOf(
-        pathSchema(tree.schema, container, tree.binding),
-      )
-      if (itemSchema === undefined) continue
-      for (const nested of run.nested) {
-        const now = nestedTexts(
-          tree,
-          container.item(at + nested.item),
-          itemSchema,
-        ).find(t => JSON.stringify(t.path) === JSON.stringify(nested.path))
-        if (now === undefined) continue
-        const before = [...unitsOf(nested.ids)]
-        const after = [...unitsOf(now.ids)]
-        if (before.length !== after.length) continue
-        before.forEach((id, k) => {
-          remap.set(idKey(id), idKey(after[k] as Id))
-        })
-      }
-    }
-    return remap
+      const itemSchema =
+        type instanceof Y.Array
+          ? itemOf(pathSchema(tree.schema, container, tree.binding))
+          : undefined
+      const nested =
+        itemSchema === undefined
+          ? []
+          : run.nested.map(n => ({
+              nested: n,
+              ids:
+                nestedTexts(tree, container.item(at + n.item), itemSchema).find(
+                  t => JSON.stringify(t.path) === JSON.stringify(n.path),
+                )?.ids ?? [],
+            }))
+      return { run, fresh, nested }
+    })
   }
 
   function readSlot(path: Path): Slot {
@@ -1387,25 +1521,6 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
     return Object.hasOwn(parent as object, key as string)
       ? { value: (parent as Record<string, unknown>)[key as string] }
       : null
-  }
-
-  function restoreValue(
-    path: RawPath,
-    previous: Slot,
-  ): { path: RawPath; change: ChangeBase } {
-    const last = path.segments.at(-1)
-    if (last !== undefined && last.role === "entry") {
-      const parent = path.slice(0, path.segments.length - 1) as RawPath
-      const key = last.resolve() as string
-      // A value this revert read from its own record.
-      return previous === null
-        ? { path: parent, change: mapChange(undefined, [key]) }
-        : {
-            path: parent,
-            change: mapChange(trustAsOwned({ [key]: own(previous.value) })),
-          }
-    }
-    return { path, change: replaceChange(own(previous?.value)) }
   }
 
   return revertible
