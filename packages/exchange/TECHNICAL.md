@@ -206,8 +206,8 @@ Source: `src/sync-program.ts` message handlers. The eight messages from `@kyneta
 | `interest` | Sync | One-way | `{ docId, version?, reciprocate?, since? }` | "I want this doc. Here's my version." Answered with `offer`, or with `vacant` if `canShare` denies the requester. Receiving one marks the sender `pending` and emits `classify-peer-version`; the sender becomes `synced` only when the shell finds its version not ahead of ours, or when its own `offer` merges. `reciprocate` asks for the symmetric interest and prevents an interest loop; it carries no other meaning. |
 | `offer` | Sync | One-way | `{ docId, payload: SubstratePayload, version }` | State transfer, and nothing else. `payload.kind` (`"entirety" | "since"`) is substrate-internal. |
 | `accept` | Sync | One-way | `{ docId, version }` | "I now hold your version `version`." Sent once per offer held — our version, after taking it in, reaches the offer's (imported, already held, or taken by a reset) — quoting the offer's `version`. Not sent for a history-free document, a refused offer, a failed import, or an offer that left us short. See §"What each side knows about the other". |
-| `dismiss` | Sync | One-way | `{ docId }` | "I am leaving the sync graph for this doc." Dual of `present`. Receiver deletes its per-peer entry + fires `ensure-doc-dismissed`. |
-| `vacant` | Sync | Point-to-point | `{ docId }` | "You asked, and I will not serve you this doc." Two producers, both via the shared `vacantReply` builder: `declareVacant` from `onEnsureDoc`'s terminal non-serve branches (we don't have it), and `handleInterest` on a `canShare` denial (we won't share it). Identical on the wire, deliberately — see §"Every path a document can leave by". Consumed by `handleVacant` (sets the peer `vacant`, emits **no** `ensure-doc-dismissed` — our replica survives). |
+| `dismiss` | Sync | One-way | `{ docId }` | "I am leaving the sync graph for this doc." Dual of `present`. Receiver deletes its per-peer entry; its own replica stays. |
+| `vacant` | Sync | Point-to-point | `{ docId }` | "You asked, and I will not serve you this doc." Two producers, both via the shared `vacantReply` builder: `declareVacant` from `onEnsureDoc`'s terminal non-serve branches (we don't have it), and `handleInterest` on a `canShare` denial (we won't share it). Identical on the wire, deliberately — see §"Every path a document can leave by". Consumed by `handleVacant` (sets the peer `vacant`; our replica stays). |
 
 The eight are defined once in `@kyneta/transport`; the wire encoding is defined once in `@kyneta/wire`. This package implements the *semantics*.
 
@@ -380,6 +380,24 @@ Note what that does *not* include: which `BoundSchema` object the caller held.
 Two `bind()` calls over one schema are interchangeable, and a schema whose
 migration chain reaches the document's shape can read it. Both are accepted.
 
+### `exchange.open` — `get`, never creating
+
+Source: `src/exchange.ts` → `open`, `#getImpl`; `src/runtime.ts` → `Intent`, `readinessFor`, `#becomeReady`.
+
+```
+exchange.open<S>(docId: DocId, bound: BoundSchema<S>): Promise<Ref<S> | undefined>
+```
+
+`get` answers "give me this document" and may create it. `open` answers "give me this document if it is here": open, replicated, or in the Store. It never creates, writes or announces one, and resolves `undefined` instead. An undo stack opens the documents its steps name this way, so an undo never brings a destroyed document back.
+
+**It is `get` with another intent, through the same load**, not a Store read followed by a `get`. `#getImpl` takes the intent's kind; the created entry carries an `Intent` (`create`, or `open` with `wasDeferred`); `#becomeReady` decides from what the load found (`readinessFor`, see [How a document becomes ready](#how-a-document-becomes-ready)). An `open` whose load finds nothing takes the entry out again before anything registers, writes or announces it. There is no gap between a check and a `get` for a destroy to fall into: a destroy while `open` loads is the existing "destroyed while loading" case.
+
+- **A destroyed document is not held**, including while its delete is in flight: the Runtime orders a load after the delete ([One document's store calls, in order](#one-documents-store-calls-in-order)).
+- **A deferred document** opens if the Store holds it. Otherwise it stays deferred: the deferred entry holds nothing, so `wasDeferred` alone puts it back, in the same step as the eviction.
+- **A `get` while an `open` loads** makes the entry `create`: the `get` caller holds that ref.
+- **A failed read rejects**; it is not an absent document. A schema that cannot read the document throws, as with `get`.
+- **While `open` loads**, the document is in the Runtime's cache like any loading document (`exchange.has` is true), but not in `exchange.documents`, which it joins only when ready.
+
 ### Promoting a replicate document
 
 A `replicate` document is a bare `Replica` — it accumulates state, computes
@@ -441,7 +459,7 @@ identity check itself rather than inheriting it.
 | Intention | API | Behaviour |
 |-----------|-----|-----------|
 | Leave sync graph, keep local state | `exchange.suspend(docId)` | Sends `dismiss`. **Stays in `exchange.documents`**, as `{ mode: "interpret", suspended: true }`. State remains in `Store`. `exchange.get(docId)` still returns the ref — **without** resuming. |
-| Permanent removal | `exchange.destroy(docId)` | Sends `dismiss`. Removes from `exchange.documents`, from `Store`, from all peers' views. Fresh `get` constructs a new doc. |
+| Permanent removal | `exchange.destroy(docId)` | Sends `dismiss`. Removes from `exchange.documents`, from `Store`, from all peers' views. Fresh `get` constructs a new doc, even while the delete is in flight; `open` resolves `undefined`. |
 
 The two exist because "I'm done with this doc" has two distinct flavours — intent to resume (`suspend`) and intent to erase (`destroy`). They differ in what leaves the `Store` and the exchange's document map.
 
@@ -812,7 +830,7 @@ A peer's per-doc sync transition is a single event with **two folds**, both adva
 1. **Volatile state** — `SyncModel.peers[*].docSyncStates: Map<DocId, PeerDocSyncState>` (`status ∈ {pending, synced, vacant}`). Drives routing (`getSyncedPeers`) and the raw per-peer view `sync(doc).peerStates: PeerSyncState[]`. **Can regress** — a reconnecting peer's reciprocal `interest` flips `synced → pending`, and flips back once the shell has compared its version: in the same drain if the peer is at or behind our version, or when its offer merges if it is ahead or concurrent. An observer sees the `pending` only in the latter case.
 2. **Monotonic latch** — `SyncModel.reconciledIdentities: Map<DocId, Map<PeerId, PeerIdentityDetails>>`, a grow-only accumulator of reconciled peer **identities**. `setPeerDocState` folds the peer's identity in whenever `next.status ∈ {synced, vacant}`; `pending` never touches it. This is the monotonic complement that volatile state lacks — the same shape as `@kyneta/schema`'s `populated`/`populated` set, lifted to the sync layer. Storing identities (not just `PeerId`) is what lets `readyFor(pred)` work and lets the latch **survive the reconciled peer leaving `model.peers`**.
 
-`sync(doc).ready` is `hasReconciled(model, docId)` (accumulator non-empty) — monotonic, connection-independent. `sync(doc).readyFor(pred)` is `reconciledMatching(model, docId, pred)`. The latch is cleared only on *our* doc removal (`handleDocDelete`, and `handleDocDismiss` **only when `msg.event?.type !== "doc-suspended"`** — suspend keeps the runtime/data alive, so its latch survives `resume`) and on `initSync` (so `reset()`/`shutdown()` clear it). An inbound `dismiss` clears the peer's *volatile* entry but **not** the accumulator.
+`sync(doc).ready` is `hasReconciled(model, docId)` (accumulator non-empty) — monotonic, connection-independent. `sync(doc).readyFor(pred)` is `reconciledMatching(model, docId, pred)`. The latch is cleared only on *our* doc removal (`handleDocDismiss` **only when `msg.event?.type !== "doc-suspended"`** — suspend keeps the runtime/data alive, so its latch survives `resume`) and on `initSync` (so `reset()`/`shutdown()` clear it). An inbound `dismiss` clears the peer's *volatile* entry but **not** the accumulator.
 
 **Every `synced` transition is downstream of a version comparison in the shell.** Two inputs produce it — `sync/doc-imported` after a merge or a reset, and `sync/peer-synced` when a comparison found nothing to import — and `sync/peer-synced` has exactly one producer, `Synchronizer.#classifyPeer`, which both the offer path and the interest path call. (`vacant` also latches reconciliation, and is comparison-free by design: the peer has said it will not serve the doc, so there is nothing to compare.) The pure decision it delegates to, `transitionForPeerVersion`, is what says a peer that is behind, equal, or version-less is `synced`, and a peer that is ahead, concurrent, or unreadable stays `pending`.
 
@@ -1013,18 +1031,37 @@ not gate the executor.
 
 Source: `src/store/*.ts`, `src/store/store-program.ts`, `src/exchange.ts` → store-program executor.
 
-A `Store` is a persistence interface this package defines. A Runtime takes one (`ExchangeParams.store`, `RuntimeParams.store`), and an instance is owned by that Runtime, which calls it sequentially per document and writes under its `seat`. Several instances may open one storage: tabs over one IndexedDB database, processes over one Postgres schema. See [Several instances over one storage](#several-instances-over-one-storage).
+A `Store` is a persistence interface this package defines. A Runtime takes one (`ExchangeParams.store`, `RuntimeParams.store`), and an instance is owned by that Runtime, which calls it sequentially per document and writes under its `seat`. (How: see [One document's store calls, in order](#one-documents-store-calls-in-order).) Several instances may open one storage: tabs over one IndexedDB database, processes over one Postgres schema. See [Several instances over one storage](#several-instances-over-one-storage).
 
 **`Store.seat`** is the identity the store issues its Runtime, taken when the store opens and released by `close()` or by the platform when the holder dies ([Durable seats](#durable-seats)). A **pooled** seat is fenced: `append`, `compact` and `delete` read the pool inside their own transaction and call `assertSeatHeld`, which throws `SeatLostError`, changing nothing, once another store has claimed the seat. A pooled store also records which seat writes each serialized document: an authored `append` or `compact` (`WriteOptions.authored`) claims an unclaimed one and is refused with `WriterRefusedError` for another seat's, checked after the fence, and `writerOf(docId)` reads the record ([Serialized documents](#serialized-documents-one-writer-seat-per-storage)). **A closed store refuses every operation.**
 
+### One document's store calls, in order
+
+Source: `src/store/serial-store.ts` → `serialStore`; `src/runtime.ts` → the constructor, `storeWrite`, `#quiesce`.
+
+A Store need not finish one call before a later one starts: a pooled backend (Postgres, Prisma) may run them at once. The store program keeps one write in flight per document, but a destroy's `delete`, a load and a rebuild are issued outside it. Unordered, a `delete` could finish before a write already sent (a first write, meta and the whole document, then stores the destroyed document again), and a `get` after a `destroy` could load what the `delete` removes.
+
+The Runtime therefore never holds the Store it is given: its constructor wraps it once in `serialStore`, which runs each document's calls one at a time, in the order they were made (different documents run at once). A failed call rejects its caller and does not stop the queue. A `loadAll` holds the queue for its whole iteration. `idle()` resolves when every queue is empty; `#quiesce` awaits it, so `flush` counts a delete as pending work, and `close()` awaits it too, so `shutdown` waits for deletes. Store backends order nothing themselves.
+
+- **It cannot deadlock, by construction.** A queued step is one Store call, and a Store call never calls back into the Runtime, so no call waits for one queued after it. A queue of *operations* (`#hydrate`, `#persist`, `#compact` …) would deadlock the first time one operation ran another of the same document (`#persist`'s compact arm calls `#compact`), and avoiding that would be a rule kept by discipline.
+- **Ordering calls, not operations, is enough**, for two reasons. Every write is one Store call: `storeWrite` takes a `Prepared` (`whole` by `compact`, `delta` by `append`, or `none`), so a write is never split around a `delete`. And every sequence of several reads checks the document again before acting on what it read: `#becomeReady` fails a load whose entry was destroyed meanwhile, `#compact` throws "document not held" after its read and before its write, and `#rebuild` stops at its read. A `delete` that runs between a read and the write depending on it is caught there.
+
 ### How a document becomes ready
 
-Source: `src/runtime.ts` → `#hydrate`, `#becomeReady`, `storeInputFor`.
+Source: `src/runtime.ts` → `#hydrate`, `#becomeReady`, `readinessFor`.
 
 A document's ref is returned at once; loading from the store runs afterwards. `#hydrate` only gathers: it reads the store and returns a `LoadOutcome` — `stored` with the version the store holds, `empty`, or `none` when nothing was loaded (no store, a transient document, or a promotion whose replica already loaded). `#becomeReady` is **the one place a document becomes ready**, for every creation path, and runs in a fixed order:
 
 1. If the cache no longer holds this entry (destroyed, or destroyed and created again, while it loaded), the latch fails with "destroyed while loading" and nothing else happens. Otherwise the dismissed document would be registered with the Synchronizer again.
-2. The store program learns what the store holds: `storeInputFor(docId, outcome)`, a pure mapping (`stored` → `hydrated`, `empty` → `register`, `none` → nothing).
+2. What was loaded decides: `readinessFor(docId, outcome, intent)`, pure.
+
+   | outcome | `create` (`get`) | `open` |
+   |---|---|---|
+   | `stored` | `hydrated` to the store program | the same |
+   | `empty` | `register` | absent |
+   | `none` | nothing to tell | absent |
+
+   An absent document is taken out again (`#evict`), and marked deferred if it was, in this one step; its latch fails ("not held here"), and nothing is registered, written or announced. With no store, or for a transient document, a document that is not open is not held. See [`exchange.open`](#exchangeopen--get-never-creating).
 3. `adopt()` claims the peer identity (Yjs, Loro) and the right to author (plain), before anyone is told the document has loaded — a listener that writes the moment it is told finds the document writable. A serialized document whose stored writer is another seat of the storage is refused instead (`refuse`), and such a listener's write throws; see [Serialized documents: one writer seat per storage](#serialized-documents-one-writer-seat-per-storage).
 4. The latch resolves `loaded`.
 5. `#register` publishes the document to the sync graph, and an interpreted document is wired (`#wire`): its local-update signal marks it dirty for the drain (see [The local-write path](#the-local-write-path)), and its changesets go to the observation hook. `#evict`, which `destroy`, `shutdown` and `reset` go through, unwires it first, so a ref that outlives its document cannot reach whatever is created under its id next.
@@ -1354,6 +1391,7 @@ await stack.undo()                                           // false when nothi
 - **The stack lives in a serialized document** (`UndoDoc`, `json.bind`), so the Store stores, syncs and compacts it, and the one-writer rule of [Serialized documents](#serialized-documents-one-writer-seat-per-storage) guarantees one runtime pops a stack: per tab or per device is only which document id the app gives it. Without a Store the stack lasts the session. Every transition is a pure function of the stored stack (`pushStep`, `moveStep`), and is written as Kyneta ops: `stackOps(at, before, after)` takes each list's shortest edit (`diffSequence`) and replaces the note if it changed, and `applyChanges` writes them in one batch. So a write to the undo document is as large as what changed: pushing a step inserts that step, and a revert rewrites only the steps whose records its remap changed. The undo document is compacted every `COMPACT_EVERY` (200) writes, which bounds its log.
 - **Every revert's remap rewrites the records left**, in the step being undone (`revertStep` from `@kyneta/schema`) and in both lists, in the same write that moves the step. Records always name live identities; nothing global is kept.
 - **A step nothing of which still stands is dropped silently**, and the one below it is tried.
+- **A part stands only if its document is held here**: open, or in the Store. The stack opens a step's documents with `exchange.open`, never `get`, so an undo never creates a document, and a part whose document is not open when it is used (destroyed, here or by another runtime on the Store, before or during the undo) does not stand. No lifecycle event is needed: a stack names only documents its own runtime wrote, and with a Store those are all in it (own writes are stored before they are published); without one, the stack lasts the session. A destroyed document's parts stay in the stored stack until an undo meets them, bounded by `depth`, like any step that stopped standing.
 
 ### Crash safety: the write-ahead note
 
@@ -1467,7 +1505,7 @@ For durability guarantees, use the `cohort` predicate to prevent compaction past
 | `src/types.ts` | `DocChange`, `DocInfo`, `PeerChange`, `PeerDocSyncState`, `PeerState`, `PeerSyncState`, `Connectivity`. |
 | `src/observe.ts` | — | DevTools observation protocol (`ObsEvent`), bus (`createObservationBus`), and pure effect/msg/changeset/frame mappers. Experimental. |
 | `src/utils.ts` | `validatePrincipal`. |
-| `src/store/` | — | `Store` interface, in-memory implementation, the store program, shared utilities (`validateAppend` in `store.ts`), seats and the seat pool (`seats.ts`), and the open plan every backend runs (`store-open.ts`). |
+| `src/store/` | — | `Store` interface, in-memory implementation, the store program, shared utilities (`validateAppend` in `store.ts`), seats and the seat pool (`seats.ts`), the open plan every backend runs (`store-open.ts`), and `serialStore`, which orders one document's calls (`serial-store.ts`). |
 | `src/transport/` | — | Transport-manager glue. |
 | `src/testing/` | — | Test-only helpers exported from `@kyneta/exchange/testing`. |
 | `src/__tests__/` | — | Full dispatch-loop, governance, capabilities, line, seats, storage, compaction, classification, and end-to-end tests. |

@@ -420,6 +420,8 @@ const exchange = new Exchange({
 })
 ```
 
+`exchange.get(docId, bound)` gives a document, creating it if this exchange has never seen it. `exchange.open(docId, bound)` gives it only if this exchange holds it (open, or in its store), and resolves `undefined` otherwise: it never creates one.
+
 > **Peer identity:** you name a `principal`, who this exchange speaks for: a user, a service. Several exchanges may share one. The exchange issues its own `peerId`, its **seat**, which is the address its operations are written under. **A store makes the seat stable across restarts**: the store issues it, and a reload over the same storage gets it back, while two tabs or processes open at once hold different seats. Without a store, each session is a new peer. Key policies on `principal` when you mean *who*, and on `peerId` when you mean *which replica*. Input documents above are keyed by seat, one per tab.
 
 ### Heterogeneous Documents
@@ -698,6 +700,7 @@ await stack.redo()
 - **Typing** goes through `stack.typing(fn)`, which joins a keystroke to the step before it while the user keeps typing in one place (`useText(ref, { undo: stack })` does this). Direct writes by an editor binding are grouped the same way with `stack.follow(docId)`.
 - **The stack is a document.** With a Store it survives a reload, and a crash in the middle of an undo is finished on the next load without applying anything twice. Without one it lasts the session. The document is serialized, so one runtime writes it: give each tab its own id for per-tab undo, or share one over a device's Store.
 - **What there is to undo** is a read of that document: `stack.doc.stacks.at("cards")`.
+- **A destroyed document's steps are skipped.** An undo opens a step's documents with `exchange.open`, so it never creates a document; a part whose document is gone does not stand, and the undo goes on to the step below.
 - Plain, Loro and Yjs documents are undoable; ephemeral ones are not.
 
 ### Escape Hatches

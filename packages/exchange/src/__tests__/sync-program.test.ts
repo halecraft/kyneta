@@ -2096,21 +2096,20 @@ describe("sync-program", () => {
       ).toBe(false)
     })
 
-    it("emits ensure-doc-dismissed effect", () => {
+    it("leaves our replica, queues the doc, and has no effect", () => {
       const update = makeUpdate()
       let model = initSync(alice)
       ;[model] = addPeer(update, model, "bob", bob)
       ;[model] = ensureDoc(update, model, "doc-1")
 
-      const [, effects] = receiveMessage(update, model, "bob", {
+      const [m2, effects] = receiveMessage(update, model, "bob", {
         type: "dismiss",
         docId: "doc-1",
       })
 
-      const dismissed = effectsOfType(effects, "ensure-doc-dismissed")
-      expect(dismissed.length).toBe(1)
-      expect(defined(dismissed[0], "dismissed[0]").docId).toBe("doc-1")
-      expect(defined(dismissed[0], "dismissed[0]").peer).toBe(bob)
+      expect(effects).toEqual([])
+      expect(m2.documents.has("doc-1")).toBe(true)
+      expect(m2.pendingPeerSyncDocIds).toContain("doc-1")
     })
 
     it("emits readyStateChanged", () => {
@@ -2236,21 +2235,6 @@ describe("sync-program", () => {
       )
 
       expect(m2.pendingStateAdvancedDocIds).not.toContain("doc-1")
-    })
-  })
-
-  // -----------------------------------------------------------------------
-  // sync/doc-delete
-  // -----------------------------------------------------------------------
-  describe("sync/doc-delete", () => {
-    it("removes document from model", () => {
-      const update = makeUpdate()
-      let model = initSync(alice)
-      ;[model] = ensureDoc(update, model, "doc-1")
-      expect(model.documents.has("doc-1")).toBe(true)
-
-      ;[model] = update({ type: "sync/doc-delete", docId: "doc-1" }, model)
-      expect(model.documents.has("doc-1")).toBe(false)
     })
   })
 
@@ -2739,7 +2723,7 @@ describe("vacant + reconciliation latch", () => {
   }
 
   describe("handleVacant (consumer)", () => {
-    it("records the peer vacant, queues the doc, emits no ensure-doc-dismissed", () => {
+    it("records the peer vacant and queues the doc", () => {
       const { update, model } = setup()
       const [m2, fx] = receiveMessage(update, model, "bob", {
         type: "vacant",
@@ -2749,7 +2733,7 @@ describe("vacant + reconciliation latch", () => {
         "vacant",
       )
       expect(m2.pendingPeerSyncDocIds).toContain("doc-1")
-      expect(effectsOfType(fx, "ensure-doc-dismissed")).toHaveLength(0)
+      expect(fx).toEqual([])
     })
 
     it("a vacant reply makes the doc reconciled (ready latch)", () => {
@@ -2867,17 +2851,6 @@ describe("vacant + reconciliation latch", () => {
         m,
       )
       expect(hasReconciled(removed, "doc-1")).toBe(false)
-    })
-
-    it("handleDocDelete clears the latch", () => {
-      const { update, model } = setup()
-      const m = markSynced(update, model, "bob")
-      const [deleted] = applyUpdate(
-        update,
-        { type: "sync/doc-delete", docId: "doc-1" },
-        m,
-      )
-      expect(hasReconciled(deleted, "doc-1")).toBe(false)
     })
   })
 })

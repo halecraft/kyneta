@@ -62,7 +62,13 @@ import {
   sessionSeat,
   WriterRefusedError,
 } from "./store/seats.js"
-import type { Store, StoreRecord, WriteOptions } from "./store/store.js"
+import { type SerialStore, serialStore } from "./store/serial-store.js"
+import type {
+  Store,
+  StoreMark,
+  StoreRecord,
+  WriteOptions,
+} from "./store/store.js"
 import {
   allDocsSettled,
   confirmedVersion,
@@ -95,22 +101,47 @@ function unrefTimer(timer: unknown): void {
 }
 
 /**
- * Store the records of a `register` or `since` write: a document the store
- * has never acknowledged is written by `compact` with no mark, which only
- * appends; a delta is appended.
+ * What one write stores, and the version it brings the store to. Each kind is
+ * one Store call, so a write is never split around another call of the same
+ * document (see `serialStore`).
  */
-async function writeRecords(
+type Prepared =
+  /** Meta and the whole document, by `compact`. */
+  | {
+      readonly kind: "whole"
+      readonly records: StoreRecord[]
+      readonly version: string
+    }
+  /** A delta, by `append`. */
+  | {
+      readonly kind: "delta"
+      readonly record: StoreRecord
+      readonly version: string
+    }
+  /** Nothing past the store's confirmed version: the store already holds it
+   *  all, and the write succeeds without a call. */
+  | { readonly kind: "none"; readonly version: string }
+
+/**
+ * Store `prepared` in one call. A whole document replaces the records at or
+ * before `through`, or with `through` null (a document the store has never
+ * acknowledged) only appends.
+ */
+async function storeWrite(
   store: Store,
   docId: DocId,
-  write: Exclude<Write, { kind: "compact" }>,
-  records: StoreRecord[],
+  prepared: Prepared,
+  through: StoreMark | null,
   options: WriteOptions,
 ): Promise<void> {
-  if (write.kind === "register") {
-    await store.compact(docId, records, null, options)
-    return
+  switch (prepared.kind) {
+    case "whole":
+      return store.compact(docId, prepared.records, through, options)
+    case "delta":
+      return store.append(docId, prepared.record, options)
+    case "none":
+      return
   }
-  for (const record of records) await store.append(docId, record, options)
 }
 
 /**
@@ -161,21 +192,41 @@ type Loaded = {
 const NOTHING_LOADED: Loaded = { outcome: { kind: "none" }, writer: null }
 
 /**
- * The store program's view of a load, or `null` when there is nothing to tell
- * it. `hydrated` carries the version the store holds, which the program keeps
- * as its baseline for later writes.
+ * Why an interpreted document was created: to be had whatever the store
+ * holds (`get`), or only if this Runtime holds it (`open`). A deferred entry
+ * holds nothing, so an `open` that finds nothing puts it back from
+ * `wasDeferred` alone.
  */
-export function storeInputFor(
+export type Intent =
+  | { readonly kind: "create" }
+  | { readonly kind: "open"; readonly wasDeferred: boolean }
+
+export const CREATE: Intent = { kind: "create" }
+
+/**
+ * What a finished load makes of a document. `ready` carries the store
+ * program's view of the load, or `null` when there is nothing to tell it:
+ * `hydrated` carries the version the store holds, which the program keeps as
+ * its baseline for later writes. An `open` that loaded nothing is `absent`:
+ * with no store, or a transient document, not open means not held.
+ */
+export function readinessFor(
   docId: DocId,
   outcome: LoadOutcome,
-): StoreInput | null {
-  switch (outcome.kind) {
-    case "stored":
-      return { type: "hydrated", docId, version: outcome.version }
-    case "empty":
-      return { type: "register", docId }
-    case "none":
-      return null
+  intent: Intent,
+):
+  | { readonly kind: "ready"; readonly input: StoreInput | null }
+  | { readonly kind: "absent" } {
+  if (outcome.kind === "stored") {
+    return {
+      kind: "ready",
+      input: { type: "hydrated", docId, version: outcome.version },
+    }
+  }
+  if (intent.kind === "open") return { kind: "absent" }
+  return {
+    kind: "ready",
+    input: outcome.kind === "empty" ? { type: "register", docId } : null,
   }
 }
 
@@ -341,6 +392,9 @@ export type DocCacheEntry =
       authorship: Authorship
       /** The writer the store recorded when the document loaded. */
       writer: PeerId | null
+      /** Why it was created. A `get` while an `open` loads makes it
+       *  `create`: the `get` caller holds the ref. */
+      intent: Intent
     }
   | {
       mode: "replicate"
@@ -525,7 +579,8 @@ export class Runtime {
   readonly peerId: string
   readonly lease: Lease
 
-  readonly #store: Store | undefined
+  /** The only store this Runtime holds: every call is ordered per document. */
+  readonly #store: SerialStore | undefined
   /** Store-program handle — pure Mealy machine for store coordination. */
   readonly #storeHandle: ObservableHandle<StoreInput, StoreModel> | null
 
@@ -558,12 +613,13 @@ export class Runtime {
   #tickTimer: ReturnType<typeof setInterval> | null = null
 
   constructor({
-    store,
+    store: given,
     onStoreError,
     lease,
     tickInterval = 1000,
   }: RuntimeParams = {}) {
     this.lease = lease ?? createLease()
+    const store = given === undefined ? undefined : serialStore(given)
     this.#store = store
     this.seat = store?.seat ?? sessionSeat()
     this.peerId = this.seat.peerId
@@ -602,7 +658,10 @@ export class Runtime {
               const { docId } = effect
               this.#cancelRetry(docId)
               store.delete(docId).then(
-                () => {}, // No write-succeeded for destroy
+                // No write-succeeded for destroy. `serialStore` runs the
+                // delete after the document's calls already made, and
+                // before any made later (a load of a document created again).
+                () => {},
                 error =>
                   error instanceof SeatLostError
                     ? dispatch({ type: "seat-lost", docId, error })
@@ -754,7 +813,7 @@ export class Runtime {
       }
     }
 
-    return this.createInterpretDoc(docId, bound) as never
+    return this.createInterpretDoc(docId, bound, CREATE) as never
   }
 
   /**
@@ -1075,22 +1134,15 @@ export class Runtime {
       return
     }
 
-    let prepared: { records: StoreRecord[]; version: string }
+    let prepared: Prepared
     try {
       prepared = this.#prepareWrite(docId, write)
     } catch (error) {
       failed(error)
       return
     }
-    const { records, version } = prepared
-
-    // Nothing past the confirmed version. The store already holds it all.
-    if (records.length === 0) {
-      dispatch({ type: "write-succeeded", docId, version })
-      return
-    }
-
-    writeRecords(store, docId, write, records, options).then(
+    const { version } = prepared
+    storeWrite(store, docId, prepared, null, options).then(
       () => dispatch({ type: "write-succeeded", docId, version }),
       failed,
     )
@@ -1120,7 +1172,10 @@ export class Runtime {
    *
    * 1. Read the store's mark, then every entry.
    * 2. Stop if the document is no longer the one held when the read began:
-   *    nothing is merged into, or pushed from, a document that is gone.
+   *    nothing is merged into, or pushed from, a document that is gone. The
+   *    store orders calls, not this whole compaction (`serialStore`), so a
+   *    destroy's delete may run between the read and the write; this check
+   *    is what keeps the write from storing the document again.
    * 3. Take what was read into the live replica, toward its own lineage, or
    *    toward the latest stored one while it is still at genesis, since
    *    joining a lineage from genesis is not a crossing. Records other
@@ -1181,20 +1236,18 @@ export class Runtime {
         confirmed === undefined
           ? { kind: "register" }
           : { kind: "since", version: confirmed }
-      const { records, version } = this.#prepareWrite(docId, write)
-      if (records.length > 0) {
-        await writeRecords(store, docId, write, records, options)
-      }
-      return version
+      const prepared = this.#prepareWrite(docId, write)
+      await storeWrite(store, docId, prepared, null, options)
+      return prepared.version
     }
 
-    const { records, version } = this.#prepareWrite(docId, { kind: "compact" })
-    await store.compact(docId, records, mark, options)
-    return version
+    const prepared = this.#prepareWrite(docId, { kind: "compact" })
+    await storeWrite(store, docId, prepared, mark, options)
+    return prepared.version
   }
 
   /**
-   * The records a write consists of, and the version they bring the store to.
+   * What a write stores, and the version it brings the store to.
    *
    * Reads the replica now, when the write starts.
    *
@@ -1203,10 +1256,7 @@ export class Runtime {
    * so that is a broken invariant; it is reported as a failed write rather
    * than thrown through the dispatcher.
    */
-  #prepareWrite(
-    docId: DocId,
-    write: Write,
-  ): { records: StoreRecord[]; version: string } {
+  #prepareWrite(docId: DocId, write: Write): Prepared {
     const entry = this.#docCache.get(docId)
     if (!entry || entry.mode === "deferred") {
       throw new Error(`[runtime] cannot write '${docId}': document not held`)
@@ -1219,18 +1269,24 @@ export class Runtime {
     const current = replica.version()
     const version = current.serialize()
 
-    const whole = (): StoreRecord[] => [
-      {
-        kind: "meta",
-        meta: { replicaType: replicaFactory.replicaType, syncMode, schemaHash },
-      },
-      { kind: "entry", payload: replica.exportEntirety(), version },
-    ]
-
     switch (write.kind) {
       case "register":
       case "compact":
-        return { records: whole(), version }
+        return {
+          kind: "whole",
+          records: [
+            {
+              kind: "meta",
+              meta: {
+                replicaType: replicaFactory.replicaType,
+                syncMode,
+                schemaHash,
+              },
+            },
+            { kind: "entry", payload: replica.exportEntirety(), version },
+          ],
+          version,
+        }
       case "since": {
         const since = replicaFactory.parseVersion(write.version)
         // `compare` is only meaningful within one lineage.
@@ -1238,7 +1294,7 @@ export class Runtime {
           current.lineage === since.lineage &&
           current.compare(since) === "equal"
         ) {
-          return { records: [], version: write.version }
+          return { kind: "none", version: write.version }
         }
         // `exportSince` answers `null` both for "nothing new" and for "cannot:
         // `since` is behind the trimmed base". The second happens once a
@@ -1247,7 +1303,11 @@ export class Runtime {
         // advanced replica always writes something: the delta if it can,
         // otherwise the whole document, appended.
         const payload = replica.exportSince(since) ?? replica.exportEntirety()
-        return { records: [{ kind: "entry", payload, version }], version }
+        return {
+          kind: "delta",
+          record: { kind: "entry", payload, version },
+          version,
+        }
       }
     }
   }
@@ -1301,11 +1361,13 @@ export class Runtime {
    *
    * @internal
    */
-  createInterpretDoc(docId: DocId, bound: BoundSchema): any {
+  createInterpretDoc(docId: DocId, bound: BoundSchema, intent: Intent): any {
     // Ensure semantics: if this doc already exists in interpret mode,
-    // return the existing ref.
+    // return the existing ref. A `get` of a document an `open` is loading
+    // keeps it, whatever the load finds.
     const cached = this.#docCache.get(docId)
     if (cached && cached.mode === "interpret") {
+      if (intent.kind === "create") cached.intent = CREATE
       return cached.ref
     }
 
@@ -1385,6 +1447,8 @@ export class Runtime {
       unwire: NOTHING_WIRED,
       authorship,
       writer: null,
+      // A promoted replica is held, so it is had whatever an `open` asked.
+      intent: promoting ? CREATE : intent,
       // Suspension survives promotion. The two say different things: which
       // tier holds the document, versus whether it is in the sync graph.
       // Dropping the flag here would let a `get()` silently re-announce a
@@ -1526,7 +1590,11 @@ export class Runtime {
    * 1. A document destroyed or replaced while it loaded is no longer this
    *    entry's to make ready: its latch fails, so waiters are not told a
    *    document that is gone has loaded, and nothing below runs.
-   * 2. The store program learns what the store holds.
+   * 2. What was loaded decides (`readinessFor`). An `open` that found
+   *    nothing takes the document out again, and puts back the deferred
+   *    entry it replaced, in this one step, so nothing sees it missing
+   *    between; nothing was registered, written or announced, and its latch
+   *    fails. Otherwise the store program learns what the store holds.
    * 3. `adopt` claims identity (Yjs, Loro) and the right to author (plain)
    *    before anyone is told the document has loaded, so a listener that
    *    writes on that signal finds the document writable. A serialized
@@ -1547,8 +1615,18 @@ export class Runtime {
       })
       return
     }
-    const input = storeInputFor(docId, loaded.outcome)
-    if (input) this.#storeHandle?.dispatch(input)
+    const intent = entry.mode === "interpret" ? entry.intent : CREATE
+    const readiness = readinessFor(docId, loaded.outcome, intent)
+    if (readiness.kind === "absent") {
+      this.#evict(docId)
+      if (intent.kind === "open" && intent.wasDeferred) this.markDeferred(docId)
+      resolveHydration(entry.hydration, {
+        ok: false,
+        error: new Error(`Document '${docId}' is not held here`),
+      })
+      return
+    }
+    if (readiness.input) this.#storeHandle?.dispatch(readiness.input)
     entry.writer = loaded.writer
     if (entry.mode === "interpret") {
       entry.authorship.adopt()
@@ -1703,14 +1781,17 @@ export class Runtime {
   }
 
   /**
-   * Wait until no tracked work is running and every document is settled.
-   * Either can start the other: a write that settles can start a rebuild,
-   * which hands the document back to the store program with a write owed.
+   * Wait until no tracked work is running, every document is settled, and no
+   * store call is queued (a destroy's delete settles nothing in the store
+   * program, so only the store's queue shows it). Each can start another: a
+   * write that settles can start a rebuild, which hands the document back to
+   * the store program with a write owed.
    */
   async #quiesce(): Promise<void> {
     for (;;) {
       await Promise.all(this.#pendingWork)
       await this.#storeHandle?.waitForState(allDocsSettled)
+      await this.#store?.idle()
       if (this.#pendingWork.size === 0) return
     }
   }
@@ -1720,8 +1801,9 @@ export class Runtime {
   // =========================================================================
 
   /**
-   * Async hydration — loads stored entries and merges them into the
-   * replica, then registers the doc in the store program.
+   * Async hydration — loads stored entries, merges them into the replica,
+   * and returns what it found; `#becomeReady` decides from that. Its reads go
+   * through `serialStore`, so a load after a destroy reads after the delete.
    *
    * Storage I/O only — this method never fires `onDocReady`. It has no
    * knowledge of hooks at all, which makes it structurally impossible to
@@ -1893,7 +1975,8 @@ export class Runtime {
    *    owes finds nothing new, and its confirmation reopens the gate, since
    *    the rebuilt version reaches `ownHigh` or lies on another lineage.
    *
-   * Stops at the read if the document is destroyed meanwhile.
+   * Stops at the read if the document is destroyed meanwhile, so a delete
+   * that runs after the read is not undone by what follows.
    */
   async #rebuild(
     store: Store,
@@ -1927,13 +2010,14 @@ export class Runtime {
     readyInfo.replica.resetFromEntirety(fresh.exportEntirety())
     this.#hooks?.onDocReset?.(docId)
 
-    const input = storeInputFor(
+    const readiness = readinessFor(
       docId,
       stored === undefined
         ? { kind: "empty" }
         : { kind: "stored", version: stored },
+      CREATE,
     )
-    if (input) dispatch(input)
+    if (readiness.kind === "ready" && readiness.input) dispatch(readiness.input)
   }
 
   /**

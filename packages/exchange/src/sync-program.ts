@@ -128,8 +128,8 @@ export type SyncModel = {
    * peer leaving `model.peers`. Mirrors `@kyneta/schema`'s
    * `populated`/`populated` set, lifted to the sync layer.
    *
-   * Cleared only on *our* doc removal (`handleDocDelete`, true-removal
-   * `handleDocDismiss`) and `initSync` — never by an inbound `dismiss`.
+   * Cleared only on *our* doc removal (`handleDocDismiss`, but not for a
+   * suspend) and `initSync` — never by an inbound `dismiss`.
    */
   reconciledIdentities: Map<DocId, Map<PeerId, PeerIdentityDetails>>
 }
@@ -190,7 +190,6 @@ export type SyncInput =
    * we hold of theirs no longer stands.
    */
   | { type: "sync/doc-reset"; docId: DocId; version: string }
-  | { type: "sync/doc-delete"; docId: DocId; event?: DocChange }
   | { type: "sync/doc-dismiss"; docId: DocId; event?: DocChange }
   | {
       type: "sync/doc-imported"
@@ -417,11 +416,6 @@ export type SyncEffect =
       syncMode: SyncMode
       schemaHash: string
       supportedHashes?: readonly string[]
-    }
-  | {
-      type: "ensure-doc-dismissed"
-      docId: DocId
-      peer: PeerIdentityDetails
     }
   | { type: "emit-doc-events"; events: readonly DocChange[] }
   | { type: "emit-ready-state-changes"; docIds: readonly DocId[] }
@@ -956,8 +950,6 @@ export function createSyncUpdate(
         return handleDocAdvanced(input, model, canShare)
       case "sync/doc-reset":
         return handleDocReset(input, model, canShare)
-      case "sync/doc-delete":
-        return handleDocDelete(input, model)
       case "sync/doc-dismiss":
         return handleDocDismiss(input, model, canShare)
       case "sync/doc-imported":
@@ -1290,29 +1282,6 @@ function handleDocReset(
   return [
     next,
     ...asked.map(peerId => interestTo(next, peerId, msg.docId, entry, false)),
-  ]
-}
-
-function handleDocDelete(
-  msg: Extract<SyncInput, { type: "sync/doc-delete" }>,
-  model: SyncModel,
-): [SyncModel, ...SyncEffect[]] {
-  const documents = new Map(model.documents)
-  documents.delete(msg.docId)
-  return [
-    {
-      ...model,
-      documents,
-      // Our doc is gone — clear its readiness latch so a destroyed-then-
-      // recreated doc doesn't report a stale `ready`.
-      reconciledIdentities: clearReconciled(
-        model.reconciledIdentities,
-        msg.docId,
-      ),
-      pendingDocEvents: msg.event
-        ? [...model.pendingDocEvents, msg.event]
-        : model.pendingDocEvents,
-    },
   ]
 }
 
@@ -1867,6 +1836,8 @@ function handleDismiss(
   docSyncStates.delete(message.docId)
   peers.set(from, { ...peerState, docSyncStates })
 
+  // Our replica stays: the peer left the document, which says nothing
+  // about ours.
   return [
     {
       ...model,
@@ -1875,11 +1846,6 @@ function handleDismiss(
         model.pendingPeerSyncDocIds,
         message.docId,
       ),
-    },
-    {
-      type: "ensure-doc-dismissed",
-      docId: message.docId,
-      peer: peerState.identity,
     },
   ]
 }
@@ -1893,9 +1859,8 @@ function handleDismiss(
  * for. Record the peer's per-doc state as terminal (`vacant`) so
  * readiness can settle.
  *
- * Critically, this emits **no** `ensure-doc-dismissed`: the *peer* lacks
- * the doc, but our own replica must survive (unlike `dismiss`, where the
- * peer is leaving a doc it had). Early-returns if we don't track the doc.
+ * The peer lacks the doc; our own replica is untouched, as with `dismiss`.
+ * Early-returns if we don't track the doc.
  */
 function handleVacant(
   from: PeerId,
@@ -1906,9 +1871,7 @@ function handleVacant(
   // Early-return if we don't track the doc — there is nothing to reconcile.
   if (!model.documents.has(message.docId)) return [model]
 
-  // Fold the terminal state through the single fold point. Emits NO
-  // `ensure-doc-dismissed`: the *peer* lacks the doc, but our replica
-  // must survive (the opposite of `dismiss`).
+  // Fold the terminal state through the single fold point.
   return [
     setPeerDocState(model, from, message.docId, {
       status: "vacant",

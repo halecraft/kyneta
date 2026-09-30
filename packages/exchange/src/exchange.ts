@@ -58,7 +58,7 @@ import { Governance } from "./governance.js"
 import type { DocPhase } from "./interpret.js"
 import { planInterpretation } from "./interpret.js"
 import type { ObsSink } from "./observe.js"
-import { Runtime, type RuntimeParams } from "./runtime.js"
+import { CREATE, type Intent, Runtime, type RuntimeParams } from "./runtime.js"
 import {
   makeSettleTerm,
   registerPeerResolver,
@@ -110,6 +110,13 @@ type Get = <S extends SchemaNode, N extends NativeMap>(
   docId: DocId,
   bound: BoundSchema<S, N>,
 ) => S extends ProductSchema ? DocRef<S, N> : Ref<S, N>
+
+/** Call signature for {@link Exchange.open}: {@link Get}'s, as a promise
+ *  that may hold nothing. */
+type Open = <S extends SchemaNode, N extends NativeMap>(
+  docId: DocId,
+  bound: BoundSchema<S, N>,
+) => Promise<(S extends ProductSchema ? DocRef<S, N> : Ref<S, N>) | undefined>
 
 /**
  * Who an Exchange says it is. Its peer id, the seat, is not here: the
@@ -398,7 +405,7 @@ export class Exchange {
           })
           if (action.action === "promote") this.#runtime.deleteDeferred(docId)
           if (action.action !== "refuse") {
-            this.#runtime.createInterpretDoc(docId, resolvedBound)
+            this.#runtime.createInterpretDoc(docId, resolvedBound, CREATE)
           }
           return
         }
@@ -430,7 +437,7 @@ export class Exchange {
 
         switch (result.kind) {
           case "interpret":
-            this.#runtime.createInterpretDoc(docId, result.bound)
+            this.#runtime.createInterpretDoc(docId, result.bound, CREATE)
             break
           case "replicate": {
             const boundReplica = this.#capabilities.resolveReplica(
@@ -664,16 +671,59 @@ export class Exchange {
    * batch(doc, d => { d.title.insert(0, "Hello") })
    * ```
    */
-  get: Get = (docId, bound) => this.#getImpl(docId, bound) as never
+  get: Get = (docId, bound) => this.#getImpl(docId, bound, "create") as never
 
   /**
-   * Implementation of {@link get}. Kept generic only in `S` and returning the
-   * plain `Ref<S>` so the heavy `DocRef`/native-map inference stays out of the
-   * checked method body — the precise `DocRef<S, N>` return type is supplied
-   * by the {@link Get} call-signature on the public `get` field, which the
-   * `as never` cast bridges. See {@link Get} for the TS2589 rationale.
+   * The document, if this exchange holds it: open, replicated, or stored.
+   * Never creates, writes or announces one; resolves `undefined` instead.
+   *
+   * `get` answers "give me this document" and may create it; `open` answers
+   * "give me this document if it is here". It is `get` with that intent,
+   * through the same load: a document loaded from nothing is taken out again
+   * before anything registers, writes or announces it. A document destroyed
+   * here is not held, including while its delete is in flight or when the
+   * destroy happens while `open` loads. A deferred document opens if the store
+   * holds it, and otherwise stays deferred.
+   *
+   * Rejects when the store cannot be read (a failed read is not an absent
+   * document), and throws as `get` does for a schema that cannot read the
+   * document.
    */
-  #getImpl<S extends SchemaNode>(docId: DocId, bound: BoundSchema<S>): Ref<S> {
+  open: Open = (docId, bound) => this.#openImpl(docId, bound) as never
+
+  /** Implementation of {@link open}, kept non-generic for the TS2589 reason
+   *  {@link Get} gives. */
+  async #openImpl(docId: DocId, bound: BoundSchema): Promise<unknown> {
+    // Let a load in flight finish first: a replicate document mid-load would
+    // be refused as "still loading". Its failure is not this call's: a load
+    // that found nothing (another `open`) or was destroyed has left the
+    // cache, and one whose read failed is still cached, so the wait below
+    // rejects for it.
+    await this.#runtime.whenHydrated(docId).catch(() => {})
+    const ref = this.#getImpl(docId, bound, "open")
+    const held = () => {
+      const entry = this.#runtime.getEntry(docId)
+      return entry?.mode === "interpret" && entry.ref === ref
+    }
+    try {
+      await this.#runtime.whenHydrated(docId)
+    } catch (error) {
+      if (held()) throw error
+      return undefined
+    }
+    return held() ? ref : undefined
+  }
+
+  /**
+   * Implementation of {@link get} and {@link open}, which differ only in
+   * `kind`: what a load that finds nothing does (`Intent`). Not generic, so
+   * the heavy `DocRef`/native-map inference stays out of the checked method
+   * body; the precise return type is supplied by the {@link Get} and
+   * {@link Open} call signatures, which the `as never` casts bridge. See
+   * {@link Get} for the TS2589 rationale.
+   */
+  #getImpl(docId: DocId, bound: BoundSchema, kind: Intent["kind"]): unknown {
+    let wasDeferred = false
     // Check Runtime cache first
     const cached = this.#runtime.getEntry(docId)
 
@@ -706,7 +756,13 @@ export class Exchange {
       })
 
       if (action.action === "return-cached") {
-        return (cached as { ref: unknown }).ref as Ref<S>
+        // Through the Runtime, so a `get` of a document an `open` is loading
+        // keeps it.
+        return this.#runtime.createInterpretDoc(
+          docId,
+          bound,
+          kind === "create" ? CREATE : { kind, wasDeferred: false },
+        )
       }
 
       if (action.action === "refuse") {
@@ -758,7 +814,7 @@ export class Exchange {
         // Delete deferred entry and fall through to normal get() creation.
         // registerDoc() → doc-ensure handles the deferred→promoted transition
         // in the synchronizer model.
-        this.#runtime.deleteDeferred(docId)
+        wasDeferred = this.#runtime.deleteDeferred(docId) !== undefined
       }
     }
 
@@ -772,7 +828,11 @@ export class Exchange {
     // no infinite recursion or cache corruption.
     this.registerSchema(bound)
 
-    return this.#runtime.createInterpretDoc(docId, bound) as Ref<S>
+    return this.#runtime.createInterpretDoc(
+      docId,
+      bound,
+      kind === "create" ? CREATE : { kind, wasDeferred },
+    )
   }
 
   /**
@@ -981,7 +1041,9 @@ export class Exchange {
 
   /**
    * Destroy a document — remove it locally, broadcast `dismiss` to
-   * all peers, and delete from the store.
+   * all peers, and delete from the store. A `get` afterwards creates a
+   * fresh document, and `open` resolves `undefined`, even while the delete
+   * is in flight.
    *
    * This is the single public API for document removal. For bulk
    * teardown without per-doc notification, use `reset()` or `shutdown()`.
@@ -1072,7 +1134,7 @@ export class Exchange {
       // Safe: Runtime.deleteDeferred removes from cache, then
       // createInterpretDoc inserts the new entry.
       this.#runtime.deleteDeferred(docId)
-      this.#runtime.createInterpretDoc(docId, bound)
+      this.#runtime.createInterpretDoc(docId, bound, CREATE)
     }
   }
 

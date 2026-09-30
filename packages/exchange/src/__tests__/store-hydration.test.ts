@@ -20,7 +20,7 @@ import {
 } from "@kyneta/schema"
 import { yjs } from "@kyneta/yjs-schema"
 import { describe, expect, it } from "vitest"
-import { Runtime } from "../runtime.js"
+import { CREATE, Runtime } from "../runtime.js"
 import { whenHydrated } from "../settle.js"
 import {
   createInMemoryStore,
@@ -611,7 +611,7 @@ async function session(
   const runtime = new Runtime({
     store: createInMemoryStore({ sharedData: storage }),
   })
-  const doc: any = runtime.createInterpretDoc("doc", bound)
+  const doc: any = runtime.createInterpretDoc("doc", bound, CREATE)
   await whenHydrated(doc)
   await work(doc, runtime)
   await runtime.flush()
@@ -641,7 +641,7 @@ describe("writes made while a document loads", () => {
     const runtime = new Runtime({
       store: createInMemoryStore({ sharedData: storage }),
     })
-    const doc: any = runtime.createInterpretDoc("doc", bound)
+    const doc: any = runtime.createInterpretDoc("doc", bound, CREATE)
     batch(doc, (d: any) => d.b.set("during-load"))
     await runtime.flush()
     await runtime.shutdown()

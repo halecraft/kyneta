@@ -123,17 +123,6 @@ export type DocCreationCallback = (
 ) => void
 
 /**
- * Fired by the `ensure-doc-dismissed` effect when a peer dismisses a doc.
- *
- * **Must be idempotent** — same rationale as `DocCreationCallback`.
- */
-export type DocDismissedCallback = (
-  docId: DocId,
-  peer: PeerIdentityDetails,
-  origin: "local" | "remote",
-) => void
-
-/**
  * Consulted when an incoming entirety payload would overwrite a doc that
  * has already synced with at least one peer (a likely compaction-induced
  * reset). Returns `true` to accept the reset, `false` to keep local state
@@ -166,7 +155,6 @@ export type SynchronizerParams = {
    */
   publishable: (docId: DocId) => boolean
   onEnsureDoc?: DocCreationCallback
-  onEnsureDocDismissed?: DocDismissedCallback
   departureTimeout?: number
   /**
    * Wire features advertised by this peer in outbound `establish`.
@@ -553,7 +541,6 @@ export class Synchronizer {
 
   readonly #docs = new Map<DocId, RegisteredDoc>()
   readonly #docCreationCallback?: DocCreationCallback
-  readonly #docDismissedCallback?: DocDismissedCallback
 
   /**
    * Outbound message queue — accumulated during dispatch, flushed at
@@ -661,7 +648,6 @@ export class Synchronizer {
     rebuildReplica,
     publishable,
     onEnsureDoc,
-    onEnsureDocDismissed,
     departureTimeout,
     selfFeatures,
     lease,
@@ -679,7 +665,6 @@ export class Synchronizer {
     this.#canShare = canShare
     this.#canAccept = canAccept
     this.#docCreationCallback = onEnsureDoc
-    this.#docDismissedCallback = onEnsureDocDismissed
     this.#lease = lease ?? createLease()
     ;[this.#sessionHandle, this.#syncHandle, this.#outerHandle] =
       this.#buildHandles()
@@ -1031,30 +1016,15 @@ export class Synchronizer {
     return this.#docs.has(docId)
   }
 
-  async removeDocument(docId: DocId): Promise<void> {
-    const sync = this.#syncHandle.getState()
-    const event: DocChange | undefined =
-      this.#docs.has(docId) || sync.documents.has(docId)
-        ? { type: "doc-removed", docId }
-        : undefined
-    // Runtime must be deleted before the dispatch: emit-doc-events
-    // rebuilds the doc map from #docs, so a live entry here
-    // would re-introduce the doc the event is meant to remove.
-    this.#docs.delete(docId)
-    this.#dispatchSync({
-      type: "sync/doc-delete",
-      docId,
-      event,
-    })
-  }
-
   dismissDocument(docId: DocId): void {
     const sync = this.#syncHandle.getState()
     const event: DocChange | undefined =
       this.#docs.has(docId) || sync.documents.has(docId)
         ? { type: "doc-removed", docId }
         : undefined
-    // See removeDocument: the local delete must precede the dispatch.
+    // Delete locally before the dispatch: emit-doc-events rebuilds the doc
+    // map from #docs, so a live entry here would re-introduce the doc the
+    // event is meant to remove.
     this.#docs.delete(docId)
     this.#dispatchSync({
       type: "sync/doc-dismiss",
@@ -1487,9 +1457,6 @@ export class Synchronizer {
           effect.schemaHash,
           effect.supportedHashes,
         )
-        break
-      case "ensure-doc-dismissed":
-        this.#docDismissedCallback?.(effect.docId, effect.peer, "remote")
         break
       case "emit-doc-events":
         this.#emitDocEvents(effect.events)

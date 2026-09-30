@@ -264,9 +264,9 @@ This is not a bug in the algebra. The `Program` type is intentionally simple —
 
 ## Relationship to the Synchronizer
 
-The Synchronizer in `@kyneta/exchange` is a `Program<SynchronizerMessage, SynchronizerModel, Command>` where `Command` is a discriminated union of data effects (send message, build offer, apply snapshot, etc.). Its interpreter batches commands and executes them against live channels and substrates. The pure `update` function is tested exhaustively without any I/O.
+The Synchronizer in `@kyneta/exchange` runs two programs, `Program<SessionInput, SessionModel, SessionEffect>` and `Program<SyncInput, SyncModel, SyncEffect>`, whose effects are discriminated unions of data (send a message, send offers, import a payload, and so on). Its interpreter executes them against live channels and substrates. The pure `update` functions are tested exhaustively without any I/O.
 
-The Synchronizer's `cmd/ensure-doc` and `cmd/ensure-doc-dismissed` commands are the primary example of the idempotent-effect pattern described in "Stale-Sibling-Effect Hazard" above. When `handlePresent` batches multiple `cmd/ensure-doc` commands, the first command's callback may cascade-create state that the second command also targets. The `ensure-*` naming convention makes the idempotency contract explicit.
+The sync program's `ensure-doc` effect is the primary example of the idempotent-effect pattern described in "Stale-Sibling-Effect Hazard" above. When `handlePresent` batches several `ensure-doc` effects, the first one's callback may cascade-create state that the next one also targets. The `ensure-*` naming makes the idempotency contract explicit.
 
 ## Peer Dependencies
 

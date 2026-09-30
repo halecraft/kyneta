@@ -41,7 +41,7 @@ import type { Store, StoreRecord } from "../store/store.js"
 import { whenSettled } from "../sync.js"
 import { collectAll, UNAUTHORED } from "../testing/store-conformance.js"
 import { exchangesPerTest, sleep } from "./exchanges.js"
-import { wrapStore } from "./wrap-store.js"
+import { gated, wrapStore } from "./wrap-store.js"
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -190,46 +190,6 @@ describe("Storage persist + hydrate", () => {
 // Writes requested while another write is in flight
 // ---------------------------------------------------------------------------
 
-/**
- * Wrap a store so that, while held, appends wait until released — or fail.
- * Lets a test decide exactly which writes are in flight when a mutation lands.
- */
-function gatedAppend(inner: Store) {
-  let held: {
-    promise: Promise<void>
-    resolve: () => void
-    reject: (error: unknown) => void
-  } | null = null
-  const store = wrapStore(inner, {
-    append: async (docId, record, options) => {
-      if (held) await held.promise
-      return inner.append(docId, record, options)
-    },
-  })
-  return {
-    store,
-    hold(): void {
-      let resolve = (): void => {}
-      let reject = (_error: unknown): void => {}
-      const promise = new Promise<void>((res, rej) => {
-        resolve = res
-        reject = rej
-      })
-      held = { promise, resolve, reject }
-    },
-    release(): void {
-      const h = held
-      held = null
-      h?.resolve()
-    },
-    fail(error: unknown): void {
-      const h = held
-      held = null
-      h?.reject(error)
-    },
-  }
-}
-
 /** Let the Runtime's microtask drain dispatch what the last batch did. */
 async function tick(): Promise<void> {
   await new Promise(resolve => setTimeout(resolve, 0))
@@ -250,7 +210,7 @@ describe("a mutation during an in-flight write", () => {
     // At most one write per document is in flight at a time. A request that
     // arrives meanwhile is owed, and written once the first lands.
     const sharedData: InMemoryStoreData = createInMemoryStoreData()
-    const gate = gatedAppend(createInMemoryStore({ sharedData }))
+    const gate = gated(createInMemoryStore({ sharedData }), "append")
     const exchange1 = createExchange({ principal: "server", store: gate.store })
 
     const doc = exchange1.get("doc-1", SequentialDoc)
@@ -285,7 +245,7 @@ describe("a mutation during an in-flight write", () => {
     // discarded — there was no base to diff it against yet — and nothing
     // offered it again, so a restart found the document without it.
     const sharedData: InMemoryStoreData = createInMemoryStoreData()
-    const gate = gatedAppend(createInMemoryStore({ sharedData }))
+    const gate = gated(createInMemoryStore({ sharedData }), "append")
     const exchange1 = createExchange({ principal: "server", store: gate.store })
 
     gate.hold()
@@ -315,7 +275,7 @@ describe("a mutation during an in-flight write", () => {
     // edits behind it, every record after the first used to be as large as
     // the first.
     const sharedData: InMemoryStoreData = createInMemoryStoreData()
-    const gate = gatedAppend(createInMemoryStore({ sharedData }))
+    const gate = gated(createInMemoryStore({ sharedData }), "append")
     const exchange1 = createExchange({ principal: "server", store: gate.store })
 
     const doc = exchange1.get("doc-1", CausalDoc)
@@ -369,7 +329,7 @@ describe("a mutation during an in-flight write", () => {
     // started, so it carries both — nothing is lost, and nothing is retried
     // in a loop.
     const sharedData: InMemoryStoreData = createInMemoryStoreData()
-    const gate = gatedAppend(createInMemoryStore({ sharedData }))
+    const gate = gated(createInMemoryStore({ sharedData }), "append")
     const errors: unknown[] = []
     const exchange1 = createExchange({
       principal: "server",
@@ -414,7 +374,7 @@ describe("a failed compaction", () => {
     // silently wrote no further changes until some later compaction
     // happened to succeed.
     const sharedData: InMemoryStoreData = createInMemoryStoreData()
-    const gate = gatedAppend(createInMemoryStore({ sharedData }))
+    const gate = gated(createInMemoryStore({ sharedData }), "append")
     let failCompact = true
     const exchange1 = createExchange({
       principal: "server",

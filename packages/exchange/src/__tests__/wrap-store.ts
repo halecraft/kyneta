@@ -33,3 +33,66 @@ export function wrapStore(
     ...overrides,
   }
 }
+
+/** Store methods a test can hold. */
+export type Holdable = "append" | "compact" | "delete"
+
+/**
+ * Wrap a store so that, while held, `method` calls wait until released, or
+ * fail. Lets a test decide exactly which calls are in flight when something
+ * else happens.
+ */
+export function gated(inner: Store, method: Holdable) {
+  let held: {
+    promise: Promise<void>
+    resolve: () => void
+    reject: (error: unknown) => void
+  } | null = null
+  const wait = async (): Promise<void> => {
+    if (held) await held.promise
+  }
+  const overrides: Partial<Omit<Store, "seat">> =
+    method === "append"
+      ? {
+          append: async (docId, record, options) => {
+            await wait()
+            return inner.append(docId, record, options)
+          },
+        }
+      : method === "compact"
+        ? {
+            compact: async (docId, records, through, options) => {
+              await wait()
+              return inner.compact(docId, records, through, options)
+            },
+          }
+        : {
+            delete: async docId => {
+              await wait()
+              return inner.delete(docId)
+            },
+          }
+  return {
+    store: wrapStore(inner, overrides),
+    /** Hold every later call until `release` or `fail`. */
+    hold(): void {
+      let resolve = (): void => {}
+      let reject = (_error: unknown): void => {}
+      const promise = new Promise<void>((res, rej) => {
+        resolve = res
+        reject = rej
+      })
+      held = { promise, resolve, reject }
+    },
+    release(): void {
+      const h = held
+      held = null
+      h?.resolve()
+    },
+    fail(error: unknown): void {
+      const h = held
+      held = null
+      h?.reject(error)
+    },
+  }
+}

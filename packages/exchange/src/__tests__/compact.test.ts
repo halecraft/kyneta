@@ -25,7 +25,7 @@ import {
 } from "../store/in-memory-store.js"
 import { WriterRefusedError } from "../store/seats.js"
 import { drain, exchangesPerTest } from "./exchanges.js"
-import { wrapStore } from "./wrap-store.js"
+import { gated } from "./wrap-store.js"
 
 const LogSchema = Schema.struct({ log: Schema.text() })
 type LogDoc = {
@@ -190,18 +190,11 @@ describe("compaction with an own write unconfirmed", () => {
   )("sends nothing while the write is held, across the compaction, and then the write (%s)", async (_name, bound) => {
     const bridge = new Bridge()
     const storage = createInMemoryStoreData()
-    const inner = new InMemoryStore(storage)
-    let release = () => {}
-    let held: Promise<void> | undefined
+    const gate = gated(new InMemoryStore(storage), "append")
     const writer = createExchange({
       principal: "writer",
       transports: [createBridgeTransport({ bridge, transportId: "writer" })],
-      store: wrapStore(inner, {
-        append: async (docId, record, options) => {
-          if (held) await held
-          await inner.append(docId, record, options)
-        },
-      }),
+      store: gate.store,
     })
     const peer = createExchange({
       principal: "peer",
@@ -215,17 +208,14 @@ describe("compaction with an own write unconfirmed", () => {
     await drain()
     expect(seen.log()).toBe("one")
 
-    held = new Promise(resolve => {
-      release = resolve
-    })
+    gate.hold()
     append(doc, "two")
     await drain()
     const compaction = writer.compact("doc")
     await drain()
     expect(seen.log()).toBe("one")
 
-    held = undefined
-    release()
+    gate.release()
     await compaction
     await writer.flush()
     await drain()

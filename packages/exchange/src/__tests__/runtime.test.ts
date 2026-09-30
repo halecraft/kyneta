@@ -14,7 +14,7 @@ import {
 } from "@kyneta/schema"
 import { describe, expect, it, vi } from "vitest"
 import { Exchange } from "../exchange.js"
-import { Runtime, storeInputFor } from "../runtime.js"
+import { CREATE, Runtime, readinessFor } from "../runtime.js"
 import { whenHydrated } from "../settle.js"
 import {
   createInMemoryStore,
@@ -569,16 +569,35 @@ describe("Runtime.get and replicate-mode documents", () => {
 // Becoming ready — one step, for every creation path
 // ---------------------------------------------------------------------------
 
-describe("storeInputFor", () => {
+describe("readinessFor", () => {
+  const OPEN = { kind: "open", wasDeferred: false } as const
   it.each([
     [
       { kind: "stored", version: "L:3" } as const,
-      { type: "hydrated", docId: "d", version: "L:3" },
+      CREATE,
+      {
+        kind: "ready",
+        input: { type: "hydrated", docId: "d", version: "L:3" },
+      },
     ],
-    [{ kind: "empty" } as const, { type: "register", docId: "d" }],
-    [{ kind: "none" } as const, null],
-  ])("%j", (outcome, expected) => {
-    expect(storeInputFor("d", outcome)).toEqual(expected)
+    [
+      { kind: "stored", version: "L:3" } as const,
+      OPEN,
+      {
+        kind: "ready",
+        input: { type: "hydrated", docId: "d", version: "L:3" },
+      },
+    ],
+    [
+      { kind: "empty" } as const,
+      CREATE,
+      { kind: "ready", input: { type: "register", docId: "d" } },
+    ],
+    [{ kind: "empty" } as const, OPEN, { kind: "absent" }],
+    [{ kind: "none" } as const, CREATE, { kind: "ready", input: null }],
+    [{ kind: "none" } as const, OPEN, { kind: "absent" }],
+  ])("%j, %j", (outcome, intent, expected) => {
+    expect(readinessFor("d", outcome, intent)).toEqual(expected)
   })
 })
 

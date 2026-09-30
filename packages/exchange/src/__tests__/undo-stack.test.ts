@@ -99,6 +99,31 @@ describe("an undo stack", () => {
     expect(card.text()).toBe("")
   })
 
+  it("a destroyed document is not created again, and its step is skipped", async () => {
+    const exchange = createExchange({ schemas: [CardDoc, PlacesDoc] })
+    const { card, places } = open(exchange)
+    const stack = await stackOn(exchange)
+    stack.gesture(() => places.place.set("column"))
+    stack.gesture(() => card.text.insert(0, "sent"))
+    exchange.destroy("card")
+    expect(await stack.undo()).toBe(true)
+    expect(places.place()).toBe("")
+    expect(exchange.has("card")).toBe(false)
+  })
+
+  it("a document destroyed during an undo does not stand, and is not created again", async () => {
+    const exchange = createExchange({ schemas: [CardDoc, PlacesDoc] })
+    const { card, places } = open(exchange)
+    const stack = await stackOn(exchange)
+    stack.gesture(() => places.place.set("column"))
+    stack.gesture(() => card.text.insert(0, "sent"))
+    const undone = stack.undo()
+    exchange.destroy("card")
+    expect(await undone).toBe(true)
+    expect(places.place()).toBe("")
+    expect(exchange.has("card")).toBe(false)
+  })
+
   it("does not capture documents out of scope, or its own document", async () => {
     const exchange = createExchange({ schemas: [CardDoc] })
     const elsewhere: any = exchange.get("elsewhere", CardDoc)
@@ -141,6 +166,29 @@ describe("a stored undo stack", () => {
     expect(b.card.text()).toBe("hello")
     expect(await again.undo()).toBe(true)
     expect(b.card.text()).toBe("")
+  })
+
+  it("a stored document destroyed before it is opened is skipped, not created", async () => {
+    const data = createInMemoryStoreData()
+    const first = withStore(data)
+    const a = await settled(first)
+    const stack = await stackOn(first)
+    stack.gesture(() => a.places.place.set("column"))
+    stack.gesture(() => a.card.text.insert(0, "sent"))
+    await drain()
+    await first.shutdown()
+
+    const second = withStore(data)
+    const again = await stackOn(second)
+    second.destroy("card")
+    expect(await again.undo()).toBe(true)
+    expect(second.has("card")).toBe(false)
+    const places: any = second.get("places", PlacesDoc)
+    expect(places.place()).toBe("")
+    await second.flush()
+    expect(
+      await createInMemoryStore({ sharedData: data }).currentMeta("card"),
+    ).toBeNull()
   })
 
   it("a crash between the note and the revert reverts on the next load", async () => {

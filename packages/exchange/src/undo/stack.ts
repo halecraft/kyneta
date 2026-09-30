@@ -83,7 +83,8 @@ export interface UndoStack {
   /** Direct writes on this document made outside a gesture, grouped by the
    *  typing policy, as an editor binding makes them. */
   follow(docId: DocId): () => void
-  /** Undo the top step still standing. False when there is none. */
+  /** Undo the top step still standing. False when there is none. A part
+   *  stands only if its document is held here: an undo never creates one. */
   undo(options?: CommitOptions): Promise<boolean>
   /** Redo the top undone step still standing. */
   redo(options?: CommitOptions): Promise<boolean>
@@ -225,6 +226,21 @@ export async function createUndoStack(
     }
   }
 
+  /**
+   * A document open here now, with its undo. Read from the Runtime each time:
+   * a rebuilt document has a new substrate, and a destroyed one is gone. A
+   * part stands only if its document is this when the part is used.
+   */
+  const interpreted = (docId: DocId) => {
+    const entry = exchange.runtime.getEntry(docId)
+    if (entry?.mode !== "interpret") return undefined
+    const substrate = entry.readyInfo.replica
+    const { revertible } = substrate
+    if (revertible === undefined) return undefined
+    const ref: object = entry.ref
+    return { ref, readyInfo: entry.readyInfo, substrate, revertible }
+  }
+
   // --- Capture ------------------------------------------------------------
 
   const attached = new Map<
@@ -251,10 +267,9 @@ export async function createUndoStack(
     if (reverting) return
     const mode = via ?? (followed.has(docId) ? "follow" : undefined)
     if (mode === undefined) return
-    const entry = exchange.runtime.getEntry(docId)
-    if (entry?.mode !== "interpret" || entry.readyInfo.replica !== substrate)
-      return
-    const { readyInfo } = entry
+    const open = interpreted(docId)
+    if (open?.substrate !== substrate) return
+    const { readyInfo } = open
     const [only] = commit.ops
     const edit: Edit | undefined =
       commit.ops.length === 1 && only !== undefined
@@ -285,11 +300,9 @@ export async function createUndoStack(
 
   const attach = (docId: DocId) => {
     if (docId === params.docId || !scope(docId)) return
-    const entry = exchange.runtime.getEntry(docId)
-    if (entry?.mode !== "interpret") return
-    const substrate = entry.readyInfo.replica
-    const revertible = substrate.revertible
-    if (revertible === undefined) return
+    const open = interpreted(docId)
+    if (open === undefined) return
+    const { substrate, revertible } = open
     const existing = attached.get(docId)
     if (existing?.substrate === substrate) return
     existing?.stop()
@@ -298,69 +311,77 @@ export async function createUndoStack(
     )
     attached.set(docId, { substrate, stop })
   }
+  /** Listen to exactly the documents in scope that are open: a destroyed
+   *  document's substrate is let go. */
   const scan = () => {
     for (const docId of exchange.documents.keys()) attach(docId)
+    for (const [docId, { stop }] of attached) {
+      if (interpreted(docId) !== undefined) continue
+      stop()
+      attached.delete(docId)
+    }
   }
   scan()
   const stopScanning = exchange.documents.subscribe(scan)
 
   // --- Opening what a step names -----------------------------------------
 
-  /** Make sure the document a part names is open and loaded. */
+  /**
+   * Open and load the document a part names, if this exchange holds it. One
+   * it does not hold (destroyed, here or by another runtime on the store) is
+   * never created: the part does not stand.
+   */
   async function open(part: Part, settle: boolean): Promise<void> {
-    let entry = exchange.runtime.getEntry(part.docId)
-    if (entry?.mode !== "interpret") {
-      const bound = exchange.capabilities.resolveSchema(
-        part.schemaHash,
-        part.replicaType,
-        part.syncMode,
-      )
-      if (bound === undefined) {
-        throw new Error(
-          `undo: no schema is registered for document "${part.docId}" ` +
-            `(${part.schemaHash}). Register it in ExchangeParams.schemas.`,
-        )
-      }
-      // Widened: `get`'s precise return type recurses too deeply for a
-      // schema known only at runtime (TS2589).
-      const widened = exchange as unknown as {
-        get(docId: DocId, bound: BoundSchema): unknown
-      }
-      widened.get(part.docId, bound)
-      entry = exchange.runtime.getEntry(part.docId)
+    const ref = interpreted(part.docId)?.ref ?? (await openHeld(part))
+    if (ref === undefined) return
+    try {
+      if (settle) await whenSettled(ref)
+      else await whenHydrated(ref)
+    } catch (error) {
+      // A load that ended with the document gone (another caller's `open`
+      // found nothing, or it was destroyed meanwhile): the part does not
+      // stand.
+      if (interpreted(part.docId)?.ref === ref) throw error
+      return
     }
-    if (entry?.mode !== "interpret") {
-      throw new Error(`undo: document "${part.docId}" cannot be opened`)
-    }
-    if (settle) await whenSettled(entry.ref)
-    else await whenHydrated(entry.ref)
     attach(part.docId)
+  }
+
+  /** The document a part names, through `exchange.open`: `undefined` when
+   *  this exchange does not hold it. */
+  async function openHeld(part: Part): Promise<object | undefined> {
+    const bound = exchange.capabilities.resolveSchema(
+      part.schemaHash,
+      part.replicaType,
+      part.syncMode,
+    )
+    if (bound === undefined) {
+      throw new Error(
+        `undo: no schema is registered for document "${part.docId}" ` +
+          `(${part.schemaHash}). Register it in ExchangeParams.schemas.`,
+      )
+    }
+    // Widened: `open`'s precise return type recurses too deeply for a
+    // schema known only at runtime (TS2589).
+    const widened = exchange as unknown as {
+      open(docId: DocId, bound: BoundSchema): Promise<object | undefined>
+    }
+    return widened.open(part.docId, bound)
   }
 
   const openAll = async (step: Step, settle: boolean) => {
     for (const part of step.parts) await open(part, settle)
   }
 
-  /** A document's undo, read from the Runtime each time: a rebuilt
-   *  document has a new substrate. */
-  const revertibleOf = (docId: string): Revertible => {
-    const entry = exchange.runtime.getEntry(docId)
-    const revertible =
-      entry?.mode === "interpret"
-        ? entry.readyInfo.replica.revertible
-        : undefined
-    if (revertible === undefined) {
-      throw new Error(`undo: document "${docId}" is not open or not revertible`)
-    }
-    return revertible
-  }
-
   // --- Reverting ----------------------------------------------------------
 
-  /** A part's record, decoded, rewritten and encoded again. */
+  /** A part's record, decoded, rewritten and encoded again. `docId` has
+   *  just reverted, so it is open, unless the revert's own writes destroyed
+   *  it; its parts then stand no more, and are left as they are. */
   const rewritePart = (part: Part, docId: string, remap: Remap): Part => {
     if (part.docId !== docId || remap.size === 0) return part
-    const revertible = revertibleOf(docId)
+    const revertible = interpreted(docId)?.revertible
+    if (revertible === undefined) return part
     const record = revertible.codec.decode(base64ToUint8Array(part.record))
     return {
       ...part,
@@ -378,7 +399,11 @@ export async function createUndoStack(
   const settleStep = (
     direction: Direction,
     step: Step,
-    attempt: (part: Part, record: unknown) => ReturnType<Revertible["revert"]>,
+    attempt: (
+      revertible: Revertible,
+      part: Part,
+      record: unknown,
+    ) => ReturnType<Revertible["revert"]>,
   ): boolean => {
     const rewrite = (part: Part, by: Part, remap: Remap) =>
       rewritePart(part, by.docId, remap)
@@ -388,11 +413,12 @@ export async function createUndoStack(
       reverted = revertStep(
         step.parts,
         part => {
-          const revertible = revertibleOf(part.docId)
+          const revertible = interpreted(part.docId)?.revertible
+          if (revertible === undefined) return null
           const record = revertible.codec.decode(
             base64ToUint8Array(part.record),
           )
-          const result = attempt(part, record)
+          const result = attempt(revertible, part, record)
           if (result === null) return null
           const redo = uint8ArrayToBase64(revertible.codec.encode(result.redo))
           return { redo: { ...part, record: redo }, remap: result.remap }
@@ -453,11 +479,12 @@ export async function createUndoStack(
         return
       }
       case "note": {
+        // Only open documents: a part of one that is not does not stand.
         const positions: Record<string, string> = {}
         for (const part of effect.step.parts) {
-          positions[part.docId] ??= uint8ArrayToBase64(
-            revertibleOf(part.docId).position(),
-          )
+          const revertible = interpreted(part.docId)?.revertible
+          if (revertible === undefined) continue
+          positions[part.docId] ??= uint8ArrayToBase64(revertible.position())
         }
         write({
           ...read(),
@@ -477,8 +504,8 @@ export async function createUndoStack(
         const applied = settleStep(
           effect.direction,
           effect.step,
-          (part, record) =>
-            revertibleOf(part.docId).revert(record, effect.options),
+          (revertible, _part, record) =>
+            revertible.revert(record, effect.options),
         )
         dispatch({ type: "reverted", applied })
         return
@@ -519,8 +546,7 @@ export async function createUndoStack(
       return
     }
     await openAll(step, true)
-    settleStep(note.direction, step, (part, record) => {
-      const revertible = revertibleOf(part.docId)
+    settleStep(note.direction, step, (revertible, part, record) => {
       const noted = note.positions[part.docId]
       const position =
         noted === undefined ? undefined : base64ToUint8Array(noted)

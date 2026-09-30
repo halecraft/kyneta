@@ -16,7 +16,7 @@ import type { ExchangeParams } from "../exchange.js"
 import { persisted } from "../persistence.js"
 import { createInMemoryStore } from "../store/in-memory-store.js"
 import { exchangesPerTest, sleep } from "./exchanges.js"
-import { wrapStore } from "./wrap-store.js"
+import { gated } from "./wrap-store.js"
 
 const Doc = json.bind(Schema.struct({ title: Schema.string() }))
 
@@ -146,17 +146,10 @@ describe("two lineages of a plain document", () => {
     // reset discards it, so there is nothing left to confirm, and the
     // document must not stay held forever.
     quietErrors()
-    const inner = createInMemoryStore()
-    let waiting: (() => void)[] | undefined = []
-    const held = wrapStore(inner, {
-      append: async (docId, record, options) => {
-        const w = waiting
-        if (w) await new Promise<void>(resolve => w.push(resolve))
-        await inner.append(docId, record, options)
-      },
-    })
+    const gate = gated(createInMemoryStore(), "append")
+    gate.hold()
     const bridge = new Bridge()
-    const loser = open("loser", [bridge], { store: held })
+    const loser = open("loser", [bridge], { store: gate.store })
     const winner = open("winner", [bridge])
     await sleep(40)
 
@@ -165,9 +158,7 @@ describe("two lineages of a plain document", () => {
     await sleep(40)
     expect(loser.doc.title()).toBe("won")
 
-    const released = waiting ?? []
-    waiting = undefined
-    for (const resolve of released) resolve()
+    gate.release()
     await sleep(40)
     expect(persisted(loser.doc)).toBe(true)
 
