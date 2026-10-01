@@ -47,6 +47,7 @@ import type {
   SumVariants,
 } from "../interpret.js"
 import { INTERPRETER, type RefContext } from "../interpreter-types.js"
+import { RawPath } from "../path.js"
 import type {
   CounterSchema,
   MapSchema,
@@ -66,7 +67,11 @@ import { planSubtreeEffect, projectChange } from "../subtree-effect.js"
 import type { HasRead } from "./bottom.js"
 import { CALL } from "./bottom.js"
 import { type SubscriberNode, SubscriberTrie } from "./subscriber-trie.js"
-import { hasPreparePipeline, type SealedBatch } from "./writable.js"
+import {
+  hasPreparePipeline,
+  type SealedBatch,
+  type TraceEntry,
+} from "./writable.js"
 
 export const POPULATED: unique symbol = Symbol.for("kyneta:populated")
 
@@ -192,7 +197,8 @@ export interface DeliveryPlan {
   /**
    * Deep channel: node → every op in that node's subtree, already rebased to
    * its relative path, and the projections of ops above it at its relative
-   * root, in dispatch order.
+   * root, in dispatch order. Each path is the op's frozen one, rebased, so
+   * it says where the op wrote when it was made.
    */
   readonly deep: ReadonlyMap<SubscriberNode, readonly Op[]>
   /** Deep subscriber nodes, deepest-first — the order those callbacks fire in. */
@@ -218,11 +224,17 @@ export interface DeliveryPlan {
  * ancestor past both of them, and replaying the result reaches a different
  * state than the writes produced.
  *
- * @param pending - The sealed batch's ops, in dispatch order.
+ * Each entry carries two paths. The walk follows `at`, the live path, because
+ * subscribers are keyed by segment identity, and a list item's identity is
+ * its address. What a subscriber receives is `op.path`, the path frozen when
+ * the op was made, rebased by slicing at the subscriber's depth; the two
+ * paths have the same length.
+ *
+ * @param pending - The sealed batch's entries, in dispatch order.
  * @param trie - The context's subscribers; only read.
  */
 export function planDelivery(
-  pending: readonly Op[],
+  pending: readonly TraceEntry[],
   trie: SubscriberTrie,
 ): DeliveryPlan {
   const ownPath = new Map<SubscriberNode, ChangeBase[]>()
@@ -246,12 +258,13 @@ export function planDelivery(
     }
   }
 
-  for (const { path, change } of pending) {
+  for (const { op, at } of pending) {
+    const { path, change } = op
     // Up: the ancestor chain, as far as the trie has it. `chain[i]` is the
     // node for the first `i` segments; the chain is built from segment
     // identities, never by cutting a key string, so it cannot invent a level.
-    const chain = trie.chain(path)
-    const target = chain.length === path.length + 1 ? chain.at(-1) : undefined
+    const chain = trie.chain(at)
+    const target = chain.length === at.length + 1 ? chain.at(-1) : undefined
     if (target) toOwn(target, change)
     for (let i = chain.length - 1; i >= 0; i--) {
       const node = chain[i]
@@ -270,7 +283,7 @@ export function planDelivery(
       toOwn(node, projected)
       toDeep(
         node,
-        { path: path.root(), change: projected },
+        { path: RawPath.empty, change: projected },
         path.length + relative.length,
       )
     }
@@ -368,7 +381,7 @@ export function deliverNotifications(
  */
 export function liftToOps<C extends ChangeBase>(
   changeset: Changeset<C>,
-  path: Path,
+  path: RawPath,
 ): Changeset<Op<C>> {
   return {
     changes: changeset.changes.map(change => ({ path, change })),
@@ -429,7 +442,7 @@ function subscriberTrieOf(ctx: RefContext): SubscriberTrie {
 
   ctx.deliver = (batch: SealedBatch): void => {
     originalDeliver(batch)
-    deliverNotifications(planDelivery(batch.ops, trie), batch.options)
+    deliverNotifications(planDelivery(batch.entries, trie), batch.options)
   }
 
   contextState.set(ctx, trie)
@@ -498,7 +511,9 @@ function createPopulatedChangefeed(
     },
     subscribe,
     subscribeDescendants(callback) {
-      return subscribe(changeset => callback(liftToOps(changeset, path.root())))
+      return subscribe(changeset =>
+        callback(liftToOps(changeset, RawPath.empty)),
+      )
     },
   }
 }

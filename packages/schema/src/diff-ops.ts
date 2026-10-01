@@ -22,7 +22,7 @@ import {
 } from "./change.js"
 import type { Op } from "./changefeed.js"
 import { isNonNullObject, samePlainValue } from "./guards.js"
-import { type Path, RawPath } from "./path.js"
+import { RawPath } from "./path.js"
 import {
   KIND,
   type ProductSchema,
@@ -65,7 +65,7 @@ export function diffOps(
   schema: SchemaNode,
   before: unknown,
   after: unknown,
-  path: Path = RawPath.empty,
+  path: RawPath = RawPath.empty,
   keys?: readonly string[],
 ): Op[] {
   const ops: Op[] = []
@@ -93,7 +93,7 @@ function diffNode(
   schema: SchemaNode,
   before: unknown,
   after: unknown,
-  path: Path,
+  path: RawPath,
   ops: Op[],
 ): void {
   if (storageClass(schema) === "container") {
@@ -131,7 +131,7 @@ function diffProduct(
   schema: ProductSchema,
   before: unknown,
   after: unknown,
-  path: Path,
+  path: RawPath,
   ops: Op[],
 ): void {
   const from = isNonNullObject(before) ? before : {}
@@ -152,7 +152,7 @@ function diffRecord(
   item: SchemaNode,
   before: unknown,
   after: unknown,
-  path: Path,
+  path: RawPath,
   ops: Op[],
   keys?: readonly string[],
 ): void {
@@ -203,7 +203,7 @@ function diffRecord(
 function diffList(
   before: unknown,
   after: unknown,
-  path: Path,
+  path: RawPath,
   ops: Op[],
 ): void {
   const from: readonly unknown[] = Array.isArray(before) ? before : []
@@ -235,7 +235,7 @@ function diffList(
 function diffTextLeaf(
   before: unknown,
   after: unknown,
-  path: Path,
+  path: RawPath,
   ops: Op[],
 ): void {
   const from = typeof before === "string" ? before : ""
@@ -246,7 +246,7 @@ function diffTextLeaf(
 function diffCounter(
   before: unknown,
   after: unknown,
-  path: Path,
+  path: RawPath,
   ops: Op[],
 ): void {
   const from = typeof before === "number" ? before : 0
@@ -254,6 +254,6 @@ function diffCounter(
   if (from !== to) emit(ops, path, incrementChange(to - from))
 }
 
-function emit(ops: Op[], path: Path, change: ChangeBase): void {
+function emit(ops: Op[], path: RawPath, change: ChangeBase): void {
   ops.push({ path, change })
 }

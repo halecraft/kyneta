@@ -22,7 +22,7 @@
 
 ## Changed
 
-- **`SubstratePrepare.afterBatch(outcome)`** (`@kyneta/schema`) (breaking, custom substrates). The end of an authored batch now receives its `BatchOutcome`: the ops that survived and their inverses, paired, and whether it aborted. `InverseEntry` is exported. `AnnounceOptions` gains `source`, carried by a local announcement of a write a local caller asked the substrate to make natively.
+- **`SubstratePrepare.afterBatch(outcome)`** (`@kyneta/schema`) (breaking, custom substrates). The end of an authored batch now receives its `BatchOutcome`: the ops that survived and their inverses, each an op at its op's path, paired, and whether it aborted. `AnnounceOptions` gains `source`, carried by a local announcement of a write a local caller asked the substrate to make natively.
 - **`useText`'s and `attach`'s `undo` option** (`@kyneta/react`) is `UndoTarget | "prevent" | "browser"`. `"prevent"` stays the default.
 - **Rich text is materialized with adjacent equal-mark spans merged** (`@kyneta/loro-schema`, `@kyneta/yjs-schema`). Loro could split them after a mark was removed, so a re-materialized shadow disagreed with the stepped one.
 - **The Yjs backend's TECHNICAL.md says how to configure `Y.UndoManager`** (scope it to the root map, capture only `transaction.local`): with its defaults it records a peer's merged edits as undoable.
@@ -162,6 +162,13 @@
   - **Removed**: `withoutTracking`, `writeByPath`, `ownedForStore` (now `freezePayload`, which freezes a payload in place for the store to share), and `WritableContext.preparing`. New exports: `freezePayload`, `freezeTree`, `isDeeplyFrozen`, `StateCell`, and `frozenInvariantViolations` in `@kyneta/schema/testing`.
   - **`resolveToAddressed` re-resolves a path addressed in another document's trie**, by its coordinates, so ops returned by one document's `batch()` apply to another even after their coordinates died in the first.
   - `set.clear()` names the members it removed in its op; the op's `remove` list was the store's own members array, which the clear emptied.
+- **An op's path is fixed when the op is made, and a batch keeps one record of what it did** (`@kyneta/schema`, `@kyneta/exchange`) (breaking). Every op a document handed out carried the live addressed path it was prepared at, whose list indices advance as items are inserted before them. A held op replayed to the wrong item, and plain undo of `batch(d => { d.items.at(1).t.set("x"); d.items.insert(0, …) })` wrote another item.
+  - **`Op.path` is a `RawPath`**, frozen once, when the op is made: in `batch()`'s return value, in every delivered changeset (rebased), and in `BatchOutcome`. A caller building ops from a ref's `[PATH]` calls `.toRaw()`. Delivery still finds subscribers by identity.
+  - **`batch()` returns only the ops that survived**: an inner `batch()` that threw and was caught is no longer in it, so the returned ops replay to the source's state. The changeset still carries the inner writes and their compensations.
+  - **An op is recorded once `substrate.prepare` returns**, so a `prepare` that throws is not compensated. `RecordInverseFn` takes only the inverse, and must be called exactly once per forward write (breaking, custom substrates).
+  - **A plain aborted batch logs nothing and does not move the version**, and is no local update; a batch that absorbed an inner abort logs only what survived.
+  - **Typing groups key by the edited text's position**, so a typing step ends when its list item moves between keystrokes. Authored and native writes now key alike.
+  - `SealedBatch.entries` (`{ op, at }`) replaces `SealedBatch.ops`; `authoredSince` and `TraceEntry.authored` are gone. `BatchOutcome.inverses` are `Op`s, and `InverseEntry` is gone. `deliveryConformance`'s local-update check for an aborted batch now asks whether the replica gained ops.
 
 ## Removed
 

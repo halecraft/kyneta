@@ -670,12 +670,15 @@ export function deliveryConformance(
       })
     }
 
-    it("signal: an aborted batch is a local update", () => {
+    it("signal: an aborted batch is a local update exactly when the replica gained ops", () => {
       const env = factory()
+      const substrate = substrateOf(env.doc)
+      const before = substrate.version()
       const localUpdates = countLocalUpdates(env.doc)
 
-      // The compensations are committed along with the writes they undo, so
-      // the replica gained ops even though its state did not move.
+      // A CRDT commits the compensations along with the writes they undo, so
+      // the replica gains ops though its state does not move. The plain log
+      // takes what the batch did, which is nothing.
       expect(() =>
         batch(env.doc, d => {
           d.top.set(1)
@@ -683,7 +686,8 @@ export function deliveryConformance(
         }),
       ).toThrow("abort")
 
-      expect(localUpdates()).toBeGreaterThan(0)
+      const gained = substrate.version().compare(before) !== "equal"
+      expect(localUpdates() > 0).toBe(gained)
     })
 
     it("signal: after commitPending, an export reports no local update", () => {

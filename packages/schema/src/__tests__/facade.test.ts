@@ -741,7 +741,7 @@ describe("round-trip: subscribeDescendants output → applyChanges input", () =>
     // To apply to docB, we need to prepend the "settings" prefix
     const absoluteOps: Op[] = treeChangesets.flatMap(cs =>
       cs.changes.map(te => ({
-        path: te.path.root().field("settings").concat(te.path),
+        path: RawPath.empty.field("settings").concat(te.path).toRaw(),
         change: te.change,
       })),
     )

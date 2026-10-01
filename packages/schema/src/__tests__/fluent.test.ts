@@ -5,7 +5,6 @@ import type {
   Interpreter,
   InterpreterLayer,
   Op,
-  RawSegment,
   RefContext,
   WritableContext,
 } from "../index.js"
@@ -140,9 +139,7 @@ describe("fluent: interpret(schema, ctx).with(...).done()", () => {
     )
     doc.settings.darkMode.set(true)
     expect(events.length).toBeGreaterThanOrEqual(1)
-    expect(
-      (events[0]?.path.segments[0] as RawSegment & { key: string }).key,
-    ).toBe("darkMode")
+    expect(events[0]?.path.segments[0]?.coord()).toBe("darkMode")
   })
 })
 

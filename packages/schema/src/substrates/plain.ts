@@ -324,10 +324,6 @@ export function createPlainSubstrate(
   const reader = plainReader(cell)
   const core = createPlainCore(() => cell.current, clock, history)
 
-  // Ops of the authored batch in progress: filled by `prepare`, logged by
-  // `afterBatch`.
-  const pendingOps: Op[] = []
-
   // Every op this substrate logs locally is authored here, so a batch that
   // logged something is exactly a local update.
   const localUpdates = createLocalUpdateSignal()
@@ -401,22 +397,17 @@ export function createPlainSubstrate(
         // Read, don't copy. `invert` owns whatever it retains (`own`): a
         // value a read froze is shared, since no write can change it, and
         // anything else is copied.
-        recordInverse(path, invert(path.read(cell.current), change))
+        recordInverse(invert(path.read(cell.current), change))
       }
       // The writable context completed the change, so σ and the log take the
       // same value, frozen and shared.
       applyChange(cell, path, freezePayload(change))
-      // Freeze to an immutable RawPath before the op enters the log. The live
-      // AddressedPath aliases memoized registry Address objects that a later
-      // delete tombstones and a later insert re-indexes, in place — logging it
-      // would let those mutations corrupt this historical op (export throws, or
-      // serializes a drifted index). The addressed `path` above is still needed
-      // for the σ read and inverse; only the logged copy is frozen. jj:mlurlzqt
-      pendingOps.push({ path: path.toRaw(), change })
     },
 
+    // The log takes what the batch did: its surviving ops, each path frozen
+    // as the op was made. An aborted batch did nothing, and logs nothing.
     afterBatch(outcome: BatchOutcome): void {
-      if (pendingOps.length === 0) return
+      if (outcome.ops.length === 0) return
       const before = core.version().serialize()
       // Mint a REAL lineage on the first authored flush. Only authored
       // batches reach here: a merge appends to the log directly, so taking
@@ -425,7 +416,7 @@ export function createPlainSubstrate(
       if (clock.lineage() === DEFAULT_LINEAGE) {
         clock.adopt(mintLineage(Date.now()))
       }
-      core.append(pendingOps.splice(0))
+      core.append(outcome.ops)
       revertible.captured(outcome, before, core.version().serialize())
       localUpdates.notify()
     },

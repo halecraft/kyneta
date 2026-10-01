@@ -215,6 +215,27 @@ export function undoConformance(
           expect(s.doc.cards()).toEqual([{ name: "hi", done: false }])
         })
 
+        it("a step that writes a card, then inserts a card before it, undoes exactly", () => {
+          const s = new Stack(env, env.create())
+          s.step(d =>
+            d.cards.push(
+              { name: "a", done: false },
+              { name: "b", done: false },
+              { name: "c", done: false },
+            ),
+          )
+          const before = s.doc.cards()
+          s.step(d =>
+            batch(d, (b: any) => {
+              b.cards.at(1).done.set(true)
+              b.cards.insert(0, { name: "new", done: false })
+            }),
+          )
+          settle(s)
+          expect(s.undo()).toBe(true)
+          expect(s.doc.cards()).toEqual(before)
+        })
+
         it("a step of several commits to one text or list undoes and redoes in order", () => {
           const s = new Stack(env, env.create())
           s.step(d => {

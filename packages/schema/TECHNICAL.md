@@ -359,7 +359,7 @@ It is how `@kyneta/exchange` decides what leaves the process. A changeset cannot
 |---|---|
 | Yjs | the `Y.Doc`'s `update` event, for a `transaction.local` transaction |
 | Loro | `LoroDoc.subscribeLocalUpdates` |
-| plain | the end of `afterBatch`, when the batch appended ops |
+| plain | the end of `afterBatch`, when the batch appended ops; an aborted batch appends none |
 | ephemeral | the end of `afterBatch`, when the batch wrote the tree |
 
 Plain and ephemeral have only Kyneta writers, so they share `createLocalUpdateSignal` (`src/substrates/local-update-signal.ts`) and differ only in how they know a batch wrote.
@@ -372,11 +372,11 @@ The signal fires synchronously, possibly several times for one batch (a Yjs tick
 
 The substrate boundary knows nothing about provenance: `prepare`, `afterBatch` and `runBatch` are called only for local writes and their compensations. Mutations apply eagerly per the σ-eager design. For each `prepare(path, change, recordInverse)`:
 
-1. If `recordInverse` is present (a forward write), read `pre = path.read(σ)`, compute `inverse = invert(pre, change)` — the reverse arrow in the change groupoid — and record it on the active runBatch frame's inverse stack.
+1. If `recordInverse` is present (a forward write), read `pre = path.read(σ)`, compute `inverse = invert(pre, change)` — the reverse arrow in the change groupoid — and hand it to `recordInverse`, exactly once. The context records the op and its inverse on the active frame once `prepare` returns.
 2. Advance σ via `applyChange(shadow, path, change)`.
 3. Advance λ via the substrate-native path (Loro: applyDiff or coalescing buffer; Yjs: applyChangeToYjs inside the ambient transact).
 
-The inverse stack belongs to the bracket primitive (`WritableContext.runBatch`'s wrapper). On the bracket's depth-0 success release, the frame's range goes to `afterBatch(outcome)` and is cleared, and the batch is sealed. `outcome` holds the ops that survived (a frame that threw inside an outer one took its entries with it) and their inverses, paired: each entry keeps its forward change beside its inverse. A revertible substrate builds the batch's undo record from it; an aborted batch passes `{ ops: [], inverses: [], aborted: true }`. On a throw, the catch path replays the frame's inverses LIFO through `ctx.prepare(path, inverse, { ingress: "compensate" })`, which reaches the substrate with `recordInverse === null`, then seals the batch with `aborted: true`, then rethrows. The bracket's commit contains forward + inverse ops with net-zero delta when the outermost throws.
+The frame stack (`frame-stack.ts`) belongs to the bracket primitive (`WritableContext.runBatch`'s wrapper). On the bracket's depth-0 success release, its content goes to `afterBatch(outcome)` and is cleared, and the batch is sealed. `outcome` holds the ops that survived (a frame that threw inside an outer one took its entries with it) and their inverses, paired, each path frozen as its op was made. A revertible substrate builds the batch's undo record from it; an aborted batch passes `{ ops: [], inverses: [], aborted: true }`. On a throw, the catch path replays the frame's inverses LIFO through `ctx.prepare(path, inverse, { ingress: "compensate" })`, which reaches the substrate with `recordInverse === null`, then seals the batch with `aborted: true`, then rethrows. The bracket's commit contains forward + inverse ops with net-zero delta when the outermost throws.
 
 This is how `batch(doc, d => { d.title.insert(0, "hi"); d.items.push(x); })` becomes one atomic changefeed emission with read-your-writes inside the block, and how a throwing block becomes one batched native event with net-zero delta plus one `Changeset` with `aborted: true`.
 
@@ -426,7 +426,7 @@ All substrates now share the same read semantics: reads go through `plainReader`
 - an adopted state is gathered (`completeValue(schema, state)`), planned (`diffOps(schema, σ, completed)`) and executed;
 - `buildUpgrade` seeds σ with `completeValue(schema, replica state)`.
 
-**The log keeps authored ops completed and merged batches as sent.** The log is history shared across peers and addressed by position: a schema-less headless replica, such as a relay, forwards and serves it as received, and peers on different schemas would log different contents at the same positions if each rewrote it. So `exportSince` can carry a peer's incomplete op, and every receiver completes it on `append`. σ is the completion of the replayed log. The headless replica does not complete: it has no schema, so its state is λ.
+**The log keeps authored ops completed and merged batches as sent.** An authored batch is logged from its `BatchOutcome`: the ops that survived, so an aborted batch logs nothing and does not move the version, and a batch that absorbed an inner abort logs only what σ holds. The log is history shared across peers and addressed by position: a schema-less headless replica, such as a relay, forwards and serves it as received, and peers on different schemas would log different contents at the same positions if each rewrote it. So `exportSince` can carry a peer's incomplete op, and every receiver completes it on `append`. σ is the completion of the replayed log. The headless replica does not complete: it has no schema, so its state is λ.
 
 Key functions (in `src/substrates/plain.ts`):
 
@@ -492,14 +492,19 @@ The plain substrate's `serializeOps` / `deserializeOps` embed `Op.change` by ref
 
 The lineage now travels as an explicit field, `SubstratePayload.lineage`, set by every substrate's `exportEntirety`/`exportSince` (Plain sets it to the current lineage; Loro/Yjs/`ephemeral` set it to `DEFAULT_LINEAGE`). Plain's own `data` payload is `{ at, state }` for entirety and `{ from, batches }` for since (see §"Positioned payloads, and merging by plan") — positions, but no lineage. This is a simplification from an earlier design where Plain's JSON payload wrapped state/ops in an inline envelope (`{ i: string, s: PlainState }` / `{ i: string, b: SerializedOp[][] }`); that inline lineage field duplicated information already available via the parsed `Version` (which encodes as `"${lineage}:${value}"`) and via the new `SubstratePayload.lineage` field, creating a desync hazard between the wire-level version and the body-embedded lineage.
 
-### The op-log holds immutable `RawPath` (authoring-time freeze)
+### An op is a value (authoring-time freeze)
 
-**Invariant: the op-log is history — immutable values, never references into the live addressing registry.** A logged `Op` is a fact about the past; a since-deleted key is still the correct thing that op did. `AddressedPath` segments are memoized, *mutable* `Address` objects (an entry delete sets `dead = true`; a sequence edit advances `index` — both in place, see [§The interpreter stack](#the-interpreter-stack) addressing and `change.ts` `advanceAddresses`). If the log stored the live path, a later mutation would corrupt a historical op: `exportSince` → `serializeOps` would throw `"Ref access on deleted map entry"` on a tombstoned entry segment, or silently serialize a *drifted* index.
+**Invariant: every op that leaves the writable context is a value, never a reference into the live addressing registry.** `Op.path` is a `RawPath` by type. An op names the coordinate it wrote at the moment it was made, and a held op still replays there after the document moves on. `AddressedPath` segments are memoized, *mutable* `Address` objects (an entry delete sets `dead = true`; a sequence edit advances `index`, both in place, see [§The interpreter stack](#the-interpreter-stack) addressing and `change.ts` `advanceAddresses`). An op that kept the live path would report a coordinate the op never wrote: `serializeOps` would throw `"Ref access on deleted map entry"` on a tombstoned entry segment, or a replay would land on a *drifted* index.
 
-The fix is a one-token change at the authoring seam: `PlainSubstrate.prepare` (and the `ephemeral` substrate's) pushes `{ path: path.toRaw(), change }`, not `{ path, change }`. `Path.toRaw()` (`path.ts`) is a pure projection — `RawPath.toRaw()` returns `this`; `AddressedPath.toRaw()` reads each segment's **`coord()`** (never `resolve()`, so it succeeds even for a dead address). It is the named inverse of `resolveToAddressed`. Two consequences worth internalizing:
+**Frozen once, where the op is made.** `ctx.prepare` builds `{ path: path.toRaw(), change }` once per op and pairs it with the live path it prepared at (`TraceEntry { op, at }`). `Path.toRaw()` (`path.ts`) is a pure projection: `RawPath.toRaw()` returns `this`; `AddressedPath.toRaw()` reads each segment's **`coord()`** (never `resolve()`, so it succeeds even for a dead address). It is the named inverse of `resolveToAddressed`. Each consumer takes the half it needs:
 
-- **Freeze at *push*, not flush.** Index addresses advance in place *within* a batch, before `afterBatch` appends the pending ops to the log, so freezing later would capture the post-advance index. Push-time captures the coordinate as-authored. (The addressing prepare-handler fires *before* `substrate.prepare` for the same change, but an op's own path coordinate is stable under its own change — structural effects live in the change *payload* at the container path, not in the op's path segments; `index`/`entry` segments appear only on *nested* writes, which don't advance the address they sit on.)
-- **The log is now byte-shape-homogeneous.** Local-write ops and merge ops (which were already `RawPath` via `deserializeOps`) are the same value type, replayed by the same `applyChange`. `serializeOps` needs no special case: its `seg.resolve()` runs only on total `RawSegment`s and never throws — the defect was the *input*, not the code.
+- **The frozen op:** `batch()`'s return value, delivered changesets (rebased), `BatchOutcome.ops` and `.inverses`, the plain log, and so every undo record.
+- **The live path:** the prepare stages, compensation (an inverse is prepared where the address stands once the ops after it are undone), and the subscriber walk (subscribers are keyed by segment identity, and a list item's is its address).
+
+Two consequences worth internalizing:
+
+- **Freeze at *push*, not at the end of the batch.** Index addresses advance in place *within* a batch, so freezing when the batch is sealed, or in `afterBatch`, would capture the post-advance index. The plain undo record was built that way, and `batch(d => { d.items.at(1).t.set("x"); d.items.insert(0, …) })` recorded `items[2].t`: undoing it wrote another item. An op's own coordinate is stable under its own change, since structural effects live in the change *payload* at the container path, not in the op's path segments; `index`/`entry` segments appear only on *nested* writes, which don't advance the address they sit on.
+- **The log is byte-shape-homogeneous.** Local-write ops and merge ops (`deserializeOps`) are the same value type, replayed by the same `applyChange`. `serializeOps` runs `seg.resolve()` only on total `RawSegment`s, which never throw.
 
 ### `resolve()` vs `coord()` — liveness assertion vs coordinate projection
 
@@ -1251,7 +1256,7 @@ Under the three-primitive substrate contract, `ctx.runBatch` is **one bracket pr
 
 2. **Seal handler** — fires exactly once at the depth 1→0 transition, inside the bracket. It runs `substrate.afterBatch()` and seals the batch: success path `{ ...opts, ingress: "author" }`, catch path with `aborted: true`. Inner frames push/pop without sealing — the depth-0 release is the single seal per outermost block. Delivery happens after the bracket closes (see below).
 
-3. **Inverse-stack handler** — every successful authored `prepare` pushes an `InverseEntry` (path + reverse arrow), with the forward change beside it. On throw, the frame's range is replayed LIFO through `ctx.prepare(path, inverse, { ingress: "compensate" })`, which hands the substrate no recorder, so the inverse of an inverse is never recorded. External observers see one batched native event whose ops net to zero. On success the outermost range goes to `afterBatch`, for undo.
+3. **Frame-stack handler** — every authored `prepare` whose substrate call returned records the op and its reverse arrow on the frame stack (`frame-stack.ts`). On throw, the frame's inverses are replayed LIFO through `ctx.prepare(at, inverse, { ingress: "compensate" })`, which hands the substrate no recorder, so the inverse of an inverse is never recorded. External observers see one batched native event whose ops net to zero. On success the outermost frame's ops and inverses go to `afterBatch`, for undo.
 
 The three handlers are co-extensive — they all open and close at the same boundary. Every authored write goes through `ctx.runBatch` (`batch`, `applyChanges`, or `dispatch`'s auto-commit); `announce` bypasses it, because the substrate has already applied those ops and there is nothing to bracket.
 
@@ -1259,13 +1264,14 @@ Substrate.runBatch is invoked at most once per outermost `batch(doc, fn)`. Re-en
 
 ### The batch lifecycle: capture, seal, release
 
-Source: `src/interpreters/writable.ts` (`buildWritableContext`, `authoredSince`, `seal`).
+Source: `src/interpreters/writable.ts` (`buildWritableContext`, `TraceEntry`, `SealedBatch`), `src/interpreters/frame-stack.ts`.
 
 **Changesets are delivered in seal order, each after every native commit that was open when it was sealed.** The writable context owns the whole lifecycle, because it is the one place that sees both which ops belong to which batch and when a native commit is open:
 
-- **Capture.** A stack of **traces**, each a list of `{ op, authored }`. An authored op is traced completed, so `batch()`'s return value, the delivered changeset and the plain log carry the value σ holds. The outermost `runBatch` frame opens one, and so does `announce`. The base `prepare` appends every op to the top trace; with no trace open it throws. An announcement made while an authored batch is open gets its own trace, so neither batch can pick up the other's ops.
-- **The trace is also `batch()`'s return value.** Each frame notes the trace length on entry and returns `authoredSince(trace, start)`: the authored ops, without compensations. The sealed changeset carries every entry.
-- **Seal.** At the end of the outermost frame, inside the bracket, `afterBatch` runs and `seal(trace, options)` makes a `SealedBatch`. The trace is popped at once, so a stray prepare afterwards throws instead of joining a sealed batch.
+- **Capture: two records, one job each.** An authored op is captured completed, so everything below carries the value σ holds, and its path frozen ([An op is a value](#an-op-is-a-value-authoring-time-freeze)).
+  - **The trace is what to deliver.** A stack of traces, each a list of `{ op, at }`: every op prepared, compensations included. The outermost `runBatch` frame opens one, and so does `announce`. The base `prepare` appends every op to the top trace; with no trace open it throws. An announcement made while an authored batch is open gets its own trace, so neither batch can pick up the other's ops.
+  - **The frame stack is what the batch did** (`frame-stack.ts`, pure). Each `runBatch` frame opens a frame; `prepare` records an authored op with its inverse once `substrate.prepare` returns, so an op whose `prepare` threw is never recorded. A frame that ends returns its ops (`batch()`'s return), nested frames that ended included. A frame that throws hands back its inverses to compensate, last first, and leaves the stack, so no frame around it reports its ops. When the outermost frame ends, the stack's content is the `BatchOutcome` `afterBatch` receives. Its entries are a list built from the head, so recording, compensating and truncating copy nothing.
+- **Seal.** At the end of the outermost frame, inside the bracket, `afterBatch` runs and the trace becomes a `SealedBatch`. The trace is popped at once, so a stray prepare afterwards throws instead of joining a sealed batch.
 - **Release.** Each context has one delivery dispatcher (`createDispatcher`, label `"changefeed"`, message `{ type: "deliver", batch }`, the context's `lease`), created on first use. `runBatch` runs the substrate bracket inside `deliveries.hold(...)`: anything sealed while it runs — the batch itself, and any announcement a native listener triggers during the commit — queues, and drains in seal order when the commit closes. The dispatcher's handler calls `ctx.deliver(batch)`, which the changefeed layer wraps.
 
 Two consequences worth knowing:
@@ -1409,13 +1415,17 @@ Two guarantees that follow from one boundary: the bracket belongs to the *outerm
 
 A Changeset with `aborted: true` is the bracket's signal that the outermost `batch(doc, fn)` block threw and was wholly compensated via inverse replay. The op list contains forward + inverse pairs that net to identity at every path. Inner `batch()`s that threw and were caught by an outer `batch()`'s try/catch produce a NON-aborted outermost Changeset; the absorbed forward + inverse pair sits in the op list alongside surviving outer ops. Consumers needing to identify absorbed inner aborts pair the ops semantically (the framework doesn't surface a separate flag for this).
 
+`batch()`'s return value and `BatchOutcome` leave an absorbed inner abort out: they are what the batch did. The changeset keeps it, because the inner writes gave σ new objects at their paths, and a subscriber hears a batch exactly when its read gets a new identity in it. Both lists replay to the same state.
+
 The `aborted` flag is tightened: `true` iff the outermost block threw. Auto-commit blocks and successful outermost blocks have `aborted: undefined` (== falsy). Replay batches have `aborted: undefined`.
 
 ### Compensation and buffered substrates
 
-**On a buffered substrate, compensation can mask the original error.** If a substrate (like Loro) buffers changes (e.g., `coalesceBuffer`) or throws synchronously during `prepare`, Kyneta's eager inverse recording causes the compensation loop to apply inverses for changes that were never actually committed to the substrate. This can cause the compensation loop itself to crash (e.g., throwing "Index out of bound" when attempting to revert an uncommitted insert). A `try/catch` in the compensation loop ensures the original error is chained via `Error.cause`, but the architectural mismatch between eager inverse recording and buffered substrate application remains a known limitation.
+**An op is recorded only once `substrate.prepare` returns.** A substrate hands its inverse to `recordInverse`, exactly once per forward write, and the context records the op and the inverse after `prepare` returns. So a `prepare` that throws leaves nothing to compensate, and compensation never reverts a change the substrate did not apply. A substrate that records no inverse, or two, makes `prepare` throw at once.
 
-**Future Direction:** This will eventually be resolved by a deeper architectural shift, such as a "two-phase prepare" (recording inverses only after successful substrate application) or by pushing transaction boundaries and rollback responsibilities down to the substrate.
+**On a buffered substrate, compensation can still mask the original error.** A substrate (like Loro) that buffers changes (`coalesceBuffer`) and applies them only at `afterBatch` has applied nothing native when `prepare` returns, so a failure while the buffer drains meets inverses for writes λ never took. The compensation loop can then crash itself (e.g., throwing "Index out of bound" when reverting an uncommitted insert). A `try/catch` in the compensation loop chains the original error via `Error.cause`.
+
+**Future Direction:** pushing transaction boundaries and rollback responsibilities down to the substrate, so a buffered substrate rolls back what it buffered.
 
 ### Re-entrant `batch()` inside subscriber callbacks (drain-to-quiescence)
 
@@ -1540,7 +1550,7 @@ interface Revertible<R> {
 
 ### Three substrates, three records
 
-- **Plain** has one writer, so its undo is a strict stack. A record is the batch's ops and inverses and the log heads before and after it. A revert applies exactly when the head is where the step left it. The remap renames the head the revert produced as the position before the step, so the step below reverts next. A write outside the stack moves the head somewhere no record names, and ends undo past it.
+- **Plain** has one writer, so its undo is a strict stack. A record is the batch's ops and inverses, each path as its op was made, and the log heads before and after it. A revert applies exactly when the head is where the step left it. The remap renames the head the revert produced as the position before the step, so the step below reverts next. A write outside the stack moves the head somewhere no record names, and ends undo past it.
 - **Yjs** is identity-based, on Yjs's public API. See its TECHNICAL.md § Undo.
 - **Loro** is history-based: the inverse is `diff(after, before)`, and what happened since is read by content, the document forked at `after` against the document now. See its TECHNICAL.md § Undo.
 
@@ -1549,6 +1559,8 @@ interface Revertible<R> {
 ### Typing
 
 `continuesStep(previous, next)` decides whether a keystroke joins the undo step before it: the same text, inside the gap (`TYPING_GAP`, 1000 ms), the same kind of edit, the caret where the last edit left it, and no word boundary. `editOf(op, at)` reads the one contiguous edit a text op makes, through `singleEdit`, which the React text adapter also uses.
+
+"The same text" is the op's raw path key, the position the text had when the op was made. So a typing step also ends when an insert or delete moves the edited text's list item between two keystrokes. Authored ops and the CRDT bridges' ops key alike: both carry raw paths.
 
 ### What undo is NOT
 
@@ -1588,7 +1600,7 @@ Facade vs. protocol vocabulary inversion: facade `subscribe` is deep delivery (`
 
 Two functions form the notification engine:
 
-1. `planDelivery(ops, trie)` → `DeliveryPlan` — the Functional Core. Walks a sealed batch's ops **once**, in dispatch order, and answers both channels. The plan is keyed by subscriber-trie node.
+1. `planDelivery(entries, trie)` → `DeliveryPlan` — the Functional Core. Walks a sealed batch's entries **once**, in dispatch order, and answers both channels. The plan is keyed by subscriber-trie node.
 2. `deliverNotifications(plan, options)` → the Imperative Shell. Builds changesets and calls functions. All the deciding already happened.
 
 **Subscribers live in a trie** (`SubscriberTrie`, `src/interpreters/subscriber-trie.ts`), one per context, keyed by segment identity like the coordinate trie: each node holds its coordinate's own-path and deep subscribers, its population state, and a count of the callbacks at or below it, so walks skip what nobody watches. A path key would do for a lookup, but not for enumerating a subtree, and it conflates two coordinates whose joined keys collide (`field("a\0b")` and `field("a").field("b")`); the trie keeps them apart. It is not the `CoordinateTrie`: a subscription lasts as long as its subscriber, not its coordinate, and a subscriber at a list item or tree node must hear the change that kills it, while addressing unlinks those coordinates before delivery.
@@ -1597,7 +1609,7 @@ Two functions form the notification engine:
 
 **The walk, up and down.** A change concerns exactly the coordinates whose read it changes, so delivery walks the same scope in which a write gives σ new objects ([Read identity](#read-identity)) — and **a subscriber hears a batch exactly when its read gets a new identity in it**:
 
-- **Up.** A change at `a.b.c` concerns a subscriber at `a.b.c`, at `a.b`, at `a`, and at the root: the path's ancestor chain, walked down the trie by the path's `segmentKeys`, so it is computed from the path itself rather than maintained between flushes. The change is rebased to each deep subscriber's relative path, only where one exists.
+- **Up.** A change at `a.b.c` concerns a subscriber at `a.b.c`, at `a.b`, at `a`, and at the root: the path's ancestor chain, walked down the trie by the path's `segmentKeys`, so it is computed from the path itself rather than maintained between flushes. The walk follows the entry's live path (`at`), because a list item's identity is its address. The change is rebased to each deep subscriber's relative path, only where one exists, by slicing the op's frozen path, so a subscriber receives the coordinates the op had when it was made, even when its changeset is delivered after later writes (queued behind a re-entrant batch).
 - **Down.** A change may also rewrite part of the tree below its path (`planSubtreeEffect`): a `replace` all of it, a map change the keys it names, a tree change the nodes it deletes. Every subscriber in that part receives `projectChange(change, relative)` — the change as seen from where it sits, at its own relative root: a `replace` of its new value (read along the relative path from the replaced value, or from the value a map change writes at the key), `replace(undefined)` where the change removed it (a deleted or cleared key, anything reached through a list item, anything below a deleted tree node), and at a deleted tree node, the tree-delete terminal. So `doc.roster.set("alice", {...})` over an existing `alice`, a struct's `.set` and `m.delete("k")` reach the subscribers below them, and a sibling key's subscribers hear nothing. The op log, the wire and every ancestor's changeset carry the op as written; only subscribers below it see a projection. `expandProductMapChanges` splits a struct's map event into field writes with the same projection.
 
 Walking down is only right because announcements are fine ([An announcement is as fine as the store](#an-announcement-is-as-fine-as-the-store)): a coarse op is now a coarse *write*, and everything in its scope really was rewritten. No value is compared — a rewrite to an equal value notifies, as a leaf `.set` to its current value always has.
@@ -1616,7 +1628,7 @@ The old `NotificationPlan.paths` is gone with the restructure. It existed only s
 
 Three guarantees, all pinned:
 
-- **Dispatch order within a changeset.** A subscriber's `changes` are the ops it would have received individually, in the order they were dispatched. For a root subscriber that is exactly `batch()`'s return value, filtered to its subtree — which is what makes relaying through `applyChanges` sound.
+- **Dispatch order within a changeset.** A subscriber's `changes` are the ops it would have received individually, in the order they were dispatched. For a root subscriber that is exactly `batch()`'s return value when nothing inside the batch aborted; an absorbed inner abort's writes and compensations are in the changeset and not in the return value ([`Changeset.aborted`](#changesetaborted)). Either replays to the same state, which is what makes relaying through `applyChanges` sound.
 - **Deepest-first across deep subscribers.** Chosen, not inherited: before the ancestor walk, cross-level delivery order was an artifact of the sequence in which subscribers happened to register, and reversing registration reversed delivery.
 - **Every own-path callback before every deep callback.** This is the one ordering that is a *choice*. The channels used to interleave per changed path — own(P1), deep(P1→root), own(P2), deep(P2→root) — because delivery happened inside the walk. Planning before firing is what collapses a subscriber's several changesets into one, and this ordering is the price. It is a trade, not an oversight.
 
@@ -2334,7 +2346,8 @@ The worked example is `__countKeptRefs` (`src/coordinate-trie.ts`), a backdoor f
 | `src/interpreters/read-at.ts` | `readAt`, `readChildAt`, `valueAt` — the one rule for what a value read returns. |
 | `src/interpreters/with-addressing.ts` | Addressing layer: owns the context's `CoordinateTrie`, records schemas, and registers the prepare stage that advances, kills and revives addresses; `[DELETED]`, `[REMOVE]`. |
 | `src/interpreters/with-caching.ts` | Identity-preserving memoization of carriers. Sequence/movable, map and tree cases delegate to shared helpers. |
-| `src/interpreters/writable.ts` | Mutation primitives + `REMOVE` + `TRANSACT` + the batch lifecycle (`buildWritableContext`, `SealedBatch`, `authoredSince`, `seal`) + the prepare pipeline (`PrepareStage`) + `hasPreparePipeline`. Text/sequence/movable/map/set cases delegate to shared helpers. |
+| `src/interpreters/writable.ts` | Mutation primitives + `REMOVE` + `TRANSACT` + the batch lifecycle (`buildWritableContext`, `SealedBatch`, `TraceEntry`) + the prepare pipeline (`PrepareStage`) + `hasPreparePipeline`. Text/sequence/movable/map/set cases delegate to shared helpers. |
+| `src/interpreters/frame-stack.ts` | What an authored batch did, frame by frame: `openFrame`, `record`, `closeFrame`, `abortFrame`. Pure. |
 | `src/interpreters/with-changefeed.ts` | Observation layer + `planDelivery` + `deliverNotifications` + `createNodeChangefeed` + `wireChangefeed`. All cases, the tree included, use `wireChangefeed`. The notification engine itself is internal — not exported. |
 | `src/interpreters/subscriber-trie.ts` | `SubscriberTrie` — a context's subscribers and population state, one node per coordinate, with the up and down walks delivery and population need. |
 | `src/interpreters/validate.ts` | Validation interpreter. |

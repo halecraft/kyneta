@@ -45,18 +45,20 @@ import type { CommitOptions } from "../substrate.js"
  *   called before shallower ones.
  * - **Ops arrive in dispatch order.** A subscriber's `changes` are the `Op[]`
  *   this function returns, filtered to its subtree and rebased to relative
- *   paths — so relaying them onward through `applyChanges` reproduces the
- *   writes exactly.
+ *   paths, so relaying them onward through `applyChanges` reproduces the
+ *   writes exactly. When an inner `batch()` threw and this one caught it,
+ *   the changeset also carries the inner writes and their compensations,
+ *   which this function does not return; both replay to the same state.
+ * - **Ops are values.** Each op's path is the coordinate it wrote when it
+ *   was made, so a held op replays there after the document moves on.
  * - **Atomic abort via inverse compensation.** If `fn` throws, every
  *   change recorded in this block is undone inside the same commit by
  *   replaying inverses LIFO. External observers see one batched native
  *   event with net-zero delta and one Changeset with `aborted: true`.
  *   The rethrow propagates after compensation.
  *
- * Implementation: thin `runWriter`/`execWriter` wrapper around
- * `ctx.runBatch`. Snapshot the writer-log marker before `fn`, run `fn`,
- * slice the new entries off the end (forward only — inverse entries
- * from absorbed inner aborts are filtered out).
+ * Implementation: a thin wrapper around `ctx.runBatch`, which returns the
+ * ops its frame recorded and that survived (`frame-stack.ts`).
  *
  * ```ts
  * const ops = batch(doc, d => {

@@ -15,7 +15,6 @@ import type {
   CommitOptions,
   Edit,
   Op,
-  Path,
   Remap,
   Revertible,
   RevertibleCommit,
@@ -143,7 +142,7 @@ export function moveStep(
  * large as what changed, not as large as the stack.
  */
 export function stackOps(
-  at: Path,
+  at: RawPath,
   before: StoredStack,
   after: StoredStack,
 ): Op[] {
@@ -151,7 +150,8 @@ export function stackOps(
   for (const list of ["undo", "redo"] as const) {
     const instructions = diffSequence(before[list], after[list], samePlainValue)
     if (instructions.length === 0) continue
-    // Each inserted step is copied: a step read from the document is frozen.
+    // Each inserted step is owned: one read from the document is frozen, and
+    // shared as it is; anything else is copied.
     const owned = instructions.map(i =>
       "insert" in i ? { insert: i.insert.map(step => own(step)) } : i,
     )

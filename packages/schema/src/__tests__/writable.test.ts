@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest"
 import type {
-  BatchOptions,
   ChangeBase,
   Path,
-  RecordInverseFn,
   Ref,
   StateCell,
   SubstratePayload,
@@ -39,11 +37,6 @@ import {
   withWritable,
   writable,
 } from "../index.js"
-import {
-  authoredSince,
-  seal,
-  type TraceEntry,
-} from "../interpreters/writable.js"
 
 // ===========================================================================
 // Composed stacks
@@ -878,76 +871,90 @@ describe("writable: TRANSACT attachment", () => {
 // ===========================================================================
 
 describe("writable: compensation loop", () => {
-  it("surfaces original error via Error.cause when compensation fails", () => {
-    const schema = Schema.struct({ count: Schema.counter() })
-    const store = { count: 0 }
+  const schema = Schema.struct({ count: Schema.counter() })
 
-    const originalError = new Error("Substrate prepare failed")
-    const compensationError = new Error("Substrate compensation failed")
-
-    // Create a mock substrate where prepare throws, and compensation also throws
-    const mockSubstrate = {
-      reader: plainReader({ current: store }),
-      prepare: (
-        path: Path,
-        _change: ChangeBase,
-        recordInverse: RecordInverseFn | null,
-      ) => {
-        // A compensation arrives without a recorder.
-        if (recordInverse === null) throw compensationError
-        // Record an inverse so compensation loop has something to run
-        recordInverse(path, { type: "increment", amount: -1 } as ChangeBase)
-        throw originalError
+  /**
+   * A substrate whose first write succeeds and whose second throws `failure`.
+   * A compensation throws `compensationFailure`, when given. `prepared`
+   * lists each call's change and whether it carried a recorder.
+   */
+  function failingDoc(failure: unknown, compensationFailure?: unknown) {
+    const prepared: { type: string; amount: unknown; forward: boolean }[] = []
+    let writes = 0
+    const substrate: SubstratePrepare = {
+      reader: plainReader({ current: { count: 0 } }),
+      prepare: (_path, change, recordInverse) => {
+        prepared.push({
+          type: change.type,
+          amount: (change as { amount?: unknown }).amount,
+          forward: recordInverse !== null,
+        })
+        if (recordInverse === null) {
+          if (compensationFailure !== undefined) throw compensationFailure
+          return
+        }
+        recordInverse({ type: "increment", amount: -1 } as ChangeBase)
+        writes++
+        if (writes === 2) throw failure
       },
       afterBatch: () => {},
-      runBatch: (work: () => void) => work(),
     }
-
-    const ctx = buildWritableContext(mockSubstrate as any, schema)
+    const ctx = buildWritableContext(substrate, schema)
     const doc = interpret(schema, fullInterpreter, ctx) as any
+    return { doc, prepared }
+  }
 
+  const twoWrites = (d: any) => {
+    d.count.increment(1)
+    d.count.increment(1)
+  }
+
+  it("compensates only the writes the substrate applied, not the one that threw", () => {
+    const failure = new Error("Substrate prepare failed")
+    const { doc, prepared } = failingDoc(failure)
+    expect(() => batch(doc, twoWrites)).toThrow(failure)
+    expect(prepared).toEqual([
+      { type: "increment", amount: 1, forward: true },
+      { type: "increment", amount: 1, forward: true },
+      { type: "increment", amount: -1, forward: false },
+    ])
+  })
+
+  it("surfaces the original error via Error.cause when compensation fails", () => {
+    const failure = new Error("Substrate prepare failed")
+    const compensationFailure = new Error("Substrate compensation failed")
+    const { doc } = failingDoc(failure, compensationFailure)
     try {
-      batch(doc, d => d.count.increment(1))
+      batch(doc, twoWrites)
       expect.fail("Should have thrown")
     } catch (e: any) {
-      expect(e).toBe(compensationError)
-      expect(e.cause).toBe(originalError)
+      expect(e).toBe(compensationFailure)
+      expect(e.cause).toBe(failure)
     }
   })
 
-  it("surfaces original error via Error.cause when compensation throws a string (WASM)", () => {
-    const schema = Schema.struct({ count: Schema.counter() })
-    const store = { count: 0 }
-
-    const originalError = new Error("Substrate prepare failed")
-    const compensationErrorStr = "Index out of bound"
-
-    const mockSubstrate = {
-      reader: plainReader({ current: store }),
-      prepare: (
-        path: Path,
-        _change: ChangeBase,
-        recordInverse: RecordInverseFn | null,
-      ) => {
-        if (recordInverse === null) throw compensationErrorStr
-        recordInverse(path, { type: "increment", amount: -1 } as ChangeBase)
-        throw originalError
-      },
-      afterBatch: () => {},
-      runBatch: (work: () => void) => work(),
-    }
-
-    const ctx = buildWritableContext(mockSubstrate as any, schema)
-    const doc = interpret(schema, fullInterpreter, ctx) as any
-
+  it("surfaces the original error via Error.cause when compensation throws a string (WASM)", () => {
+    const failure = new Error("Substrate prepare failed")
+    const { doc } = failingDoc(failure, "Index out of bound")
     try {
-      batch(doc, d => d.count.increment(1))
+      batch(doc, twoWrites)
       expect.fail("Should have thrown")
     } catch (e: any) {
       expect(e).toBeInstanceOf(Error)
-      expect(e.message).toBe(compensationErrorStr)
-      expect(e.cause).toBe(originalError)
+      expect(e.message).toBe("Index out of bound")
+      expect(e.cause).toBe(failure)
     }
+  })
+
+  it("refuses a substrate that records no inverse for a write", () => {
+    const substrate: SubstratePrepare = {
+      reader: plainReader({ current: { count: 0 } }),
+      prepare: () => {},
+      afterBatch: () => {},
+    }
+    const ctx = buildWritableContext(substrate, schema)
+    const doc = interpret(schema, fullInterpreter, ctx) as any
+    expect(() => doc.count.increment(1)).toThrow("exactly one inverse")
   })
 })
 
@@ -991,36 +998,6 @@ describe("writable: announcements never reach the substrate", () => {
 // The batch lifecycle: capture, seal, release
 // ===========================================================================
 
-describe("authoredSince and seal", () => {
-  const op = (key: string) => ({
-    path: RawPath.empty.field(key),
-    change: replaceChange(key),
-  })
-  const trace: TraceEntry[] = [
-    { op: op("a"), authored: true },
-    { op: op("b"), authored: true },
-    { op: op("b-inverse"), authored: false },
-    { op: op("c"), authored: true },
-  ]
-  const keys = (ops: readonly { path: Path }[]) => ops.map(o => o.path.format())
-
-  it.each([
-    [0, ["a", "b", "c"]],
-    [1, ["b", "c"]],
-    [3, ["c"]],
-    [4, []],
-  ])("authoredSince(trace, %i) keeps only authored ops after it", (from, expected) => {
-    expect(keys(authoredSince(trace, from))).toEqual(expected)
-  })
-
-  it("seal keeps every entry in order, with the given options", () => {
-    const options: BatchOptions = { ingress: "author", aborted: true }
-    const sealed = seal(trace, options)
-    expect(keys(sealed.ops)).toEqual(["a", "b", "b-inverse", "c"])
-    expect(sealed.options).toBe(options)
-  })
-})
-
 /**
  * A two-field doc over a stub substrate that writes straight into `store`.
  * `onCommit` runs inside the native bracket, after `work`, standing in for
@@ -1041,7 +1018,7 @@ function buildLifecycleDoc(options?: {
         throw new Error("compensation failed")
       }
       if (recordInverse) {
-        recordInverse(path, invert(path.read(store.current), change))
+        recordInverse(invert(path.read(store.current), change))
       }
       applyChange(store, path, change)
     },

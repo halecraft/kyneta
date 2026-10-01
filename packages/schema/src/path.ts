@@ -393,7 +393,7 @@ export interface Path {
   root(): Path
   /**
    * Project to an immutable, liveness-agnostic `RawPath` — the value form
-   * used by the op-log and the wire. Idempotent on `RawPath` (returns
+   * every `Op` holds, and so the op-log and the wire. Idempotent on `RawPath` (returns
    * `this`); on `AddressedPath` it reads each segment's `coord()` so the
    * result never aliases the live addressing trie. The named inverse
    * of `resolveToAddressed`. Context: jj:mlurlzqt.

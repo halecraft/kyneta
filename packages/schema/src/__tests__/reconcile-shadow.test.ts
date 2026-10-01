@@ -8,7 +8,7 @@ import {
   plainValueResolver,
   Schema,
 } from "../index.js"
-import { type Path, RawPath } from "../path.js"
+import { RawPath } from "../path.js"
 import {
   planReconcile,
   type ReconcileTarget,
@@ -39,8 +39,8 @@ const Doc = Schema.struct({
   ),
 })
 
-const at = (...segments: (string | number)[]): Path => {
-  let path: Path = RawPath.empty
+const at = (...segments: (string | number)[]): RawPath => {
+  let path = RawPath.empty
   for (const segment of segments) {
     path =
       typeof segment === "number"
@@ -52,7 +52,10 @@ const at = (...segments: (string | number)[]): Path => {
   return path
 }
 
-const touch = (path: Path, effect: SubtreeEffect): Touched => ({ path, effect })
+const touch = (path: RawPath, effect: SubtreeEffect): Touched => ({
+  path,
+  effect,
+})
 
 /** Each target as `[path, keys?]`. */
 const described = (targets: readonly ReconcileTarget[]) =>

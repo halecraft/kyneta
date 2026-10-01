@@ -11,7 +11,8 @@ import type { Op } from "./changefeed.js"
 
 /** One contiguous text edit, when and where it happened. */
 export interface Edit {
-  /** The edited text's path key. */
+  /** The edited text's raw path key: its position when the op was made, so
+   *  an insert that moves its list item between keystrokes changes it. */
   readonly path: string
   /** When, in milliseconds. */
   readonly at: number

@@ -131,6 +131,106 @@ describe("an op's payload is stable from capture to delivery", () => {
 })
 
 // ---------------------------------------------------------------------------
+// An op's path names where it wrote when it was made
+// ---------------------------------------------------------------------------
+
+describe("an op's path is fixed where it was made", () => {
+  const List = Schema.struct({
+    items: Schema.list(Schema.struct({ t: Schema.string() })),
+  })
+
+  /** A source with three items, and a copy of it. */
+  function pair() {
+    const source: any = createDoc(json.bind(List))
+    const copy: any = createDoc(json.bind(List))
+    applyChanges(
+      copy,
+      batch(source, (d: any) =>
+        d.items.push({ t: "0" }, { t: "1" }, { t: "2" }),
+      ),
+    )
+    return { source, copy }
+  }
+
+  it("held batch() ops replay where they wrote after the source moves on", () => {
+    const { source, copy } = pair()
+    const ops = batch(source, (d: any) => d.items.at(1).t.set("x"))
+    const wrote = source()
+    source.items.insert(0, { t: "new" })
+    applyChanges(copy, ops)
+    expect(copy()).toEqual(wrote)
+  })
+
+  it("a later op in the same batch does not move an earlier op's path", () => {
+    const { source, copy } = pair()
+    const ops = batch(source, (d: any) => {
+      d.items.at(1).t.set("x")
+      d.items.insert(0, { t: "new" })
+    })
+    expect(ops.map(op => op.path.format())).toEqual(["items[1].t", "items"])
+    applyChanges(copy, ops)
+    expect(copy()).toEqual(source())
+  })
+
+  it("held delivered ops replay where they wrote, at every depth", () => {
+    const { source, copy } = pair()
+    const atRoot: Op[] = []
+    const atItems: Op[] = []
+    const atItem: Op[] = []
+    subscribe(source, (cs: any) => atRoot.push(...cs.changes))
+    subscribe(source.items, (cs: any) => atItems.push(...cs.changes))
+    subscribe(source.items.at(1), (cs: any) => atItem.push(...cs.changes))
+    batch(source, (d: any) => d.items.at(1).t.set("x"))
+    const wrote = source()
+    source.items.insert(0, { t: "new" })
+
+    expect(atItems[0]?.path.format()).toBe("[1].t")
+    expect(atItem[0]?.path.format()).toBe("t")
+    applyChanges(copy, atRoot.slice(0, 1))
+    expect(copy()).toEqual(wrote)
+  })
+
+  it("every op handed out has a raw path", () => {
+    const { source } = pair()
+    const delivered: Op[] = []
+    subscribe(source.items, (cs: any) => delivered.push(...cs.changes))
+    const ops = batch(source, (d: any) => d.items.at(1).t.set("x"))
+    for (const op of [...ops, ...delivered]) {
+      expect(op.path).toBeInstanceOf(RawPath)
+    }
+  })
+
+  it("batch() omits an inner batch that threw and was caught", () => {
+    const Pair = Schema.struct({ a: Schema.string(), b: Schema.string() })
+    const source: any = createDoc(json.bind(Pair))
+    const delivered: Op[] = []
+    subscribe(source, (cs: any) => delivered.push(...cs.changes))
+    const ops = batch(source, (d: any) => {
+      d.a.set("outer")
+      try {
+        batch(source, (e: any) => {
+          e.b.set("inner")
+          throw new Error("inner")
+        })
+      } catch {
+        // absorbed
+      }
+    })
+
+    expect(ops.map(op => op.path.format())).toEqual(["a"])
+    const fromReturn: any = createDoc(json.bind(Pair))
+    applyChanges(fromReturn, ops)
+    expect(fromReturn()).toEqual(source())
+    // The changeset keeps the inner write and its compensation: both gave σ
+    // new objects. It replays to the same state.
+    expect(delivered.map(op => op.path.format())).toEqual(["a", "b", "b"])
+    const fromChangeset: any = createDoc(json.bind(Pair))
+    applyChanges(fromChangeset, delivered)
+    expect(fromChangeset()).toEqual(source())
+  })
+})
+
+// ---------------------------------------------------------------------------
 // freezePayload — pure, no substrate required
 // ---------------------------------------------------------------------------
 

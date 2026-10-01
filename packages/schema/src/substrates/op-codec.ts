@@ -24,10 +24,9 @@ export interface SerializedOp {
  * Convert Ops with Path objects into JSON-safe form for serialization.
  * Extracts segments and produces plain `{ type, field/entry/index }` objects.
  *
- * `seg.resolve()` here never throws: the log holds only `RawPath` ops —
- * local writes are frozen via `path.toRaw()` in `prepare`, merged ops are
- * already raw from `deserializeOps` — and `RawSegment.resolve()` is total.
- * The dead-`Address` hazard was the *input*, fixed there, not here. jj:mlurlzqt
+ * `seg.resolve()` here never throws: an `Op`'s path is a `RawPath`, frozen
+ * by the writable context when the op is made or decoded by
+ * `deserializeOps`, and `RawSegment.resolve()` is total.
  */
 export function serializeOps(ops: readonly Op[]): SerializedOp[] {
   return ops.map(op => ({

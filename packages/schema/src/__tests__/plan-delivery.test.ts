@@ -29,8 +29,16 @@ import { RawPath } from "../path.js"
 // ---------------------------------------------------------------------------
 
 /** Build an Op from a path and a change whose type rewrites nothing below. */
-function pc(path: Path, type: string): Op {
+function pc(path: RawPath, type: string): Op {
   return { path, change: { type } }
+}
+
+/** Plan raw ops, each prepared at its own path. */
+function planOps(pending: readonly Op[], trie: SubscriberTrie): DeliveryPlan {
+  return planDelivery(
+    pending.map(op => ({ op, at: op.path })),
+    trie,
+  )
 }
 
 /** A trie with own-path and deep subscribers at the given paths. */
@@ -59,7 +67,7 @@ function deepAt(plan: DeliveryPlan, trie: SubscriberTrie, path: Path) {
 /** Plan with own-path subscribers at `paths` and no deep subscribers. */
 function planOwn(pending: readonly Op[], paths: readonly Path[]) {
   const trie = subscribers({ own: paths })
-  return { trie, plan: planDelivery(pending, trie) }
+  return { trie, plan: planOps(pending, trie) }
 }
 
 /** Render a deep buffer as `relativePath:changeType` strings, in order. */
@@ -215,8 +223,8 @@ describe("planDelivery: immutability", () => {
     const input = [pc(path, "replace")]
 
     const trie = subscribers({ own: [path] })
-    const plan1 = planDelivery(input, trie)
-    const plan2 = planDelivery(input, trie)
+    const plan1 = planOps(input, trie)
+    const plan2 = planOps(input, trie)
 
     expect(plan1.ownPath).not.toBe(plan2.ownPath)
   })
@@ -240,13 +248,13 @@ describe("planDelivery: change data integrity", () => {
   // reach a change from several buffers at once. It is a statement about the
   // *planner*: it groups and rebases, it does not duplicate. Ownership is
   // settled before the planner ever sees a change — `own` at construction,
-  // `ownedForStore` at the store boundary — so a consumer may hold a delivered
+  // `freezePayload` at the store boundary — so a consumer may hold a delivered
   // op indefinitely.
   it("shares one change object between the own-path and deep buffers", () => {
     const path = RawPath.empty.field("settings").field("dark")
     const change = { type: "replace" as const, value: true }
     const trie = subscribers({ own: [path], deep: [RawPath.empty] })
-    const plan = planDelivery([{ path, change }], trie)
+    const plan = planOps([{ path, change }], trie)
 
     const own = ownAt(plan, trie, path) as any
     const deep = deepAt(plan, trie, RawPath.empty) as any
@@ -267,7 +275,7 @@ describe("planDelivery: deep channel", () => {
 
   it("one op reaches every ancestor, each at its own relative path", () => {
     const trie = subscribers({ deep: chain })
-    const plan = planDelivery([pc(abc, "replace")], trie)
+    const plan = planOps([pc(abc, "replace")], trie)
 
     expect(plan.deep.size).toBe(4)
     expect(shape(deepAt(plan, trie, RawPath.empty))).toEqual(["a.b.c:replace"])
@@ -281,7 +289,7 @@ describe("planDelivery: deep channel", () => {
   it("two ops under a common ancestor merge into one buffer, in dispatch order", () => {
     const outer = RawPath.empty.field("outer")
     const trie = subscribers({ deep: [outer] })
-    const plan = planDelivery(
+    const plan = planOps(
       [pc(outer.field("x"), "replace"), pc(outer.field("y"), "text")],
       trie,
     )
@@ -296,7 +304,7 @@ describe("planDelivery: deep channel", () => {
     const outer = RawPath.empty.field("outer")
     const x = outer.field("x")
     const trie = subscribers({ deep: [RawPath.empty] })
-    const plan = planDelivery(
+    const plan = planOps(
       [pc(x, "replace"), pc(outer, "map"), pc(x, "replace")],
       trie,
     )
@@ -311,7 +319,7 @@ describe("planDelivery: deep channel", () => {
   it("own-path and descendant changes land in one buffer at the subscriber", () => {
     const outer = RawPath.empty.field("outer")
     const trie = subscribers({ deep: [outer] })
-    const plan = planDelivery(
+    const plan = planOps(
       [pc(outer, "map"), pc(outer.field("x"), "replace")],
       trie,
     )
@@ -321,7 +329,7 @@ describe("planDelivery: deep channel", () => {
 
   it("deepOrder is deepest-first", () => {
     const trie = subscribers({ deep: chain })
-    const plan = planDelivery([pc(abc, "replace")], trie)
+    const plan = planOps([pc(abc, "replace")], trie)
 
     expect(plan.deepOrder).toEqual(
       [abc, ab, a, RawPath.empty].map(path => nodeOf(trie, path)),
@@ -334,17 +342,14 @@ describe("planDelivery: deep channel", () => {
     const first = RawPath.empty.field("zebra")
     const second = RawPath.empty.field("alpha")
     const trie = subscribers({ deep: [second, first] })
-    const plan = planDelivery(
-      [pc(first, "replace"), pc(second, "replace")],
-      trie,
-    )
+    const plan = planOps([pc(first, "replace"), pc(second, "replace")], trie)
 
     expect(plan.deepOrder).toEqual([nodeOf(trie, first), nodeOf(trie, second)])
   })
 
   it("allocates no buffer for a coordinate nobody is subscribed at", () => {
     const trie = subscribers({ deep: [abc] })
-    const plan = planDelivery([pc(abc, "replace")], trie)
+    const plan = planOps([pc(abc, "replace")], trie)
 
     expect(plan.deep.size).toBe(1)
     expect(deepAt(plan, trie, abc)).toBeDefined()
@@ -352,7 +357,7 @@ describe("planDelivery: deep channel", () => {
 
   it("no deep subscribers → no deep work at all", () => {
     const trie = subscribers({ own: [abc] })
-    const plan = planDelivery([pc(abc, "replace")], trie)
+    const plan = planOps([pc(abc, "replace")], trie)
 
     expect(plan.deep.size).toBe(0)
     expect(plan.deepOrder).toEqual([])
@@ -363,7 +368,7 @@ describe("planDelivery: deep channel", () => {
     const tricky = RawPath.empty.field("a\0b")
     expect(tricky.key).toBe(ab.key)
     const trie = subscribers({ deep: [tricky, ab] })
-    const plan = planDelivery([pc(ab, "text")], trie)
+    const plan = planOps([pc(ab, "text")], trie)
 
     expect(shape(deepAt(plan, trie, ab))).toEqual(["root:text"])
     expect(deepAt(plan, trie, tricky)).toBeUndefined()
@@ -388,7 +393,7 @@ describe("planDelivery: the rewritten scope", () => {
     const x = outer.field("x")
     const trie = subscribers({ own: [x], deep: [x] })
     const change = replaceChange(trustAsOwned({ x: 1, y: 2 }))
-    const plan = planDelivery([{ path: outer, change }], trie)
+    const plan = planOps([{ path: outer, change }], trie)
 
     expect(ownAt(plan, trie, x)).toEqual([replaceChange(1)])
     expect(shape(deepAt(plan, trie, x))).toEqual(["root:replace"])
@@ -398,7 +403,7 @@ describe("planDelivery: the rewritten scope", () => {
   it("a map set reaches the keys it writes and not their siblings", () => {
     const trie = subscribers({ deep: [aliceCursor, bob] })
     const change = mapChange(trustAsOwned({ alice: { cursor: 5 } }))
-    const plan = planDelivery([{ path: roster, change }], trie)
+    const plan = planOps([{ path: roster, change }], trie)
 
     expect(projected(deepAt(plan, trie, aliceCursor))).toEqual([
       replaceChange(5),
@@ -408,7 +413,7 @@ describe("planDelivery: the rewritten scope", () => {
 
   it("a removed key is replaced with undefined", () => {
     const trie = subscribers({ own: [alice], deep: [aliceCursor] })
-    const plan = planDelivery(
+    const plan = planOps(
       [{ path: roster, change: mapChange(undefined, ["alice"]) }],
       trie,
     )
@@ -424,7 +429,7 @@ describe("planDelivery: the rewritten scope", () => {
     const item = items.item(0)
     const trie = subscribers({ deep: [item] })
     const change = replaceChange(trustAsOwned(["new"]))
-    const plan = planDelivery([{ path: items, change }], trie)
+    const plan = planOps([{ path: items, change }], trie)
 
     expect(projected(deepAt(plan, trie, item))).toEqual([
       replaceChange(undefined),
@@ -437,7 +442,7 @@ describe("planDelivery: the rewritten scope", () => {
     const label = node.field("label")
     const trie = subscribers({ deep: [tree, node, label] })
     const change = treeChange([{ action: "delete", target: "n1" }])
-    const plan = planDelivery([{ path: tree, change }], trie)
+    const plan = planOps([{ path: tree, change }], trie)
 
     expect(projected(deepAt(plan, trie, tree))).toEqual([change])
     expect(projected(deepAt(plan, trie, node))).toEqual([
@@ -451,14 +456,14 @@ describe("planDelivery: the rewritten scope", () => {
   it("a change that rewrites nothing below reaches nobody below", () => {
     const outer = RawPath.empty.field("outer")
     const trie = subscribers({ deep: [outer.field("x")] })
-    const plan = planDelivery([pc(outer, "text")], trie)
+    const plan = planOps([pc(outer, "text")], trie)
 
     expect(plan.deep.size).toBe(0)
   })
 
   it("a subscriber hears projections and its own ops in dispatch order", () => {
     const trie = subscribers({ deep: [alice] })
-    const plan = planDelivery(
+    const plan = planOps(
       [
         { path: aliceCursor, change: replaceChange(1) },
         {

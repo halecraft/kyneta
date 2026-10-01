@@ -785,8 +785,8 @@ export function stateTreeMaterializer(
  * its one value, and at a key the schema does not declare. A fold over
  * `keySpace` and `childSchemaForKey`, adding no rule of its own.
  */
-function keysToPath(root: SchemaNode, keys: readonly string[]): Path {
-  let path: Path = RawPath.empty
+function keysToPath(root: SchemaNode, keys: readonly string[]): RawPath {
+  let path = RawPath.empty
   let schema = root
   for (const key of keys) {
     const space = keySpace(schema)
@@ -804,7 +804,7 @@ function keysToPath(root: SchemaNode, keys: readonly string[]): Path {
  * beneath it is (`isPresent`), so a leaf deleted anywhere below can remove
  * the entry, and with it any entry above that held nothing else.
  */
-export function movedScope(root: SchemaNode, keys: readonly string[]): Path {
+export function movedScope(root: SchemaNode, keys: readonly string[]): RawPath {
   const path = keysToPath(root, keys)
   const entry = path.segments.findIndex(segment => segment.role === "entry")
   return entry === -1 ? path : path.slice(0, entry + 1)

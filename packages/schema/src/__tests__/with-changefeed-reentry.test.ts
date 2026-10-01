@@ -259,3 +259,28 @@ describe("with-changefeed: cross-doc cascade with shared lease", () => {
     expect(docB.v()).toBeGreaterThan(0)
   })
 })
+
+describe("with-changefeed: a queued changeset's paths", () => {
+  it("say where its ops wrote, though a later batch moved the item before delivery", () => {
+    const schema = Schema.struct({
+      flag: Schema.number(),
+      items: Schema.list(Schema.struct({ t: Schema.string() })),
+    })
+    const doc = buildPlainDoc(schema, {
+      flag: 0,
+      items: [{ t: "0" }, { t: "1" }],
+    })
+    const delivered: string[][] = []
+    subscribe(doc.items, (cs: any) =>
+      delivered.push(cs.changes.map((op: any) => op.path.format())),
+    )
+    subscribe(doc.flag, () => {
+      // Both batches seal while this delivery runs, and queue behind it: the
+      // insert lands before the first is delivered.
+      batch(doc, (d: any) => d.items.at(1).t.set("x"))
+      batch(doc, (d: any) => d.items.insert(0, { t: "new" }))
+    })
+    doc.flag.set(1)
+    expect(delivered).toEqual([["[1].t"], ["root"]])
+  })
+})

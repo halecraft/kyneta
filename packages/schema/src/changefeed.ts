@@ -22,7 +22,7 @@ import {
 } from "@kyneta/changefeed"
 import { isMapChange } from "./change.js"
 import { walkPath } from "./fold-path.js"
-import type { Path } from "./interpret.js"
+import type { RawPath } from "./path.js"
 import { KIND, type Schema as SchemaNode } from "./schema.js"
 import { planSubtreeEffect, projectChange } from "./subtree-effect.js"
 
@@ -43,14 +43,19 @@ export { CHANGEFEED, hasChangefeed }
 // ---------------------------------------------------------------------------
 
 /**
- * An addressed delta — the atomic unit of change in the delta algebra.
+ * A delta at a coordinate — the atomic unit of change in the delta algebra.
  *
  * Every mutation, notification, and sync payload decomposes into Ops.
- * An Op is a (Path, Change) pair: the path addresses a node in the
- * schema tree, the change describes the delta at that node.
+ * An Op is a (path, change) pair: the path names a node in the schema tree,
+ * the change describes the delta at that node.
+ *
+ * An op is a value. Its path is a `RawPath`, the coordinate the op wrote when
+ * it was made, so a held op still replays there after the document moves on.
+ * A ref's live `AddressedPath` would not: its list indices advance as items
+ * are inserted and deleted before them.
  */
 export interface Op<C extends ChangeBase = ChangeBase> {
-  readonly path: Path
+  readonly path: RawPath
   readonly change: C
 }
 

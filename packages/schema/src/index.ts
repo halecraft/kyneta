@@ -565,7 +565,6 @@ export type {
   HasDevtoolsHistory,
   HasTreeNodeAllocation,
   HydrationHandle,
-  InverseEntry,
   MergeOptions,
   MetadataAxis,
   MetadataMismatch,

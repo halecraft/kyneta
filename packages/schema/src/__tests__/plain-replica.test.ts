@@ -85,3 +85,42 @@ describe("the plain replica", () => {
 function fail(): never {
   throw new Error("expected a payload")
 }
+
+describe("the plain log takes what a batch did", () => {
+  it("an aborted batch logs nothing and leaves the version", () => {
+    const substrate = plainSubstrateFactory.create(Doc)
+    const doc: any = createRef(Doc, substrate)
+    batch(doc, (d: any) => d.title.set("kept"))
+    const before = substrate.version()
+    expect(() =>
+      batch(doc, (d: any) => {
+        d.title.set("gone")
+        throw new Error("abort")
+      }),
+    ).toThrow("abort")
+    expect(substrate.version().compare(before)).toBe("equal")
+    expect(doc.title()).toBe("kept")
+  })
+
+  it("a batch that absorbed an inner abort logs only what survived", () => {
+    const substrate = plainSubstrateFactory.create(Doc)
+    const doc: any = createRef(Doc, substrate)
+    const since = substrate.version()
+    batch(doc, (d: any) => {
+      d.title.set("outer")
+      try {
+        batch(doc, (e: any) => {
+          e.rows.set("r", { n: 1 })
+          throw new Error("inner")
+        })
+      } catch {
+        // absorbed
+      }
+    })
+
+    const peer = plainSubstrateFactory.create(Doc)
+    peer.merge(substrate.exportSince(since) ?? fail())
+    expect(createRef(Doc, peer)()).toEqual(doc())
+    expect(doc()).toEqual({ title: "outer", rows: {} })
+  })
+})

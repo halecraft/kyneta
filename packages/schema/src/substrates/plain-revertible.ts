@@ -12,7 +12,6 @@
 // `rewritePlainRecord`); `createPlainRevertible` is the shell over a
 // substrate's context and log head.
 
-import type { ChangeBase } from "../change.js"
 import type { Op } from "../changefeed.js"
 import type { WritableContext } from "../interpreters/writable.js"
 import type {
@@ -125,11 +124,6 @@ export interface PlainRevertible extends Revertible<PlainRecord> {
   captured(outcome: BatchOutcome, before: string, after: string): void
 }
 
-const raw = (op: { path: Op["path"]; change: ChangeBase }): Op => ({
-  path: op.path.toRaw(),
-  change: op.change,
-})
-
 export function createPlainRevertible(
   host: PlainRevertibleHost,
 ): PlainRevertible {
@@ -143,10 +137,8 @@ export function createPlainRevertible(
       const record: PlainRecord = {
         before,
         after,
-        ops: outcome.ops.map(raw),
-        inverses: outcome.inverses.map(e =>
-          raw({ path: e.path, change: e.inverse }),
-        ),
+        ops: outcome.ops,
+        inverses: outcome.inverses,
       }
       const commit = { record, ops: record.ops }
       for (const listener of [...listeners]) listener(commit)

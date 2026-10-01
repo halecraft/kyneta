@@ -428,7 +428,7 @@ export function createLoroSubstrate(
         // Read, don't copy. `invert` owns whatever it retains (`own`): a
         // value a read froze is shared, since no write can change it, and
         // anything else is copied.
-        recordInverse(path, invert(path.read(shadow.current), change))
+        recordInverse(invert(path.read(shadow.current), change))
       }
 
       // Local write — σ advances eagerly so reads are immediately

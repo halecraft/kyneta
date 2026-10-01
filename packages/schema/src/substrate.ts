@@ -652,27 +652,24 @@ export interface PrepareOptions {
 }
 
 /**
- * Records the inverse of a change on the active `runBatch` frame. The bracket
- * replays recorded inverses LIFO if the block throws, and otherwise hands
- * them to `afterBatch`, where a substrate keeps what it needs for undo.
+ * Hands the context the inverse of the change `prepare` is applying, at the
+ * same path. Called exactly once per forward write. The context records the
+ * op and its inverse once `prepare` returns, so a `prepare` that throws
+ * leaves nothing to compensate.
  */
-export type RecordInverseFn = (path: Path, inverse: ChangeBase) => void
-
-/** One recorded inverse: the reverse arrow of one authored op, at its path. */
-export interface InverseEntry {
-  readonly path: Path
-  readonly inverse: ChangeBase
-}
+export type RecordInverseFn = (inverse: ChangeBase) => void
 
 /**
  * What an authored batch did, as `afterBatch` receives it. `ops` are the
- * authored ops (what `batch()` returns) and `inverses` their reverse arrows,
- * both in the order they were made. An aborted batch has neither: its
+ * authored ops that survived (what `batch()` returns) and `inverses` their
+ * reverse arrows, each an op at the same path as the op it reverses, both in
+ * the order they were made, each path frozen as its op was made. An inner
+ * frame that threw is in neither. An aborted batch has neither: its
  * compensations have already undone it.
  */
 export interface BatchOutcome {
   readonly ops: readonly Op[]
-  readonly inverses: readonly InverseEntry[]
+  readonly inverses: readonly Op[]
   readonly aborted: boolean
 }
 
@@ -698,8 +695,8 @@ export interface SubstratePrepare {
   /**
    * Apply one change to σ and λ. `recordInverse` is present for a forward
    * write: the substrate reads the pre-state at `path`, computes the inverse,
-   * and records it before writing. It is `null` for a compensation, which
-   * records nothing.
+   * and hands it over before writing, exactly once. It is `null` for a
+   * compensation, which records nothing.
    */
   prepare(
     path: Path,

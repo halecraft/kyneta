@@ -23,14 +23,14 @@ import {
   type MaterializeResolver,
   materializeContextFromResolver,
 } from "./interpreters/materialize.js"
-import type { Path } from "./path.js"
+import type { Path, RawPath } from "./path.js"
 import { applyChange, freezePayload, type StateCell } from "./reader.js"
 import { KIND, type Schema as SchemaNode } from "./schema.js"
 import { planSubtreeEffect, type SubtreeEffect } from "./subtree-effect.js"
 
 /** Where a change landed, and how far below it reached. */
 export interface Touched {
-  readonly path: Path
+  readonly path: RawPath
   readonly effect: SubtreeEffect
 }
 
@@ -47,7 +47,7 @@ export function touchedBy(ops: readonly Op[]): Touched[] {
  * entries of the record at `path`.
  */
 export interface ReconcileTarget {
-  readonly path: Path
+  readonly path: RawPath
   readonly schema: SchemaNode
   readonly keys?: readonly string[]
 }
@@ -96,7 +96,7 @@ export function planReconcile(
 
 /** A node target, or one key of a record. */
 interface Candidate {
-  readonly path: Path
+  readonly path: RawPath
   readonly schema: SchemaNode
   readonly key?: string
   /** `path`, or `path.entry(key)`: what this candidate covers. */
@@ -127,9 +127,9 @@ function walkSchemas(root: SchemaNode, path: Path): Walked {
 
 function expand(
   root: SchemaNode,
-  path: Path,
+  path: RawPath,
   effect: SubtreeEffect,
-): readonly Path[] {
+): readonly RawPath[] {
   if (effect === "none" || effect === "all") return [path]
   const walked = walkSchemas(root, path)
   if (!walked.complete) return [path]
@@ -146,8 +146,8 @@ function expand(
 /** `path` lifted to its opaque boundary, then to its outermost decay. */
 function lift(
   root: SchemaNode,
-  path: Path,
-): { readonly path: Path; readonly schemas: readonly SchemaNode[] } {
+  path: RawPath,
+): { readonly path: RawPath; readonly schemas: readonly SchemaNode[] } {
   const walked = walkSchemas(root, path)
   let length = walked.consumed
   const decayAt = walked.schemas
@@ -161,7 +161,7 @@ function lift(
 }
 
 function toCandidate(lifted: {
-  readonly path: Path
+  readonly path: RawPath
   readonly schemas: readonly SchemaNode[]
 }): Candidate {
   const { path, schemas } = lifted
@@ -216,7 +216,7 @@ function group(candidates: readonly Candidate[]): readonly ReconcileTarget[] {
   const targets: ReconcileTarget[] = []
   const keyed = new Map<
     string,
-    { readonly path: Path; readonly schema: SchemaNode; keys: string[] }
+    { readonly path: RawPath; readonly schema: SchemaNode; keys: string[] }
   >()
   for (const candidate of candidates) {
     if (candidate.key === undefined) {

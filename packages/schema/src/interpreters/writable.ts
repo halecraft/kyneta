@@ -55,11 +55,19 @@ import type {
   BatchOptions,
   BatchOutcome,
   CommitOptions,
-  InverseEntry,
   PrepareOptions,
   SubstratePrepare,
 } from "../substrate.js"
 import { TREE_NODE_ALLOCATE } from "../substrate.js"
+import {
+  abortFrame,
+  closeFrame,
+  emptyFrames,
+  type FrameStack,
+  inFrame,
+  openFrame,
+  record,
+} from "./frame-stack.js"
 import { installKeyedWriteOps } from "./keyed-helpers.js"
 import {
   installListWriteOps,
@@ -159,10 +167,20 @@ export function hasRemove(value: unknown): value is HasRemove {
 // WritableContext — shared state flowing through the tree
 // ---------------------------------------------------------------------------
 
+/**
+ * One prepared op: `op` frozen as it was made, and `at` the live path it was
+ * prepared at, which delivery walks by identity. `op.path` is `at.toRaw()`,
+ * so the two have the same length.
+ */
+export interface TraceEntry {
+  readonly op: Op
+  readonly at: Path
+}
+
 /** A finished batch: its options and every op it prepared, in order. */
 export interface SealedBatch {
   readonly options: BatchOptions
-  readonly ops: readonly Op[]
+  readonly entries: readonly TraceEntry[]
 }
 
 /**
@@ -221,7 +239,8 @@ export interface WritableContext extends RefContext {
    * A fixed pipeline: resolve the path, complete an authored change against
    * the schema it lands at (`completeAt`), run every stage's `before`, apply
    * the change to the substrate (for `author` and `compensate`) and add the
-   * op to the batch's trace, then run every stage's `after`. Order comes from
+   * op to the batch's trace (and an authored one, with its inverse, to its
+   * frame), then run every stage's `after`. Order comes from
    * that shape, never from the order in which layers registered.
    */
   readonly prepare: (
@@ -236,8 +255,9 @@ export interface WritableContext extends RefContext {
    *  wraps it. Called in seal order by the context's delivery dispatcher. */
   deliver: (batch: SealedBatch) => void
   /**
-   * Run an authored block in its own frame and return the authored ops the
-   * frame captured (what `batch()` returns).
+   * Run an authored block in its own frame and return the authored ops that
+   * survived in it (what `batch()` returns): an inner frame that threw and
+   * was caught is not among them.
    *
    * The outermost frame is one native commit: it runs inside
    * `substrate.runBatch`, calls `substrate.afterBatch(outcome)` and seals before the
@@ -285,37 +305,6 @@ export function hasPreparePipeline(
   )
 }
 
-// ---------------------------------------------------------------------------
-// Traces — the ops of one batch, and the two projections of them
-// ---------------------------------------------------------------------------
-
-/** One prepared op. `authored` is false for compensations and announcements. */
-export interface TraceEntry {
-  readonly op: Op
-  readonly authored: boolean
-}
-
-/** The authored ops after position `from`: a `runBatch` frame's return value. */
-export function authoredSince(
-  trace: readonly TraceEntry[],
-  from: number,
-): Op[] {
-  const ops: Op[] = []
-  for (let i = from; i < trace.length; i++) {
-    const entry = trace[i]
-    if (entry.authored) ops.push(entry.op)
-  }
-  return ops
-}
-
-/** A trace as a sealed batch: every op, in order. */
-export function seal(
-  trace: readonly TraceEntry[],
-  options: BatchOptions,
-): SealedBatch {
-  return { options, ops: trace.map(entry => entry.op) }
-}
-
 const ABORTED: BatchOutcome = { ops: [], inverses: [], aborted: true }
 const AUTHOR: PrepareOptions = { ingress: "author" }
 const COMPENSATE: PrepareOptions = { ingress: "compensate" }
@@ -346,7 +335,8 @@ type DeliveryMsg = { readonly type: "deliver"; readonly batch: SealedBatch }
  *
  * The substrate sees only authored ops and their compensations:
  * - `substrate.prepare(path, change, recordInverse)` — apply the change to
- *   σ and λ; for a forward op, record its inverse on the active frame.
+ *   σ and λ; for a forward op, hand over its inverse, which the context
+ *   records on the active frame once `prepare` returns.
  * - `substrate.afterBatch(outcome)` — end of an authored batch, inside the
  *   bracket, with the ops that survived and their inverses
  *   (plain logs the batch; CRDT substrates drain their coalescing buffers).
@@ -358,35 +348,15 @@ export function buildWritableContext(
   schema: Schema,
   capabilities: SubstrateCapabilities = {},
 ): WritableContext {
-  // Inverse stack — per-frame ranges of recorded inverses. Each call to
-  // ctx.runBatch pushes the current `inverseStack.length` onto frameStarts;
-  // every inverse recorded between push and pop belongs to that frame.
-  // frameStarts.length IS the canonical depth counter: 0 means "no
-  // frame open" (auto-commit territory), 1 means "outermost frame open,"
-  // > 1 means "nested re-entry."
-  //
-  // Each entry keeps its forward change beside the inverse. A frame that
-  // throws inside an outer one takes its entries with it, so at the
-  // outermost release the stack holds exactly the ops that survived, paired
-  // with their inverses: what `afterBatch` receives.
-  const inverseStack: (InverseEntry & { readonly change: ChangeBase })[] = []
-  const frameStarts: number[] = []
+  // What the authored batch did, frame by frame (`frame-stack.ts`): what
+  // `batch()` returns, what `afterBatch` receives, and what an abort
+  // compensates.
+  let frames: FrameStack = emptyFrames
 
-  // The forward change `substrate.prepare` is applying, for `recordInverse`.
-  let forwardChange: ChangeBase | undefined
-
-  // One trace per open batch. An announcement made while an authored batch
-  // is open pushes its own trace, so neither batch captures the other's ops.
+  // What to deliver: one trace per open batch, every op it prepared. An
+  // announcement made while an authored batch is open pushes its own trace,
+  // so neither batch captures the other's ops.
   const traces: TraceEntry[][] = []
-
-  // Substrates call this after computing a forward op's inverse; it pushes
-  // onto the active frame's stack range.
-  const recordInverse = (path: Path, inverse: ChangeBase): void => {
-    if (forwardChange === undefined) {
-      throw new Error("recordInverse called outside substrate.prepare")
-    }
-    inverseStack.push({ path, inverse, change: forwardChange })
-  }
 
   // Delivers sealed batches in seal order. Created on first use so that it
   // picks up the lease `createRef` attaches to the context.
@@ -414,8 +384,9 @@ export function buildWritableContext(
   }
 
   // Resolve once, for every caller. A raw path from `announce` or
-  // `applyChanges` becomes the addressed path whose `key` the listeners,
-  // address tables and carriers are keyed by. Idempotent for addressed paths.
+  // `applyChanges` becomes the addressed path the prepare stages, the
+  // subscriber walk and compensation use. Idempotent for a path addressed in
+  // this context's trie.
   // `rootPath` is read per call: `withAddressing` installs it on the context
   // after the context is built.
   const resolve = (path: Path): Path => {
@@ -426,10 +397,13 @@ export function buildWritableContext(
   }
 
   // Resolve, complete an authored change, `before` stages, the substrate call
-  // for the ingress and the op joining the open batch's trace, then `after`
-  // stages. Everything after completion sees the completed change. A
-  // compensation is read from σ and an announcement comes from a substrate
-  // that applied it, so both are complete already.
+  // for the ingress and the op joining the open batch's trace (and, authored,
+  // its frame), then `after` stages. Everything after completion sees the
+  // completed change. A compensation is read from σ and an announcement comes
+  // from a substrate that applied it, so both are complete already.
+  //
+  // The op is frozen here, once: its own coordinate is stable under its own
+  // change, and a later op in the batch may advance the address it sits on.
   const prepare = (
     rawPath: Path,
     incoming: ChangeBase,
@@ -447,15 +421,18 @@ export function buildWritableContext(
     for (const stage of stages.values()) {
       stage.before?.(path, change, options)
     }
+    const op: Op = { path: path.toRaw(), change }
     switch (options.ingress) {
       case "author": {
-        const outer = forwardChange
-        forwardChange = change
-        try {
-          substrate.prepare(path, change, recordInverse)
-        } finally {
-          forwardChange = outer
+        const inverses: ChangeBase[] = []
+        substrate.prepare(path, change, inverse => inverses.push(inverse))
+        const [inverse] = inverses
+        if (inverse === undefined || inverses.length > 1) {
+          throw new Error(
+            `substrate.prepare must record exactly one inverse for a write, and recorded ${inverses.length}.`,
+          )
         }
+        frames = record(frames, { at: path, op, inverse })
         break
       }
       case "compensate":
@@ -464,10 +441,7 @@ export function buildWritableContext(
       case "announce":
         break
     }
-    trace.push({
-      op: { path, change },
-      authored: options.ingress === "author",
-    })
+    trace.push({ op, at: path })
     for (const stage of stages.values()) {
       stage.after?.(path, change, options)
     }
@@ -489,39 +463,31 @@ export function buildWritableContext(
 
   const sealAndRelease = (trace: TraceEntry[], options: BatchOptions): void => {
     closeTrace(trace)
-    release(seal(trace, options))
+    release({ options, entries: trace })
   }
 
   const runBatch: WritableContext["runBatch"] = (work, opts) => {
-    const outermost = frameStarts.length === 0
+    const outermost = !inFrame(frames)
     if (outermost) traces.push([])
     const trace = traces.at(-1) ?? []
-    const from = trace.length
     let captured: Op[] = []
 
     const wrappedWork = (): void => {
-      const start = inverseStack.length
-      frameStarts.push(start)
+      frames = openFrame(frames)
       try {
         work()
       } catch (e) {
-        // Undo-replay handler: pop this frame's start, replay its recorded
-        // inverses LIFO via `prepare` with `ingress: "compensate"`.
-        // Routing through `prepare` (not substrate.prepare) keeps the
-        // compensations in the trace, so the aborted Changeset shows the
-        // full op log, and runs every stage on them; the substrate receives
-        // no recorder, so it does not record the inverse-of-the-inverse.
-        // `?? 0` rather than an assertion: the push/pop are paired by
-        // construction, so an empty stack cannot happen — and if it ever did,
-        // compensating the whole log is the safe reading, not crashing.
-        const frameStart = frameStarts.pop() ?? 0
+        // Replay this frame's inverses LIFO through `prepare`, not
+        // `substrate.prepare`, so the compensations join the trace (the
+        // aborted Changeset shows the full op log) and run every stage. The
+        // substrate gets no recorder, so it records no inverse of an inverse.
+        const aborted = abortFrame(frames)
+        frames = aborted.frames
         try {
-          for (let i = inverseStack.length - 1; i >= frameStart; i--) {
-            const { path, inverse } = inverseStack[i]
-            prepare(path, inverse, COMPENSATE)
+          for (const { at, inverse } of aborted.compensations) {
+            prepare(at, inverse, COMPENSATE)
           }
-          inverseStack.length = frameStart
-          if (frameStarts.length === 0) {
+          if (aborted.outermost) {
             substrate.afterBatch(ABORTED)
             sealAndRelease(trace, { ...opts, ingress: "author", aborted: true })
           }
@@ -533,19 +499,11 @@ export function buildWritableContext(
         }
         throw e
       }
-      frameStarts.pop()
-      captured = authoredSince(trace, from)
-      if (frameStarts.length === 0) {
-        // Inner frames' inverses stay on the stack across inner pops; the
-        // outermost release hands the whole block's range to the substrate,
-        // which keeps what undo needs, and clears it.
-        const ops = inverseStack.map(e => ({ path: e.path, change: e.change }))
-        const inverses = inverseStack.map(e => ({
-          path: e.path,
-          inverse: e.inverse,
-        }))
-        inverseStack.length = 0
-        substrate.afterBatch({ ops, inverses, aborted: false })
+      const closed = closeFrame(frames)
+      frames = closed.frames
+      captured = closed.ops
+      if (closed.outcome !== undefined) {
+        substrate.afterBatch(closed.outcome)
         sealAndRelease(trace, { ...opts, ingress: "author" })
       }
     }
@@ -581,14 +539,14 @@ export function buildWritableContext(
   }
 
   // Depth-aware dispatch combinator:
-  // - frameStarts.length === 0 (outside any runBatch frame): open an
-  //   implicit single-op runBatch — auto-commit semantics. Subscribers
-  //   see a degenerate Changeset of one change.
-  // - frameStarts.length > 0 (inside a frame, e.g. a batch(doc, fn)
-  //   body): just call prepare. The outer frame owns the seal, so
-  //   multi-helper blocks collapse into one Changeset.
+  // - outside any runBatch frame: open an implicit single-op runBatch —
+  //   auto-commit semantics. Subscribers see a degenerate Changeset of one
+  //   change.
+  // - inside a frame (e.g. a batch(doc, fn) body): just call prepare. The
+  //   outer frame owns the seal, so multi-helper blocks collapse into one
+  //   Changeset.
   const dispatch = (path: Path, change: ChangeBase): void => {
-    if (frameStarts.length === 0) {
+    if (!inFrame(frames)) {
       runBatch(() => {
         prepare(path, change, AUTHOR)
       }, {})
