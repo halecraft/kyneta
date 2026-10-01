@@ -32,14 +32,16 @@ import { deepClonePlain } from "../clone.js"
 import { walkPath } from "../fold-path.js"
 import { isNonNullObject } from "../guards.js"
 import { DIGEST_SEEDS, type Digest, digestFold } from "../hash.js"
-import { interpret, type Path } from "../interpret.js"
+import { type Interpreter, interpret, type Path } from "../interpret.js"
 import {
   createMaterializeInterpreter,
+  type MaterializeContext,
   type MaterializeResolver,
   materializeContextFromResolver,
   plainResolution,
 } from "../interpreters/materialize.js"
 import { withDecay } from "../interpreters/with-decay.js"
+import { RawPath } from "../path.js"
 import type { PlainState } from "../reader.js"
 import {
   isJsonBoundary,
@@ -276,20 +278,25 @@ function horizonOf(
 /**
  * Schema-blind join of two StateTrees: `local ⊔ remote`.
  *
- * Modifies `local` in place and returns it, along with whether the join moved.
+ * Modifies `local` in place and returns it, along with where the join moved.
  * Both trees must be in normal form, which `decodeTree` and every local write
  * guarantee.
  *
- * `changed` is a lattice question, not a bookkeeping one: `a ⊔ b = a` exactly
- * when `b ≤ a`, so a false answer means the incoming payload was already
- * subsumed. The caller needs it because announcing a change that did not happen
- * is not merely wasteful — in a mesh of three or more peers it is a cycle,
- * since each peer relays to everyone but the sender and no peer can decline a
- * re-import it has no way to recognise as redundant.
+ * `moved` holds the key path of every node where the join changed the
+ * winner, raised a horizon or adopted a key; a path may sit below another.
+ * The substrate re-projects σ at those paths and nowhere else.
+ *
+ * Whether it is empty is a lattice question, not a bookkeeping one:
+ * `a ⊔ b = a` exactly when `b ≤ a`, so an empty `moved` means the incoming
+ * payload was already subsumed. The caller needs it because announcing a
+ * change that did not happen is not merely wasteful — in a mesh of three or
+ * more peers it is a cycle, since each peer relays to everyone but the sender
+ * and no peer can decline a re-import it has no way to recognise as
+ * redundant.
  */
 export interface MergeResult {
   readonly tree: Container
-  readonly changed: boolean
+  readonly moved: readonly (readonly string[])[]
 }
 
 export function mergeStateTree(
@@ -297,10 +304,13 @@ export function mergeStateTree(
   remote: Container,
   installedAt: number,
 ): MergeResult {
-  const moved = { changed: false }
-  joinContainers(local, remote, installedAt, moved)
-  return { tree: local, changed: moved.changed }
+  const moved: (readonly string[])[] = []
+  joinContainers(local, remote, installedAt, moved, [])
+  return { tree: local, moved }
 }
+
+/** The key paths a join moved, collected as it recurses. */
+type Moved = (readonly string[])[]
 
 /**
  * Copy an incoming node into the local tree, stamping every leaf and horizon
@@ -352,7 +362,8 @@ function join(
   local: StateTree,
   remote: StateTree,
   installedAt: number,
-  moved: { changed: boolean },
+  moved: Moved,
+  at: readonly string[],
 ): StateTree {
   const localTuple = isLive(local) || isBareDeletion(local)
   const remoteTuple = isLive(remote) || isBareDeletion(remote)
@@ -361,19 +372,19 @@ function join(
     // Identity is the whole test: `joinTuples` returns the local node for
     // anything it cannot strictly beat.
     if (winner === local) return local
-    moved.changed = true
+    moved.push(at)
     return adopt(winner, installedAt)
   }
 
   if (isHorizon(local) || isHorizon(remote)) {
     if (isLive(local) || isLive(remote)) {
-      return joinMismatchedShapes(local, remote, installedAt, moved)
+      return joinMismatchedShapes(local, remote, installedAt, moved, at)
     }
-    return joinHorizons(local, remote, installedAt, moved)
+    return joinHorizons(local, remote, installedAt, moved, at)
   }
 
   if (isLive(local) || isLive(remote)) {
-    return joinMismatchedShapes(local, remote, installedAt, moved)
+    return joinMismatchedShapes(local, remote, installedAt, moved, at)
   }
 
   // Neither side is live or a horizon, so both are containers; `nodeKind`
@@ -383,7 +394,13 @@ function join(
       "unreachable: two nodes that are neither leaves nor horizons",
     )
   }
-  joinContainers(local as Container, remote as Container, installedAt, moved)
+  joinContainers(
+    local as Container,
+    remote as Container,
+    installedAt,
+    moved,
+    at,
+  )
   return local
 }
 
@@ -395,18 +412,20 @@ function joinHorizons(
   local: Horizon | Container,
   remote: Horizon | Container,
   installedAt: number,
-  moved: { changed: boolean },
+  moved: Moved,
+  at: readonly string[],
 ): StateTree {
   if (isContainer(local)) {
     // The key gains a horizon it did not have: our container is content
     // written before it, and keeps only what the horizon lets through.
     const incoming = remote as Horizon
-    moved.changed = true
+    moved.push(at)
     const content = mergeContent(
       pruneContainer(local, incoming[1]) ?? null,
       incoming[0],
       installedAt,
       moved,
+      at,
     )
     return horizonOf(
       content ?? undefined,
@@ -425,6 +444,7 @@ function joinHorizons(
       surviving ?? null,
       installedAt,
       moved,
+      at,
     )
     const normal = horizonOf(content ?? undefined, local[1], local[2], local[3])
     local[0] = normal[0]
@@ -435,10 +455,10 @@ function joinHorizons(
   if (order < 0) {
     // The incoming horizon wins, and is at least as high as ours. Our content
     // keeps only what was written at or after it.
-    moved.changed = true
+    moved.push(at)
     const ours =
       local[0] === null ? null : (pruneContainer(local[0], remote[1]) ?? null)
-    const content = mergeContent(ours, remote[0], installedAt, moved)
+    const content = mergeContent(ours, remote[0], installedAt, moved, at)
     const normal = horizonOf(
       content ?? undefined,
       remote[1],
@@ -455,7 +475,7 @@ function joinHorizons(
   // Our horizon stands, and is at least as high as theirs.
   const theirs =
     remote[0] === null ? null : (pruneContainer(remote[0], local[1]) ?? null)
-  const content = mergeContent(local[0], theirs, installedAt, moved)
+  const content = mergeContent(local[0], theirs, installedAt, moved, at)
   local[0] = horizonOf(content ?? undefined, local[1], local[2], local[3])[0]
   return local
 }
@@ -465,15 +485,16 @@ function mergeContent(
   local: Container | null,
   remote: Container | null,
   installedAt: number,
-  moved: { changed: boolean },
+  moved: Moved,
+  at: readonly string[],
 ): Container | null {
   if (remote === null) return local
   if (local === null) {
     if (Object.keys(remote).length === 0) return null
-    moved.changed = true
+    moved.push(at)
     return adoptContainer(remote, installedAt)
   }
-  joinContainers(local, remote, installedAt, moved)
+  joinContainers(local, remote, installedAt, moved, at)
   return local
 }
 
@@ -482,7 +503,8 @@ function joinContainers(
   local: Container,
   remote: Container,
   installedAt: number,
-  moved: { changed: boolean },
+  moved: Moved,
+  at: readonly string[],
 ): void {
   for (const key of Object.keys(remote)) {
     const theirs = remote[key] as StateTree
@@ -490,10 +512,10 @@ function joinContainers(
     if (ours === undefined) {
       // A key we have never seen. Absence carries no information under a
       // key-unioning merge, so this is always new state.
-      moved.changed = true
+      moved.push([...at, key])
       local[key] = adopt(theirs, installedAt)
     } else {
-      local[key] = join(ours, theirs, installedAt, moved)
+      local[key] = join(ours, theirs, installedAt, moved, [...at, key])
     }
   }
 }
@@ -518,7 +540,8 @@ function joinMismatchedShapes(
   local: StateTree,
   remote: StateTree,
   installedAt: number,
-  moved: { changed: boolean },
+  moved: Moved,
+  at: readonly string[],
 ): StateTree {
   const localTimestamp = newestTimestamp(local)
   const remoteTimestamp = newestTimestamp(remote)
@@ -529,7 +552,7 @@ function joinMismatchedShapes(
   ) {
     return local
   }
-  moved.changed = true
+  moved.push(at)
   return adopt(remote, installedAt)
 }
 
@@ -658,9 +681,14 @@ function hasPresentChild(container: Container): boolean {
 function presentKeys(node: Container | Horizon): string[] {
   const container = isHorizon(node) ? node[0] : node
   if (container === null) return []
-  return Object.keys(container).filter(key =>
-    isPresent(container[key] as StateTree),
-  )
+  return Object.keys(container).filter(key => hasPresentKey(node, key))
+}
+
+/** Whether `key` reads as present in a container or a horizon's content. */
+function hasPresentKey(node: Container | Horizon, key: string): boolean {
+  const container = isHorizon(node) ? node[0] : node
+  const child = container === null ? undefined : container[key]
+  return child !== undefined && isPresent(child)
 }
 
 /**
@@ -671,7 +699,7 @@ function presentKeys(node: Container | Horizon): string[] {
  * and applies decay through `withDecay`. A leaf's value is returned by
  * reference, so a projection shares register values with the tree.
  */
-function createStateTreeResolver(tree: StateTree): MaterializeResolver {
+export function createStateTreeResolver(tree: StateTree): MaterializeResolver {
   function plainAt(path: Path): unknown {
     const at = stateTreeAt(tree, path)
     if (at.kind === "value") return at.value
@@ -692,6 +720,13 @@ function createStateTreeResolver(tree: StateTree): MaterializeResolver {
       if (isLive(at.node)) return plainResolution.keys(at.node[0])
       return presentKeys(at.node)
     },
+    resolveHasKey(path, key) {
+      const at = stateTreeAt(tree, path)
+      if (at.kind === "absent") return false
+      if (at.kind === "value") return plainResolution.hasKey(at.value, key)
+      if (isLive(at.node)) return plainResolution.hasKey(at.node[0], key)
+      return hasPresentKey(at.node, key)
+    },
     // A tree schema has no representation here; `stateTreeViolation` refuses
     // it before a substrate exists.
     resolveForest: () => [],
@@ -709,16 +744,70 @@ export function projectStateTree(
   schema: SchemaNode,
   now: number,
 ): PlainState {
+  const { resolver, interpreter } = stateTreeMaterializer(tree, now)
+  return interpret(
+    schema,
+    interpreter,
+    materializeContextFromResolver(resolver),
+  ) as PlainState
+}
+
+/**
+ * The resolver over `tree` and the fold that projects through it as of
+ * `now`, decay applied: what `projectStateTree` runs over the whole schema,
+ * and what a reconcile runs over the parts a merge or tick touched.
+ */
+export function stateTreeMaterializer(
+  tree: StateTree,
+  now: number,
+): {
+  readonly resolver: MaterializeResolver
+  readonly interpreter: Interpreter<MaterializeContext, unknown>
+} {
   const resolver = createStateTreeResolver(tree)
   const newestAt = (path: Path): number => {
     const at = stateTreeAt(tree, path)
     return at.kind === "node" ? newestTimestamp(at.node) : 0
   }
-  return interpret(
-    schema,
-    withDecay(createMaterializeInterpreter(resolver), newestAt, now),
-    materializeContextFromResolver(resolver),
-  ) as PlainState
+  return {
+    resolver,
+    interpreter: withDecay(
+      createMaterializeInterpreter(resolver),
+      newestAt,
+      now,
+    ),
+  }
+}
+
+/**
+ * The path a StateTree key path names under `root`: a declared key is a
+ * field, a dynamic key an entry. Stops at a register, whose keys are inside
+ * its one value, and at a key the schema does not declare. A fold over
+ * `keySpace` and `childSchemaForKey`, adding no rule of its own.
+ */
+function keysToPath(root: SchemaNode, keys: readonly string[]): Path {
+  let path: Path = RawPath.empty
+  let schema = root
+  for (const key of keys) {
+    const space = keySpace(schema)
+    const child = childSchemaForKey(schema, key)
+    if (space === undefined || child === undefined) break
+    path = space === "declared" ? path.field(key) : path.entry(key)
+    schema = child
+  }
+  return path
+}
+
+/**
+ * The part of σ a move at `keys` can change: the path cut after its first
+ * dynamic key. An entry at a dynamic key is present only while something
+ * beneath it is (`isPresent`), so a leaf deleted anywhere below can remove
+ * the entry, and with it any entry above that held nothing else.
+ */
+export function movedScope(root: SchemaNode, keys: readonly string[]): Path {
+  const path = keysToPath(root, keys)
+  const entry = path.segments.findIndex(segment => segment.role === "entry")
+  return entry === -1 ? path : path.slice(0, entry + 1)
 }
 
 // ---------------------------------------------------------------------------

@@ -17,6 +17,7 @@ import {
   interpret,
   KIND,
   observation,
+  RawPath,
   readable,
   Schema,
   type SchemaNode,
@@ -25,7 +26,7 @@ import {
 import type { LoroDoc } from "loro-crdt"
 import { describe, expect, it } from "vitest"
 import { type LoroVersion, loroSubstrateFactory } from "../index.js"
-import { materializeLoroShadow } from "../materialize.js"
+import { createLoroResolver, materializeLoroShadow } from "../materialize.js"
 
 // ===========================================================================
 // Helpers
@@ -283,5 +284,42 @@ describe("materializeLoroShadow", () => {
     const binding = trivialBinding(schema)
     const result = materializeLoroShadow(loroDoc, schema, binding)
     expect(result).toEqual({ settings: { theme: null } })
+  })
+})
+
+describe("createLoroResolver.resolveHasKey", () => {
+  it("agrees with resolveKeys, for a record and a .json() record", () => {
+    const schema = Schema.struct({
+      peers: Schema.record(Schema.number()),
+      blob: Schema.record.json(Schema.number()),
+    })
+    const substrate = loroSubstrateFactory.create(schema)
+    const doc = interpretSubstrate(schema, substrate)
+    batch(doc, (d: any) => {
+      d.peers.set("alice", 1)
+      d.peers.set("bob", 2)
+      d.blob.set("carol", 3)
+    })
+    batch(doc, (d: any) => d.peers.delete("bob"))
+
+    const resolver = createLoroResolver(
+      getLoroDoc(substrate),
+      schema,
+      trivialBinding(schema),
+    )
+    for (const field of ["peers", "blob"]) {
+      const path = RawPath.empty.field(field)
+      for (const key of ["alice", "bob", "carol", "never"]) {
+        expect(resolver.resolveHasKey(path, key)).toBe(
+          resolver.resolveKeys(path).includes(key),
+        )
+      }
+    }
+    expect(resolver.resolveHasKey(RawPath.empty.field("peers"), "alice")).toBe(
+      true,
+    )
+    expect(resolver.resolveHasKey(RawPath.empty.field("peers"), "bob")).toBe(
+      false,
+    )
   })
 })

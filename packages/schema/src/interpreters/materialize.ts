@@ -16,6 +16,9 @@
 //    - **Container shape resolvers** (return structure metadata):
 //      resolveLength (sequence, movable), resolveKeys (map, set)
 //
+//    `resolveHasKey` is asked by no case: the reconcile's gather uses it to
+//    read only the record keys λ holds (`reconcile-shadow.ts`).
+//
 // Three "array-collector" cases — sequence, movable, set — share the
 // `collectArrayByLength` / `collectArrayByKeys` helpers and all produce
 // `Plain<I>[]`. The map case produces `Record<string, Plain<I>>`. The
@@ -35,7 +38,7 @@ import { isNonNullObject } from "../guards.js"
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
 import { dispatchSum } from "../interpret.js"
 import { INTERPRETER } from "../interpreter-types.js"
-import type { FlatTreeNodeTopology } from "../reader.js"
+import { type FlatTreeNodeTopology, forestTopologyOf } from "../reader.js"
 import type {
   CounterSchema,
   MapSchema,
@@ -65,6 +68,14 @@ export interface MaterializeResolver {
   // --- Container shape resolvers ---
   resolveLength(path: Path): number
   resolveKeys(path: Path): string[]
+  /**
+   * Whether the record at `path` holds the runtime key `key`: what
+   * `resolveKeys(path).includes(key)` answers, without listing the keys.
+   * Asked only of a record, never of a struct's field, whose existence the
+   * schema decides; so a backend that keys fields by identity needs no
+   * binding lookup here.
+   */
+  resolveHasKey(path: Path, key: string): boolean
 
   // --- Topology resolvers ---
   // Third resolver family. `Schema.tree` needs richer structural data
@@ -95,7 +106,28 @@ export const plainResolution = {
   length: (value: unknown): number => (Array.isArray(value) ? value.length : 0),
   keys: (value: unknown): string[] =>
     isNonNullObject(value) ? Object.keys(value) : [],
+  hasKey: (value: unknown, key: string): boolean =>
+    isNonNullObject(value) && Object.hasOwn(value, key),
 } as const
+
+/**
+ * A resolver over a plain value: the fold over it completes the value, as
+ * the backends' resolvers complete what they hold. Every method answers with
+ * `plainResolution`, and a forest is read from the flat shadow shape.
+ */
+export function plainValueResolver(state: unknown): MaterializeResolver {
+  const at = (path: Path): unknown => path.read(state)
+  return {
+    resolveValue: at,
+    resolveText: path => plainResolution.text(at(path)),
+    resolveCounter: path => plainResolution.counter(at(path)),
+    resolveRichText: path => plainResolution.richText(at(path)),
+    resolveLength: path => plainResolution.length(at(path)),
+    resolveKeys: path => plainResolution.keys(at(path)),
+    resolveHasKey: (path, key) => plainResolution.hasKey(at(path), key),
+    resolveForest: path => forestTopologyOf(at(path)),
+  }
+}
 
 // ---------------------------------------------------------------------------
 // collectArray — shared array-collection helpers

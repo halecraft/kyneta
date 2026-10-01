@@ -31,28 +31,50 @@ import { Zero } from "./zero.js"
 
 /**
  * `value` shaped by `schema`: absent declared fields as `Zero.structural`,
- * undeclared keys dropped, sums completed as the variant `dispatchSum` picks.
- * Returns `value` itself when nothing changes.
+ * undeclared keys dropped, a struct's fields in schema order, and sums
+ * completed as the variant `dispatchSum` picks. Returns `value` itself when
+ * it is already in that shape.
  *
- * A value of the wrong kind (a number where a struct is declared) passes
- * through unchanged: validation is not this function's job.
+ * A container of the wrong kind (a number where a struct is declared) is
+ * absent, and so its zero, as the materializer reads it. A scalar of the
+ * wrong kind passes through, as it does there: validation is not this
+ * function's job.
  */
 export function completeValue(schema: SchemaNode, value: unknown): unknown {
   if (value === undefined) return Zero.structural(schema)
   switch (schema[KIND]) {
     case "product":
-      return completeProduct(schema as ProductSchema, value)
+      return isPlainObject(value)
+        ? completeProduct(schema as ProductSchema, value)
+        : Zero.structural(schema)
     case "map":
-      return completeEntries(schema.item, value)
+      // An array reads as a record keyed by index, as `plainResolution.keys`
+      // lists it for the materializer; sets need it to list array members.
+      if (Array.isArray(value)) {
+        return completeEntries(schema.item, { ...value })
+      }
+      return isPlainObject(value)
+        ? completeEntries(schema.item, value)
+        : Zero.structural(schema)
     case "sequence":
     case "movable":
     case "set":
-      return completeItems(schema.item, value)
+      return Array.isArray(value)
+        ? completeItems(schema.item, value)
+        : Zero.structural(schema)
     case "tree":
-      return completeForest(schema.item, value)
+      return Array.isArray(value)
+        ? completeForest(schema.item, value)
+        : Zero.structural(schema)
+    case "text":
+      return typeof value === "string" ? value : Zero.structural(schema)
+    case "counter":
+      return typeof value === "number" ? value : Zero.structural(schema)
+    case "richtext":
+      return Array.isArray(value) ? value : Zero.structural(schema)
     case "sum":
       return completeSum(schema, value)
-    default:
+    case "scalar":
       return value
   }
 }
@@ -132,29 +154,36 @@ function slotSchema(
   }
 }
 
-function completeProduct(schema: ProductSchema, value: unknown): unknown {
-  if (!isPlainObject(value)) return value
+/**
+ * Rebuilt when a field changes or the value's own keys are not exactly the
+ * schema's fields in schema order. That order is the materializer's, and the
+ * same on every peer, so a writer and a receiver hold one key order.
+ */
+function completeProduct(
+  schema: ProductSchema,
+  value: Record<string, unknown>,
+): unknown {
   let changed = false
   const out: Record<string, unknown> = {}
-  for (const [key, field] of Object.entries(schema.fields)) {
+  const fields = Object.keys(schema.fields)
+  for (const key of fields) {
     const child = value[key]
-    const completed = completeValue(field, child)
+    const completed = completeValue(schema.fields[key] as SchemaNode, child)
     if (completed !== child || !Object.hasOwn(value, key)) changed = true
     out[key] = completed
   }
   if (!changed) {
-    for (const key of Object.keys(value)) {
-      if (!Object.hasOwn(schema.fields, key)) {
-        changed = true
-        break
-      }
-    }
+    const own = Object.keys(value)
+    changed =
+      own.length !== fields.length || own.some((key, i) => key !== fields[i])
   }
   return changed ? out : value
 }
 
-function completeEntries(item: SchemaNode, value: unknown): unknown {
-  if (!isPlainObject(value)) return value
+function completeEntries(
+  item: SchemaNode,
+  value: Record<string, unknown>,
+): unknown {
   let out: Record<string, unknown> | undefined
   for (const [key, child] of Object.entries(value)) {
     const completed = completeValue(item, child)
@@ -164,8 +193,7 @@ function completeEntries(item: SchemaNode, value: unknown): unknown {
   return out ?? value
 }
 
-function completeItems(item: SchemaNode, value: unknown): unknown {
-  if (!Array.isArray(value)) return value
+function completeItems(item: SchemaNode, value: readonly unknown[]): unknown {
   let out: unknown[] | undefined
   for (let i = 0; i < value.length; i++) {
     const child: unknown = value[i]
@@ -177,8 +205,7 @@ function completeItems(item: SchemaNode, value: unknown): unknown {
 }
 
 /** A forest as σ holds it: `{ id, parent, index, data }` nodes. */
-function completeForest(item: SchemaNode, value: unknown): unknown {
-  if (!Array.isArray(value)) return value
+function completeForest(item: SchemaNode, value: readonly unknown[]): unknown {
   let out: unknown[] | undefined
   for (let i = 0; i < value.length; i++) {
     const node: unknown = value[i]

@@ -21,13 +21,13 @@
 import type { ChangeBase } from "../change.js"
 import { own, replaceChange } from "../change.js"
 import { deepClonePlain } from "../clone.js"
-import { diffOps } from "../diff-ops.js"
 import { findOpaqueBoundary } from "../fold-path.js"
 import { digestToHex } from "../hash.js"
 import type { Path } from "../interpret.js"
 import type { WritableContext } from "../interpreters/writable.js"
 import { buildWritableContext } from "../interpreters/writable.js"
 import { invert } from "../inverse.js"
+import { RawPath } from "../path.js"
 import {
   decodePlainPosition,
   type PlainPosition,
@@ -40,6 +40,11 @@ import {
   type PlainState,
   plainReader,
 } from "../reader.js"
+import {
+  planReconcile,
+  type ReconcileTarget,
+  reconcileShadow,
+} from "../reconcile-shadow.js"
 import type { Schema as SchemaNode } from "../schema.js"
 import type {
   BatchOutcome,
@@ -63,8 +68,10 @@ import {
   formatStateTreeViolation,
   installedAfter,
   mergeStateTree,
+  movedScope,
   projectStateTree,
   stateTreeDigest,
+  stateTreeMaterializer,
   stateTreeViolation,
   type WriteStamp,
 } from "./state-tree.js"
@@ -330,7 +337,8 @@ function createStateReplicaCore(
       }
     },
 
-    merge(payload: SubstratePayload): void {
+    /** Join `payload` into the tree; returns the key paths the join moved. */
+    merge(payload: SubstratePayload): readonly (readonly string[])[] {
       if (payload.encoding !== "json" || typeof payload.data !== "string") {
         throw new Error("StateReplica expects JSON-encoded StateTree payloads.")
       }
@@ -342,7 +350,7 @@ function createStateReplicaCore(
       // silence.
       const incomingTree = decodeTree(payload.data)
       installSeq += 1
-      const { tree, changed } = mergeStateTree(
+      const { tree, moved } = mergeStateTree(
         getTree(),
         incomingTree,
         installSeq,
@@ -355,7 +363,8 @@ function createStateReplicaCore(
       // every peer re-announces every payload it receives — harmless between
       // two peers, where the sender is excluded from the relay and the cycle
       // closes, and an endless loop among three, where it never does.
-      if (!changed) installSeq -= 1
+      if (moved.length === 0) installSeq -= 1
+      return moved
     },
 
     resetFromEntirety(payload: SubstratePayload): void {
@@ -411,35 +420,33 @@ export function createStateSubstrate(
   const localUpdates = createLocalUpdateSignal()
 
   /**
-   * The tree moved without a local write: re-project σ from it and tell
-   * subscribers what changed.
+   * The tree moved without a local write, or time passed: re-project σ at
+   * `targets` and tell subscribers what changed.
    *
-   * Both ways that happens — a peer's merge and a decay sweep — need the
-   * same two steps, and differ only in the `origin` they announce under.
+   * A merge names the parts its join moved, lifted to their decay
+   * boundaries (`planReconcile`), so it costs the size of what arrived. A
+   * tick names the root: decay has no ops to say where it changed.
    *
    * The announcement is what a local writer would have written to get from
-   * σ to the projection (`diffOps`): one op per declared field, record key
-   * or register that moved. Delivery notifies a changed path's *ancestors*,
-   * so a coarser op would reach nobody below it — a presence roster's
-   * per-entry subscribers would never hear a peer arrive, move or expire —
-   * and naming everything would wake subscribers whose subtree nothing
-   * touched, on every tick and every sync.
+   * σ to the projection at each target (`reconcileShadow`, through
+   * `diffOps`): one op per declared field, record key or register that
+   * moved. Delivery notifies a changed path's *ancestors*, so a coarser op
+   * would reach nobody below it — a presence roster's per-entry subscribers
+   * would never hear a peer arrive, move or expire — and naming everything
+   * would wake subscribers whose subtree nothing touched.
    *
-   * σ is written here, before announcing: an announcement never reaches
-   * `prepare`. Each op's payload is `diffOps`'s own copy, and σ takes
-   * another (`ownedForStore`), so σ, the op and the tree's register values
-   * share nothing. The announcement still has to go through the writable
-   * context, which seals the ops as one batch and delivers it.
+   * σ is written before announcing: an announcement never reaches
+   * `prepare`. σ, the ops and the tree's register values share nothing
+   * (`reconcileShadow`). The announcement still has to go through the
+   * writable context, which seals the ops as one batch and delivers it.
    */
-  function announceReprojection(now: number, origin?: string): void {
-    const ops = diffOps(
-      schema,
-      shadow,
-      projectStateTree(currentTree, schema, now),
-    )
-    for (const { path, change } of ops) {
-      applyChange(shadow, path, ownedForStore(change))
-    }
+  function announceReprojection(
+    now: number,
+    targets: readonly ReconcileTarget[],
+    origin?: string,
+  ): void {
+    const { resolver, interpreter } = stateTreeMaterializer(currentTree, now)
+    const ops = reconcileShadow(shadow, targets, resolver, interpreter)
     substrate.context().announce(ops, { origin, local: false })
   }
 
@@ -583,8 +590,18 @@ export function createStateSubstrate(
       // Both kinds join the same way. A delta is a partial tree and the merge
       // unions keys, so a key it omits is one it makes no claim about — the
       // same rule that makes an entirety safe to join rather than adopt.
-      core.merge(payload)
-      announceReprojection(Date.now(), options?.origin)
+      const moved = core.merge(payload)
+      announceReprojection(
+        Date.now(),
+        planReconcile(
+          schema,
+          moved.map(keys => ({
+            path: movedScope(schema, keys),
+            effect: "all",
+          })),
+        ),
+        options?.origin,
+      )
     },
 
     resetFromEntirety(payload: SubstratePayload, options?: MergeOptions): void {
@@ -609,7 +626,10 @@ export function createStateSubstrate(
      * clobber a slower peer's still-valid value.
      */
     tick(now: number): void {
-      announceReprojection(now)
+      announceReprojection(
+        now,
+        planReconcile(schema, [{ path: RawPath.empty, effect: "all" }]),
+      )
     },
   }
 

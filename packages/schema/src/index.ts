@@ -221,7 +221,6 @@ export type {
   KeyedReadable,
   KeyedWriteOps,
 } from "./interpreters/keyed-helpers.js"
-// Built-in interpreters
 // Materialize interpreter — generic CRDT→PlainState materialization
 export type {
   MaterializeContext,
@@ -231,6 +230,7 @@ export {
   createMaterializeInterpreter,
   materializeContextFromResolver,
   plainResolution,
+  plainValueResolver,
 } from "./interpreters/materialize.js"
 // Navigable type interfaces — navigation-only collection refs
 export type {
@@ -449,10 +449,17 @@ export {
   applyChange,
   ownedForStore,
   plainReader,
-  syncShadow,
   writeByPath,
 } from "./reader.js"
 export { rebaseChange } from "./rebase.js"
+// Built-in interpreters
+// Reconcile — σ brought up to date from λ where a change touched it
+export type { ReconcileTarget, Touched } from "./reconcile-shadow.js"
+export {
+  planReconcile,
+  reconcileShadow,
+  touchedBy,
+} from "./reconcile-shadow.js"
 // Ref tier types — parameterized recursive refs for composed interpreter stacks
 export type {
   DocRef,
@@ -626,6 +633,7 @@ export {
   plainSubstrateFactory,
   supersedes,
 } from "./substrates/plain.js"
+export type { SubtreeEffect } from "./subtree-effect.js"
 // Sync — generic sync functions for any substrate (via ref[SUBSTRATE])
 export {
   exportEntirety,

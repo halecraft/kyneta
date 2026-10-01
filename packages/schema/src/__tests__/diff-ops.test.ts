@@ -8,6 +8,7 @@ import {
   mapChange,
   own,
   replaceChange,
+  sequenceChange,
   textChange,
 } from "../change.js"
 import { deepClonePlain } from "../clone.js"
@@ -114,13 +115,94 @@ describe("diffOps", () => {
     expectLaw(base, after)
   })
 
-  it("a sequence and a set are one replace each", () => {
-    const after = { ...base, items: [1, 2, 3], tags: ["t", "u"] }
+  it("a set is one replace", () => {
+    const after = { ...base, tags: ["t", "u"] }
     expect(described(base, after)).toEqual([
-      ["items", replaceChange(own([1, 2, 3]))],
       ["tags", replaceChange(own(["t", "u"]))],
     ])
     expectLaw(base, after)
+  })
+
+  describe("a list diffs by position", () => {
+    const withItems = (items: number[]) => ({ ...base, items })
+
+    it("an insert retains the prefix and inserts only the new items", () => {
+      const before = withItems([1, 2, 3, 4])
+      const after = withItems([1, 2, 9, 3, 4])
+      expect(described(before, after)).toEqual([
+        ["items", sequenceChange([{ retain: 2 }, { insert: [own(9)] }])],
+      ])
+      expectLaw(before, after)
+    })
+
+    it("a delete retains the prefix and deletes only the items that left", () => {
+      const before = withItems([1, 2, 3, 4])
+      const after = withItems([1, 4])
+      expect(described(before, after)).toEqual([
+        ["items", sequenceChange([{ retain: 1 }, { delete: 2 }])],
+      ])
+      expectLaw(before, after)
+    })
+
+    it("a middle replacement deletes and inserts the window between the differences", () => {
+      const before = withItems([1, 2, 3, 4, 5])
+      const after = withItems([1, 7, 3, 8, 5])
+      expect(described(before, after)).toEqual([
+        [
+          "items",
+          sequenceChange([
+            { retain: 1 },
+            { delete: 3 },
+            { insert: [own(7), own(3), own(8)] },
+          ]),
+        ],
+      ])
+      expectLaw(before, after)
+    })
+
+    it("an unchanged list gives nothing", () => {
+      expect(described(base, withItems([1, 2]))).toEqual([])
+    })
+
+    it("a .json() list is one replace", () => {
+      const schema = Schema.struct({ tags: Schema.list.json(Schema.number()) })
+      const ops = diffOps(schema, { tags: [1, 2] }, { tags: [1, 2, 3] })
+      expect(ops.map(op => [op.path.format(), op.change])).toEqual([
+        ["tags", replaceChange(own([1, 2, 3]))],
+      ])
+    })
+  })
+
+  describe("restricted to named entries", () => {
+    const peers = RawPath.empty.field("peers")
+
+    it("a record reports only the named keys that arrived or left, and recurses into kept ones", () => {
+      const before = {
+        alice: { cursor: 1, name: "A" },
+        bob: { cursor: 2, name: "B" },
+        dave: { cursor: 4, name: "D" },
+      }
+      const after = {
+        alice: { cursor: 5, name: "A" },
+        carol: { cursor: 3, name: "C" },
+        erin: { cursor: 6, name: "E" },
+      }
+      const ops = diffOps(Doc.fields.peers, before, after, peers, [
+        "alice",
+        "bob",
+        "carol",
+      ])
+      expect(ops.map(op => [op.path.format(), op.change])).toEqual([
+        ["peers", mapChange(own({ carol: { cursor: 3, name: "C" } }), ["bob"])],
+        ["peers.alice.cursor", replaceChange(5)],
+      ])
+    })
+
+    it("names entries only of a record", () => {
+      expect(() =>
+        diffOps(Doc, { flag: false }, { flag: true }, RawPath.empty, ["flag"]),
+      ).toThrow(/entries of a record/)
+    })
   })
 
   it("text becomes the minimal contiguous edit, and a counter an increment", () => {

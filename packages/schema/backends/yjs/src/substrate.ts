@@ -67,6 +67,7 @@ import {
   BACKING_DOC,
   buildWritableContext,
   containerKey,
+  createMaterializeInterpreter,
   DEFAULT_LINEAGE,
   DEVTOOLS_HISTORY,
   type DevtoolsHistory,
@@ -80,11 +81,13 @@ import {
   ownedForStore,
   plainReader,
   planAdvance,
-  syncShadow,
+  planReconcile,
+  reconcileShadow,
+  touchedBy,
 } from "@kyneta/schema"
 import * as Y from "yjs"
 import { applyChangeToYjs, eventsToOps } from "./change-mapping.js"
-import { materializeYjsShadow } from "./materialize.js"
+import { createYjsResolver, materializeYjsShadow } from "./materialize.js"
 import { ensureContainers } from "./populate.js"
 import { toYjsAssoc, YjsPosition } from "./position.js"
 import { createYjsRevertible } from "./undo/revertible.js"
@@ -208,6 +211,9 @@ export function createYjsSubstrate(
   // `prepare` steps it for local writes; the event bridge re-materializes it
   // for everything else.
   const shadow: PlainState = materializeYjsShadow(doc, schema, binding)
+  // What the event bridge re-materializes σ's touched parts through.
+  const resolver = createYjsResolver(rootMap, schema, binding)
+  const materializer = createMaterializeInterpreter(resolver)
   const reader: Reader = plainReader(shadow)
 
   // Undo records of local transactions. Gathers nothing until someone
@@ -568,9 +574,14 @@ export function createYjsSubstrate(
     const ctx = substrate.context()
 
     // The Y.Doc already holds these ops. CRDT merge is a lattice join with
-    // no sequential decomposition, so σ is re-materialised from λ in one Π
-    // pass rather than stepped op by op, and only then announced.
-    syncShadow(shadow, materializeYjsShadow(doc, schema, binding))
+    // no sequential decomposition, so σ is re-materialised from λ where the
+    // ops touched it rather than stepped op by op, and only then announced.
+    reconcileShadow(
+      shadow,
+      planReconcile(schema, touchedBy(ops)),
+      resolver,
+      materializer,
+    )
     ctx.announce(ops, { origin, local: transaction.local })
   })
 

@@ -415,7 +415,7 @@ The built-in substrate. Stores state as plain JS objects, tracks a monotonic int
 - The default binding when no CRDT is needed (`Schema.string`, small configs, ephemeral UI state).
 - Reference implementation for testing the `Substrate<V>` contract.
 
-All substrates now share the same read semantics: reads go through `plainReader` backed by a `PlainState` object. For the plain substrate this is trivially the substrate's own state. For CRDT substrates (Loro, Yjs), the `PlainState` is a shadow that is kept in sync — eagerly on local writes, re-materialized from the CRDT doc before every announcement. See [§The functional shadow](#the-functional-shadow).
+All substrates now share the same read semantics: reads go through `plainReader` backed by a `PlainState` object. For the plain substrate this is trivially the substrate's own state. For CRDT substrates (Loro, Yjs), the `PlainState` is a shadow that is kept in sync — eagerly on local writes, and brought up to date from λ where an announcement touched before it is announced. See [§The functional shadow](#the-functional-shadow).
 
 **A plain substrate is its replica's core plus σ and a changefeed.** The core (`createPlainCore`) holds the base offset, the op log retained after it, and a `PlainClock`. `buildUpgrade` seeds the substrate from the replica's materialized state and its history, so `create` (`upgrade(createReplica())`), `fromEntirety` (`upgrade(replica.fromEntirety(payload))`) and promotion of a replicate document all keep the replica's version and log. Nothing restarts history.
 
@@ -656,9 +656,9 @@ A horizon's `deleted` marker lives in its own slot rather than in the value beca
 
 `nodeKind` throws on anything else, and every walker switches on it exhaustively, closed with a `never`. Treating an unknown shape as a container is quiet and expensive: its slots are walked as keys, and the characters of a string value after them. A malformed fixture once did exactly that, and the walk recursed until the stack ran out.
 
-### A merge reports whether it moved
+### A merge reports where it moved
 
-`mergeStateTree` returns `{ tree, changed }`. `changed` is a lattice question rather than bookkeeping: `a ⊔ b = a` exactly when `b ≤ a`, so a false answer means the incoming payload was already subsumed. A horizon that rises or flips is a change; a leaf the join prunes on arrival is not. The substrate advances its version only when the join moved, and the synchronizer relays only an import that changed something.
+`mergeStateTree` returns `{ tree, moved }`, the key path of every node where the join changed the winner, raised a horizon or adopted a key. The substrate reprojects σ at those paths ([The projection](#the-projection)). Whether `moved` is empty is a lattice question rather than bookkeeping: `a ⊔ b = a` exactly when `b ≤ a`, so an empty answer means the incoming payload was already subsumed. A horizon that rises or flips is a change; a leaf the join prunes on arrival is not. The substrate advances its version only when the join moved, and the synchronizer relays only an import that changed something.
 
 Getting this wrong is not a waste of bytes, it is a cycle. Each peer relays an import to every peer except the sender. With two peers that closes immediately — the sender is the only candidate — which is why announcing every merge was survivable and why every ephemeral test in the suite passed. With three peers there is always somewhere left to forward to, and because `StateVersion.compare` can never answer `"equal"`, no receiver can decline a payload it already holds. Three peers opening the same ephemeral document wedged the event loop before this was fixed, with nobody writing anything.
 
@@ -704,13 +704,14 @@ The property this buys — a concurrent variant switch resolving to one coherent
 
 Π for ephemeral is the materializer the CRDT backends use: `projectStateTree` is `interpret(schema, withDecay(createMaterializeInterpreter(resolver), …))` over `createStateTreeResolver(tree)`. The resolver is schema-blind, as theirs are. Every method resolves its path with `stateTreeAt`, which descends through horizons and continues into a live leaf's value for the rest of a path, so a register's fields are read from inside its one tuple. For a value held as plain JSON, a `.json()` list's length or a `.json()` record's keys, it answers with `plainResolution`, the same answers Loro and Yjs give for their plain values. The fold holds the schema, so it supplies every zero and applies decay.
 
-A projection returns register values by reference from the tree, so it is never kept or handed out as it is. A reprojection, after a merge or on a tick, is an announcement:
+A projection returns register values by reference from the tree, so it is never kept or handed out as it is. A reprojection, after a merge or on a tick, is a reconcile ([The functional shadow](#the-functional-shadow)) followed by an announcement of its ops:
 
-1. gather: `projectStateTree(tree, schema, now)`;
-2. plan: `diffOps(schema, σ, next)`, the ops a local writer would have produced to get from σ to the projection — one per declared field, record key or register that moved;
-3. execute: apply each op to σ, then `announce` the ops.
+1. plan: where to reproject. A merge reports every key path its join moved (`MergeResult.moved`: a changed winner, a raised horizon, an adopted key). Each becomes a path (`keysToPath`), cut after its first dynamic key (`movedScope`), because an entry at a dynamic key is present only while something beneath it is, so a leaf deleted below can remove the entry. `planReconcile` lifts each to its outermost decaying ancestor, since a write under an expired container makes the whole container visible again. A tick names the root: decay has no ops to say where it changed;
+2. gather: the projection at each target, through `stateTreeMaterializer(tree, now)`, the resolver and decaying fold `projectStateTree` runs over the whole schema;
+3. plan: `diffOps` of each target against σ, the ops a local writer would have produced to get from σ to the projection — one per declared field, record key or register that moved;
+4. execute: apply each op to σ, then `announce` the ops.
 
-Each moved value is copied twice: `diffOps` builds each payload as a copy (`own`), and σ takes its own through `ownedForStore`, so neither the op nor σ shares a register value with the tree or with the other. An unchanged value is neither cloned nor rewritten. That is the shape of Loro's and Yjs's event bridge, native state → σ → `Op[]` → announce, with a diff against the projection standing in for their CRDT events — and as fine as theirs, so a subscriber at one peer's cursor hears that peer move, and a held `doc.peers.at("alice")` keeps its identity across every merge in which alice still exists.
+So a merge costs the size of what it moved, not of the document, and a tick still reprojects everything. Each moved value is copied twice: `diffOps` builds each payload as a copy (`own`), and σ takes its own through `ownedForStore`, so neither the op nor σ shares a register value with the tree or with the other. An unchanged value is neither cloned nor rewritten. That is the shape of Loro's and Yjs's event bridge, native state → σ → `Op[]` → announce, with a diff against the projection standing in for their CRDT events — and as fine as theirs, so a subscriber at one peer's cursor hears that peer move, and a held `doc.peers.at("alice")` keeps its identity across every merge in which alice still exists.
 
 ### One way in
 
@@ -751,25 +752,43 @@ CRDT substrates (Loro, Yjs) maintain a **shadow**: a `PlainState` object that se
 
 **On local writes**, `prepare` calls `applyChange(shadow, path, change)` — the same σ-advance the plain substrate uses — making the write immediately visible to reads, and advances the CRDT doc in the same call (Loro coalesces plain map writes until `afterBatch`; Yjs defers `.json()` boundary writes the same way).
 
-**On everything else** (a merge, a raw native write), the CRDT doc holds the ops first (via `doc.import`, `Y.applyUpdate`, or the native call). The event bridge re-materializes the shadow from the CRDT doc and only then announces the ops, so `ctx.reader` already reflects the new state when any subscriber runs.
+**On everything else** (a merge, a raw native write), the CRDT doc holds the ops first (via `doc.import`, `Y.applyUpdate`, or the native call). The event bridge brings the shadow up to date from the CRDT doc where the ops touched it, and only then announces the ops, so `ctx.reader` already reflects the new state when any subscriber runs.
 
 **A substrate announces only after λ and σ agree.** Every change that a local writer did not author reaches the changefeed as an announcement, `ctx.announce(ops, origin)` (`src/interpreters/writable.ts`), issued after the substrate has taken the ops into λ and brought σ up to date. The announcement never calls `substrate.prepare` or `afterBatch`; it only feeds the changefeed layers and delivers. Those layers work from the ops alone, so σ is final for every observer.
 
 | announcer | reconcile λ | reconcile σ |
 |---|---|---|
-| Yjs / Loro event bridge | CRDT import or native write, already done | `syncShadow(shadow, materialize(λ))` |
+| Yjs / Loro event bridge | CRDT import or native write, already done | `reconcileShadow` at what the native ops touched |
 | plain `merge` | `core.append(batch)` | apply each op's completion to σ: σ is the completion of λ |
-| plain `resetFromEntirety` | `core.adopt(remote)` | apply `diffOps(schema, σ, completeValue(schema, state))`: σ is the completion of λ |
-| ephemeral `merge` | `core.merge` joins the tree | apply `diffOps(schema, σ, projection)` |
-| ephemeral `tick` | none | apply `diffOps(schema, σ, projection)` |
+| plain `resetFromEntirety` | `core.adopt(remote)` | `reconcileShadow` at the root, over the adopted state: σ is the completion of λ |
+| ephemeral `merge` | `core.merge` joins the tree | `reconcileShadow` at what the join moved |
+| ephemeral `tick` | none | `reconcileShadow` at the root |
 
-**Initialization.** The shadow is created at substrate construction time via `materializeLoroShadow` (Loro) or `materializeYjsShadow` (Yjs). These functions now delegate to `createMaterializeInterpreter` with a backend-specific `MaterializeResolver`, rather than defining bespoke 370-line interpreters. The resolver closes over the CRDT doc and binding; the generic materializer walks the schema and calls resolver methods to produce a plain JS object matching the schema's shape. The shadow is also re-materialized on upgrade and before every bridge announcement.
+**The reconcile.** Every way σ moves apart from an authored write and a plain `append` is one function, `reconcileShadow` (`src/reconcile-shadow.ts`), in three steps:
 
-The ephemeral substrate builds its shadow with the same fold, over a resolver for its `StateTree` (see [The projection](#the-projection)). Its announcements have the same shape too: all three bring σ up to date, turn native state into `Op[]`, and announce it. Loro and Yjs take the ops from their CRDT events; ephemeral has no event bridge, so `diffOps` diffs σ against a fresh projection instead. For a value a backend holds as plain JSON, such as the inside of a `.json()` register, every resolver answers with `plainResolution` (`interpreters/materialize.ts`), so they cannot disagree about it.
+1. **plan** (pure): `planReconcile(schema, touched)` turns where a change landed, and how far below it reached (`planSubtreeEffect`; `touchedBy(ops)` pairs the two for an op list), into the parts of σ to refresh, each one `diffOps` call. It expands a map change into the keys it names, lifts a path inside a sum or `.json()` node to that register and a path under a decaying container to the container, re-expresses a path ending at a record entry as its record keyed by that entry (a node target could not say that an entry is gone, or new), and drops what another target covers, merging one record's keys into one target. Paths compare by `segmentKeys`;
+2. **gather**: read each part from λ through the backend's `MaterializeResolver` and the materializer, at that path. A keyed record target reads only the keys λ holds (`resolveHasKey`);
+3. **execute**: diff each part against σ (`diffOps`, with `keys` for a keyed target), and apply the ops through `ownedForStore`.
 
-**`Reader` vs `MaterializeResolver`.** `Reader` (5 methods) is the runtime read interface backed by the `PlainState` shadow — schema-blind, live. `MaterializeResolver` (7 methods) is the materialization interface backed by the native store — schema-aware via catamorphism dispatch, one-shot. They share a conceptual lineage — the resolver is what a CRDT Reader would look like if it were schema-aware and didn't need liveness.
+It costs the size of what changed, and every σ object outside the refreshed parts keeps its identity. The read path is built on that identity: a read will return σ's own frozen objects, so an untouched object must stay the same object. A part is re-materialized whole, so a remote change to a text costs the string's length.
+
+**Loro and Yjs still announce their native ops**, not the reconcile's: those are as fine as the store and carry the positional list and text instructions addressing and cursors need, where a reconcile's list window can be coarser. The ephemeral substrate and plain `adopt` have no ops of their own, so they announce what the reconcile applied.
+
+**Initialization.** The shadow is created at substrate construction time via `materializeLoroShadow` (Loro) or `materializeYjsShadow` (Yjs), which run `createMaterializeInterpreter` over a backend-specific `MaterializeResolver` (`createLoroResolver`, `createYjsResolver`). The resolver closes over the CRDT doc and binding; the generic materializer walks the schema and calls resolver methods to produce a plain JS object matching the schema's shape. The whole shadow is materialized only at construction and upgrade; the event bridges reconcile it through the same resolver.
+
+The ephemeral substrate builds its shadow with the same fold, over a resolver for its `StateTree` (see [The projection](#the-projection)). Its announcements have the same shape too: all three bring σ up to date through `reconcileShadow`, turn native state into `Op[]`, and announce it. Loro and Yjs take the ops from their CRDT events; ephemeral has no event bridge, so it announces the ops the reconcile applied. For a value a backend holds as plain JSON, such as the inside of a `.json()` register, every resolver answers with `plainResolution` (`interpreters/materialize.ts`), so they cannot disagree about it.
+
+**`Reader` vs `MaterializeResolver`.** `Reader` (5 methods) is the runtime read interface backed by the `PlainState` shadow — schema-blind, live. `MaterializeResolver` (8 methods) is the materialization interface backed by the native store — schema-aware via catamorphism dispatch, one-shot. They share a conceptual lineage — the resolver is what a CRDT Reader would look like if it were schema-aware and didn't need liveness.
 
 This design makes the read-your-writes invariant true by construction for all substrates: reads always go through `plainReader(shadow)`, and local writes always land in the shadow eagerly. No coordination, no flags, no special-casing per substrate.
+
+### Key order
+
+- **A struct's keys are in schema order on every peer.** Completion rebuilds a struct written in another order (`completeValue`), and every receiver materializes schema order, so a writer's and a receiver's `JSON.stringify` of a struct agree. The order is `Object.keys(schema.fields)`, integer-like field names first.
+- **A record's key order is unspecified, and can differ between peers.** Loro lists a record's keys sorted, the writer and Yjs in insertion order, and JavaScript lists integer-like keys first in every object, so no canonical order can be imposed.
+- **Loro reorders keys inside an `any` value**, which it stores as one native value.
+
+No schema says either of the last two orders, so completion cannot fix them. Compare records and `any` values by content, not by serialization.
 
 ### The projection law, and where it is pinned
 
@@ -1007,7 +1026,7 @@ Source: `src/read-cache.ts`, `src/interpreters/with-caching.ts`, `src/interprete
 
 Source: `packages/schema/src/interpreters/materialize.ts`.
 
-`createMaterializeInterpreter(resolver)` produces a generic `Interpreter<void, unknown>` that builds plain values from any CRDT backend. The `MaterializeResolver` interface abstracts the 6 backend-specific operations into two families:
+`createMaterializeInterpreter(resolver)` produces a generic `Interpreter<void, unknown>` that builds plain values from any CRDT backend. The `MaterializeResolver` interface abstracts the backend-specific operations into three families:
 
 **Leaf resolvers** (return typed value or `undefined` = not present):
 - `resolveValue(path)` — scalar and sum values
@@ -1018,12 +1037,17 @@ Source: `packages/schema/src/interpreters/materialize.ts`.
 **Container shape resolvers** (return structure metadata):
 - `resolveLength(path)` — item count for sequences and movable lists
 - `resolveKeys(path)` — key enumeration for maps and sets
+- `resolveHasKey(path, key)` — whether a record holds a runtime key, what `resolveKeys(path).includes(key)` answers without listing the keys. Asked only of a record, never of a struct's field (the schema decides those), so a backend that keys fields by identity needs no binding lookup. The reconcile's gather uses it for a keyed record target.
+
+**Topology resolver**: `resolveForest(path)` — a tree's flat topology.
+
+`plainValueResolver(state)` is the resolver over a plain value, every method answered by `plainResolution`: plain `adopt` reconciles through it, so the fold over an adopted state completes it as a CRDT receiver's would.
 
 The 11 interpreter cases partition into **container cases** (product, tree — structurally identical for all backends, no resolver calls) and **resolution cases** (the remaining 9, each calling one of the 6 resolver methods). Zero fallback is delegated to `zeroInterpreter` (scalars), and a sum's variant to `dispatchSum`, the rule every read applies, so an unknown discriminant materializes as the first variant. `completeValue` applies the same rule to a value on its way into σ ([Zero / defaults](#zero--defaults)); `store-completion.test.ts` pins the two against each other.
 
 Three resolution cases — `sequence`, `movable`, `set` — share an array-collection pattern, factored into `collectArrayByLength(length, item)` and `collectArrayByKeys(keys, item)`. Sequence and movable use the length-based helper; set uses the keys-based helper. All three produce `Plain<I>[]` — `materialize.set` is **not** identical to `materialize.map`: sets project to `T[]` while maps project to `Record<string, T>`. The catamorphism's separate `set` branch carries semantic weight here, even though the storage-layer key enumeration is the same as map's.
 
-Each backend provides a thin resolver factory (~50 lines): `createLoroResolver(doc, schema, binding)` and `createYjsResolver(rootMap, schema, binding)`. The closure-based design parallels `plainReader(state) → Reader` — the resolver closes over backend state, eliminating Ctx threading.
+Each backend provides a thin resolver factory (~50 lines): `createLoroResolver(doc, schema, binding)` and `createYjsResolver(rootMap, schema, binding)`, and the ephemeral substrate `createStateTreeResolver(tree)`. The closure-based design parallels `plainReader(state) → Reader` — the resolver closes over backend state, eliminating Ctx threading.
 
 ### Value materialization — the write-side unfold
 
@@ -1127,9 +1151,9 @@ Source: `packages/schema/src/zero.ts`.
 The `zeroInterpreter` is the single source of truth for zeros, and one rule applies it: an absent value means its zero.
 
 - **Initialization writes no zeros.** CRDT initialization routines (`ensureRootContainer`, `ensureContainers`) only create structural containers, and the ephemeral substrate's tree starts empty. A zero is what the materializer's fold answers for a node nothing has been written to, or one decay has retired.
-- **A value a write carries is completed before it reaches the store.** `completeValue(schema, value)` (`src/complete.ts`) fills every absent declared field with its `Zero.structural`, drops every undeclared key, and completes a sum as the variant `dispatchSum` picks. `completeChange(schema, change)` does it for every value a change carries, through `mapPayload`'s slots. An omitted field is therefore stored as its zero in σ and λ alike, so every read, peer and substrate sees the same value. The writable context completes authored writes ([The prepare pipeline](#the-prepare-pipeline)); the plain substrate completes what it merges ([The plain substrate](#the-plain-substrate)).
+- **A value a write carries is completed before it reaches the store.** `completeValue(schema, value)` (`src/complete.ts`) fills every absent declared field with its `Zero.structural`, drops every undeclared key, puts a struct's fields in schema order, and completes a sum as the variant `dispatchSum` picks. `completeChange(schema, change)` does it for every value a change carries, through `mapPayload`'s slots. An omitted field is therefore stored as its zero in σ and λ alike, so every read, peer and substrate sees the same value. The writable context completes authored writes ([The prepare pipeline](#the-prepare-pipeline)); the plain substrate completes what it merges ([The plain substrate](#the-plain-substrate)).
 
-Completion recurses by schema kind, not storage class: a sum's variant and a `.json()` struct are completed too. It rebuilds only the nodes that change, so a complete value costs one walk and comes back as itself. A value of the wrong kind passes through; validation is a separate concern. Completion can make two set members equal (`{x: 1}` and `{x: 1, y: 0}` under `{x, y}`), and `stepSet` then keeps one, as the schema says it should.
+Completion recurses by schema kind, not storage class: a sum's variant and a `.json()` struct are completed too. It rebuilds only the nodes that change, so a complete value costs one walk and comes back as itself. A container of the wrong kind (a number where a struct is declared) is absent, and so its zero, as the materializer reads it; an array where a record is declared reads by index, as `plainResolution.keys` lists it. A scalar of the wrong kind passes through, in both; validation is a separate concern. So completion and the materializer agree on every value, key order included (`store-completion.test.ts`), and plain's `append` and `adopt` store the same σ for the same document. Completion can make two set members equal (`{x: 1}` and `{x: 1, y: 0}` under `{x, y}`), and `stepSet` then keeps one, as the schema says it should.
 
 ---
 
@@ -1282,6 +1306,8 @@ The stages:
 
 Rewritten and removed are not told apart: every consumer examines each named coordinate, and whether it still exists decides the rest. Sequence deletions are settled by address advancement, which reads the instructions.
 
+A fourth reader is the reconcile ([The functional shadow](#the-functional-shadow)): `planReconcile` refreshes σ at a change's path, or at the keys `planSubtreeEffect` names. Changing this function moves σ on a merge, as well as addresses, cached reads and delivery.
+
 ### The step function, and its mutating dual
 
 Source: `packages/schema/src/step.ts`.
@@ -1330,7 +1356,7 @@ Both must hold. Naturality over `invert` is what makes the abort path correct: w
 
 Substrate-implementation contract: **any backend whose `applyChange` is a natural transformation over the change groupoid (forward AND inverse arrows) automatically gets correct abort for free.** PlainSubstrate is the degenerate case (Π is completion, and an authored op is logged exactly as σ applied it, so both naturality squares hold trivially). Loro and Yjs satisfy naturality by design.
 
-A bridged change can't use incremental σ-step: CRDT merge is a lattice join with no sequential decomposition. The correct response is `syncShadow(materialize(λ))` in the event bridge, before the announcement — re-materialise σ from λ in one Π pass.
+A bridged change can't use incremental σ-step: CRDT merge is a lattice join with no sequential decomposition. The correct response is to reconcile σ from λ in the event bridge, before the announcement, at the parts the change touched (`reconcileShadow`). The law still holds: each refreshed part is Π restricted to that part, and every other part of σ already agreed with λ.
 
 ### Op payloads are snapshots, not views
 
@@ -1614,9 +1640,9 @@ Every announcer states a change at the grain the store keeps it: a struct field 
 
 **`expandProductMapChanges`** is the CRDT bridges' half (`backends/loro/src/change-mapping.ts`, `backends/yjs/src/change-mapping.ts`), run before they hand `announce` a finished op list. Loro and Yjs keep a struct as one map container, so their events report a write to its fields as a `MapChange` at the struct; the expansion splits it into one op per key it names, each the change projected onto that field (`projectChange`, the same definition delivery uses). A record's map change passes through, since a record's keys are written at the record. It is not part of the notification engine, which reaches subscribers below a map change either way.
 
-**`diffOps(schema, before, after)`** (`src/diff-ops.ts`) is the state-based merges' half: the ephemeral substrate's join and decay ticks, and the plain substrate's reset. A state-based merge has no ops of its own — it moves σ from one state to another — so it announces the ops a local writer would have produced, at the store's grain: declared struct fields recurse (a field either side lacks reads as its structural zero); a record sets the keys that arrived, deletes the keys that left, and recurses into the keys on both sides; a text leaf becomes `diffText`'s minimal contiguous edit and a counter an increment, so their subscribers get the change type they understand (and a bound editor's cursor stays put); every other node that differs — a register (a sum, a `.json()` node), a sequence, a set, a tree, a rich-text delta, a scalar — is one `replace`. Values are compared only where an op would be emitted, never at a container before recursing, so the diff is O(size), not O(size × depth). This is the one place in the package that compares values, and it must: two states are all a state-based merge has.
+**`diffOps(schema, before, after, path?, keys?)`** (`src/diff-ops.ts`) is the state-based merges' half, through `reconcileShadow`: the ephemeral substrate's join and decay ticks, and the plain substrate's reset. A state-based merge has no ops of its own — it moves σ from one state to another — so it announces the ops a local writer would have produced, at the store's grain: declared struct fields recurse (a field either side lacks reads as its structural zero); a record sets the keys that arrived, deletes the keys that left, and recurses into the keys on both sides; a list diffs by position, one sequence change retaining the common prefix and deleting and inserting the middle, so an item the change did not reach keeps its address; a text leaf becomes `diffText`'s minimal contiguous edit and a counter an increment, so their subscribers get the change type they understand (and a bound editor's cursor stays put); every other node that differs — a register (a sum, a `.json()` node, so a `.json()` list too), a set, a tree, a rich-text delta, a scalar — is one `replace`. With `keys`, the diff is restricted to those entries of a record, which is how a reconcile diffs one record's touched keys. Values are compared only where an op would be emitted, never at a container before recursing, so the diff is O(size), not O(size × depth). This is the one place in the package that compares values, and it must: two states are all a state-based merge has.
 
-The CRDT bridges don't use `diffOps`: their events already carry positional text and sequence deltas, which cursor rebasing depends on and a state diff could not recover.
+The CRDT bridges don't announce `diffOps`'s ops: their events already carry positional text and sequence deltas, which cursor rebasing depends on and a state diff could not recover. They use it only to bring σ up to date.
 
 Grain is not grouping. A merge on Loro or Yjs reconstructs ops from a CRDT diff, so a batch that wrote a struct whole with `.set` arrives as its field writes, and ops within a merge come in the diff's order rather than the writer's — which is why `deliveryConformance` asserts invariants rather than literal op lists. Its **Reach** invariant pins the rule from the subscriber's side: a subscriber at a grandchild, or below a record key, hears a write to it on every substrate and through every way a change arrives.
 
@@ -2291,6 +2317,7 @@ The worked example is `__countCachedReads` (`src/read-cache.ts`), a backdoor for
 | `src/change.ts` | Change vocabulary, constructors, guards, `Owned`/`own`/`trustAsOwned`, `mapPayload`, `transformIndex`, `diffText`, `textInstructionsToPatches`, `advanceAddresses`. |
 | `src/subtree-effect.ts` | `planSubtreeEffect` — what a change may have rewritten below its path — and `projectChange`, the change as seen from inside that part. Pure. |
 | `src/complete.ts` | `completeValue`, `completeChange` — a value or change shaped by its schema before it enters σ; `completeAt`, a change completed at the schema it lands at in σ. Pure over a reader. |
+| `src/reconcile-shadow.ts` | `planReconcile`, `reconcileShadow` — σ brought up to date from λ where a change touched it: plan (pure), gather, execute. |
 | `src/diff-ops.ts` | `diffOps` — the ops a local writer would have produced between two states; the state-based merges' announcer. Pure. |
 | `src/coordinate-trie.ts` | `CoordinateTrie` — one node per coordinate; `coordinatePath`; `__countKeptRefs`. |
 | `src/coordinate-exists.ts` | `coordinateExists`, `childSchema`, `activeSchema`, `liveSchemaAt`, `landingSchema` — existence and schema of a coordinate, sums resolved from σ. Pure over a reader. |
@@ -2328,7 +2355,7 @@ The worked example is `__countCachedReads` (`src/read-cache.ts`), a backdoor for
 | `src/create-doc.ts` | `createDoc`, `createRef` — convenience factories. |
 | `src/describe.ts` | ASCII schema tree printer. |
 | `src/zero.ts` | `Zero`, `scalarDefault`. |
-| `src/interpreters/materialize.ts` | Generic CRDT→PlainState materialization: `MaterializeResolver` interface, `createMaterializeInterpreter`. |
+| `src/interpreters/materialize.ts` | Generic CRDT→PlainState materialization: `MaterializeResolver` interface, `createMaterializeInterpreter`, `plainResolution`, `plainValueResolver`. |
 | `src/guards.ts` | `isNonNullObject`, `isPropertyHost`. |
 | `src/base64.ts` | Platform-agnostic base64. |
 | `src/substrates/plain.ts` | Plain substrate + factories. |

@@ -64,8 +64,14 @@ function build<S extends ReturnType<typeof Schema.struct>>(schema: S) {
 // unbound variant constructs the substrate without a binding so
 // `materializeLoroShadow(doc, schema)` round-trips with the same
 // view the substrate writes to.
-function buildUnbound<S extends ReturnType<typeof Schema.struct>>(schema: S) {
+function buildUnbound<S extends ReturnType<typeof Schema.struct>>(
+  schema: S,
+  from?: LoroDocType,
+) {
   const doc = new LoroDoc()
+  // A peer starts from another document's state, so the two share their
+  // containers rather than creating them concurrently.
+  if (from !== undefined) doc.import(from.export({ mode: "snapshot" }))
   ensureLoroContainers(doc, schema)
   doc.commit()
   const substrate = createLoroSubstrate(doc, schema)
@@ -178,6 +184,7 @@ const ProjectionFixture = Schema.struct({
     version: Schema.number(),
   }),
   peers: Schema.record(Schema.boolean()),
+  rows: Schema.record(Schema.struct({ body: Schema.text() })),
 })
 
 projectionConformance(
@@ -185,6 +192,16 @@ projectionConformance(
     // Unbound, so `materializeLoroShadow(doc, schema)` called without a binding
     // finds the same raw field names in the native tree.
     const { substrate, doc } = buildUnbound(ProjectionFixture)
+
+    /** A peer started from this document writes, and its delta is merged. */
+    const mergeFromPeer = (write: (peer: any) => void): void => {
+      const peer = buildUnbound(ProjectionFixture, unwrap(doc) as LoroDocType)
+      const since = peer.substrate.version()
+      write(peer.doc)
+      const delta = peer.substrate.exportSince(since)
+      if (delta === null) throw new Error("the peer has no delta to send")
+      substrate.merge(delta)
+    }
 
     return {
       writes: [
@@ -246,6 +263,31 @@ projectionConformance(
                 change: mapChange(own({ dave: false }), ["dave"]),
               },
             ]),
+        },
+        {
+          // A peer, started from this document's state, writes and the delta
+          // is merged: σ is reconciled at what the merged ops touched.
+          name: "a peer's record set, delete and nested text write, merged",
+          apply: () =>
+            mergeFromPeer(peer => {
+              batch(peer, (d: any) => {
+                d.peers.set("erin", true)
+                d.peers.delete("alice")
+                d.rows.set("r1", { body: "" })
+                d.rows.set("r2", { body: "keep" })
+              })
+              batch(peer, (d: any) => d.rows.at("r1").body.insert(0, "hi"))
+            }),
+        },
+        {
+          name: "a peer's text write into one row and list insert, merged",
+          apply: () =>
+            mergeFromPeer(peer => {
+              batch(peer, (d: any) => {
+                d.rows.at("r1").body.insert(2, " there")
+                d.items.insert(1, { name: "p", done: true })
+              })
+            }),
         },
       ],
       shadow: () => substrate.reader.read(RawPath.empty),

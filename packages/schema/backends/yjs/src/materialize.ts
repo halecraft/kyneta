@@ -33,7 +33,7 @@ import { resolveYjsType } from "./yjs-resolve.js"
 // Yjs resolver
 // ---------------------------------------------------------------------------
 
-function createYjsResolver(
+export function createYjsResolver(
   rootMap: Y.Map<any>,
   rootSchema: SchemaNode,
   binding?: SchemaBinding,
@@ -80,6 +80,14 @@ function createYjsResolver(
         return Array.from(resolved.keys())
       }
       return plainResolution.keys(resolved)
+    },
+
+    // A record's keys are runtime keys, never identity-keyed field names,
+    // so the key is looked up as it is.
+    resolveHasKey(path: Path, key: string): boolean {
+      const { resolved } = resolveYjsType(rootMap, rootSchema, path, binding)
+      if (resolved instanceof Y.Map) return resolved.has(key)
+      return plainResolution.hasKey(resolved, key)
     },
 
     // Yjs has no tree primitive — schemas with `Schema.tree` are rejected

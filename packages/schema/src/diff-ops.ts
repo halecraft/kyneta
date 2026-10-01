@@ -5,17 +5,19 @@
 // plain substrate's reset) has no ops of its own: it moves σ from one state
 // to another. Subscribers, addresses and cached reads all key off ops, and
 // whatever lies below an op is taken as rewritten. So the announcement has to
-// be as fine as the store, one op per field, record key or register that
-// moved, or everything below a coarse op would rebuild and notify whether or
-// not it moved.
+// be as fine as the store, one op per field, record key, list window or
+// register that moved, or everything below a coarse op would rebuild and
+// notify whether or not it moved. `reconcileShadow` calls it once per part of
+// σ a change touched, which is how every such merge brings σ up to date.
 
-import type { ChangeBase } from "./change.js"
+import type { ChangeBase, Owned, SequenceInstruction } from "./change.js"
 import {
   diffText,
   incrementChange,
   mapChange,
   own,
   replaceChange,
+  sequenceChange,
   trustAsOwned,
 } from "./change.js"
 import type { Op } from "./changefeed.js"
@@ -38,17 +40,24 @@ import { Zero } from "./zero.js"
  * - A record diffs by key: one map change setting the keys that arrived and
  *   deleting the keys that left, and a recursion into each key present on
  *   both sides.
+ * - A list diffs by position: one sequence change retaining the common
+ *   prefix, deleting and inserting the middle, and leaving the common suffix
+ *   alone. Exact for one insert or delete, and linear; several scattered
+ *   edits replace the window between the first and the last.
  * - A text leaf becomes `diffText(before, after)`'s minimal contiguous edit,
  *   and a counter an increment by the difference, so their subscribers
  *   receive the change type they understand.
  * - Every other node that differs becomes one `replace`: an atomic register
- *   (a sum or `.json()` node), a sequence, a set, a tree, a rich-text delta,
- *   a scalar.
+ *   (a sum or `.json()` node), a set, a tree, a rich-text delta, a scalar.
  * - Unchanged nodes produce nothing.
  *
- * Values are compared only where an op would be emitted (leaves, registers
- * and record keys), never at a container before recursing into it, which
- * would make the diff O(size × depth).
+ * With `keys`, the top node is a record, diffed only at those entries: which
+ * of them arrived or left, and a recursion into those present on both sides.
+ * `before` and `after` need hold only the named entries.
+ *
+ * Values are compared only where an op would be emitted (leaves, registers,
+ * record keys and list items), never at a container before recursing into
+ * it, which would make the diff O(size × depth).
  *
  * Every payload is a copy (`own`), so the ops share nothing with `after`.
  */
@@ -57,9 +66,26 @@ export function diffOps(
   before: unknown,
   after: unknown,
   path: Path = RawPath.empty,
+  keys?: readonly string[],
 ): Op[] {
   const ops: Op[] = []
-  diffNode(schema, before, after, path, ops)
+  if (keys === undefined) {
+    diffNode(schema, before, after, path, ops)
+    return ops
+  }
+  if (schema[KIND] !== "map") {
+    throw new Error(
+      `diffOps: keys name entries of a record, not children of a ${String(schema[KIND])}.`,
+    )
+  }
+  diffRecord(
+    (schema as { readonly item: SchemaNode }).item,
+    before,
+    after,
+    path,
+    ops,
+    keys,
+  )
   return ops
 }
 
@@ -83,6 +109,10 @@ function diffNode(
           path,
           ops,
         )
+        return
+      case "sequence":
+      case "movable":
+        diffList(before, after, path, ops)
         return
       case "text":
         diffTextLeaf(before, after, path, ops)
@@ -117,22 +147,37 @@ function diffProduct(
   }
 }
 
+/** `keys` defaults to every key either side holds. */
 function diffRecord(
   item: SchemaNode,
   before: unknown,
   after: unknown,
   path: Path,
   ops: Op[],
+  keys?: readonly string[],
 ): void {
   const from = isNonNullObject(before) ? before : {}
   const to = isNonNullObject(after) ? after : {}
   const arrived: Record<string, unknown> = {}
   const left: string[] = []
-  for (const key of Object.keys(from)) {
-    if (!(key in to)) left.push(key)
+  const kept: string[] = []
+  const classify = (key: string): void => {
+    const inFrom = Object.hasOwn(from, key)
+    const inTo = Object.hasOwn(to, key)
+    if (inFrom && inTo) kept.push(key)
+    else if (inFrom) left.push(key)
+    else if (inTo) arrived[key] = own(to[key])
   }
-  for (const [key, value] of Object.entries(to)) {
-    if (!(key in from)) arrived[key] = own(value)
+  if (keys === undefined) {
+    for (const key of Object.keys(from)) {
+      if (!Object.hasOwn(to, key)) left.push(key)
+    }
+    for (const key of Object.keys(to)) {
+      if (Object.hasOwn(from, key)) kept.push(key)
+      else arrived[key] = own(to[key])
+    }
+  } else {
+    for (const key of keys) classify(key)
   }
   if (left.length > 0 || Object.keys(arrived).length > 0) {
     emit(
@@ -145,9 +190,46 @@ function diffRecord(
       ),
     )
   }
-  for (const key of Object.keys(to)) {
-    if (key in from) diffNode(item, from[key], to[key], path.entry(key), ops)
+  for (const key of kept) {
+    diffNode(item, from[key], to[key], path.entry(key), ops)
   }
+}
+
+/**
+ * One sequence change: retain the common prefix, delete and insert the
+ * middle, leave the common suffix. Items compare by value, so the edit is
+ * linear in the lists' size.
+ */
+function diffList(
+  before: unknown,
+  after: unknown,
+  path: Path,
+  ops: Op[],
+): void {
+  const from: readonly unknown[] = Array.isArray(before) ? before : []
+  const to: readonly unknown[] = Array.isArray(after) ? after : []
+  const shorter = Math.min(from.length, to.length)
+  let prefix = 0
+  while (prefix < shorter && samePlainValue(from[prefix], to[prefix])) {
+    prefix++
+  }
+  let suffix = 0
+  while (
+    suffix < shorter - prefix &&
+    samePlainValue(from[from.length - 1 - suffix], to[to.length - 1 - suffix])
+  ) {
+    suffix++
+  }
+  const deleted = from.length - prefix - suffix
+  const inserted = to.slice(prefix, to.length - suffix)
+  if (deleted === 0 && inserted.length === 0) return
+  const instructions: SequenceInstruction<Owned<unknown>>[] = []
+  if (prefix > 0) instructions.push({ retain: prefix })
+  if (deleted > 0) instructions.push({ delete: deleted })
+  if (inserted.length > 0) {
+    instructions.push({ insert: inserted.map(item => own(item)) })
+  }
+  emit(ops, path, sequenceChange(instructions))
 }
 
 function diffTextLeaf(

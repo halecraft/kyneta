@@ -40,7 +40,7 @@ import { resolveContainer } from "./loro-resolve.js"
 // Loro resolver
 // ---------------------------------------------------------------------------
 
-function createLoroResolver(
+export function createLoroResolver(
   doc: LoroDoc,
   rootSchema: SchemaNode,
   binding?: SchemaBinding,
@@ -87,6 +87,15 @@ function createLoroResolver(
       if (isLoroMap(resolved)) return resolved.keys()
       if (hasKind(resolved)) return []
       return plainResolution.keys(resolved)
+    },
+
+    // A record's keys are runtime keys, never identity-keyed field names,
+    // so the key is looked up as it is. A deleted key reads as `undefined`.
+    resolveHasKey(path: Path, key: string): boolean {
+      const { resolved } = resolveContainer(doc, rootSchema, path, binding)
+      if (isLoroMap(resolved)) return resolved.get(key) !== undefined
+      if (hasKind(resolved)) return false
+      return plainResolution.hasKey(resolved, key)
     },
 
     resolveForest(path: Path): readonly FlatTreeNodeTopology[] {

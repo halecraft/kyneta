@@ -21,8 +21,11 @@ import { replaceChange, trustAsOwned } from "../change.js"
 import type { Op } from "../changefeed.js"
 import { deepClonePlain } from "../clone.js"
 import { completeAt, completeValue } from "../complete.js"
-import { diffOps } from "../diff-ops.js"
 import type { Path } from "../interpret.js"
+import {
+  createMaterializeInterpreter,
+  plainValueResolver,
+} from "../interpreters/materialize.js"
 import type { WritableContext } from "../interpreters/writable.js"
 import { buildWritableContext } from "../interpreters/writable.js"
 import { invert } from "../inverse.js"
@@ -39,6 +42,7 @@ import {
   type PlainState,
   plainReader,
 } from "../reader.js"
+import { planReconcile, reconcileShadow } from "../reconcile-shadow.js"
 import type { Schema as SchemaNode } from "../schema.js"
 import type {
   BatchOutcome,
@@ -349,11 +353,18 @@ export function createPlainSubstrate(
       })
     },
     adopt(state) {
-      // Announce what a local writer would have written to get from `doc` to
-      // the completion of `state`, per field, record key and register, so
-      // every subscriber below a moved value hears it.
-      const ops = diffOps(schema, doc, completeValue(schema, state))
-      applyOps(doc, ops)
+      // Reconcile σ at the root against `state`: the fold over it completes
+      // it, as `completeValue` would, and the ops are what a local writer
+      // would have written to get there, per field, record key, list
+      // position and register, so every subscriber below a moved value
+      // hears it, and a list item that stayed keeps its address.
+      const resolver = plainValueResolver(state)
+      const ops = reconcileShadow(
+        doc,
+        planReconcile(schema, [{ path: RawPath.empty, effect: "all" }]),
+        resolver,
+        createMaterializeInterpreter(resolver),
+      )
       substrate.context().announce(ops, {
         origin: options?.origin,
         local: false,
@@ -699,7 +710,11 @@ export function createPlainReplica(clock: PlainClock): Replica<PlainVersion> {
     const revision = core.revision()
     if (cached !== null && cached.revision === revision) return cached.state
     const state = deepClonePlain(base)
-    for (const batch of core.log) applyOps(state, batch)
+    for (const batch of core.log) {
+      for (const op of batch) {
+        applyChange(state, op.path, ownedForStore(op.change))
+      }
+    }
     cached = { revision, state }
     return state
   }
@@ -946,16 +961,6 @@ export function planMerge(
   const batches = payload.batches.slice(position - payload.from)
   if (batches.length === 0) return { kind: "none" }
   return { kind: "append", lineage: payload.lineage, batches }
-}
-
-/**
- * Apply ops taken in from elsewhere to `state`. Each payload is copied, since
- * the op is also logged and delivered to subscribers.
- */
-function applyOps(state: PlainState, ops: readonly Op[]): void {
-  for (const op of ops) {
-    applyChange(state, op.path, ownedForStore(op.change))
-  }
 }
 
 /**

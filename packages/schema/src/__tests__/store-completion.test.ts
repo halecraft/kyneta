@@ -11,7 +11,7 @@ import { completeChange, completeValue } from "../complete.js"
 // Everything from one entrypoint: binding compares schema identity, and
 // `../basic/index.js` is a separate module instance whose schemas this
 // entrypoint's binder does not recognise.
-import type { MaterializeResolver, Op, Schema as SchemaNode } from "../index.js"
+import type { Op, Schema as SchemaNode } from "../index.js"
 import {
   batch,
   createDoc,
@@ -25,7 +25,7 @@ import {
   materializeContextFromResolver,
   merge,
   NATIVE,
-  plainResolution,
+  plainValueResolver,
   replaceChange,
   Schema,
   sequenceChange,
@@ -34,8 +34,6 @@ import {
   trustAsOwned,
   version,
 } from "../index.js"
-import type { Path } from "../path.js"
-import { plainReader } from "../reader.js"
 
 // ---------------------------------------------------------------------------
 // completeValue — pure
@@ -146,6 +144,32 @@ const cases: readonly {
     expected: { v: { a: "x", b: 0 } },
   },
   {
+    name: "containers of the wrong kind, as absent",
+    field: Schema.struct({
+      p: Point,
+      list: Schema.list(Schema.number()),
+      rec: Schema.record(Schema.number()),
+      title: Schema.text(),
+      count: Schema.counter(),
+    }),
+    value: { v: { p: 3, list: "no", rec: 7, title: 4, count: "x" } },
+    expected: {
+      v: { p: { x: 0, y: 0 }, list: [], rec: {}, title: "", count: 0 },
+    },
+  },
+  {
+    name: "an array where a record is declared, read by index",
+    field: Schema.record(Schema.number()),
+    value: { v: [5, 6] },
+    expected: { v: { 0: 5, 1: 6 } },
+  },
+  {
+    name: "a struct out of schema order",
+    field: Point,
+    value: { v: { y: 2, x: 1 } },
+    expected: { v: { x: 1, y: 2 } },
+  },
+  {
     name: "record entries missing fields",
     field: Schema.record(Point),
     value: { v: { p: { x: 1 }, q: { y: 2 } } },
@@ -184,23 +208,6 @@ const cases: readonly {
   },
 ]
 
-/** A resolver over a plain value, as a backend answers for a register's interior. */
-function plainValueResolver(
-  state: Record<string, unknown>,
-): MaterializeResolver {
-  const at = (path: Path) => path.read(state)
-  const reader = plainReader(state)
-  return {
-    resolveValue: at,
-    resolveText: path => plainResolution.text(at(path)),
-    resolveCounter: path => plainResolution.counter(at(path)),
-    resolveRichText: path => plainResolution.richText(at(path)),
-    resolveLength: path => plainResolution.length(at(path)),
-    resolveKeys: path => plainResolution.keys(at(path)),
-    resolveForest: path => reader.forestTopology(path),
-  }
-}
-
 function materialize(
   schema: SchemaNode,
   state: Record<string, unknown>,
@@ -218,11 +225,15 @@ describe("completeValue", () => {
     const schema = Schema.struct({ v: field })
 
     it(`completes ${name}`, () => {
-      expect(completeValue(schema, value)).toEqual(expected)
+      expect(JSON.stringify(completeValue(schema, value))).toBe(
+        JSON.stringify(expected),
+      )
     })
 
-    it(`agrees with the materializer on ${name}`, () => {
-      expect(completeValue(schema, value)).toEqual(materialize(schema, value))
+    it(`agrees with the materializer on ${name}, key order included`, () => {
+      expect(JSON.stringify(completeValue(schema, value))).toBe(
+        JSON.stringify(materialize(schema, value)),
+      )
     })
   }
 
@@ -259,9 +270,20 @@ describe("completeValue", () => {
     expect(out.b).toEqual({ x: 1, y: 0 })
   })
 
-  it("passes a value of the wrong kind through", () => {
-    expect(completeValue(Point, 3)).toBe(3)
-    expect(completeValue(Schema.list(Point), "no")).toBe("no")
+  it("rebuilds a struct out of schema order in schema order", () => {
+    const value = { y: 2, x: 1 }
+    const out = completeValue(Point, value)
+    expect(out).not.toBe(value)
+    expect(Object.keys(out as object)).toEqual(["x", "y"])
+  })
+
+  it("returns a struct already in schema order as itself", () => {
+    const value = { x: 1, y: 2 }
+    expect(completeValue(Point, value)).toBe(value)
+  })
+
+  it("passes a scalar of the wrong kind through", () => {
+    expect(completeValue(Schema.number(), "three")).toBe("three")
   })
 })
 

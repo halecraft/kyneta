@@ -332,6 +332,23 @@ export function runSubstrateConformance(profile: SubstrateProfile): void {
       expect(docB.rows()).toEqual({ k: complete })
     })
 
+    it("a struct written out of schema order reads in one key order on every peer", async () => {
+      // Completion puts a struct's fields in schema order, which is the order
+      // every receiver materializes, so the writer's read and a receiver's
+      // read serialize identically. One record key, because a record's key
+      // order is unspecified and can differ between peers.
+      const bound = profile.bind()
+      const [docA, docB] = connectedPair(bound)
+
+      batch(docA, (d: Doc) =>
+        d.rows.set("k", { inner: { x: 1 }, s: "a", n: 2 }),
+      )
+      await drain()
+
+      expect(JSON.stringify(docA())).toBe(JSON.stringify(docB()))
+      expect(Object.keys(docA.rows().k)).toEqual(["n", "s", "inner"])
+    })
+
     it("a removed record key stays removed after merging a peer that still has it", async () => {
       // Absence carries no information in a key-union merge: a key one peer
       // lacks looks exactly like a key it has never seen. Every substrate has

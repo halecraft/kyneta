@@ -330,21 +330,21 @@ describe("StateVersion carries no lineage", () => {
 // a peer uses to decide there is news worth relaying, and a false positive is
 // not wasted bytes but a cycle: every peer relays to everyone but the sender,
 // so in a mesh of three there is always somewhere left to forward to.
-describe("the join reports whether it moved", () => {
+describe("the join reports where it moved", () => {
   it("merging an identical tree changes nothing", () => {
     // The guard against a mesh that never settles: a merge reporting a change
     // it did not make has every peer re-announce everything it receives, and
     // with three or more peers there is always somewhere left to forward to.
     const tree = { peers: { alice: tup("online", 1000) } }
-    expect(merge(tree, { peers: { alice: tup("online", 1000) } }).changed).toBe(
-      false,
-    )
+    expect(
+      merge(tree, { peers: { alice: tup("online", 1000) } }).moved,
+    ).toEqual([])
   })
 
   it("a losing tuple changes nothing", () => {
     const tree = { peers: { alice: tup("new", 2000) } }
-    expect(merge(tree, { peers: { alice: tup("old", 1000) } }).changed).toBe(
-      false,
+    expect(merge(tree, { peers: { alice: tup("old", 1000) } }).moved).toEqual(
+      [],
     )
   })
 
@@ -354,31 +354,31 @@ describe("the join reports whether it moved", () => {
     // timestamps. That strictness is what lets the caller read "the winner is
     // not ours" as "something changed" without comparing contents.
     const tree = { peers: { alice: tup("aaa", 1000) } }
-    expect(merge(tree, { peers: { alice: tup("zzz", 1000) } }).changed).toBe(
-      true,
-    )
+    expect(merge(tree, { peers: { alice: tup("zzz", 1000) } }).moved).toEqual([
+      ["peers", "alice"],
+    ])
   })
 
   it("a newer timestamp on the same value is a change", () => {
     // The timestamp replicates and decay reads it, so it is state.
     const tree = { peers: { alice: tup("online", 1000) } }
-    expect(merge(tree, { peers: { alice: tup("online", 2000) } }).changed).toBe(
-      true,
-    )
+    expect(
+      merge(tree, { peers: { alice: tup("online", 2000) } }).moved,
+    ).toEqual([["peers", "alice"]])
   })
 
   it("a key we have never seen is a change", () => {
     const tree = { peers: { alice: tup("online", 1000) } }
-    expect(merge(tree, { peers: { bob: tup("online", 1000) } }).changed).toBe(
-      true,
-    )
+    expect(merge(tree, { peers: { bob: tup("online", 1000) } }).moved).toEqual([
+      ["peers", "bob"],
+    ])
   })
 
   it("a tombstone arriving over a live value is a change", () => {
     const tree = { peers: { alice: tup("online", 1000) } }
     expect(
-      merge(tree, { peers: { alice: tup(null, 2000, true) } }).changed,
-    ).toBe(true)
+      merge(tree, { peers: { alice: tup(null, 2000, true) } }).moved,
+    ).toEqual([["peers", "alice"]])
   })
 
   it("a leaf below a horizon we hold changes nothing when a peer re-sends it", () => {
@@ -387,8 +387,8 @@ describe("the join reports whether it moved", () => {
     // join took it back, the relay loop above would never end.
     const tree: Container = { peers: { alice: hz(null, 2000, true) } }
     const resent: Container = { peers: { alice: { x: tup(1, 1000) } } }
-    const { tree: merged, changed } = merge(tree, resent)
-    expect(changed).toBe(false)
+    const { tree: merged, moved } = merge(tree, resent)
+    expect(moved).toEqual([])
     expect(merged).toEqual({ peers: { alice: hz(null, 2000, true) } })
   })
 })

@@ -149,6 +149,7 @@ export interface LoroListLike {
 export interface LoroMapLike {
   kind(): string
   keys(): string[]
+  get(key: string): unknown
   toJSON(): unknown
 }
 

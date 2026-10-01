@@ -52,6 +52,19 @@ function createEphemeralEnv(): ProjectionTestEnv {
   // type surface.
   const doc = createRef(Fixture, substrate) as any
 
+  /** A peer started from this document writes, and its delta is merged. */
+  const mergeFromPeer = (write: (peer: any) => void): void => {
+    const peerSubstrate = ephemeralSubstrateFactory.fromEntirety(
+      substrate.exportEntirety(),
+      Fixture,
+    )
+    const since = peerSubstrate.version()
+    write(createRef(Fixture, peerSubstrate))
+    const delta = peerSubstrate.exportSince(since)
+    if (delta === null) throw new Error("the peer has no delta to send")
+    substrate.merge(delta)
+  }
+
   return {
     writes: [
       {
@@ -121,6 +134,26 @@ function createEphemeralEnv(): ProjectionTestEnv {
               change: mapChange(own({ b: 5 }), ["b"]),
             },
           ]),
+      },
+      {
+        // A peer, started from this document's state, writes and the delta is
+        // merged: σ is reconciled at what the join moved.
+        name: "a peer's record set, delete and nested field write, merged",
+        apply: () =>
+          mergeFromPeer(peer =>
+            batch(peer, (d: any) => {
+              d.peers.set("erin", { name: "E" })
+              d.peers.at("alice").name.set("A2")
+              d.entries.set("c", 7)
+              d.entries.delete("b")
+              d.outer.x.set(11)
+            }),
+          ),
+      },
+      {
+        name: "a peer's delete of a whole entry, merged",
+        apply: () =>
+          mergeFromPeer(peer => batch(peer, (d: any) => d.peers.delete("bob"))),
       },
     ],
 

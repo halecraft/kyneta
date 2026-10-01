@@ -44,6 +44,7 @@ import {
   type ChangeBase,
   type CommitOptions,
   containerKey,
+  createMaterializeInterpreter,
   DEFAULT_LINEAGE,
   DEVTOOLS_HISTORY,
   type DevtoolsHistory,
@@ -71,17 +72,19 @@ import {
   type ProductSchema,
   plainReader,
   planAdvance,
+  planReconcile,
   type RecordInverseFn,
   type Replica,
   type ReplicaFactory,
   type RichTextSchema,
+  reconcileShadow,
   type SchemaBinding,
   type Schema as SchemaNode,
   type Side,
   type Substrate,
   type SubstrateFactory,
   type SubstratePayload,
-  syncShadow,
+  touchedBy,
   type Version,
   type WritableContext,
 } from "@kyneta/schema"
@@ -104,7 +107,7 @@ import {
   mapDiffUpdated,
 } from "./loro-guards.js"
 import { PROPS_KEY, resolveContainer } from "./loro-resolve.js"
-import { materializeLoroShadow } from "./materialize.js"
+import { createLoroResolver, materializeLoroShadow } from "./materialize.js"
 import { LoroPosition, toLoroSide } from "./position.js"
 import { createLoroRevertible } from "./revertible.js"
 import { LoroVersion } from "./version.js"
@@ -260,6 +263,9 @@ export function createLoroSubstrate(
   // The plainReader is a live view over this object. `prepare` steps it for
   // local writes; the event bridge re-materializes it for everything else.
   const shadow: PlainState = materializeLoroShadow(doc, schema, binding)
+  // What the event bridge re-materializes σ's touched parts through.
+  const resolver = createLoroResolver(doc, schema, binding)
+  const materializer = createMaterializeInterpreter(resolver)
   const reader = plainReader(shadow)
 
   // --- Coalescer helpers ---
@@ -714,9 +720,14 @@ export function createLoroSubstrate(
 
     // The LoroDoc already holds these ops. `batchToOps` may emit
     // overlapping structural + leaf diffs whose sequential σ-step
-    // composition would double-count, so σ is re-materialised from λ in
-    // one Π pass, and only then announced.
-    syncShadow(shadow, materializeLoroShadow(doc, schema, binding))
+    // composition would double-count, so σ is re-materialised from λ where
+    // the ops touched it, and only then announced.
+    reconcileShadow(
+      shadow,
+      planReconcile(schema, touchedBy(ops)),
+      resolver,
+      materializer,
+    )
     const local = batch.by === "local"
     ctx.announce(ops, {
       origin:

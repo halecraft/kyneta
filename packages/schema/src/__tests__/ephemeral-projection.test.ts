@@ -15,6 +15,12 @@ import {
 } from "../index.js"
 import type { Path } from "../interpret.js"
 import { withDecay } from "../interpreters/with-decay.js"
+import { RawPath } from "../path.js"
+import {
+  createStateTreeResolver,
+  type StateTree,
+} from "../substrates/state-tree.js"
+import { hz, tup } from "./ephemeral-fixtures.js"
 
 describe("withDecay", () => {
   // A resolver that records every path it is asked about.
@@ -31,6 +37,7 @@ describe("withDecay", () => {
       resolveRichText: path => answer(path, undefined),
       resolveLength: path => answer(path, 0),
       resolveKeys: path => answer(path, []),
+      resolveHasKey: path => answer(path, false),
       resolveForest: path => answer(path, []),
     }
     return { asked, resolver }
@@ -74,5 +81,34 @@ describe("withDecay", () => {
     // it is already the zero, but would skip walking what is there.
     const { asked } = project(0, 2001)
     expect(asked).toEqual(["user.name", "user.mood", "other"])
+  })
+})
+
+describe("createStateTreeResolver.resolveHasKey", () => {
+  it("agrees with resolveKeys: live, deleted, re-written, emptied and never-seen entries", () => {
+    // `alice` live, `bob` deleted, `carol` written after a horizon, `dave` a
+    // container whose only entry was deleted, and `erin` never seen.
+    const tree: StateTree = {
+      peers: {
+        alice: tup(1, 10),
+        bob: tup(null, 20, true),
+        carol: hz({ x: tup(3, 40) }, 30, true),
+        dave: { x: tup(null, 50, true) },
+      },
+      blob: tup({ frank: 1 }, 60),
+    }
+    const resolver = createStateTreeResolver(tree)
+    for (const field of ["peers", "blob"]) {
+      const path = RawPath.empty.field(field)
+      for (const key of ["alice", "bob", "carol", "dave", "erin", "frank"]) {
+        expect(resolver.resolveHasKey(path, key)).toBe(
+          resolver.resolveKeys(path).includes(key),
+        )
+      }
+    }
+    expect(resolver.resolveKeys(RawPath.empty.field("peers"))).toEqual([
+      "alice",
+      "carol",
+    ])
   })
 })

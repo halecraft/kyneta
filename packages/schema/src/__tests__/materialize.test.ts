@@ -23,6 +23,7 @@ function mockResolver(
     resolveRichText: () => undefined,
     resolveLength: () => 0,
     resolveKeys: () => [],
+    resolveHasKey: () => false,
     resolveForest: () => [],
     ...overrides,
   }

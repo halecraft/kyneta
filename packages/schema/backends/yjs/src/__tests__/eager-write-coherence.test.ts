@@ -54,8 +54,14 @@ function build<S extends ReturnType<typeof Schema.struct>>(schema: S) {
 // Unbound variant — bypasses the trivialBinding that identity-keys
 // product fields, so raw-name `materializeYjsShadow(doc, schema)` /
 // `rootMap.get(name)` calls in tests round-trip with the substrate.
-function buildUnbound<S extends ReturnType<typeof Schema.struct>>(schema: S) {
+function buildUnbound<S extends ReturnType<typeof Schema.struct>>(
+  schema: S,
+  from?: Y.Doc,
+) {
   const doc = new Y.Doc()
+  // A peer starts from another document's state, so the two share their
+  // containers rather than creating them concurrently.
+  if (from !== undefined) Y.applyUpdate(doc, Y.encodeStateAsUpdate(from))
   ensureContainers(doc, schema)
   const substrate = createYjsSubstrate(doc, schema)
   const view = interpret(schema, substrate.context())
@@ -136,6 +142,7 @@ const ProjectionFixture = Schema.struct({
     version: Schema.number(),
   }),
   peers: Schema.record(Schema.boolean()),
+  rows: Schema.record(Schema.struct({ body: Schema.text() })),
 })
 
 projectionConformance(
@@ -143,6 +150,16 @@ projectionConformance(
     // Unbound, so `materializeYjsShadow(doc, schema)` called without a binding
     // finds the same raw field names in the native tree.
     const { substrate, doc } = buildUnbound(ProjectionFixture)
+
+    /** A peer started from this document writes, and its delta is merged. */
+    const mergeFromPeer = (write: (peer: any) => void): void => {
+      const peer = buildUnbound(ProjectionFixture, unwrap(doc) as Y.Doc)
+      const since = peer.substrate.version()
+      write(peer.doc)
+      const delta = peer.substrate.exportSince(since)
+      if (delta === null) throw new Error("the peer has no delta to send")
+      substrate.merge(delta)
+    }
 
     return {
       writes: [
@@ -203,6 +220,31 @@ projectionConformance(
                 change: mapChange(own({ dave: false }), ["dave"]),
               },
             ]),
+        },
+        {
+          // A peer, started from this document's state, writes and the delta
+          // is merged: σ is reconciled at what the merged ops touched.
+          name: "a peer's record set, delete and nested text write, merged",
+          apply: () =>
+            mergeFromPeer(peer => {
+              batch(peer, (d: any) => {
+                d.peers.set("erin", true)
+                d.peers.delete("alice")
+                d.rows.set("r1", { body: "" })
+                d.rows.set("r2", { body: "keep" })
+              })
+              batch(peer, (d: any) => d.rows.at("r1").body.insert(0, "hi"))
+            }),
+        },
+        {
+          name: "a peer's text write into one row and list insert, merged",
+          apply: () =>
+            mergeFromPeer(peer => {
+              batch(peer, (d: any) => {
+                d.rows.at("r1").body.insert(2, " there")
+                d.items.insert(1, { name: "p", done: true })
+              })
+            }),
         },
       ],
       shadow: () => substrate.reader.read(RawPath.empty),

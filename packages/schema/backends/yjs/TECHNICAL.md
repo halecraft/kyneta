@@ -87,7 +87,7 @@ The two backends implement the same `Substrate<V>` contract and share the overal
 | Container discrimination | `.kind()` method (strings: `"Map"`, `"Text"`, `"List"`, …) | `instanceof Y.Map`, `instanceof Y.Array`, `instanceof Y.Text` |
 | Why | Loro containers are WASM handles; `instanceof` is unreliable across module boundaries | Yjs shared types are native JS classes; `instanceof` is stable |
 | Write commit | Eager `applyDiff` in `prepare` (plain MapDiff writes coalesce into a per-CID buffer drained in `afterBatch`; structural inserts apply immediately). `runBatch` brackets with a depth counter + single `doc.commit()` on outermost release | Eager imperative mutations inside the ambient `Y.transact` opened by `runBatch` (marked via `transaction.meta`); Yjs's native transact nesting collapses re-entries for free |
-| Event bridge | `doc.subscribe` + pre-commit-hook discriminator; re-materialize σ, then announce | `observeDeep` + `transaction.meta` mark discriminator; re-materialize σ, then announce |
+| Event bridge | `doc.subscribe` + pre-commit-hook discriminator; reconcile σ where the ops touched, then announce | `observeDeep` + `transaction.meta` mark discriminator; reconcile σ where the ops touched, then announce |
 | Structural identity | Identity hash as Loro container key | Identity hash as `Y.Map` key within the root `Y.Map` |
 | Structural creation | Lazy — creation happens on first typed accessor call | Eager — `ensureContainers` walks the schema on upgrade |
 | Structural client ID | Not needed (Loro has no equivalent concern) | `STRUCTURAL_YJS_CLIENT_ID = 0` during `ensureContainers` |
@@ -378,7 +378,8 @@ The handler:
 
 1. If the transaction carries this substrate's `KYNETA_MARK` in `transaction.meta` → skip (kyneta already notified during its own `change`).
 2. Call `eventsToOps(events, schema, binding)` → pure translation from Yjs events to kyneta `Op[]`.
-3. Announce the ops with `{ origin, local: transaction.local }`. `origin` is `transaction.origin` when it is a string: a merge passes its `options.origin` to `Y.applyUpdate`, so its transaction carries it, and a write an observer makes in reaction is a transaction of its own with its own origin. A merge without an origin reports `undefined`.
+3. Reconcile the shadow from the `Y.Doc` at what the ops touched: `reconcileShadow(shadow, planReconcile(schema, touchedBy(ops)), resolver, materializer)`, over `createYjsResolver`. `touchedBy` pairs each op's path with how far below it the change reached (`planSubtreeEffect`). Only those parts are re-materialized, so the cost is the change's size and every other σ object keeps its identity (`@kyneta/schema` TECHNICAL.md, §The functional shadow). Undo (`revertible.observed`) reads σ before this step.
+4. Announce the ops with `{ origin, local: transaction.local }`. `origin` is `transaction.origin` when it is a string: a merge passes its `options.origin` to `Y.applyUpdate`, so its transaction carries it, and a write an observer makes in reaction is a transaction of its own with its own origin. A merge without an origin reports `undefined`.
 
 ### Own-commit discriminator via `transaction.meta`
 
@@ -423,7 +424,7 @@ Measured on a merge without an origin: with the defaults the first undo removed 
 
 Mixing raw CRDT mutations with `batch()` calls inside the same atomic unit (a single Yjs `transact` body) is unsupported. The raw mutations will be silently absorbed into kyneta's own-commit skip and not bridged to the kyneta changefeed, so σ misses them. They are still pushed and persisted: the local-update signal covers the whole transaction. To intermix, use separate transacts for raw mutations. This is a fundamental limit of commit-level discrimination.
 
-Before announcing (`ctx.announce`), the bridge re-materializes the `PlainState` shadow from the `Y.Doc` via `materializeYjsShadow`, so `ctx.reader` — which reads through `plainReader(shadow)` — already reflects the merged Yjs state when any subscriber runs. The announcement never reaches `substrate.prepare` or `afterBatch`. See [§The functional shadow](../../TECHNICAL.md#the-functional-shadow).
+Before announcing (`ctx.announce`), the bridge reconciles the `PlainState` shadow from the `Y.Doc` where the ops touched it (`reconcileShadow`, over `createYjsResolver`), so `ctx.reader` — which reads through `plainReader(shadow)` — already reflects the merged Yjs state when any subscriber runs. The announcement never reaches `substrate.prepare` or `afterBatch`. See [§The functional shadow](../../TECHNICAL.md#the-functional-shadow).
 
 `materializeYjsShadow` itself uses the generic `createMaterializeInterpreter` from `@kyneta/schema` core with a Yjs-specific `MaterializeResolver` (created by `createYjsResolver`), rather than defining a bespoke interpreter. The resolver (~50 lines) handles only CRDT-specific value extraction (reading from `Y.Text`, `Y.Map`, `Y.Array`); the structural traversal, zero-default production for missing scalars/sums, and recursive descent are all handled by the shared core interpreter.
 

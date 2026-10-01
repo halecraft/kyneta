@@ -13,6 +13,7 @@ import {
   createDoc,
   deriveSchemaBinding,
   KIND,
+  RawPath,
   Schema,
   type SchemaNode,
   SUBSTRATE,
@@ -20,7 +21,7 @@ import {
 import { describe, expect, it } from "vitest"
 import type * as Y from "yjs"
 import { yjs } from "../bind-yjs.js"
-import { materializeYjsShadow } from "../materialize.js"
+import { createYjsResolver, materializeYjsShadow } from "../materialize.js"
 
 // ===========================================================================
 // Helpers
@@ -223,5 +224,41 @@ describe("materializeYjsShadow", () => {
     const binding = trivialBinding(schema)
     const result = materializeYjsShadow(yDoc, schema, binding)
     expect(result).toEqual({ settings: { theme: null } })
+  })
+})
+
+describe("createYjsResolver.resolveHasKey", () => {
+  it("agrees with resolveKeys, for a record and a .json() record", () => {
+    const schema = Schema.struct({
+      peers: Schema.record(Schema.number()),
+      blob: Schema.record.json(Schema.number()),
+    })
+    const doc: any = createDoc(yjs.bind(schema))
+    batch(doc, (d: any) => {
+      d.peers.set("alice", 1)
+      d.peers.set("bob", 2)
+      d.blob.set("carol", 3)
+    })
+    batch(doc, (d: any) => d.peers.delete("bob"))
+
+    const resolver = createYjsResolver(
+      getYDoc(doc).getMap("root"),
+      schema,
+      trivialBinding(schema),
+    )
+    for (const field of ["peers", "blob"]) {
+      const path = RawPath.empty.field(field)
+      for (const key of ["alice", "bob", "carol", "never"]) {
+        expect(resolver.resolveHasKey(path, key)).toBe(
+          resolver.resolveKeys(path).includes(key),
+        )
+      }
+    }
+    expect(resolver.resolveHasKey(RawPath.empty.field("peers"), "alice")).toBe(
+      true,
+    )
+    expect(resolver.resolveHasKey(RawPath.empty.field("peers"), "bob")).toBe(
+      false,
+    )
   })
 })

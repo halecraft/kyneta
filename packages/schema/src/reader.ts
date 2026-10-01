@@ -91,16 +91,21 @@ export function plainReader(state: Record<string, unknown>): Reader {
   }
 }
 
-/**
- * Project topology from the `stepTree` shadow shape. Defensive `[]`
- * fallback covers callers that hit a non-tree path with a tree-typed
- * reader (e.g. ill-formed test fixtures).
- */
 function readForestTopology(
   state: unknown,
   path: Path,
 ): readonly FlatTreeNodeTopology[] {
-  const value = path.read(state)
+  return forestTopologyOf(path.read(state))
+}
+
+/**
+ * Project topology from the `stepTree` shadow shape. Defensive `[]`
+ * fallback covers callers that hit a non-tree value with a tree-typed
+ * reader (e.g. ill-formed test fixtures).
+ */
+export function forestTopologyOf(
+  value: unknown,
+): readonly FlatTreeNodeTopology[] {
   if (!Array.isArray(value)) return []
   const result: FlatTreeNodeTopology[] = []
   for (const n of value) {
@@ -227,21 +232,14 @@ function isFlatForestArray(arr: readonly unknown[]): boolean {
 
 /**
  * Replace the contents of `target` with the contents of `source`,
- * preserving `target`'s object identity.
+ * preserving `target`'s object identity: every reader closes over the
+ * document's root object, so a fresh root is copied onto it. Keys absent
+ * from `source` are deleted from `target`.
  *
- * Used by the CRDT event bridges before they announce: after
- * `materializeXxxShadow` produces a fresh `PlainState` from the CRDT tree,
- * this copies
- * its keys onto the live shadow object so the existing `Reader` keeps
- * working (the reader closes over the shadow's identity, not its
- * current snapshot). Keys absent from `source` are deleted from
- * `target`.
- *
- * O(|source| + |target|). Shallow only — nested values share
- * references with `source`, which is fine here because the
- * materialiser produces fresh trees per call.
+ * Shallow: `target` takes `source`'s values by reference, so `source` must
+ * be a value nothing else holds.
  */
-export function syncShadow(target: PlainState, source: PlainState): void {
+function syncShadow(target: PlainState, source: PlainState): void {
   for (const key of Object.keys(source)) {
     target[key] = source[key]
   }
