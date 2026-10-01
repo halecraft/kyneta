@@ -146,6 +146,14 @@ export {
   pathSchema,
   walkPath,
 } from "./fold-path.js"
+// Undo — the region a record writes and depends on
+export {
+  type Footprint,
+  footprintOf,
+  footprintsOverlap,
+  footprintUnion,
+  WHOLE_DOCUMENT,
+} from "./footprint.js"
 // Forest helpers — pure flat↔recursive projection for `Schema.tree`
 export type {
   FlatTreeNode,
@@ -212,6 +220,8 @@ export {
   invertText,
   invertTree,
 } from "./inverse.js"
+// Landing — where a change landed, at the grain the document stores it
+export { type Touched, touchedBy } from "./landing.js"
 // materializeValue — write-side counterpart to foldPath: unfolds a plain value
 // into a backend-agnostic, identity-keyed container-shape IR.
 export type { EagerPolicy, MaterializedNode } from "./materialize-value.js"
@@ -310,12 +320,8 @@ export type {
 export { applyChange, freezePayload, plainReader } from "./reader.js"
 export { rebaseChange } from "./rebase.js"
 // Reconcile — σ brought up to date from λ where a change touched it
-export type { ReconcileTarget, Touched } from "./reconcile-shadow.js"
-export {
-  planReconcile,
-  reconcileShadow,
-  touchedBy,
-} from "./reconcile-shadow.js"
+export type { ReconcileTarget } from "./reconcile-shadow.js"
+export { planReconcile, reconcileShadow } from "./reconcile-shadow.js"
 // Refs — one construction per schema node (`ref/`): the deletion, removal and
 // population protocols, the read symbol, and the ref types by kind
 export {

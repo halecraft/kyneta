@@ -1,6 +1,6 @@
 // undo-program — the stack's decisions, as tables over `update`.
 
-import type { Edit } from "@kyneta/schema"
+import { type Edit, WHOLE_DOCUMENT } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import type { Direction, Part } from "../undo/schema.js"
 import {
@@ -21,6 +21,7 @@ function part(docId: string, record = "r"): Part {
     replicaType: ["yjs", 1, 0],
     syncMode: { writerModel: "concurrent", durability: "persistent" },
     record,
+    footprint: WHOLE_DOCUMENT,
   }
 }
 

@@ -28,6 +28,7 @@ import {
   type CommitOptions,
   diffSequence,
   diffString,
+  footprintOf,
   isRichTextChange,
   isSequenceChange,
   jsonRecordCodec,
@@ -40,6 +41,7 @@ import {
   type RevertibleCommit,
   rebaseChange,
   richTextChange,
+  type Schema as SchemaNode,
   type SequenceInstruction,
   samePlainValue,
   sequenceChange,
@@ -429,6 +431,8 @@ const decodePosition = (bytes: Uint8Array): Position =>
 
 export interface LoroRevertibleHost {
   readonly doc: LoroDoc
+  /** The document's schema: where a commit's ops landed, for its footprint. */
+  readonly schema: SchemaNode
   /** Commit `work` natively, carrying `options` to the bridge's
    *  announcement. */
   commitNative(work: () => void, options: CommitOptions): void
@@ -609,7 +613,9 @@ export function createLoroRevertible(host: LoroRevertibleHost): LoroRevertible {
         return
       }
       if (aborted || ops.length === 0) return
-      for (const listener of [...listeners]) listener({ record, ops })
+      const footprint = footprintOf(host.schema, ops)
+      for (const listener of [...listeners])
+        listener({ record, ops, footprint })
     },
 
     subscribeCommits(listener) {

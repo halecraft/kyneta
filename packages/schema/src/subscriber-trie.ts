@@ -212,16 +212,16 @@ export class SubscriberTrie {
    * the part below it that `effect` names. Fires the population listeners of
    * every node that became populated.
    *
-   * Creates only what the mark adds. The path stops before its first list
-   * index, since a list's items are populated with it, so nothing is keyed
-   * by an index (a raw index names another item after an insert). And a
+   * Creates only what the mark adds. The mark is made at the path's stable
+   * prefix (`Path.stablePrefix`), before its first list index: a list's
+   * items are populated with it, and nothing is keyed by an index, which
+   * names another item after an insert. And a
    * mark an ancestor's rewrite already implies, or one that adds nothing to
    * a populated node, returns before creating a node.
    */
   markPopulated(path: Path, effect: SubtreeEffect): void {
-    const index = path.segments.findIndex(s => s.role === "index")
-    const at = index === -1 ? path : path.slice(0, index)
-    const added = index === -1 ? effect : "none"
+    const at = path.stablePrefix()
+    const added = at.length === path.length ? effect : "none"
     if (this.implied(at, added)) return
     const node = this.ensure(at)
     for (let up: SubscriberNode | undefined = node; up; up = up.parent) {

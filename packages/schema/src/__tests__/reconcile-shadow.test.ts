@@ -8,12 +8,12 @@ import {
   plainValueResolver,
   Schema,
 } from "../index.js"
+import type { Touched } from "../landing.js"
 import { RawPath } from "../path.js"
 import {
   planReconcile,
   type ReconcileTarget,
   reconcileShadow,
-  type Touched,
 } from "../reconcile-shadow.js"
 import type { SubtreeEffect } from "../subtree-effect.js"
 

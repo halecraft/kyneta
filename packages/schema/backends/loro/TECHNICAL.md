@@ -445,6 +445,7 @@ A record is one local commit's frontiers, taken from the pre-commit hook: the do
 - **What happened since is read by content**, not by op identity: the document forked at `after` (`forkAt`) against the document now. A text is compared with `diffString`, a list with `diffSequence` (Myers), and the inverse is rebased over the result with `rebaseChange`. By op identity, text a revert restored is new text, and an older step's inverse would miss it: "type, delete, undo, undo" would leave the typing. By content it is back where it was.
 - **A map key or a tree node's parent** is restored only while it still holds what the commit left there (`planValueRestores`). Loro's own manager overwrites a later write by someone else; this does not.
 - **A counter** always reverts.
+- **A commit's footprint is `footprintOf(schema, ops)`** (`LoroRevertibleHost.schema`): the inverse `diff(after, before)` names only what the commit wrote, at the grain it is stored.
 - **A container no longer there** takes its inverse as it is: `applyDiff` fills a container the same group re-creates, and leaves one gone for good alone.
 
 The revert gathers, then plans. `gather` reads each container of the inverse at `after` and now (`LoroGathered`: its text, its items, the values of the keys the inverse touches, each tree node's liveness and parents); `planLoroRevert(aliases, gathered)` decides the diffs purely, and is tested with no document (`src/__tests__/revert-plan.test.ts`).

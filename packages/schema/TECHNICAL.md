@@ -771,7 +771,7 @@ CRDT substrates (Loro, Yjs) maintain a **shadow**: a `PlainState` object that se
 
 **The reconcile.** Every way σ moves apart from an authored write and a plain `append` is one function, `reconcileShadow` (`src/reconcile-shadow.ts`), in three steps:
 
-1. **plan** (pure): `planReconcile(schema, touched)` turns where a change landed, and how far below it reached (`planSubtreeEffect`; `touchedBy(ops)` pairs the two for an op list), into the parts of σ to refresh, each one `diffOps` call. It expands a map change into the keys it names, lifts a path inside a sum or `.json()` node to that register and a path under a decaying container to the container, re-expresses a path ending at a record entry as its record keyed by that entry (a node target could not say that an entry is gone, or new), and drops what another target covers, merging one record's keys into one target. Paths compare by `segmentKeys`;
+1. **plan** (pure): `planReconcile(schema, touched)` turns where a change landed, and how far below it reached (`planSubtreeEffect`; `touchedBy(ops)` pairs the two for an op list), into the parts of σ to refresh, each one `diffOps` call. It lands each change (`landed`, `src/landing.ts`): it expands a map change into the keys it names, and lifts a path inside a sum or `.json()` node to that register and a path under a decaying container to the container. Undo footprints land a local commit the same way ([Undo](#undo)). It then re-expresses a path ending at a record entry as its record keyed by that entry (a node target could not say that an entry is gone, or new), and drops what another target covers (`uncovered`), merging one record's keys into one target. Paths compare by `segmentKeys`;
 2. **gather**: read each part from λ through the backend's `MaterializeResolver` and the materializer, at that path. A keyed record target reads only the keys λ holds (`resolveHasKey`);
 3. **execute**: diff each part against σ (`diffOps`, with `keys` for a keyed target), and apply the ops through `freezePayload`.
 
@@ -1520,7 +1520,7 @@ Kyneta is a translucent layer over the underlying CRDT, and the user-facing orig
 
 ## Undo
 
-Source: `src/substrate.ts` (`Revertible`), `src/rebase.ts`, `src/restore.ts`, `src/diff-sequence.ts`, `src/typing.ts`, `src/substrates/plain-revertible.ts`, `src/testing/undo-conformance.ts`; each backend's `revertible.ts`; the stack in `@kyneta/exchange` (`src/undo/`). The measurements behind it are `docs/findings/undo-probes.md`.
+Source: `src/substrate.ts` (`Revertible`), `src/footprint.ts`, `src/landing.ts`, `src/rebase.ts`, `src/restore.ts`, `src/diff-sequence.ts`, `src/typing.ts`, `src/substrates/plain-revertible.ts`, `src/testing/undo-conformance.ts`; each backend's `revertible.ts`; the stack in `@kyneta/exchange` (`src/undo/`). The measurements behind it are `docs/findings/undo-probes.md`.
 
 Undo is selective: it reverses this runtime's operations as they now stand among everyone's. A stored inverse cannot do that on its own. It is written in the coordinates of the state right after its op, so once a collaborator edits earlier in the same text it deletes the wrong characters.
 
@@ -1530,7 +1530,7 @@ A substrate's `revertible` records every local commit and reverts one:
 
 ```ts
 interface Revertible<R> {
-  subscribeCommits(listener: (commit: { record: R; ops: readonly Op[] }) => void): () => void
+  subscribeCommits(listener: (commit: { record: R; ops: readonly Op[]; footprint: Footprint }) => void): () => void
   revert(record: R, options: CommitOptions): { redo: R; remap: Remap } | null
   recovered(record: R, position: Uint8Array): { redo: R; remap: Remap }
   rewrite(record: R, remap: Remap): R
@@ -1544,6 +1544,7 @@ interface Revertible<R> {
 - **`revert` is its own inverse.** It applies the reverse of a record as one local commit, and returns that commit's own record: reverting it redoes. There is no redo logic anywhere.
 - **`revert` returns a remap.** Neither CRDT can undelete, so restoring deleted content creates new items or containers. The remap pairs the old identities with the new ones, and `rewrite` aims every older record at the new ones. Without it, "type, delete, undo, undo" does nothing on the second undo.
 - **`position` and `authoredSince`** let a stack finish a revert a crash interrupted: a replica that has authored anything since the position noted before the revert was reverted, by each CRDT's own causality. `recovered` rebuilds what the revert returned.
+- **A commit's footprint** is the region of the document its record's revert writes and reads, as paths (`Footprint`, each path's `segmentKeys`). Yjs and Loro state `footprintOf(schema, ops)`: where the ops landed at the grain the document is stored (`landed`, shared with reconcile), so a record's keys are apart and a `.json()` or sum value is one region, each path cut to its stable prefix (`Path.stablePrefix`, before its first list index). An index moves when items go in before it, and a field or a key does not, so a cut path names the same region through remote edits, remaps and a reload. Population marks are kept at the same prefix, for the same reason ([Population](#population)). Plain states `WHOLE_DOCUMENT`: its revert applies only at the head the record left, and every write moves the head. A redo keeps the footprint of the record it came from, since a revert writes only what the record wrote. Two records whose footprints do not overlap (`footprintsOverlap`: no path of one is a prefix of a path of the other) commute, so an undo stack across documents orders only steps that overlap, and never reads a schema. Gotcha: a write inside list item 3 overlaps every step in that list.
 - **Never recorded:** a merge, an aborted batch, a commit with no effect (a Yjs delete-clock tick), and `revert`'s own commit.
 - **A record that is plain JSON** encodes with `jsonRecordCodec()`; the Yjs and Loro records are.
 - **A step is undone by `revertStep`**: its parts last first, each revert's remap reaching every part still waiting and every redo part already made. The exchange's stack and `undoConformance`'s stack both use it, so the suite tests the algorithm that ships.
@@ -1687,7 +1688,7 @@ A list item's subscribers follow it across inserts and reorders because the subs
 
 **A mark creates only what it adds.** `markPopulated(path, effect)` (step 6 of [the prepare pipeline](#the-prepare-pipeline)) returns before creating a node when the mark is implied: an ancestor rewrote all below it, or rewrote the key toward `path`, or the node is populated already and `effect` adds nothing. After a document's first whole-document adopt, every later mark is implied, so ops leave no nodes behind.
 
-**A list's items are populated exactly when the list is.** An item exists only because an insert carried its value, and a list starts empty, so no change can find an item in a list nothing populated. So `isPopulated` answers true on stepping from a populated node into an index segment, raw or addressed, and `markPopulated` marks a path only down to its first index segment. Nothing is keyed by an index, and a raw index, which names another item after an insert, is never used as a key. Populating a list fires the population listeners at and below its items, without marking those nodes: the list's mark answers for them.
+**A list's items are populated exactly when the list is.** An item exists only because an insert carried its value, and a list starts empty, so no change can find an item in a list nothing populated. So `isPopulated` answers true on stepping from a populated node into an index segment, raw or addressed, and `markPopulated` marks a path only at its stable prefix (`Path.stablePrefix`), before its first index segment. Nothing is keyed by an index, and a raw index, which names another item after an insert, is never used as a key. Populating a list fires the population listeners at and below its items, without marking those nodes: the list's mark answers for them.
 
 **The live path's tail below the coordinate trie's reach is raw** ([The coordinate trie](#the-coordinate-trie)): marks and delivery key a raw field or entry segment by its key, as they would its address.
 

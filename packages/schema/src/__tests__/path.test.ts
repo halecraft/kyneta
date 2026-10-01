@@ -552,3 +552,21 @@ describe("an addressed path is its parent and one segment", () => {
     item.dead = false
   })
 })
+
+describe("stablePrefix", () => {
+  it("cuts a path before its first list index, and keeps one without", () => {
+    const raw = RawPath.empty.field("cards").item(2).field("name")
+    expect(raw.stablePrefix().format()).toBe("cards")
+    expect(raw.stablePrefix().segmentKeys).toEqual(["cards"])
+    const keyed = RawPath.empty.field("rows").entry("k")
+    expect(keyed.stablePrefix()).toBe(keyed)
+  })
+
+  it("is an ancestor of an addressed path, sharing its prefix", () => {
+    const trie = new CoordinateTrie()
+    const cards = trie.root.field("cards")
+    const name = cards.item(2).field("name")
+    expect(name.stablePrefix()).toBe(cards)
+    expect(cards.stablePrefix()).toBe(cards)
+  })
+})

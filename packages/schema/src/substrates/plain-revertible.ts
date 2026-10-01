@@ -13,6 +13,7 @@
 // substrate's context and log head.
 
 import type { Op } from "../changefeed.js"
+import { WHOLE_DOCUMENT } from "../footprint.js"
 import type {
   BatchOutcome,
   CommitOptions,
@@ -140,7 +141,9 @@ export function createPlainRevertible(
         ops: outcome.ops,
         inverses: outcome.inverses,
       }
-      const commit = { record, ops: record.ops }
+      // A revert applies only at the head the record left, and every write
+      // moves the head: the record depends on the whole document.
+      const commit = { record, ops: record.ops, footprint: WHOLE_DOCUMENT }
       for (const listener of [...listeners]) listener(commit)
     },
 

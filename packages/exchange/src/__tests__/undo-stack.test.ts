@@ -4,8 +4,10 @@
 
 import { loro } from "@kyneta/loro-schema"
 import {
+  type BoundSchema,
   base64ToUint8Array,
   batch,
+  json,
   Schema,
   uint8ArrayToBase64,
 } from "@kyneta/schema"
@@ -200,6 +202,115 @@ describe("undo by document", () => {
     expect(await stack.undo({ docs: [] })).toBe(false)
     expect(x.text()).toBe("ex")
   })
+})
+
+describe("steps conflict by what they write", () => {
+  const Index = Schema.struct({ items: Schema.record(Schema.string()) })
+  const Text = Schema.struct({ text: Schema.text() })
+  // A plain document's undo is a strict stack: every step on it conflicts
+  // with every other.
+  const targets: readonly (readonly [
+    string,
+    BoundSchema<typeof Index>,
+    BoundSchema<typeof Text>,
+    { readonly strict: boolean },
+  ])[] = [
+    ["Yjs", yjs.bind(Index), yjs.bind(Text), { strict: false }],
+    ["Loro", loro.bind(Index), loro.bind(Text), { strict: false }],
+    ["plain", json.bind(Index), json.bind(Text), { strict: true }],
+  ]
+  const filters = [
+    ["with docs", { docs: ["text:a"] }],
+    ["without docs", undefined],
+  ] as const
+
+  /** Items: an entry in `index` each, and a text document each. */
+  async function items(
+    IndexDoc: BoundSchema<typeof Index>,
+    TextDoc: BoundSchema<typeof Text>,
+  ) {
+    const exchange = createExchange({ schemas: [IndexDoc, TextDoc] })
+    const index = exchange.get("index", IndexDoc)
+    const text = (id: string) => exchange.get(`text:${id}`, TextDoc)
+    const stack = await stackOn(exchange)
+    /** One step: the item's entry and its text. */
+    const create = (id: string, content: string) =>
+      stack.gesture(() => {
+        index.items.set(id, id)
+        text(id).text.insert(0, content)
+      })
+    const shown = (id: string) => ({
+      has: index.items.has(id),
+      text: text(id).text(),
+    })
+    return { text, stack, create, shown }
+  }
+
+  for (const [substrate, IndexDoc, TextDoc, { strict }] of targets) {
+    for (const [filtered, options] of filters) {
+      it(`a new item keeps another's redo unless the document is a strict stack: ${substrate}, ${filtered}`, async () => {
+        const { text, stack, create, shown } = await items(IndexDoc, TextDoc)
+        create("a", "alpha")
+        stack.gesture(() => text("a").text.insert(5, " more"))
+        expect(await stack.undo(options)).toBe(true)
+        expect(await stack.undo(options)).toBe(true)
+        expect(shown("a")).toEqual({ has: false, text: "" })
+
+        // Creating c writes another key of index and another text, so it
+        // commutes with creating a; on a strict stack it clears a's
+        // creation, and with it the typing made on it.
+        create("c", "gamma")
+        if (strict) {
+          expect(stack.top("redo", options?.docs)).toBeUndefined()
+          expect(await stack.redo(options)).toBe(false)
+          expect(shown("a")).toEqual({ has: false, text: "" })
+          return
+        }
+        expect(await stack.redo(options)).toBe(true)
+        expect(shown("a")).toEqual({ has: true, text: "alpha" })
+        expect(await stack.redo(options)).toBe(true)
+        expect(shown("a")).toEqual({ has: true, text: "alpha more" })
+      })
+    }
+
+    it(`an item's creation undoes from under a newer item's, unless the document is a strict stack: ${substrate}`, async () => {
+      const { stack, create, shown } = await items(IndexDoc, TextDoc)
+      create("a", "alpha")
+      create("c", "gamma")
+      if (strict) {
+        expect(stack.top("undo", ["text:a"])).toBeUndefined()
+        expect(await stack.undo({ docs: ["text:a"] })).toBe(false)
+        expect(shown("a")).toEqual({ has: true, text: "alpha" })
+        return
+      }
+      expect(await stack.undo({ docs: ["text:a"] })).toBe(true)
+      expect(shown("a")).toEqual({ has: false, text: "" })
+      expect(shown("c")).toEqual({ has: true, text: "gamma" })
+    })
+
+    it(`a redo is not taken from under the step it was made on: ${substrate}`, async () => {
+      const { text, stack, create, shown } = await items(IndexDoc, TextDoc)
+      create("a", "alpha")
+      stack.gesture(() => {
+        text("a").text.insert(5, "!")
+        text("b").text.insert(0, "beta")
+      })
+      expect(await stack.undo()).toBe(true)
+      expect(await stack.undo()).toBe(true)
+
+      // The second step typed into a's text, which only the first created.
+      expect(stack.top("redo", ["text:b"])).toBeUndefined()
+      expect(await stack.redo({ docs: ["text:b"] })).toBe(false)
+      expect(shown("a")).toEqual({ has: false, text: "" })
+      expect(text("b").text()).toBe("")
+
+      expect(await stack.redo()).toBe(true)
+      expect(shown("a")).toEqual({ has: true, text: "alpha" })
+      expect(await stack.redo()).toBe(true)
+      expect(shown("a")).toEqual({ has: true, text: "alpha!" })
+      expect(text("b").text()).toBe("beta")
+    })
+  }
 })
 
 describe("a stored undo stack", () => {

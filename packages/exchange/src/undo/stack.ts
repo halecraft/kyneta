@@ -27,6 +27,9 @@ import {
   base64ToUint8Array,
   diffSequence,
   editOf,
+  type Footprint,
+  footprintsOverlap,
+  footprintUnion,
   own,
   RawPath,
   replaceChange,
@@ -74,7 +77,8 @@ export interface UndoStackParams {
 
 export interface UndoOptions extends CommitOptions {
   /** Take the newest step that writes any of these documents, even if
-   *  steps above it write others. Any step when omitted. */
+   *  steps above it write others, as long as none of those overlaps it
+   *  (`topStep`). The newest step when omitted. */
   readonly docs?: readonly DocId[]
 }
 
@@ -89,11 +93,12 @@ export interface UndoStack {
    *  typing policy, as an editor binding makes them. */
   follow(docId: DocId): () => void
   /** Undo the newest step still standing that writes any of
-   *  `options.docs`. False when there is none. A part stands only if its
-   *  document is held here: an undo never creates one. */
+   *  `options.docs` and that no newer step overlaps. False when there is
+   *  none. A part stands only if its document is held here: an undo never
+   *  creates one. */
   undo(options?: UndoOptions): Promise<boolean>
   /** Redo the newest undone step still standing that writes any of
-   *  `options.docs`. */
+   *  `options.docs` and that no step redone before it overlaps. */
   redo(options?: UndoOptions): Promise<boolean>
   /** The step `undo` or `redo` with these `docs` tries first. Whether it
    *  still stands is known only when it is tried. A read of the undo
@@ -123,16 +128,66 @@ function touches(step: Step, docs: readonly string[] | undefined): boolean {
   return docs === undefined || step.parts.some(p => docs.includes(p.docId))
 }
 
-/** The newest step in `steps` that writes any document in `docs`. */
+/** What a step writes: each document's footprint. */
+type Region = ReadonlyMap<string, Footprint>
+
+/** `region` with `footprint` added to `docId`'s. */
+function joined(region: Region, docId: string, footprint: Footprint): Region {
+  const known = region.get(docId)
+  return new Map(region).set(
+    docId,
+    known === undefined ? footprint : footprintUnion(known, footprint),
+  )
+}
+
+/** The footprints of `step`'s parts, per document. A typing step of many
+ *  keystrokes in one text is one path. */
+function regionOf(step: Step): Region {
+  return step.parts.reduce<Region>(
+    (region, part) => joined(region, part.docId, part.footprint),
+    new Map(),
+  )
+}
+
+function regionUnion(a: Region, b: Region): Region {
+  let union = a
+  for (const [docId, footprint] of b) union = joined(union, docId, footprint)
+  return union
+}
+
+/** Whether `a` and `b` write a common document, and overlap there. Two steps
+ *  whose regions do not overlap commute. */
+function regionsOverlap(a: Region, b: Region): boolean {
+  for (const [docId, footprint] of a) {
+    const other = b.get(docId)
+    if (other !== undefined && footprintsOverlap(footprint, other)) return true
+  }
+  return false
+}
+
+/**
+ * The newest step in `steps` that writes any document in `docs` and that no
+ * step after it overlaps. On `undo`, an overlapping step after it was made on
+ * it; on `redo`, it was made on an overlapping step after it. Either way the
+ * two must go in stack order. The walk carries the union of the steps
+ * passed, since overlapping a union is overlapping one of its steps. Without
+ * `docs`, the last step.
+ */
 export function topStep(
   steps: readonly Step[],
   docs: readonly string[] | undefined,
 ): Step | undefined {
-  return steps.findLast(s => touches(s, docs))
+  let after: Region = new Map()
+  for (const step of steps.toReversed()) {
+    const region = regionOf(step)
+    if (touches(step, docs) && !regionsOverlap(region, after)) return step
+    after = regionUnion(after, region)
+  }
+  return undefined
 }
 
 /** Each list kept to its newest `depth` steps. A push keeps the redo steps
- *  on other documents, so the two lists together can exceed `depth`. */
+ *  it does not conflict with, so the two lists together can exceed `depth`. */
 export function bounded(stack: StoredStack, depth: number): StoredStack {
   return {
     ...stack,
@@ -142,22 +197,35 @@ export function bounded(stack: StoredStack, depth: number): StoredStack {
 }
 
 /**
- * `step` pushed onto `undo`, and every redo step that writes a document
- * `step` writes cleared. A redo step on other documents commutes with
- * `step` and stays, so the steps on any one document behave as that
- * document's own stack.
+ * `redo` without the steps that build on `seed`: each step that overlaps
+ * `seed` or a step already cleared. The walk goes in redo order, from the
+ * step redone first, carrying the union of what it cleared, so a step redone
+ * before every cleared one it overlaps is kept. Sound for a seed taken from
+ * `redo` because a step is taken only when nothing after it overlaps it.
  */
+function clearDependents(redo: readonly Step[], seed: Step): Step[] {
+  let cleared = regionOf(seed)
+  const kept: Step[] = []
+  for (const step of redo.toReversed()) {
+    const region = regionOf(step)
+    if (regionsOverlap(region, cleared)) cleared = regionUnion(cleared, region)
+    else kept.push(step)
+  }
+  return kept.reverse()
+}
+
+/** `step` pushed onto `undo`, and the redo steps that build on it cleared
+ *  (`clearDependents`). The others commute with it and stay. */
 export function pushStep(
   stack: StoredStack,
   step: Step,
   depth: number,
 ): StoredStack {
-  const docs = step.parts.map(p => p.docId)
   return bounded(
     {
       ...stack,
       undo: [...stack.undo, step],
-      redo: stack.redo.filter(r => !touches(r, docs)),
+      redo: clearDependents(stack.redo, step),
     },
     depth,
   )
@@ -167,7 +235,9 @@ export function pushStep(
  * `step` moved from `from`'s list, as `redo` onto the other list (dropped
  * when nothing of it applied), every step left rewritten by `rewrite`, the
  * note cleared, and each list kept to `depth`. `redo` is already current:
- * its revert made it so.
+ * its revert made it so. A redo step dropped takes the redo steps that build
+ * on it (`clearDependents`), which could not be redone without it. An undo
+ * step dropped takes nothing: what it did is already gone.
  */
 export function moveStep(
   stack: StoredStack,
@@ -180,7 +250,10 @@ export function moveStep(
   const each = (steps: readonly Step[]) =>
     steps.map(s => ({ ...s, parts: s.parts.map(rewrite) }))
   const to: Direction = from === "undo" ? "redo" : "undo"
-  const left = each(listOf(stack, from).filter(s => s.id !== step.id))
+  const rest = listOf(stack, from).filter(s => s.id !== step.id)
+  const left = each(
+    from === "redo" && redo === undefined ? clearDependents(rest, step) : rest,
+  )
   const right = [
     ...each(listOf(stack, to)),
     ...(redo === undefined ? [] : [redo]),
@@ -339,6 +412,7 @@ export async function createUndoStack(
         replicaType: readyInfo.replicaFactory.replicaType,
         syncMode: readyInfo.syncMode,
         record: uint8ArrayToBase64(revertible.codec.encode(commit.record)),
+        footprint: commit.footprint,
       },
     })
     // A direct write outside a gesture is heard inside its own commit, where

@@ -3,8 +3,9 @@
 // Every way σ moves apart from an authored write and a plain `append` is one
 // reconcile: the CRDT event bridges, an ephemeral merge or tick, a plain
 // adopt. Each knows where the change landed (the ops a bridge announces, the
-// paths an ephemeral join moved), and `planSubtreeEffect` says how far below
-// that it reached. So the reconcile re-materializes only those parts, diffs
+// paths an ephemeral join moved), `planSubtreeEffect` says how far below
+// that it reached, and `landed` (`landing.ts`) where that is at the grain σ
+// is stored. So the reconcile re-materializes only those parts, diffs
 // each against σ, and applies the difference. It costs the size of what
 // changed, and every σ object outside the touched parts keeps its identity.
 //
@@ -15,7 +16,6 @@
 
 import type { Op } from "./changefeed.js"
 import { diffOps } from "./diff-ops.js"
-import { walkPath } from "./fold-path.js"
 import type { Interpreter } from "./interpret.js"
 import { interpret } from "./interpret.js"
 import {
@@ -23,24 +23,10 @@ import {
   type MaterializeResolver,
   materializeContextFromResolver,
 } from "./interpreters/materialize.js"
+import { type Landed, landed, type Touched, uncovered } from "./landing.js"
 import type { Path, RawPath } from "./path.js"
 import { applyChange, freezePayload, type StateCell } from "./reader.js"
 import { KIND, type Schema as SchemaNode } from "./schema.js"
-import { planSubtreeEffect, type SubtreeEffect } from "./subtree-effect.js"
-
-/** Where a change landed, and how far below it reached. */
-export interface Touched {
-  readonly path: RawPath
-  readonly effect: SubtreeEffect
-}
-
-/** Where each op landed, and how far below it its change reached. */
-export function touchedBy(ops: readonly Op[]): Touched[] {
-  return ops.map(op => ({
-    path: op.path,
-    effect: planSubtreeEffect(op.change),
-  }))
-}
 
 /**
  * One `diffOps` call: the node at `path`, or, with `keys`, only those
@@ -58,40 +44,28 @@ export interface ReconcileTarget {
 
 /**
  * The parts of σ to refresh after the changes `touched`, as few `diffOps`
- * calls as cover them. Five steps, in order:
+ * calls as cover them. Three steps, in order:
  *
- * 1. **Expand.** `"none"` and `"all"` name the touched node. `{ keys }` names
- *    those children of a struct or a record, and the node itself on any other
- *    kind: a tree change's keys are deleted node ids, and a tree is diffed
- *    whole.
- * 2. **Lift to an opaque boundary.** A sum or `.json()` node is stored as one
- *    value, and a sum's variant is read from it.
- * 3. **Lift to decay.** To the outermost ancestor that declares `decayMs`: a
- *    write under an expired container makes the whole container visible
- *    again.
- * 4. **Record entries become keyed parents.** A node target at an entry could
+ * 1. **Land.** Where each change landed, at the grain σ is stored
+ *    (`landed`): its keys expanded to the fields or entries they name, then
+ *    lifted to an opaque boundary and to decay.
+ * 2. **Record entries become keyed parents.** A node target at an entry could
  *    express neither a key that is gone (the materializer answers zeros for
  *    it) nor one that is new (the diff would be field writes under an entry σ
- *    lacks, not a map change at the record). This runs after both lifts,
+ *    lacks, not a map change at the record). This runs after landing,
  *    because a lift can land on an entry.
- * 5. **Cover and group.** A node target covers everything at or below its
- *    path, and a keyed target `{ k }` at P everything at or below `P.k`.
- *    Keyed targets at one record merge, their keys combined.
+ * 3. **Cover and group.** A node target covers everything at or below its
+ *    path, and a keyed target `{ k }` at P everything at or below `P.k`
+ *    (`uncovered`). Keyed targets at one record merge, their keys combined.
  *
- * A path that does not fit the schema is refreshed at the longest prefix
- * that does. Paths compare by `segmentKeys`, element by element.
+ * Paths compare by `segmentKeys`, element by element.
  */
 export function planReconcile(
   root: SchemaNode,
   touched: readonly Touched[],
 ): readonly ReconcileTarget[] {
-  const candidates: Candidate[] = []
-  for (const { path, effect } of touched) {
-    for (const child of expand(root, path, effect)) {
-      candidates.push(toCandidate(lift(root, child)))
-    }
-  }
-  return group(cover(candidates))
+  const candidates = touched.flatMap(t => landed(root, t).map(toCandidate))
+  return group(uncovered(candidates, c => c.covers))
 }
 
 /** A node target, or one key of a record. */
@@ -100,71 +74,10 @@ interface Candidate {
   readonly schema: SchemaNode
   readonly key?: string
   /** `path`, or `path.entry(key)`: what this candidate covers. */
-  readonly covers: readonly (string | number)[]
+  readonly covers: readonly string[]
 }
 
-/** The schema at each prefix of a path, and how much of it fits. */
-interface Walked {
-  /** `schemas[i]` is the schema at the path's first `i` segments. */
-  readonly schemas: readonly SchemaNode[]
-  /** How many segments the walk got through. */
-  readonly consumed: number
-  readonly complete: boolean
-}
-
-function walkSchemas(root: SchemaNode, path: Path): Walked {
-  const schemas: SchemaNode[] = [root]
-  const walk = walkPath(undefined, root, path, (_value, schema) => {
-    schemas.push(schema)
-    return undefined
-  })
-  return {
-    schemas,
-    consumed: walk.consumed,
-    complete: walk.stop === "complete",
-  }
-}
-
-function expand(
-  root: SchemaNode,
-  path: RawPath,
-  effect: SubtreeEffect,
-): readonly RawPath[] {
-  if (effect === "none" || effect === "all") return [path]
-  const walked = walkSchemas(root, path)
-  if (!walked.complete) return [path]
-  switch (walked.schemas[walked.consumed]?.[KIND]) {
-    case "product":
-      return effect.keys.map(key => path.field(key))
-    case "map":
-      return effect.keys.map(key => path.entry(key))
-    default:
-      return [path]
-  }
-}
-
-/** `path` lifted to its opaque boundary, then to its outermost decay. */
-function lift(
-  root: SchemaNode,
-  path: RawPath,
-): { readonly path: RawPath; readonly schemas: readonly SchemaNode[] } {
-  const walked = walkSchemas(root, path)
-  let length = walked.consumed
-  const decayAt = walked.schemas
-    .slice(0, length + 1)
-    .findIndex(schema => (schema as { decayMs?: number }).decayMs !== undefined)
-  if (decayAt !== -1) length = decayAt
-  return {
-    path: path.slice(0, length),
-    schemas: walked.schemas.slice(0, length + 1),
-  }
-}
-
-function toCandidate(lifted: {
-  readonly path: RawPath
-  readonly schemas: readonly SchemaNode[]
-}): Candidate {
-  const { path, schemas } = lifted
+function toCandidate({ path, schemas }: Landed): Candidate {
   const length = path.length
   const schema = schemas[length] as SchemaNode
   const last = path.segments[length - 1]
@@ -178,37 +91,6 @@ function toCandidate(lifted: {
     }
   }
   return { path, schema, covers: path.segmentKeys }
-}
-
-/** The candidates no other candidate covers, in their first order. */
-function cover(candidates: readonly Candidate[]): readonly Candidate[] {
-  interface Node {
-    readonly children: Map<string | number, Node>
-    terminal: boolean
-  }
-  const trie: Node = { children: new Map(), terminal: false }
-  const kept = new Set<Candidate>()
-  const byDepth = [...candidates].sort(
-    (a, b) => a.covers.length - b.covers.length,
-  )
-  for (const candidate of byDepth) {
-    let node = trie
-    let covered = node.terminal
-    for (const key of candidate.covers) {
-      if (covered) break
-      let next = node.children.get(key)
-      if (next === undefined) {
-        next = { children: new Map(), terminal: false }
-        node.children.set(key, next)
-      }
-      node = next
-      covered = node.terminal
-    }
-    if (covered) continue
-    node.terminal = true
-    kept.add(candidate)
-  }
-  return candidates.filter(candidate => kept.has(candidate))
 }
 
 /** Node targets as they are; keyed candidates merged per record. */

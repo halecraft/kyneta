@@ -6,7 +6,7 @@
 // other, and the one-writer rule of serialized documents is what keeps two
 // runtimes from popping the same step.
 
-import type { ReplicaType, SyncMode } from "@kyneta/schema"
+import type { Footprint, ReplicaType, SyncMode } from "@kyneta/schema"
 import { json, Schema } from "@kyneta/schema"
 
 /** One document's record in a step. */
@@ -19,6 +19,9 @@ export interface Part {
   readonly syncMode: SyncMode
   /** The record, in its substrate's codec, as base64. */
   readonly record: string
+  /** The region of the document the record's revert writes and reads, as
+   *  its substrate stated it. A redo part keeps its undo part's. */
+  readonly footprint: Footprint
 }
 
 /** What one gesture did: its parts, in the order they committed. */
@@ -50,6 +53,7 @@ const StepSchema = Schema.struct.json({
         durability: Schema.string(),
       }),
       record: Schema.string(),
+      footprint: Schema.list.json(Schema.list.json(Schema.string())),
     }),
   ),
 })

@@ -243,6 +243,7 @@ export function createLoroSubstrate(
 
   const revertible = createLoroRevertible({
     doc: doc as unknown as LoroDoc,
+    schema,
     commitNative(work, options) {
       pendingNative = options
       try {

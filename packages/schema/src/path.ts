@@ -472,6 +472,13 @@ export interface Path {
   readonly segments: readonly Segment[]
   /** Number of segments. */
   readonly length: number
+  /**
+   * The longest prefix that names the same place whatever is inserted: up to
+   * the first list index, since an index names another item once one goes in
+   * before it, while a field or a key never moves. Undo footprints and
+   * population marks are kept at it.
+   */
+  stablePrefix(): Path
   /** Slice to produce an ancestor path (same concrete type). */
   slice(start: number, end?: number): Path
   /** Concatenate two paths (same concrete type). Throws on type mismatch. */
@@ -507,6 +514,7 @@ export abstract class AbstractPath implements Path {
   abstract entry(key: string): Path
   abstract item(index: number): Path
   abstract slice(start: number, end?: number): Path
+  abstract stablePrefix(): Path
   abstract concat(other: Path): Path
   abstract root(): Path
   abstract toRaw(): RawPath
@@ -586,6 +594,16 @@ export class RawPath extends AbstractPath {
 
   item(index: number): RawPath {
     return new RawPath(this.segments.concat([rawIndex(index)]))
+  }
+
+  /** A raw segment's identity is its coordinate, always a string. */
+  override get segmentKeys(): readonly string[] {
+    return this.segments.map(segment => segment.identity)
+  }
+
+  stablePrefix(): RawPath {
+    const at = firstIndex(this.segments)
+    return at === this.length ? this : this.slice(0, at)
   }
 
   /** Already raw — identity projection. */
@@ -728,6 +746,10 @@ export class AddressedPath extends AbstractPath {
     return new AddressedPath(this.#trie, this, segment)
   }
 
+  stablePrefix(): AddressedPath {
+    return this.slice(0, firstIndex(this.segments))
+  }
+
   /** As `Array.prototype.slice`. From the start, it is an ancestor, and
    *  shares this path's prefix. */
   slice(start: number, end?: number): AddressedPath {
@@ -776,6 +798,12 @@ export class AddressedPath extends AbstractPath {
   toRaw(): RawPath {
     return new RawPath(this.segments.map(rawOf))
   }
+}
+
+/** Where the first list index is in `segments`, or their length. */
+function firstIndex(segments: readonly Segment[]): number {
+  const at = segments.findIndex(segment => segment.role === "index")
+  return at === -1 ? segments.length : at
 }
 
 /** A relative index into a list of `length`, as `Array.prototype.slice`

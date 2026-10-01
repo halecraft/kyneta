@@ -12,6 +12,8 @@ import {
   type BatchOutcome,
   type ChangeBase,
   findOpaqueBoundary,
+  footprintOf,
+  freezeTree,
   isRichTextChange,
   isSequenceChange,
   isTextChange,
@@ -148,7 +150,8 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
       reverting.record = record
       return
     }
-    for (const listener of [...listeners]) listener({ record, ops })
+    const footprint = footprintOf(host.schema, ops)
+    for (const listener of [...listeners]) listener({ record, ops, footprint })
   })
 
   // The client's clock before the authored op `prepared` will see.
@@ -226,7 +229,7 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
         }
         return
       }
-      const pre = path.read(host.shadow.current)
+      const pre = shadowAt(path)
       if (isRichTextChange(change)) {
         const stable = stabilize(tree, path)
         const key = JSON.stringify(stable)
@@ -319,7 +322,7 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
           kindAt(tree, path) !== "richtext"
             ? null
             : (draft.texts.get(JSON.stringify(stable)) ??
-              ((path.read(host.shadow.current) ?? []) as RichTextSpan[]))
+              ((shadowAt(path) ?? []) as RichTextSpan[]))
         const { deleted, inserted } = textChanges(
           doc,
           target,
@@ -355,13 +358,7 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
         }
       }
       for (const op of ops) {
-        capture(
-          draft,
-          op.path,
-          op.change,
-          op.path.read(host.shadow.current),
-          "after",
-        )
+        capture(draft, op.path, op.change, shadowAt(op.path), "after")
       }
     },
 
@@ -473,7 +470,7 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
       if (path === null) return null
       if (!containers.has(path.key)) {
         const kind = kindAt(tree, path)
-        const current = path.read(host.shadow.current)
+        const current = shadowAt(path)
         const length =
           kind === "text"
             ? String(current ?? "").length
@@ -565,15 +562,26 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
     })
   }
 
+  /**
+   * σ at `path`, frozen. A draft keeps what it reads until the transaction
+   * ends, and the batch goes on writing σ meanwhile: a write changes an
+   * unfrozen node in place, and copies a frozen one (`applyChange`).
+   */
+  function shadowAt(path: Path): unknown {
+    return freezeTree(path.read(host.shadow.current))
+  }
+
   function readSlot(path: Path): Slot {
     const segments = path.segments
     const last = segments.at(-1)
-    if (last === undefined) return { value: path.read(host.shadow.current) }
+    if (last === undefined) return { value: shadowAt(path) }
     const parent = path.slice(0, segments.length - 1).read(host.shadow.current)
     const key = last.resolve()
     if (parent === null || typeof parent !== "object") return null
     return Object.hasOwn(parent as object, key as string)
-      ? { value: (parent as Record<string, unknown>)[key as string] }
+      ? {
+          value: freezeTree((parent as Record<string, unknown>)[key as string]),
+        }
       : null
   }
 

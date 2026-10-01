@@ -76,8 +76,8 @@ export type UndoEffect =
   | { readonly type: "push"; readonly parts: readonly Part[] }
   /** Wake the program with `gap-elapsed` after `ms`. */
   | { readonly type: "set-timer"; readonly ms: number }
-  /** Read the newest step of `direction`'s list that writes any of `docs`
-   *  (any step, when undefined), and open its documents. */
+  /** Read the step of `direction`'s list a request for `docs` takes
+   *  (`topStep`), and open its documents. */
   | {
       readonly type: "begin"
       readonly direction: Direction
@@ -274,7 +274,7 @@ export const undoProgram = (
         const busy = model.busy
         if (busy === undefined || busy.phase !== "reverting") return [model]
         // Nothing of the step still stood: it is gone from the stack, and
-        // the next one writing the same documents is tried, silently.
+        // the step taken next for the same documents is tried, silently.
         if (!msg.applied) {
           const { direction, docs } = busy.request
           return written(

@@ -1,7 +1,12 @@
 // undo-edits — a stack's transitions, and the ops that write them: as large
 // as what changed.
 
-import { RawPath, step as stepChange } from "@kyneta/schema"
+import {
+  type Footprint,
+  RawPath,
+  step as stepChange,
+  WHOLE_DOCUMENT,
+} from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import type { Part, Step } from "../undo/schema.js"
 import {
@@ -12,12 +17,18 @@ import {
   topStep,
 } from "../undo/stack.js"
 
-const part = (docId: string, record: string): Part => ({
+/** A part of `docId`; on the whole document unless `footprint` says. */
+const part = (
+  docId: string,
+  record: string,
+  footprint: Footprint = WHOLE_DOCUMENT,
+): Part => ({
   docId,
   schemaHash: "h",
   replicaType: ["yjs", 1, 0],
   syncMode: { writerModel: "concurrent", durability: "persistent" },
   record,
+  footprint,
 })
 const step = (id: string, ...parts: Part[]): Step => ({ id, parts })
 
@@ -34,7 +45,7 @@ function written(stack: StoredStack, after: StoredStack): StoredStack {
 }
 
 describe("pushStep", () => {
-  it("pushes, and clears the redo steps that write a document it writes", () => {
+  it("pushes, and clears the redo steps it overlaps", () => {
     const stack: StoredStack = {
       undo: [step("a", part("x", "1"))],
       redo: [
@@ -52,6 +63,75 @@ describe("pushStep", () => {
       pending: null,
     })
     expect(written(stack, after)).toEqual(after)
+  })
+
+  it("clears the redo steps that build on a cleared one, transitively", () => {
+    // Redone last first: rxy, then ryz, then rz, then rw.
+    const stack: StoredStack = {
+      undo: [],
+      redo: [
+        step("rw", part("w", "1")),
+        step("rz", part("z", "2")),
+        step("ryz", part("y", "3"), part("z", "4")),
+        step("rxy", part("x", "5"), part("y", "6")),
+      ],
+      pending: null,
+    }
+    const after = pushStep(stack, step("b", part("x", "7")), 10)
+    expect(after.redo.map(s => s.id)).toEqual(["rw"])
+    expect(written(stack, after)).toEqual(after)
+  })
+
+  it("keeps a redo step redone before a cleared one, though they share a document", () => {
+    // ry is redone first, so it does not build on rxy.
+    const stack: StoredStack = {
+      undo: [],
+      redo: [
+        step("rxy", part("x", "1"), part("y", "2")),
+        step("ry", part("y", "3")),
+      ],
+      pending: null,
+    }
+    const after = pushStep(stack, step("b", part("x", "4")), 10)
+    expect(after.redo.map(s => s.id)).toEqual(["ry"])
+  })
+
+  it("keeps a redo step on the same document that it does not overlap", () => {
+    const stack: StoredStack = {
+      undo: [],
+      redo: [step("ra", part("index", "1", [["items", "a"]]))],
+      pending: null,
+    }
+    const after = pushStep(
+      stack,
+      step("c", part("index", "2", [["items", "c"]])),
+      10,
+    )
+    expect(after.redo.map(s => s.id)).toEqual(["ra"])
+  })
+
+  it("clears along footprints across documents, and keeps a step that only shares a document", () => {
+    // Redone first: create (a's key and text), then the key c, then typing
+    // in a's text.
+    const stack: StoredStack = {
+      undo: [],
+      redo: [
+        step("type", part("text:a", "1", [["text"]])),
+        step("keyC", part("index", "2", [["items", "c"]])),
+        step(
+          "create",
+          part("index", "3", [["items", "a"]]),
+          part("text:a", "4", [["text"]]),
+        ),
+      ],
+      pending: null,
+    }
+    const after = pushStep(
+      stack,
+      step("b", part("index", "5", [["items", "a"]])),
+      10,
+    )
+    expect(after.redo.map(s => s.id)).toEqual(["keyC"])
   })
 
   it("trims each list to depth", () => {
@@ -123,6 +203,27 @@ describe("moveStep", () => {
   })
 })
 
+describe("dropping a redo step", () => {
+  it("clears the redo steps built on it, and keeps the rest", () => {
+    const create = step(
+      "create",
+      part("index", "1", [["items", "a"]]),
+      part("text:a", "2", [["text"]]),
+    )
+    const stack: StoredStack = {
+      undo: [],
+      redo: [
+        step("type", part("text:a", "3", [["text"]])),
+        step("other", part("text:b", "4", [["text"]])),
+        create,
+      ],
+      pending: null,
+    }
+    const after = moveStep(stack, "redo", create, undefined, p => p, 10)
+    expect(after.redo.map(s => s.id)).toEqual(["other"])
+  })
+})
+
 describe("moving a step under the top", () => {
   it("removes only that step", () => {
     const stack: StoredStack = {
@@ -177,5 +278,41 @@ describe("topStep", () => {
   it("takes the newest step when no documents are named, and none for none", () => {
     expect(topStep(steps, undefined)?.id).toBe("z")
     expect(topStep(steps, [])).toBeUndefined()
+  })
+
+  it("passes over a step a later step overlaps", () => {
+    // A redo list: the creation of a is redone first, and the typing in a
+    // and b was made on it.
+    const redo = [
+      step(
+        "type",
+        part("text:a", "1", [["text"]]),
+        part("text:b", "2", [["text"]]),
+      ),
+      step(
+        "create",
+        part("index", "3", [["items", "a"]]),
+        part("text:a", "4", [["text"]]),
+      ),
+    ]
+    expect(topStep(redo, ["text:b"])).toBeUndefined()
+    expect(topStep(redo, ["text:a"])?.id).toBe("create")
+    expect(topStep(redo, undefined)?.id).toBe("create")
+  })
+
+  it("takes a step from under a newer one it does not overlap", () => {
+    const undo = [
+      step(
+        "createA",
+        part("index", "1", [["items", "a"]]),
+        part("text:a", "2", [["text"]]),
+      ),
+      step(
+        "createC",
+        part("index", "3", [["items", "c"]]),
+        part("text:c", "4", [["text"]]),
+      ),
+    ]
+    expect(topStep(undo, ["text:a"])?.id).toBe("createA")
   })
 })

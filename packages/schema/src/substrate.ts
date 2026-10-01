@@ -37,6 +37,7 @@
 
 import type { ChangeBase } from "./change.js"
 import type { Op } from "./changefeed.js"
+import type { Footprint } from "./footprint.js"
 import { isPropertyHost } from "./guards.js"
 import type { Path } from "./interpret.js"
 import type { Reader } from "./reader.js"
@@ -818,6 +819,9 @@ export interface RevertibleCommit<R> {
   readonly record: R
   /** What the commit did, in Kyneta's terms: what undo grouping reads. */
   readonly ops: readonly Op[]
+  /** The region `record`'s revert writes and reads. The revert of each redo
+   *  record that comes from it stays inside it too, so a redo keeps it. */
+  readonly footprint: Footprint
 }
 
 /**

@@ -1,9 +1,13 @@
 // undo-conformance — shared, re-exportable suite for `Substrate.revertible`.
 //
 // Every revertible substrate runs these scenarios through a minimal stack
-// kept here: a step is the records of the commits one block made, undo
-// reverts a step's records last first and pushes what that produced as the
-// step to redo, and every revert's remap rewrites the records left behind.
+// kept here: a step is the records of the commits one block made, each with
+// its commit's footprint, undo reverts a step's records last first and
+// pushes what that produced as the step to redo, under the same footprints,
+// and every revert's remap rewrites the records left behind. The stack checks
+// the footprint contract on every commit and every revert: a commit's
+// footprint covers what its ops wrote, and a revert writes only inside the
+// footprint of the record it reverts.
 // Each scenario runs twice: live, and with every record encoded and decoded
 // and the peer rebuilt from its whole state between the edits and the undo,
 // as a reload does.
@@ -12,7 +16,15 @@
 // (the CRDT backends); a plain document has one writer.
 
 import { describe, expect, it } from "vitest"
+import type { Op } from "../changefeed.js"
 import { batch } from "../facade/batch.js"
+import { subscribe } from "../facade/observe.js"
+import {
+  type Footprint,
+  footprintOf,
+  footprintsOverlap,
+  footprintUnion,
+} from "../footprint.js"
 import { revertStep } from "../revert-step.js"
 import { Schema } from "../schema.js"
 import type {
@@ -37,6 +49,7 @@ export const UndoFixture = Schema.struct({
   ),
   labels: Schema.record(Schema.string()),
   place: Schema.string(),
+  meta: Schema.struct.json({ a: Schema.string(), b: Schema.string() }),
 })
 
 /** A document of the fixture, and the substrate under it. */
@@ -71,12 +84,26 @@ function revertibleOf(peer: UndoPeer): Revertible {
   return revertible
 }
 
+/** A record, and the footprint of the commit it came from. */
+interface Entry {
+  readonly record: unknown
+  readonly footprint: Footprint
+}
+
+/** Whether `outer` covers every path of `inner`. */
+function covers(outer: Footprint, inner: Footprint): boolean {
+  return (
+    JSON.stringify(footprintUnion(outer, inner)) ===
+    JSON.stringify(footprintUnion(outer))
+  )
+}
+
 /** A peer with an undo stack over its own commits. */
 class Stack {
   peer: UndoPeer
-  undos: unknown[][] = []
-  redos: unknown[][] = []
-  #open: unknown[] | undefined
+  undos: Entry[][] = []
+  redos: Entry[][] = []
+  #open: Entry[] | undefined
   #stop: () => void
 
   constructor(
@@ -90,7 +117,10 @@ class Stack {
   #listen(): () => void {
     return revertibleOf(this.peer).subscribeCommits(
       (commit: RevertibleCommit<unknown>) => {
-        this.#open?.push(commit.record)
+        expect(
+          covers(commit.footprint, footprintOf(UndoFixture, commit.ops)),
+        ).toBe(true)
+        this.#open?.push({ record: commit.record, footprint: commit.footprint })
       },
     )
   }
@@ -114,14 +144,16 @@ class Stack {
     }
   }
 
-  #move(from: unknown[][], to: unknown[][]): boolean {
+  #move(from: Entry[][], to: Entry[][]): boolean {
     const revertible = revertibleOf(this.peer)
-    const rewrite = (record: unknown, _by: unknown, remap: Remap) =>
-      revertible.rewrite(record, remap)
+    const rewrite = (entry: Entry, _by: Entry, remap: Remap): Entry => ({
+      ...entry,
+      record: revertible.rewrite(entry.record, remap),
+    })
     for (let parts = from.pop(); parts !== undefined; parts = from.pop()) {
       const { redo, remaps } = revertStep(
         parts,
-        record => revertible.revert(record, {}),
+        entry => this.#revert(revertible, entry),
         rewrite,
       )
       for (const list of [this.undos, this.redos]) {
@@ -143,6 +175,30 @@ class Stack {
     return false
   }
 
+  /** Revert `entry`, checking that what the revert wrote lies inside its
+   *  footprint, and keep that footprint for the redo. */
+  #revert(revertible: Revertible, entry: Entry) {
+    const delivered: Op[] = []
+    const stop = subscribe(this.doc, changeset => {
+      delivered.push(...changeset.changes)
+    })
+    let result: ReturnType<Revertible["revert"]>
+    try {
+      result = revertible.revert(entry.record, {})
+    } finally {
+      stop()
+    }
+    if (result === null) return null
+    expect(delivered.length).toBeGreaterThan(0)
+    expect(covers(entry.footprint, footprintOf(UndoFixture, delivered))).toBe(
+      true,
+    )
+    return {
+      redo: { record: result.redo, footprint: entry.footprint },
+      remap: result.remap,
+    }
+  }
+
   undo(): boolean {
     return this.#move(this.undos, this.redos)
   }
@@ -154,15 +210,19 @@ class Stack {
   /** Encode every record, rebuild the peer from its whole state, decode. */
   reload(): void {
     const { codec } = revertibleOf(this.peer)
-    const bytes = (steps: unknown[][]) =>
-      steps.map(step => step.map(r => codec.encode(r)))
+    const bytes = (steps: Entry[][]) =>
+      steps.map(step =>
+        step.map(e => ({ ...e, record: codec.encode(e.record) })),
+      )
     const undos = bytes(this.undos)
     const redos = bytes(this.redos)
     this.#stop()
     this.peer = this.env.reload(this.peer)
     const next = revertibleOf(this.peer).codec
-    const back = (steps: Uint8Array[][]) =>
-      steps.map(step => step.map(b => next.decode(b)))
+    const back = (steps: { record: Uint8Array; footprint: Footprint }[][]) =>
+      steps.map(step =>
+        step.map(e => ({ ...e, record: next.decode(e.record) })),
+      )
     this.undos = back(undos)
     this.redos = back(redos)
     this.#stop = this.#listen()
@@ -294,6 +354,7 @@ export function undoConformance(
             cards: [],
             labels: {},
             place: "",
+            meta: { a: "", b: "" },
           })
           while (s.redo()) settle(s)
           expect(JSON.stringify(s.doc())).toBe(after)
@@ -308,6 +369,25 @@ export function undoConformance(
           s.undo()
           s.undo()
           expect(s.doc.place()).toBe("a")
+        })
+
+        it("two writes inside one .json() value overlap, and undo and redo exactly", () => {
+          const s = new Stack(env, env.create())
+          s.step(d => d.meta.a.set("x"))
+          s.step(d => d.meta.b.set("y"))
+          const [first, second] = s.undos.flat().map(e => e.footprint)
+          expect(first && second && footprintsOverlap(first, second)).toBe(true)
+          settle(s)
+          expect(s.undo()).toBe(true)
+          expect(s.doc.meta()).toEqual({ a: "x", b: "" })
+          settle(s)
+          expect(s.undo()).toBe(true)
+          expect(s.doc.meta()).toEqual({ a: "", b: "" })
+          settle(s)
+          expect(s.redo()).toBe(true)
+          settle(s)
+          expect(s.redo()).toBe(true)
+          expect(s.doc.meta()).toEqual({ a: "x", b: "y" })
         })
 
         it("an aborted batch records nothing", () => {
@@ -329,7 +409,7 @@ export function undoConformance(
           s.step(d => d.title.delete(0, 3)) // a delete-only step
           settle(s)
           const revertible = revertibleOf(s.peer)
-          const record = s.undos.at(-1)?.[0]
+          const record = s.undos.at(-1)?.[0]?.record
           const position = revertible.position()
           expect(revertible.authoredSince(position)).toBe(false)
           const result = revertible.revert(record, {})
