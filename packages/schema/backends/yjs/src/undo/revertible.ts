@@ -234,7 +234,10 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
           draft.texts.set(key, (pre ?? []) as RichTextSpan[])
         }
       }
-      capture(draft, path, change, pre, "before")
+      // Capture reads coordinates as they are now, and derives paths below
+      // `path`: by coordinate, since `path` is live only as far as refs were
+      // made, and deriving a live path would create coordinates.
+      capture(draft, path.toRaw(), change, pre, "before")
     },
 
     prepared(path, change) {

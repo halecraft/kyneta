@@ -5,27 +5,16 @@
 // length-derived helpers read consistent state.
 
 import { describe, expect, it } from "vitest"
-import {
-  batch,
-  interpret,
-  observation,
-  plainContext,
-  readable,
-  Schema,
-  writable,
-} from "../index.js"
+import { batch, Schema } from "../index.js"
+import { contextOver, refOver } from "./stack.js"
 
 function buildDoc<S extends ReturnType<typeof Schema.struct>>(
   schema: S,
   seed: Record<string, unknown>,
 ) {
   const store = { ...seed }
-  const ctx = plainContext(schema, store)
-  const doc = interpret(schema, ctx)
-    .with(readable)
-    .with(writable)
-    .with(observation)
-    .done() as any
+  const ctx = contextOver(schema, store)
+  const doc = refOver(schema, ctx) as any
   return { store, ctx, doc }
 }
 

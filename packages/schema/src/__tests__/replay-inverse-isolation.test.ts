@@ -19,28 +19,20 @@ import {
   batch,
   createRef,
   exportSince,
-  interpret,
   merge,
-  observation,
-  plainContext,
   plainSubstrateFactory,
-  readable,
   Schema,
-  writable,
 } from "../index.js"
 import type { SubstratePayload } from "../substrate.js"
+import { contextOver, refOver } from "./stack.js"
 
 function buildDoc<S extends ReturnType<typeof Schema.struct>>(
   schema: S,
   seed: Record<string, unknown>,
 ) {
   const store = { ...seed }
-  const ctx = plainContext(schema, store)
-  const doc = interpret(schema, ctx)
-    .with(readable)
-    .with(writable)
-    .with(observation)
-    .done() as any
+  const ctx = contextOver(schema, store)
+  const doc = refOver(schema, ctx) as any
   return { store, ctx, doc }
 }
 

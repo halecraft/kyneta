@@ -21,7 +21,9 @@ import type { BatchOutcome } from "../substrate.js"
 export interface Recorded {
   /** The live path the op was prepared at: compensation prepares its
    *  inverse here, where the address stands once the ops after it are
-   *  undone. */
+   *  undone. Below the coordinate trie's reach the path is raw indices,
+   *  which name the right item for the same reason: compensation runs last
+   *  first, so each inverse meets the state just after its own op. */
   readonly at: Path
   /** The op, frozen as it was made. */
   readonly op: Op

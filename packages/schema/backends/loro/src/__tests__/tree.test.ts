@@ -42,8 +42,8 @@ describe("Schema.tree on Loro: create + read", () => {
       rootId = d.tree.create({ data: { label: "Root" } })
     })
     expect(typeof rootId).toBe("string")
-    expect((doc.tree as any).size).toBe(1)
-    expect((doc.tree as any).node(rootId).label()).toBe("Root")
+    expect(doc.tree.size).toBe(1)
+    expect(doc.tree.node(rootId)?.label()).toBe("Root")
 
     const forest = doc.tree() as ReadonlyArray<{
       id: string
@@ -64,7 +64,7 @@ describe("Schema.tree on Loro: create + read", () => {
       rootId = d.tree.create({ data: { label: "Root" } })
       childId = d.tree.create({ parent: rootId, data: { label: "Child" } })
     })
-    const roots = (doc.tree as any).roots
+    const roots = doc.tree.roots
     expect(roots).toHaveLength(1)
     expect(roots[0].id).toBe(rootId)
     expect(roots[0].children).toHaveLength(1)
@@ -91,8 +91,8 @@ describe("Schema.tree on Loro: materialize after binary import", () => {
     const docB = createDoc(bound, snapshot)
 
     expect(docB.tree()).toEqual(docA.tree())
-    expect((docB.tree as any).node(rootId).label()).toBe("Root")
-    expect((docB.tree as any).node(childId).label()).toBe("Child")
+    expect(docB.tree.node(rootId)?.label()).toBe("Root")
+    expect(docB.tree.node(childId)?.label()).toBe("Child")
   })
 })
 
@@ -109,9 +109,9 @@ describe("Schema.tree on Loro: delete + move", () => {
     batch(doc, (d: any) => {
       d.tree.delete(childId)
     })
-    expect((doc.tree as any).size).toBe(1)
-    expect((doc.tree as any).has(rootId)).toBe(true)
-    expect((doc.tree as any).has(childId)).toBe(false)
+    expect(doc.tree.size).toBe(1)
+    expect(doc.tree.has(rootId)).toBe(true)
+    expect(doc.tree.has(childId)).toBe(false)
   })
 
   it("records descendants before the target on delete (post-order)", () => {
@@ -152,11 +152,11 @@ describe("Schema.tree on Loro: delete + move", () => {
     batch(doc, (d: any) => {
       d.tree.move(target, { parent: b, index: 0 })
     })
-    const roots = (doc.tree as any).roots
-    const aNode = roots.find((n: any) => n.id === a)
-    const bNode = roots.find((n: any) => n.id === b)
-    expect(aNode.children).toHaveLength(0)
-    expect(bNode.children[0].id).toBe(target)
+    const roots = doc.tree.roots
+    const aNode = roots.find(n => n.id === a)
+    const bNode = roots.find(n => n.id === b)
+    expect(aNode?.children).toHaveLength(0)
+    expect(bNode?.children[0]?.id).toBe(target)
   })
 })
 
@@ -190,9 +190,9 @@ describe("Schema.tree on Loro: peer sync via binary updates", () => {
     merge(docB, delta, { origin: "sync" })
 
     expect(docB.tree()).toEqual(docA.tree())
-    expect((docB.tree as any).has(rootId)).toBe(true)
-    expect((docB.tree as any).has(childId)).toBe(true)
-    expect((docB.tree as any).node(childId).label()).toBe("B")
+    expect(docB.tree.has(rootId)).toBe(true)
+    expect(docB.tree.has(childId)).toBe(true)
+    expect(docB.tree.node(childId)?.label()).toBe("B")
   })
 })
 
@@ -274,8 +274,8 @@ describe("Schema.tree on Loro: deleted-node read", () => {
     })
 
     // Tree-level read: deleted node must not appear.
-    expect((doc.tree as any).has(rootId)).toBe(false)
-    expect((doc.tree as any).node(rootId)).toBeUndefined()
+    expect(doc.tree.has(rootId)).toBe(false)
+    expect(doc.tree.node(rootId)).toBeUndefined()
     expect(doc.tree()).toEqual([])
   })
 })
@@ -286,21 +286,23 @@ describe("Schema.tree on Loro: unwrap semantics", () => {
     batch(doc, (d: any) => {
       d.tree.create({ data: { label: "Root" } })
     })
-    const native = unwrap(doc.tree as any) as any
+    const native = unwrap(doc.tree) as any
     expect(typeof native.kind).toBe("function")
     expect(native.kind()).toBe("Tree")
   })
 
   it("unwrap on a node ref returns the per-node LoroMap (post-Phase-1 contract)", () => {
-    // Phase 1 changed `stepFromContainer` Tree-case to return `node.data`.
-    // Therefore `unwrap(d.tree.node(id))` resolves to a LoroMap (with
+    // `stepFromContainer`'s tree case returns `node.data`, so
+    // `unwrap(d.tree.node(id))` resolves to a LoroMap (with
     // .kind() === "Map"), not a LoroTreeNode (which has no .kind()).
     const doc = createDoc(bound)
     let rootId = ""
     batch(doc, (d: any) => {
       rootId = d.tree.create({ data: { label: "Root" } })
     })
-    const nodeNative = unwrap((doc.tree as any).node(rootId)) as any
+    const node = doc.tree.node(rootId)
+    if (node === undefined) throw new Error("the created node is in the tree")
+    const nodeNative = unwrap(node) as any
     expect(typeof nodeNative.kind).toBe("function")
     expect(nodeNative.kind()).toBe("Map")
   })
@@ -360,8 +362,8 @@ describe("Schema.tree on Loro: round-trip via binary sync (Phase 5)", () => {
     merge(docB, defined(exportSince(docA, vB0), "a delta"), { origin: "sync" })
 
     expect(docB.tree()).toEqual(docA.tree())
-    expect((docB.tree as any).has(root)).toBe(true)
-    expect((docB.tree as any).has(child)).toBe(false)
+    expect(docB.tree.has(root)).toBe(true)
+    expect(docB.tree.has(child)).toBe(false)
   })
 })
 
@@ -371,9 +373,9 @@ describe("Schema.tree on Loro: round-trip via binary sync (Phase 5)", () => {
 
 describe("Schema.tree on Loro: subscribe parity", () => {
   it("doc-level subscriber receives TreeChange + per-node data ops on local create", () => {
-    // `with-changefeed.ts` is substrate-agnostic; pinning behavior here
-    // ensures the Loro substrate's prepare pipeline + addressing layer
-    // don't drop or reshape the events the schema layer dispatches.
+    // Delivery is substrate-agnostic; pinning behavior here ensures the
+    // Loro substrate's event bridge doesn't drop or reshape the events the
+    // schema layer delivers.
     const doc = createDoc(bound)
     const changesets: Changeset<Op>[] = []
     subscribe(doc as any, cs => changesets.push(cs))

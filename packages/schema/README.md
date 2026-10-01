@@ -229,11 +229,11 @@ if (!result.ok) {
 | Path | Audience | What you get |
 |---|---|---|
 | `@kyneta/schema/basic` | App developers | `createDoc`, `change`, `subscribe`, `validate`, sync primitives — batteries included |
-| `@kyneta/schema` | Library authors | The full composable interpreter toolkit — build custom document systems |
+| `@kyneta/schema` | Library authors | Custom substrates (`createRef`), custom interpreters (`interpret`), sync and position primitives |
 
 Most projects only need `@kyneta/schema/basic`.
 
-The `/basic` API is built on a composable interpreter algebra with six stackable layers (navigation, reading, addressing, caching, writing, observation). If you need custom stacks — read-only documents, write-only mutation dispatchers, or your own substrate — import from `@kyneta/schema` directly. See `example/advanced/` for details.
+The `/basic` API is `createRef` over a plain substrate. To put a document on your own substrate, call `createRef(schema, substrate)`; to fold a schema into something of your own (a validator, a describer, a default value), write an `Interpreter` for `interpret()`. Both come from `@kyneta/schema`. See `example/advanced/` for details.
 
 ## Examples
 
@@ -241,7 +241,7 @@ The `/basic` API is built on a composable interpreter algebra with six stackable
 # Getting started (basic API)
 bun run example/basic/main.ts
 
-# Under the hood (interpreter algebra)
+# Under the hood (createRef and interpret)
 bun run example/advanced/main.ts
 ```
 
@@ -250,8 +250,8 @@ bun run example/advanced/main.ts
 Under the hood:
 
 - the schema is a recursive functor (`Scalar | Product | Sequence | Map | Sum | Annotated`)
-- `interpret()` is a catamorphism
-  - each capability (reading, addressing, writing, caching, observation) is an F-algebra composed via interpreter transformers
+- `interpret()` is a catamorphism, and materializing, zeroing, validating and describing are F-algebras over it
+- a ref is its state, with what it does built once per schema node
 - `subscribe` is a coalgebra (Moore machine)
 - the `step(state, change) → state` functions are pure
 - the `change → applyChanges` round-trip is verified to be extensionally equal

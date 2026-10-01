@@ -1,22 +1,20 @@
 // create-doc — generic document construction for any substrate.
 //
-// createRef(schema, substrate) builds a full-stack ref from a schema and
+// createRef(schema, substrate) builds a document's root ref from a schema and
 // a pre-built substrate. Used by createDoc (public) and the exchange (internal).
 //
 // createDoc(bound) creates a live document from a BoundSchema — the single
 // public entry point that replaces per-substrate createLoroDoc, createYjsDoc,
 // and createDoc (basic).
 //
-// [NATIVE] is attached during interpretation via the nativeResolver protocol.
 // [SUBSTRATE] is attached by createRef on the root ref for sync functions.
 
 import type { Lease } from "@kyneta/machine"
 import { randomPeerId } from "@kyneta/random"
 import type { BoundSchema } from "./bind.js"
-import { interpret } from "./interpret.js"
-import { observation, readable, tracking, writable } from "./layers.js"
 import type { NativeMap } from "./native.js"
 import { SUBSTRATE } from "./native.js"
+import { createRootRef } from "./ref/create.js"
 import type { DocRef } from "./ref.js"
 import type { Schema as SchemaType } from "./schema.js"
 import type { Substrate, SubstratePayload, Version } from "./substrate.js"
@@ -26,17 +24,14 @@ import type { Substrate, SubstratePayload, Version } from "./substrate.js"
 // ---------------------------------------------------------------------------
 
 /**
- * Build a full-stack ref from a schema and a pre-built substrate.
+ * Build a document's root ref from a schema and a pre-built substrate.
  *
  * This is the internal core used by `createDoc` (public) and the exchange.
- * It runs the full interpret pipeline (readable + writable + observation)
- * and attaches `[SUBSTRATE]` on the root ref for sync functions.
- *
- * `[NATIVE]` is attached automatically during interpretation by
- * `interpretImpl` via the `nativeResolver` protocol — no action needed here.
+ * It makes the root ref over the substrate's writable context
+ * (`createRootRef`) and attaches `[SUBSTRATE]` on it for sync functions.
  *
  * When `options.lease` is provided, it's attached to the substrate's ctx
- * before interpretation runs. The context's delivery dispatcher
+ * before the root ref is made. The context's delivery dispatcher
  * (`buildWritableContext`) reads it from the ctx and uses it instead of
  * creating a private lease. This lets doc-layer dispatchers cooperate with
  * the Exchange's Synchronizer under one shared cascade budget.
@@ -53,7 +48,7 @@ import type { Substrate, SubstratePayload, Version } from "./substrate.js"
  * @param schema - The root schema
  * @param substrate - A pre-built substrate (from factory.create or factory.fromEntirety)
  * @param options - Optional `{ lease }` for cooperating cascade budgets
- * @returns A full-stack ref (opaque — cast at call site)
+ * @returns The document's root ref, untyped: cast it at the call site
  */
 export function createRef(
   schema: SchemaType,
@@ -64,16 +59,7 @@ export function createRef(
   if (options?.lease) {
     ctx.lease = options.lease
   }
-  // The `as any` on the builder avoids TS2589 — interpret's fluent API
-  // produces deeply recursive types when S is the abstract SchemaType.
-  // The public createDoc signature provides the correct DocRef<S, N>
-  // return type via the CreateDoc interface call signature pattern.
-  const ref: any = (interpret as any)(schema, ctx)
-    .with(readable)
-    .with(writable)
-    .with(observation)
-    .with(tracking)
-    .done()
+  const ref = createRootRef(ctx, schema)
   Object.defineProperty(ref, SUBSTRATE, {
     value: substrate,
     enumerable: false,
@@ -148,7 +134,7 @@ function createDocUnderPeerIdUntyped(
  * @param peerId - The peer identity to attribute this document's operations to
  * @param bound - A BoundSchema from json.bind(), loro.bind(), or yjs.bind()
  * @param payload - Optional SubstratePayload for hydration (from exportEntirety)
- * @returns A full-stack DocRef<S, N> with typed [NATIVE] at every node
+ * @returns The document's root ref, `DocRef<S, N>`, with typed [NATIVE] at every node
  */
 type CreateDocAs = <S extends SchemaType, N extends NativeMap>(
   peerId: string,
@@ -184,7 +170,7 @@ export const createDocAs: CreateDocAs =
  *
  * @param bound - A BoundSchema from json.bind(), loro.bind(), or yjs.bind()
  * @param payload - Optional SubstratePayload for hydration (from exportEntirety)
- * @returns A full-stack DocRef<S, N> with typed [NATIVE] at every node
+ * @returns The document's root ref, `DocRef<S, N>`, with typed [NATIVE] at every node
  */
 type CreateDoc = <S extends SchemaType, N extends NativeMap>(
   bound: BoundSchema<S, N>,

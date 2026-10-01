@@ -134,7 +134,7 @@ in-process). Experimental.
 | Package | Description | Tests |
 |---------|-------------|-------|
 | [`@kyneta/changefeed`](./packages/changefeed) | Universal reactive contract — a Moore machine identified by `[CHANGEFEED]`. Zero dependencies. | 47 |
-| [`@kyneta/schema`](./packages/schema) | Schema interpreter algebra. One recursive `Schema` type, one generic `interpret()` catamorphism, pluggable interpreters for reading, mutation, observation, and validation. Only dependency is `@kyneta/changefeed`. | 1,901 |
+| [`@kyneta/schema`](./packages/schema) | Schema algebra. One recursive `Schema` type; typed refs for reading, mutation and observation; one generic `interpret()` catamorphism for materializing, validation and defaults. Only dependency is `@kyneta/changefeed`. | 1,901 |
 | [`@kyneta/machine`](./packages/machine) | Universal Mealy machine algebra — pure state transitions with effect outputs. Powers the exchange synchronizer and all transport clients. Zero dependencies. | 45 |
 
 ### Substrates

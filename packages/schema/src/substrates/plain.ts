@@ -27,7 +27,6 @@ import {
   plainValueResolver,
 } from "../interpreters/materialize.js"
 import type { WritableContext } from "../interpreters/writable.js"
-import { buildWritableContext } from "../interpreters/writable.js"
 import { invert } from "../inverse.js"
 import { RawPath } from "../path.js"
 import {
@@ -64,6 +63,7 @@ import {
   versionVectorJoin,
   versionVectorMeet,
 } from "../version-vector.js"
+import { buildWritableContext } from "../writable-context.js"
 import { createLocalUpdateSignal } from "./local-update-signal.js"
 import { deserializeOps, type SerializedOp, serializeOps } from "./op-codec.js"
 import { createPlainRevertible } from "./plain-revertible.js"
@@ -780,36 +780,6 @@ export function createPlainReplica(clock: PlainClock): Replica<PlainVersion> {
 
   replicaHistories.set(replica, core.history)
   return replica
-}
-
-// ---------------------------------------------------------------------------
-// plainContext — shorthand for tests
-// ---------------------------------------------------------------------------
-
-/**
- * Shorthand: wraps a plain document in a substrate and returns its
- * WritableContext. The substrate takes `doc` as its own: a read freezes it in
- * place, and a write may change it or, once frozen, replace it, so read the
- * document through a ref rather than through `doc`.
- *
- * Useful in tests where you don't need the substrate reference:
- *
- * ```ts
- * const ctx = plainContext(schema, doc)
- * const ref = interpret(schema, ctx).with(readable).with(writable).done()
- * ```
- */
-export function plainContext(
-  schema: SchemaNode,
-  doc: PlainState,
-): WritableContext {
-  return createPlainSubstrate(
-    doc,
-    schema,
-    createPlainClock("test"),
-    EMPTY_HISTORY,
-    ALWAYS_AUTHOR,
-  ).context()
 }
 
 // ---------------------------------------------------------------------------

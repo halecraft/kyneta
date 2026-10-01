@@ -13,15 +13,12 @@ import type {
 import {
   BACKING_DOC,
   batch,
+  createRef,
   deriveSchemaBinding,
-  interpret,
   KIND,
-  observation,
   RawPath,
-  readable,
   Schema,
   type SchemaNode,
-  writable,
 } from "@kyneta/schema"
 import type { LoroDoc } from "loro-crdt"
 import { describe, expect, it } from "vitest"
@@ -38,11 +35,7 @@ type InterpretSubstrate = <S extends SchemaNode>(
 ) => Ref<S>
 
 const interpretSubstrate: InterpretSubstrate = (schema, substrate) =>
-  interpret(schema, substrate.context())
-    .with(readable)
-    .with(writable)
-    .with(observation)
-    .done()
+  createRef(schema, substrate)
 
 function trivialBinding(schema: SchemaNode): SchemaBinding {
   if (schema[KIND] === "product") {

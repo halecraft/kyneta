@@ -2,8 +2,8 @@
 //
 // Exercises the functional core of jj:vtpxvkyk: scope capture, dedup,
 // nesting and the no-scope guard. Uses synthetic Dependency
-// records — the interpreter-side instrumentation (withTracking) is tested
-// separately against real refs.
+// records; the reports refs make are tested against real refs in
+// `ref-track.test.ts`.
 
 import { describe, expect, it } from "vitest"
 import type { Aspect, Dependency } from "../tracking.js"

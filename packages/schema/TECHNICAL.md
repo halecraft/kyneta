@@ -4,10 +4,10 @@
 > **Role**: The schema interpreter algebra — one recursive grammar for document structure, a reactive observation surface (`[CHANGEFEED]` on every ref, with tree-level composed changefeeds for composites), a substrate boundary that separates state management from replication, a migration system that derives stable identity from structure, and a position algebra for cursor-stable text and sequences.
 > **Depends on**: `@kyneta/changefeed`
 > **Depended on by**: `@kyneta/exchange`, `@kyneta/loro-schema`, `@kyneta/yjs-schema`, `@kyneta/index`, `@kyneta/react`, `@kyneta/compiler`, `@kyneta/cast`, `@kyneta/transport`
-> **Canonical symbols**: `Schema`, `Schema.*` constructors, `KIND`, `LAWS`, `bind`, `BoundSchema`, `BoundReplica`, `BindingTarget`, `createBindingTarget`, `metadataOf`, `json`, `ephemeral`, `Interpret`, `Replicate`, `Defer`, `Reject`, `interpret`, `Interpreter`, `InterpreterLayer`, `createDoc`, `createDocAs`, `createRef`, `batch`, `applyChanges`, `subscribe`, `subscribeNode`, `Substrate`, `SubstrateFactory`, `SubstrateCapabilities`, `beginHydration`, `beginUpgrade`, `HydrationHandle`, `DocMetadata`, `ReadCapability`, `supportsHash`, `mismatchForInterpretation`, `mismatchForSync`, `MetadataAxis`, `MetadataMismatch`, `Replica`, `ReplicaFactory`, `SubstratePayload`, `Version`, `SyncMode`, `SYNC_AUTHORITATIVE`, `SYNC_COLLABORATIVE`, `SYNC_EPHEMERAL`, `requiresBidirectionalSync`, `computeSchemaHash`, `peerNumber`, `planAdvance`, `BACKING_DOC`, `Op`, `RecursiveChangefeedProtocol`, `Change`, `ChangeBase`, `TextChange`, `SequenceChange`, `MapChange`, `TreeChange`, `ReplaceChange`, `IncrementChange`, `RichTextChange`, `mapPayload`, `own`, `trustAsOwned`, `transformIndex`, `diffText`, `textInstructionsToPatches`, `CoordinateTrie`, `frozenClone`, `Migration`, `MIGRATION_CHAIN`, `deriveIdentity`, `deriveManifest`, `deriveSchemaBinding`, `deriveTier`, `validateChain`, `Position`, `POSITION`, `PlainPosition`, `hasPosition`, `decodePlainPosition`, `Side`, `NATIVE`, `SUBSTRATE`, `NativeMap`, `unwrap`, `versionVectorMeet`, `versionVectorCompare`, `Zero`, `validate`, `tryValidate`, `SchemaValidationError`, `walkPath`, `PathWalk`, `foldPath`, `pathSchema`, `findOpaqueBoundary`, `OpaqueBoundaryHit`, `PathStepper`, `PathFoldResult`, `extendSchemaPathKey`, `materializeValue`, `MaterializedNode`, `EagerPolicy`, `containerKey`, `fieldAbsPath`, `needsContainer`, `withTracking`, `tracking`, `withReadScope`, `reportRead`, `currentScope`, `dependencyKey`, `Dependency`, `Aspect`, `StateCell`, `applyChange`, `freezePayload`, `freezeTree`, `isDeeplyFrozen`
-> **Key invariant(s)**: The schema grammar is one recursive type with eleven node kinds; substrates declare *closed* composition-law sets via phantom `[LAWS]` brands; `bind()` enforces law compatibility at compile time. Four named binding targets (`json`, `ephemeral`, `loro`, `yjs`) each bundle a substrate factory, a `SyncMode`, and a set of allowed laws. No runtime law dispatch; no open-world subtyping; no hidden backend coupling. A ref has one carrier per coordinate, alive exactly while the coordinate exists, and a read keeps its identity until what it read changes.
+> **Canonical symbols**: `Schema`, `Schema.*` constructors, `KIND`, `LAWS`, `bind`, `BoundSchema`, `BoundReplica`, `BindingTarget`, `createBindingTarget`, `metadataOf`, `json`, `ephemeral`, `Interpret`, `Replicate`, `Defer`, `Reject`, `interpret`, `Interpreter`, `createInterpreter`, `createDoc`, `createDocAs`, `createRef`, `batch`, `applyChanges`, `subscribe`, `subscribeNode`, `Substrate`, `SubstrateFactory`, `SubstrateCapabilities`, `beginHydration`, `beginUpgrade`, `HydrationHandle`, `DocMetadata`, `ReadCapability`, `supportsHash`, `mismatchForInterpretation`, `mismatchForSync`, `MetadataAxis`, `MetadataMismatch`, `Replica`, `ReplicaFactory`, `SubstratePayload`, `Version`, `SyncMode`, `SYNC_AUTHORITATIVE`, `SYNC_COLLABORATIVE`, `SYNC_EPHEMERAL`, `requiresBidirectionalSync`, `computeSchemaHash`, `peerNumber`, `planAdvance`, `BACKING_DOC`, `Op`, `RecursiveChangefeedProtocol`, `Change`, `ChangeBase`, `TextChange`, `SequenceChange`, `MapChange`, `TreeChange`, `ReplaceChange`, `IncrementChange`, `RichTextChange`, `mapPayload`, `own`, `trustAsOwned`, `transformIndex`, `diffText`, `textInstructionsToPatches`, `CoordinateTrie`, `Coordinate`, `Migration`, `MIGRATION_CHAIN`, `deriveIdentity`, `deriveManifest`, `deriveSchemaBinding`, `deriveTier`, `validateChain`, `Position`, `POSITION`, `PlainPosition`, `hasPosition`, `decodePlainPosition`, `Side`, `NATIVE`, `SUBSTRATE`, `NativeMap`, `unwrap`, `versionVectorMeet`, `versionVectorCompare`, `Zero`, `validate`, `tryValidate`, `SchemaValidationError`, `walkPath`, `PathWalk`, `foldPath`, `pathSchema`, `findOpaqueBoundary`, `OpaqueBoundaryHit`, `PathStepper`, `PathFoldResult`, `extendSchemaPathKey`, `materializeValue`, `MaterializedNode`, `EagerPolicy`, `containerKey`, `fieldAbsPath`, `needsContainer`, `withReadScope`, `reportRead`, `currentScope`, `dependencyKey`, `Dependency`, `Aspect`, `StateCell`, `applyChange`, `freezePayload`, `freezeTree`, `isDeeplyFrozen`
+> **Key invariant(s)**: The schema grammar is one recursive type with eleven node kinds; substrates declare *closed* composition-law sets via phantom `[LAWS]` brands; `bind()` enforces law compatibility at compile time. Four named binding targets (`json`, `ephemeral`, `loro`, `yjs`) each bundle a substrate factory, a `SyncMode`, and a set of allowed laws. No runtime law dispatch; no open-world subtyping; no hidden backend coupling. A ref is its state, with what it does on one prototype per schema node; there is one canonical ref per coordinate while something holds it, and a read keeps its identity until what it read changes.
 
-The algebraic core of every document in Kyneta. You write a schema once — a tree of structural composites and CRDT leaves — and hand it to a substrate (plain JS, Loro, Yjs). The substrate stores state; the interpreter stack gives you a typed, navigable, writable reference (`Ref<S>`) over that state, with reactive observation baked in — every ref carries a `[CHANGEFEED]` that emits one `Changeset<Op>` per transaction covering own-path + descendants via `subscribeDescendants`. Migration primitives derive a content-addressed identity from the schema tree so that documents can evolve across schema versions without losing peer-to-peer identity.
+The algebraic core of every document in Kyneta. You write a schema once — a tree of structural composites and CRDT leaves — and hand it to a substrate (plain JS, Loro, Yjs). The substrate stores state; `createRef` gives you a typed, navigable, writable reference (`Ref<S>`) over that state, with reactive observation baked in — every ref carries a `[CHANGEFEED]` that emits one `Changeset<Op>` per transaction covering own-path + descendants via `subscribeDescendants`. Migration primitives derive a content-addressed identity from the schema tree so that documents can evolve across schema versions without losing peer-to-peer identity.
 
 Imported by every other Kyneta package that touches documents: the CRDT backends to implement `Substrate<V>`, the exchange to sync `SubstratePayload` blobs, the index to build live views, react to bind refs into hooks, compiler/cast to detect reactive references at compile time.
 
@@ -19,7 +19,7 @@ Imported by every other Kyneta package that touches documents: the CRDT backends
 - Why are `text`, `counter`, `set`, `tree`, `movable` first-class and not annotations? → [First-class CRDT types](#first-class-crdt-types)
 - What does a `Substrate` do that a `Replica` does not? → [The substrate / replica split](#the-substrate--replica-split)
 - What is `bind()` enforcing at compile time? → [Binding a schema to a substrate](#binding-a-schema-to-a-substrate)
-- What is the six-layer interpreter stack? → [The interpreter stack](#the-interpreter-stack)
+- How is a ref built, and what does it cost? → [Interpreters and refs](#interpreters-and-refs)
 - How does `batch(ref, fn)` end up as a wire `offer`? → [The write path](#the-write-path)
 - What is a `Position` and why can't I just use an integer index? → [Position algebra](#position-algebra)
 - How do migrations keep a document's identity stable across schema changes? → [Migration and identity](#migration-and-identity)
@@ -27,7 +27,7 @@ Imported by every other Kyneta package that touches documents: the CRDT backends
 - What is the `CHANGEFEED` surface over a composite ref? → [Tree-observable changefeeds](#tree-observable-changefeeds)
 - When does `ref()` return a new object, and when the same one? → [Read identity](#read-identity)
 - When does a ref report `deleted`, and when does it come back? → [The coordinate trie](#the-coordinate-trie)
-- In what order do layers see a change? → [The prepare pipeline](#the-prepare-pipeline)
+- In what order does a change pass through a document? → [The prepare pipeline](#the-prepare-pipeline)
 - How is a write undone after others have edited since, and after a reload? → [Undo](#undo)
 
 ---
@@ -49,7 +49,7 @@ Imported by every other Kyneta package that touches documents: the CRDT backends
 | `BoundReplica<V>` | `BoundSchema` minus the schema — used by replication conduits that persist state without reading it. | `BoundSchema` |
 | `Interpret` / `Replicate` / `Defer` / `Reject` | The four variants of an exchange `resolve` callback outcome. Return values from application-level logic that decides how to handle an unknown doc. | Handlers, error types — these are discriminated-union constructors |
 | `Interpreter<Ctx, A>` | The F-algebra: one method per `[KIND]` value, collapsing a schema tree into a value of type `A`. | A parser, a visitor, a validator alone |
-| `InterpreterLayer` | A typed transformer from one interpreter to another (e.g. `withReadable` transforms `Interpreter<Ctx, R>` into `Interpreter<Ctx, R & Readable>`). | A middleware — layers compose statically via `.with()` |
+| `Ref<S>` | A typed, callable pointer to one coordinate of a document: its state, bound to a function on one prototype per schema node and position. | The value at the coordinate: `ref()` reads it |
 | `Ref<S>` | The developer-facing handle: callable, navigable, readable, writable, observable. The result of `interpret(schema, ctx)...done()`. | A React ref, a DOM ref — this is a substrate-backed document reference |
 | `Change` | The universal currency of change — discriminated union with `type` (`"text" \| "sequence" \| "map" \| "tree" \| "replace" \| "increment" \| "richtext" \| "set-op"`, and extensible). Flows both inbound (intent) and outbound (notification). | A diff, a patch — `Change` is applied atomically by the substrate |
 | `SubstratePayload` | `{ kind: "entirety" \| "since", encoding: "json" \| "binary", data: string \| Uint8Array }` — opaque state carrier. Produced by the substrate, carried by the exchange. | A `ChannelMsg` — payloads ride *inside* `offer` messages |
@@ -65,13 +65,13 @@ Imported by every other Kyneta package that touches documents: the CRDT backends
 | `SchemaBinding` | `{ forward: Map<string, NodeIdentity>, inverse: Map<NodeIdentity, string> }` — the identity map from human-facing field names to content-addressed identity hashes for one schema snapshot. | Schema validation rules |
 | `Op` | The expanded-to-leaves notification emitted by the composed changefeed. `{ path, change }`. | `Change` alone — `Op` adds the path |
 | read (snapshot) | What `ref()` returns: a frozen plain value, kept on the ref's coordinate and returned again until something below the coordinate changes; unchanged subtrees are shared with the previous read. | σ — a read is a copy of σ's value, never σ itself |
-| coordinate | One position in the document tree, as `withAddressing` names it: a field, a map key, a list item (by its address, which moves with it) or a tree node. One node of the context's `CoordinateTrie`. | A path — many paths can name one coordinate over time, as a list item moves |
+| coordinate | One position in the document tree: a field, a map key, a list item (by its address, which moves with it) or a tree node. One `Coordinate` of the context's `CoordinateTrie`, which is its address. | A path — many paths can name one coordinate over time, as a list item moves |
 
 ---
 
 ## Architecture
 
-**Thesis**: one recursive grammar for structure, one composition-law phantom for compile-time safety, one substrate interface for state, one interpreter algebra for capabilities, one change vocabulary for updates. Everything else — backends, transports, reactive bindings, compilers — lives above this surface.
+**Thesis**: one recursive grammar for structure, one composition-law phantom for compile-time safety, one substrate interface for state, one ref construction over it, one change vocabulary for updates. Everything else — backends, transports, reactive bindings, compilers — lives above this surface.
 
 Five orthogonal sub-systems:
 
@@ -79,7 +79,7 @@ Five orthogonal sub-systems:
 |-----------|-------------|------|
 | Grammar | `src/schema.ts` | The recursive `Schema` type and its constructors. |
 | Binding | `src/bind.ts` | `BoundSchema`, `BindingTarget`, `createBindingTarget`, `json`, `ephemeral`, `bind()`, law enforcement. |
-| Interpretation | `src/interpret.ts`, `src/interpreters/*`, `src/layers.ts`, `src/ref.ts` | The six-layer interpreter stack. |
+| Interpretation | `src/interpret.ts`, `src/interpreters/*`, `src/ref/*`, `src/ref.ts` | The catamorphism (`interpret`) and its interpreters; the ref construction. |
 | Substrate | `src/substrate.ts`, `src/substrates/*` | The state / replication interface. |
 | Migration | `src/migration.ts`, `src/hash.ts` | Identity derivation and schema evolution. |
 
@@ -87,7 +87,7 @@ Plus three cross-cutting facilities:
 
 - **Change** (`src/change.ts`, `src/step.ts`, `src/facade/batch.ts`) — the universal delta vocabulary and `batch(ref, fn)` transaction facade.
 - **Position** (`src/position.ts`) — cursor-stable references inside text and sequences.
-- **Observation** (`src/changefeed.ts`, `src/interpreters/with-changefeed.ts`, `src/facade/observe.ts`) — the composed changefeed layer over refs.
+- **Observation** (`src/changefeed.ts`, `src/ref/observe.ts`, `src/delivery.ts`, `src/facade/observe.ts`) — every ref's changefeed, and delivery.
 
 ### What a `Schema` is NOT
 
@@ -99,12 +99,12 @@ Plus three cross-cutting facilities:
 ### What a `Substrate` is NOT
 
 - **Not a database.** It is an interface. Plain JS objects, Loro CRDTs, and Yjs docs all satisfy it.
-- **Not a backend in the framework sense.** No framework choices leak through the substrate boundary — there is no "Loro mode" that propagates upward. The interpreter stack treats every substrate identically.
+- **Not a backend in the framework sense.** No framework choices leak through the substrate boundary — there is no "Loro mode" that propagates upward. Refs treat every substrate identically.
 - **Not responsible for sync.** The substrate produces and consumes `SubstratePayload`. The exchange owns *when* and *to whom* to send it.
 - **Not symmetric across sync modes.** A collaborative substrate (Loro, Yjs) has concurrent versions (`SYNC_COLLABORATIVE`); an authoritative substrate (json) has a total order (`SYNC_AUTHORITATIVE`); an ephemeral substrate has wall-clock-timestamped per-field registers and no total order at all (`SYNC_EPHEMERAL`). The `SyncMode` — decomposed into `WriterModel`, `Delivery`, and `Durability` axes — tells the exchange which mode shape to run. `requiresBidirectionalSync(mode)` is the predicate the exchange uses to decide whether to establish a bidirectional causal exchange or a unidirectional push.
 
   The ephemeral case carries no peer identity at all. `StateVersion` is `(incarnation, installSeq)` — a marker for one replica *instance* and its own intake count, not a per-peer vector, and the binding target hands back a shared `ephemeralSubstrateFactory` rather than constructing one per peer, so the exchange's `peerId` never reaches it. It can afford that because it merges field by field and never orders two writes by their author. This is also why nothing about a transient document's continuity depends on storage — there is no identity for a store to preserve. If a per-peer identity is ever added there, see the note on `StateVersion` (`src/substrates/ephemeral.ts`) for why it must be derived from the exchange's stable `peerId` rather than minted per session.
-- **Not a monolithic capability provider.** Producer-side capability attachment uses a typed bag (`SubstrateCapabilities`); consumer-side capability discovery uses optional fields on `RefContext` plus the `HasTreeNodeAllocation` marker interface. The asymmetry is deliberate — substrates declare what they have; consumers ask only when they need it.
+- **Not a monolithic capability provider.** Producer-side capability attachment uses a typed bag (`SubstrateCapabilities`); consumer-side capability discovery uses optional fields on `WritableContext` plus the `HasTreeNodeAllocation` marker interface. The asymmetry is deliberate — substrates declare what they have; consumers ask only when they need it.
 
 ---
 
@@ -343,7 +343,7 @@ A `Substrate` adds interpretation:
 
 - `reader` → plain reads by path, over σ.
 - `prepare` / `afterBatch` / `runBatch` → the mutation primitives the `WritableContext` is built over. They see only local writes and their compensations.
-- `context()` → the `WritableContext` the interpreter stack closes over.
+- `context()` → the `WritableContext` every ref of the document holds.
 - `subscribeLocalUpdates(listener)` → the local-update signal, below.
 - `commitPending()` → commit any local operations the native document holds uncommitted, so the signal reports them now.
 - `tick(now)` → optional heartbeat for time-based projections (ephemeral decay).
@@ -430,7 +430,7 @@ All substrates now share the same read semantics: reads go through `plainReader`
 
 Key functions (in `src/substrates/plain.ts`):
 
-- `plainSubstrateFactory` / `plainReplicaFactory` — the public construction surface. `plainContext(schema, doc)` is a test shorthand; the substrate takes `doc` as its own σ, so a read freezes it and a write may replace its root.
+- `plainSubstrateFactory` / `plainReplicaFactory` — the public construction surface. `createPlainSubstrate(doc, …)` takes `doc` as its own σ, so a read freezes it and a write may replace its root.
 - `createPlainClock(lineage)` → `PlainClock`: the lineage, `adopt` (its only mutator), and the flush-count ↔ version mapping (`version`, `logOffset`).
 - `createPlainSubstrate(doc, schema, clock, history, authoring)` / `createPlainReplica(clock)` — module-level constructors, not exported from the package. The substrate takes `doc`'s schema, because it completes what it merges and a reset announces what it moved by diffing the two states under it.
 - `objectToReplaceOps(obj)` → one `ReplaceChange` op per top-level key: a whole-document answer, for `delta()` in `@kyneta/schema/basic`. A state that replaces another is announced with `diffOps` instead ([An announcement is as fine as the store](#an-announcement-is-as-fine-as-the-store)).
@@ -494,9 +494,9 @@ The lineage now travels as an explicit field, `SubstratePayload.lineage`, set by
 
 ### An op is a value (authoring-time freeze)
 
-**Invariant: every op that leaves the writable context is a value, never a reference into the live addressing registry.** `Op.path` is a `RawPath` by type. An op names the coordinate it wrote at the moment it was made, and a held op still replays there after the document moves on. `AddressedPath` segments are memoized, *mutable* `Address` objects (an entry delete sets `dead = true`; a sequence edit advances `index`, both in place, see [§The interpreter stack](#the-interpreter-stack) addressing and `change.ts` `advanceAddresses`). An op that kept the live path would report a coordinate the op never wrote: `serializeOps` would throw `"Ref access on deleted map entry"` on a tombstoned entry segment, or a replay would land on a *drifted* index.
+**Invariant: every op that leaves the writable context is a value, never a reference into the live addressing registry.** `Op.path` is a `RawPath` by type. An op names the coordinate it wrote at the moment it was made, and a held op still replays there after the document moves on. `AddressedPath` segments are *mutable* `Address` objects (an entry delete sets `dead = true`; a sequence edit advances `index`, both in place, see [§The coordinate trie](#the-coordinate-trie) and `change.ts` `advanceAddresses`). An op that kept the live path would report a coordinate the op never wrote: `serializeOps` would throw `"Ref access on deleted map entry"` on a tombstoned entry segment, or a replay would land on a *drifted* index.
 
-**Frozen once, where the op is made.** `ctx.prepare` builds `{ path: path.toRaw(), change }` once per op and pairs it with the live path it prepared at (`TraceEntry { op, at }`). `Path.toRaw()` (`path.ts`) is a pure projection: `RawPath.toRaw()` returns `this`; `AddressedPath.toRaw()` reads each segment's **`coord()`** (never `resolve()`, so it succeeds even for a dead address). It is the named inverse of `resolveToAddressed`. Each consumer takes the half it needs:
+**Frozen once, where the op is made.** `ctx.prepare` builds `{ path: path.toRaw(), change }` once per op and pairs it with the live path it prepared at (`TraceEntry { op, at }`). `Path.toRaw()` (`path.ts`) is a pure projection: `RawPath.toRaw()` returns `this`; `AddressedPath.toRaw()` reads each segment's **`coord()`** (never `resolve()`, so it succeeds even for a dead address). Its inverse is `CoordinateTrie.locate`. Each consumer takes the half it needs:
 
 - **The frozen op:** `batch()`'s return value, delivered changesets (rebased), `BatchOutcome.ops` and `.inverses`, the plain log, and so every undo record.
 - **The live path:** the prepare stages, compensation (an inverse is prepared where the address stands once the ops after it are undone), and the subscriber walk (subscribers are keyed by segment identity, and a list item's is its address).
@@ -516,7 +516,7 @@ A path segment (`RawSegment` | `Address`, `path.ts`) exposes two coordinate acce
 Two totality rules follow:
 
 - **Diagnostics never throw.** `format()`/`key` route through `coord()`. Previously they used `resolve()`, so formatting a path with a dead segment threw *while building an error message* (e.g. `withAddressing`'s `onRefCreated` throw), masking the original error.
-- **Reads are total; a deleted key is absent.** `path.read(store)` of a deleted key returns `undefined` (via the natural `store[key]` miss), **not** a throw. A ref's read goes one step further: any dead segment on its path reads `undefined` ([Read identity](#read-identity)), since a dead list item's `coord()` is its last index, which another item may hold. Deletion remains observable via `deletedFeed(ref)` (or `deleted(ref)` for a plain boolean); **writes** still throw (that guard belongs on the write path, not the read). This is the intended contract — see the `with-addressing` "delete → read undefined, write throws, deleted is true" tests.
+- **Reads are total; a deleted key is absent.** `path.read(store)` of a deleted key returns `undefined` (via the natural `store[key]` miss), **not** a throw. A ref's read goes one step further: any dead segment on its path reads `undefined` ([Read identity](#read-identity)), since a dead list item's `coord()` is its last index, which another item may hold. Deletion remains observable via `deletedFeed(ref)` (or `deleted(ref)` for a plain boolean); **writes** still throw (that guard belongs on the write path, not the read). This is the intended contract — `ref-address.test.ts`'s "dead ref detection" tests pin it.
 
 ---
 
@@ -759,7 +759,7 @@ CRDT substrates (Loro, Yjs) maintain a **shadow**: a `PlainState` object that se
 
 **On everything else** (a merge, a raw native write), the CRDT doc holds the ops first (via `doc.import`, `Y.applyUpdate`, or the native call). The event bridge brings the shadow up to date from the CRDT doc where the ops touched it, and only then announces the ops, so `ctx.reader` already reflects the new state when any subscriber runs.
 
-**A substrate announces only after λ and σ agree.** Every change that a local writer did not author reaches the changefeed as an announcement, `ctx.announce(ops, origin)` (`src/interpreters/writable.ts`), issued after the substrate has taken the ops into λ and brought σ up to date. The announcement never calls `substrate.prepare` or `afterBatch`; it only feeds the changefeed layers and delivers. Those layers work from the ops alone, so σ is final for every observer.
+**A substrate announces only after λ and σ agree.** Every change that a local writer did not author reaches the changefeed as an announcement, `ctx.announce(ops, origin)` (`src/writable-context.ts`), issued after the substrate has taken the ops into λ and brought σ up to date. The announcement never calls `substrate.prepare` or `afterBatch`; its ops pass through `prepare` (locate, advance, settle, mark) and are delivered, and those steps work from the ops alone, so σ is final for every observer.
 
 | announcer | reconcile λ | reconcile σ |
 |---|---|---|
@@ -888,9 +888,11 @@ Notably, the boundary rule needed no separate implementation once the walkers we
 
 ---
 
-## The interpreter stack
+## Interpreters and refs
 
-Source: `packages/schema/src/interpret.ts`, `src/interpreters/*`, `src/layers.ts`, `src/ref.ts`.
+Source: `src/interpret.ts` (the catamorphism), `src/ref/*` (refs), `src/create-doc.ts` (`createRef`), `src/ref.ts` (the ref types).
+
+### `interpret` — the catamorphism
 
 An `Interpreter<Ctx, A>` is an F-algebra over the schema functor — one method per `[KIND]`:
 
@@ -915,114 +917,130 @@ interface Interpreter<Ctx, A> {
 }
 ```
 
-`interpret(schema, ctx)` walks the schema tree, invoking the interpreter at each node. The child thunks (`() => A`, `(i) => A`, `(k) => A`) preserve laziness — composite interpreters can short-circuit recursion when capability requirements are not met.
+`interpret(schema, interpreter, ctx, path?)` walks the schema tree, invoking the interpreter at each node. The child thunks (`() => A`, `(i) => A`, `(k) => A`) preserve laziness: a case may force a child or not. Materializing, zeroing, validating and describing are interpreters (`createInterpreter` builds one from a default and the cases that differ). Refs are not: they are one fixed construction.
 
-### The six-layer stack
+### Refs: one construction
 
-Pre-built layers compose fluently via `InterpretBuilder.with(layer).done()`:
+A ref is its state, bound to a function whose prototype carries everything the ref does. Everything that depends only on the schema is computed once per schema node and position, into a template (`templateFor`, `src/ref/prototype.ts`); each coordinate then costs one bound function and one state record.
 
-| Layer | Transformer | Adds capability |
-|-------|-------------|-----------------|
-| 1. Bottom | `bottomInterpreter` | Identity ref: `[CHANGEFEED]`, `[NATIVE]`, `[SUBSTRATE]`, `[CALL]` carrier |
-| 2. Navigation | `withNavigation` | Structural descent (`.fieldName`, `.index(i)`, `.key(k)`) |
-| 3. Readable | `withReadable` | `()` on every kind ([Read identity](#read-identity)), `.get` on lists and records, `Symbol.toPrimitive` on leaves — requires navigation |
-| 4. Addressing | `withAddressing` | Stable identity: the context's `CoordinateTrie`, one node per coordinate with its address and schema; `[DELETED]`, `[REMOVE]` — requires navigation |
-| 5. Caching | `withCaching` | Identity-preserving memoization of carriers (fields per product carrier; list items, map entries and tree nodes on their coordinates) — requires addressing |
-| 6. Writable | `withWritable` | Mutation primitives: `REMOVE`, `TRANSACT`, `insert`, `delete`, `replace`, `increment`, text/sequence builders |
+**The template.** `templateFor(schema, position)` is cached per schema node and position, because one schema node can sit in several positions (a struct that is both a record's item and a field), and `[DELETED]` and `[REMOVE]` depend on the position:
 
-**Substrate Capabilities:** Substrates declare optional capabilities (`nativeResolver`, `positionResolver`, `treeNodeAllocate`) via the `SubstrateCapabilities` bag — the builder (`buildWritableContext`) attaches them as non-enumerable, non-writable properties keyed by the canonical names (or symbols, for `TREE_NODE_ALLOCATE`). Consumers narrow via type guards (`hasTreeNodeAllocation`) or the typed optional fields on `RefContext`.
+| `RefPosition` | Where | `[DELETED]` | `[REMOVE]` |
+|---|---|---|---|
+| `"root"` | the document | no | no |
+| `"field"` | a declared product field | yes | no |
+| `"child"` | a tree node | yes | no |
+| `"removable"` | a list item or record entry | yes | yes |
+
+Its prototype inherits `refBase` (`src/ref/state.ts`), which inherits `Function.prototype`, so `call`, `apply` and `bind` work on a ref. Each concern contributes its members by kind:
+
+| Module | Members |
+|---|---|
+| `ref/read.ts` | `[CALL]` (the read), `.get` on lists and records, `Symbol.toPrimitive` on leaves, a set's `.has`, `.size` and iteration |
+| `ref/navigate.ts` | product field getters; `.at`, `.length`, iteration on lists; `.at`, `.has`, `.keys`, `.size`, `.entries`, `.values`, iteration on records; `.node`, `.has`, `.ids`, `.size`, `.roots`, iteration on trees |
+| `ref/write.ts` | every write by kind; `[TRANSACT]` and `[PATH]` |
+| `ref/observe.ts` | `[CHANGEFEED]` and `[POPULATED]`, made on first access and kept in the state |
+| `ref/address.ts` | `[DELETED]` and `[REMOVE]`, by position |
+| `ref/prototype.ts` | `[NATIVE]` and, on a text, `[POSITION]` |
+
+Every member that reads the document reports its read to a tracking scope itself (`ref/track.ts`, [Read tracking](#read-tracking)).
+
+**The state record** (`RefState`) is `{ ctx, path, parent, ref, children, lazy }`. `parent` is the ref this one was reached from, held strongly, so holding any ref keeps its ancestors. `children` holds a product's field refs by name, or a sum's variants by discriminant or index; a ref is one or the other. `lazy` holds what most refs never need (`changefeed`, `populated`, `deleted`, `position`, `trackingId`) and is made with the first of them. `ref` is the ref whose state it is: a sum's `Proxy`, for a sum.
+
+**The ref is the template's `call` bound to its state** (`bindState`). A bound function inherits its target's prototype, and `call`'s prototype is the template's, so creating a ref sets no prototype. Calling the ref runs `call` with the state as `this`: `ref()` reads, through `readRef`. A bound function is about 40 bytes, against 136 for an arrow function with its closure context and a property array for the state.
+
+**Members reach the state through `this`.** `stateOf(this, name)` reads `this[STATE]`, a getter on `refBase` that calls the ref with the module-private `STATE` key, which `call` answers with the state. Only refs have the getter, so a member called without its ref (`const f = ref.set; f(x)`) throws `"set" was called without its ref; pass (v) => ref.set(v)`. The member types declare their `this` (`ScalarRef.set(this: ScalarRef<T>, value: T)`), so calling a detached member is a type error; passing one as a callback type-checks, and throws when it runs. No code in the workspace detaches a member.
+
+**Own properties.** A product's fields are the ref's own enumerable accessors, so `Object.keys(ref)` lists them; the getters are shared per product schema (`fieldDescriptors`). A bound function has its own `length` (its parameter count) and `name`, which shadow anything a prototype defines under those names, so a list defines `length` as its own accessor, and a field named `length` or `name` is an own accessor anyway. The template lists these (`own`), and they are defined one at a time: `defineProperties` measured half again as slow.
+
+**Children.** A product's field refs are made on first access and kept in its state: two variants of a sum may declare one field name with different schemas, so a field ref is per parent, never per coordinate. A list item, record entry or tree node has one canonical ref per coordinate, which the coordinate holds as a `WeakRef` (`canonicalChild`, `src/ref/create.ts`): `.at(k)` hands back the held ref while something holds it, and makes one otherwise.
+
+**How long a ref lives.** A ref lives while something holds it. A ref is *anchored* where its parent does not hold it: the root, a list item, a record entry, a tree node. An anchored ref counts itself on its coordinate (`Coordinate.refs`) and registers with a `FinalizationRegistry`; when it is collected, its coordinate is pruned if nothing else needs it ([The coordinate trie](#the-coordinate-trie)). A field ref or a sum's variant and its parent hold each other, so they are collected together, and the parent's count and registration serve both.
+
+**Substrate Capabilities:** Substrates declare optional capabilities (`nativeResolver`, `positionResolver`, `treeNodeAllocate`) via the `SubstrateCapabilities` bag — the builder (`buildWritableContext`) attaches them as non-enumerable, non-writable properties keyed by the canonical names (or symbols, for `TREE_NODE_ALLOCATE`). Consumers narrow via type guards (`hasTreeNodeAllocation`) or the typed optional fields on `WritableContext`.
 
 **DevTools history (`DEVTOOLS_HISTORY`):** an optional, substrate-neutral **pull** capability (sibling of `BACKING_DOC`/`TREE_NODE_ALLOCATE`) for DevTools — `summary()` (serialized version + `opCount` + per-actor counters) and optional `valueAt(version)` time-travel. Guard with `hasDevtoolsHistory()`; absence is graceful. Loro implements it deeply (`fork()`-based `valueAt`), Yjs gives a summary, plain omits it. Read lazily via `exchange.docHistory(docId)` — never pushed through the observation bus.
 
 **`WritableDiscriminantProductRef`** — the writable surface for discriminated unions. For a `DiscriminatedSumSchema<D, V>`, the writable ref exposes all fields (discriminant and non-discriminant) as `Plain<F[K]>` — that is, **read-only** values. Non-discriminant fields are callable (you can read them) but carry no `.set()`. The only mutation primitive is `.set()` on the union ref itself (via `ProductRef`) for whole-value replacement. This follows from sum interiors being opaque LWW values: variant fields are not independently addressable CRDT positions, and individual field mutation would violate the atomic replacement semantics of `lww-tag-replaced`.
 
-Plus the orthogonal observation layer:
-
-| Layer | Transformer | Adds |
-|-------|-------------|------|
-| Observation | `observation` | `subscribe`, `subscribeNode`, `RecursiveChangefeedProtocol<S>` |
-
-(`observation` wraps an internal transformer, `withChangefeed`, which this document names where it discusses the layer's internals. Only `observation` is exported.)
-
-The pre-built `readable` layer is `withCaching(withAddressing(withReadable(withNavigation(base))))` — navigation, reading, addressing and caching in one step, because caching needs the trie addressing owns. The canonical "everything" stack:
-
-```
-const ref = interpret(schema, ctx)
-  .with(readable)
-  .with(writable)
-  .with(observation)
-  .with(tracking)
-  .done()
-```
-
-Or equivalently, `createRef(schema, substrate)`, which produces this stack.
-
 ### Sum Addressing
 
 Kyneta schemas support discriminated unions (`Schema.discriminatedUnion`), positional unions (`Schema.union`), and nullable sugar (`.nullable()`). All sum types resolve dynamically to a specific active variant.
 
-However, Kyneta `Ref`s are designed to be stable, capable pointers to a topological location. If a `SumRef` bound eagerly to the active variant shape at creation time (e.g. producing an `AbsentRef`), it would become stale if the underlying CRDT data later shifted to a new variant (e.g. `PresentRef`). A React component holding that stale `AbsentRef` would fail to navigate the new fields, leading to incorrect runtime shapes and dropped data.
+A ref is a stable pointer to a location. A sum ref bound to the variant active when it was made (`AbsentRef`) would go stale when the data shifts to another (`PresentRef`), and a component holding it would navigate the wrong fields.
 
-To solve this, **Sum nodes use "Sum Addressing" via a stateless Proxy.** 
-Instead of returning a specific variant's carrier, `with-navigation` produces a Proxy that late-binds to the currently active variant on every property access (`Reflect.get(getActive(), prop)`). 
+**A sum ref is a `Proxy` that resolves the active variant on every access** (`createSumRef`, `src/ref/create.ts`). Its target is a bound function holding the sum's state, whose `ref` is the proxy. The handler is shared per sum schema node and position, and forwards `get`, `has`, `set`, `ownKeys`, `getOwnPropertyDescriptor` and `apply` to the active variant's ref, which `dispatchSum` picks from σ. Variant refs are made on first use, at the sum's path and with its position, kept in the sum's state, and have the proxy as their parent.
 
-- **Perfect Identity:** The `SumRef` never changes identity. It can be safely held across renders. Nor do the fields below it: a product's field carriers are memoized for the carrier's lifetime, so `doc.outer.mode` is the same ref after `doc.outer.set(…)` replaces all of `outer`.
-- **Variant fields live and die with their variant.** A field exists while the active variant declares it, so a held ref to a field of variant `a` reports `deleted` once the union switches to `b`, and comes back to life — the same ref — when it switches back. Likewise a nullable's fields while it is `null`. See [The coordinate trie](#the-coordinate-trie).
-- **Implicit Tracking:** The Proxy's `getActive()` closure executes `ctx.reader.read(path)` to evaluate the discriminant. This means any reactive computation (like `useTracked`) automatically subscribes to variant shifts simply by attempting to read a field on the sum.
-- **Type Compatibility:** The runtime Proxy correctly acts as a mathematical discriminated union, mirroring the TypeScript type signatures (where reading a non-existent field on the inactive variant gracefully returns `undefined`).
-- **Disparate Shapes:** The Proxy is strictly necessary for sums like `.nullable()`, where the `null` variant is a property-less scalar but the inner variant could be a rich composite (like a `Sequence` with `.at()`, `.length`, and iterators). A static carrier cannot model this safely.
-
-To prevent the Proxy from recalculating and instantiating the full nested carrier stack for every property access, `with-caching` wraps the `variants` thunks (`byKey` and `byIndex`) in a simple `Map`-based memoizer before passing them down to `with-navigation`. The result is a rock-solid, type-safe, and highly performant union dispatch mechanism.
+- **Identity.** The sum ref never changes identity, and nor do the refs below it: a product's field refs are kept for the ref's lifetime, so `doc.outer.mode` is the same ref after `doc.outer.set(…)` replaces all of `outer`.
+- **Variant fields live and die with their variant.** A field exists while the active variant declares it, so a held ref to a field of variant `a` reports `deleted` once the union switches to `b`, and comes back to life, the same ref, when it switches back. Likewise a nullable's fields while it is `null`. See [The coordinate trie](#the-coordinate-trie).
+- **Tracking.** Resolving the active variant reads σ at the sum's path, so a tracked read through a sum follows variant shifts.
+- **Shapes.** A `.nullable()` sum's `null` variant is a scalar, its other variant may be a list with `.at()` and `.length`: the proxy takes the shape of whichever is active.
 
 ### The coordinate trie
 
-Source: `src/coordinate-trie.ts`, `src/coordinate-exists.ts`, `src/address-fates.ts`, `src/interpreters/with-addressing.ts`.
+Source: `src/coordinate-trie.ts`, `src/path.ts` (`Coordinate`, the addresses, `AddressedPath`), `src/coordinate-exists.ts`, `src/address-fates.ts`, `src/ref/address.ts` (`advance`, `settle`).
 
-A ref is a pointer to a coordinate, and a coordinate is one node in the context's `CoordinateTrie`. Each layer owns its slots on a node, and every slot lives and dies with it:
+A ref is a pointer to a coordinate, and everything kept per coordinate lives on one object, its address, which is its node in the context's `CoordinateTrie` (`ctx.trie`). The root is a coordinate that is no segment. A `Coordinate` holds:
 
-| Slot | Owner | Holds |
-|------|-------|-------|
-| `address` | `withAddressing` | The coordinate's `Address` (absent only at the root) |
-| `schema` | `withAddressing` | The schema the interpreter saw here — a sum's own schema at a sum, since the sum's case runs before its variants'. A node no case reached (a raw path resolved on its way in) gets `liveSchemaAt(ctx.schema, σ, path)` the first time it is asked for |
-| `sequenceTable` | `withAddressing` | At a list: its live item addresses by index, for `.at(i)` and advancement |
-| `ref` | `withCaching` | The memoized carrier of a list item, map entry or tree node |
+| Slot | Holds |
+|------|-------|
+| `dead`, `listeners` | The address's liveness, and the `[DELETED]` feed's subscribers |
+| `schema` | The schema the ref here was made with, a sum's own schema at a sum. A coordinate no ref recorded one on gets `liveSchemaAt(ctx.schema, σ, path)` the first time it is asked |
+| `ref` | The canonical ref of a list item, record entry or tree node, as a `WeakRef` |
+| `refs` | The live anchored refs here |
+| `children` | The coordinates below, made with the first child |
 
-**Children are keyed by segment identity** (`Segment.identity`: the key for a field or entry, `@id` for a list item), so the trie enumerates a subtree exactly, which a separator-joined key cannot ([The ancestor walk](#plandelivery--delivernotifications)). **Every lookup descends from the root**, matching each segment's address object, and nothing outside the trie holds a node. So a node that has been unlinked is unreachable: a stale path finds nothing, never a stale address or carrier. Nodes come into being only when a path is derived — `AddressedPath.field`, `entry` and `item` ask the trie for the child's address — and a path whose coordinate has left the trie derives dead addresses rather than bringing a node back. The trie is reached through the context's root path (`AddressedPath.trie`), and `withCaching` requires `withAddressing` beneath it (the `HasAddressing` brand), since the trie is where carriers are kept.
+An address adds its segment: a field's or entry's `key`, or a list item's `index` and `id`.
 
-**A coordinate lives exactly while it exists.** After every change, `withAddressing`'s `after` stage walks the coordinates the change may have rewritten (`CoordinateTrie.within(path, planSubtreeEffect(change))`), parents first, and `planAddressFates` (pure) decides each one's fate. Existence is `coordinateExists(parentSchema, reader, parentPath, segment)`, pure over its inputs:
+**Children are keyed by coordinate:** a field's or entry's key, a list item's current index. So a list's children are its address table: `.at(i)` finds the item at index `i`, and a sequence change re-keys them (`CoordinateTrie.advance`, which also kills the items the change deleted, with everything below them). **Every lookup descends from the root**, and an address on a path must be the very object found there. So a coordinate that has been unlinked is unreachable: a stale path finds nothing, never a stale address or ref. A raw segment matches by role, so a raw index names the item now at that index.
+
+**A list item's identity is its id**, a number (`IndexAddress.identity`), since its index moves; a field's or entry's is its key. A raw index's identity is the string of its index, so the two never compare equal in a map. The subscriber trie is keyed by identity, so a subscription follows an item across inserts. `Path.key` writes an id as `@id`.
+
+**An `AddressedPath` is its parent path and one segment**, so a child path shares its parent's prefix rather than copying it. `segments` builds an array on each call; `read`, `dead`, an ancestor (`slice(0, n)`) and the trie's lookups walk the chain.
+
+**Only a ref creates a coordinate.** `AddressedPath.field`, `.entry` and `.item` ask the trie for the child's address, creating it on first use, and only ref construction calls them. A path whose coordinate has left the trie derives dead addresses rather than bringing a coordinate back. An op's path is located (`CoordinateTrie.locate`), which creates nothing: it follows the trie as far as it has coordinates, matching each raw segment to the address there, and continues with the path's own raw segments. So the live path a change is prepared at may end in raw segments below the trie's reach. Lookup is enough, because everything keyed off the trie cares only about coordinates that exist: `advance` needs a list's children, which exist only if the list was navigated; `settle` walks existing coordinates; and delivery finds subscribers only where a ref was made, and pruning keeps those coordinates while subscribed. A raw field or entry segment has the same identity as its address, so delivery and population marks find either. A path addressed in another document's trie is located by its coordinates.
+
+**A coordinate stays while something needs it.** When an anchored ref is collected, `CoordinateTrie.prune` unlinks what nothing needs: the field coordinates the ref held, children first, then the anchor's own, then each parent in turn, so an emptied branch goes. Whether a coordinate is needed is a pure predicate, `coordinateNeeded({ refs, children, listeners, subscribed })`:
+
+- `refs`: the live refs of the nearest anchor at or above it (a field's coordinate is held by its anchor's refs);
+- `children`: coordinates below it;
+- `listeners`: `[DELETED]` subscribers on its address;
+- `subscribed`: `SubscriberTrie.holdsAt(path)`, whether an own, deep or population listener sits at or below it. A subscription is keyed by the coordinate's identity, a list item's id included: pruned, a later change would resolve to a new address and miss it. A populated mark alone holds nothing.
+
+Pruning never marks an address dead: nothing holds it to be told. Unsubscribing does not itself prune; the next finalization below does.
+
+**A coordinate lives exactly while it exists.** After every change, `settle` walks the coordinates the change may have rewritten (`CoordinateTrie.within(path, planSubtreeEffect(change))`), parents first, and `planAddressFates` (pure) decides each one's fate. Existence is `coordinateExists(parentSchema, reader, parentPath, segment)`, pure over its inputs:
 
 - A **field** exists iff the parent's schema declares it, with any sum resolved from σ by the rule `dispatchSum` applies — so an inactive variant's fields, and a null nullable's, do not. A declared field exists by the schema alone, whether or not σ holds a value for it.
 - A **map key** exists iff σ has it.
 - A **tree node** exists iff its id is in the forest.
-- A **list item** is not asked. Inside a rewritten subtree it has no correspondence; outside one, its address advances with the sequence's instructions (the `before` stage), and a deleted item is dropped there.
+- A **list item** is not asked. Inside a rewritten subtree it has no correspondence; outside one, its address advances with the sequence's instructions (`advance`, before the substrate applies the change), and a deleted item dies there.
 
 **What a death keeps** depends on whether the coordinate can come back:
 
-- **List items are dropped** — unlinked with everything below them. A rewrite leaves them no correspondence, and their identity is an address nothing can name again.
+- **List items are dropped** — unlinked with everything below them. A rewrite leaves them no correspondence, and their identity is an id nothing can name again.
 - **Tree nodes are dropped.** Their ids are minted once and never reused (§"Terminal-on-delete").
-- **Fields and map entries are kept, dead,** with their address and carrier. A product field's carrier is memoized in its parent's carrier, not in the trie, so a revived parent hands the old field carrier back and its address must still be there to revive with it; a map key carries identity by its string, so a held `alice.tags.at("x")` revives by the same rule when alice returns with `x`. Memory stays bounded by what has been navigated.
+- **Fields and map entries are kept, dead, while something holds them** — a ref, a death listener or a subscriber. A product field's ref is kept in its parent ref, not in the trie, so a revived parent hands the old field ref back and its address must still be there to revive with it; a map key carries identity by its string, so a held `alice.tags.at("x")` revives by the same rule when alice returns with `x`. An unheld dead entry is pruned like any other coordinate, so memory stays bounded by what is held.
 
-Under a dead parent everything dies. Dropping a subtree first marks every address in it dead (`setDead`, which fires `[DELETED]` listeners), because once unlinked a node cannot be told, and a held ref inside it must still report `deleted`. A dead field or entry whose coordinate exists again **revives with the same address and carrier** — the long-standing "a key set again comes back to life", extended to sum fields and to everything kept below a dead node.
+Under a dead parent everything dies. Dropping a subtree first marks every address in it dead (`setDead`, which fires `[DELETED]` listeners), because once unlinked a coordinate cannot be told, and a held ref inside it must still report `deleted`. A dead field or entry whose coordinate exists again **revives with the same address and ref**.
 
-**Schemas are kept current by the walk.** Two variants of a sum may each declare a field of one name with different kinds (a struct in one, a record in the other), and the node records whichever was interpreted first. So the walk derives each child's schema from its parent's, sums resolved from σ, and writes it back. A variant switch always arrives as a `replace` at or above the sum — every substrate stores a sum as one value — so the walk always passes through the nodes whose schema can change. When the derived kind differs from the recorded one, the node's kind-specific state is stale: its list table is cleared, and everything below it dies.
+**Schemas are kept current by the walk.** Two variants of a sum may each declare a field of one name with different kinds (a struct in one, a record in the other), and the coordinate records whichever ref was made first. So the walk derives each child's schema from its parent's, sums resolved from σ, and writes it back. A variant switch always arrives as a `replace` at or above the sum — every substrate stores a sum as one value — so the walk always passes through the coordinates whose schema can change. When the derived kind differs from the recorded one, the coordinate's list items are cleared (`clearList`), and everything below it dies.
 
-**Why product field carriers stay per carrier.** List items, map entries and tree nodes share one item schema, so one carrier per coordinate is safe for them, and `withCaching` keeps it on the node (`d.tree.node(id)` is the same carrier every call). Two variants of one sum can declare same-named fields of different schemas, so a field carrier kept by coordinate would hand one variant's carrier to the other; field carriers stay memoized per product carrier.
+**`[REMOVE]`** is on a list item's or record entry's ref, by its template's position (`"removable"`). A tree node is an entry address too, and removing one is a tree delete, so it has none.
 
-**`[REMOVE]`** is attached to a child exactly when its parent's recorded schema (sum resolved) is a list, map or set. The address kind cannot decide alone: a tree node is an entry address too, and removing one is a tree delete.
+**The intended direction: one trie.** Subscribers would live on coordinates, so "is this coordinate needed?" becomes a local check, and delivery's walk and the fates' walk become one. Today two tries are joined by one call, `holdsAt`; merging them would rewrite delivery too.
 
 ### Read identity
 
-Source: `src/interpreters/read-at.ts`, `src/interpreters/with-readable.ts`, `src/reader.ts` (`applyChange`), `src/clone.ts`.
+Source: `src/ref/read.ts`, `src/reader.ts` (`applyChange`), `src/clone.ts`.
 
-**A read is σ's own value, frozen in place.** On a writable stack every kind's `()` is `freezeTree(ctx.reader.read(path))` (`readAt`): the very object σ holds at the path, with everything below it frozen. A composite read never navigates to its children, so it builds no refs, and it holds nothing σ does not already hold. `.get(i)` on a list and `.get(key)` on a record read the child from the parent's value (`readChildAt`), so they too build no ref, and freeze only that child.
+**A read is σ's own value, frozen in place.** Every kind's `()` is `freezeTree(ctx.reader.read(path))` (`readAt`): the very object σ holds at the path, with everything below it frozen. A composite read never navigates to its children, so it builds no refs, and it holds nothing σ does not already hold. `.get(i)` on a list and `.get(key)` on a record read the child from the parent's value (`readChildAt`), so they too build no ref, and freeze only that child.
 
-**The invariant holds by construction.** With no write in between, `ref() === ref()`. A write copies a frozen node before changing it (`applyChange`, [The step function, and its mutating dual](#the-step-function-and-its-mutating-dual)), and copies only the spine from the root to its target. So after a change at path P, a node's read is a new object exactly when P is that node or one of its descendants, or the change rewrote a subtree containing it; every other node is the same object σ held before. It holds however the change arrived — authored, native, merge, reset, compensation or decay — because every one advances σ through `applyChange`. A read's identity carries exactly one bit, changed or not: after `d.items.at(1).title.set(…)`, `doc()`, `doc().items` and `doc().items[1]` are new, and `doc().items[0]` is the same object as before. A sum needs nothing of its own: the proxy dispatches `()` to the active variant's carrier, which reads the sum's coordinate.
+**The invariant holds by construction.** With no write in between, `ref() === ref()`. A write copies a frozen node before changing it (`applyChange`, [The step function, and its mutating dual](#the-step-function-and-its-mutating-dual)), and copies only the spine from the root to its target. So after a change at path P, a node's read is a new object exactly when P is that node or one of its descendants, or the change rewrote a subtree containing it; every other node is the same object σ held before. It holds however the change arrived — authored, native, merge, reset, compensation or decay — because every one advances σ through `applyChange`. A read's identity carries exactly one bit, changed or not: after `d.items.at(1).title.set(…)`, `doc()`, `doc().items` and `doc().items[1]` are new, and `doc().items[0]` is the same object as before. A sum needs nothing of its own: the proxy dispatches `()` to the active variant's ref, which reads the sum's coordinate.
 
 **Freezing.** A frozen node's descendants are all frozen, or are byte arrays (`bytes`): no typed array can be frozen, and none needs to be, since no write mutates one in place — a `bytes` scalar is replaced whole. Every value entering σ is owned or new ([Op payloads are snapshots, not views](#op-payloads-are-snapshots-not-views)), so `freezeTree` can stop at a node already frozen, and the walk costs only what is not yet frozen. `Plain<S>` is readonly to match, so mutating a read is a type error and a `TypeError`. A set's `has`, `size` and iteration read the same value. **The `bytes` hazard:** a read's byte array is σ's own `Uint8Array`; mutating it changes σ without a write, so copy it first.
 
 **A dead ref reads `undefined`, whatever its type says.** Its coordinate is gone, and a list item's address keeps its last index, which another item may hold now. Ask `deleted(ref)` to tell an absent value from a present one. The types still say `() => string` and `() => number`, since widening every `Plain<S>` would burden every live read. `Symbol.toPrimitive` keeps its own coercions, so `${text}` of a dead text ref is `""`.
-
-**Read-only stacks copy, and complete.** With no prepare pipeline, the value under a read may be the caller's own data, which a read must not freeze, and nothing completed it on the way in. So a read there is `frozenClone(completeValue(schema, value))`.
 
 **The memory trade.** A read holds nothing beyond σ. A write after a read pays the copy of its spine: the first write into a record after a whole-record read copies the record object, about 1 ms at 10,000 keys, and the next read freezes the copy. Reading single entries (`.get`, or a navigated child's `()`) freezes only those entries, and a write elsewhere copies nothing.
 
@@ -1066,43 +1084,39 @@ Source: `packages/schema/src/materialize-value.ts` → `materializeValue`, `Mate
 ### What an `Interpreter` is NOT
 
 - **Not a visitor pattern.** Interpreters return values; visitors mutate state. `interpret` is a catamorphism, not a traversal.
-- **Not layered dynamically.** Layers compose at the type level. Once `.done()` is called, the stack is fixed.
-- **Not framework-aware.** No React, no DOM. The `Ref<S>` the stack produces is a pure object with a `[CHANGEFEED]` surface; framework bindings (`@kyneta/react`, `@kyneta/cast`) adapt it.
+- **Not how refs are made.** Refs are one fixed construction (`src/ref/*`), not an interpreter: there is nothing to compose.
+- **Not framework-aware.** No React, no DOM. A `Ref<S>` is a callable with a `[CHANGEFEED]` surface; framework bindings (`@kyneta/react`, `@kyneta/cast`) adapt it.
 
-### Interpreter duplication families
+### Ref modules by kind family
 
-The 11 interpreter cases fall into four structural categories. The first three are **duplication families** — groups of cases that share identical logic across every transformer, captured by shared helper modules. The fourth has unique per-case logic.
+Each ref module (`src/ref/*`) contributes its members per kind, and the kinds fall into four families that share members:
 
-| Family | Cases | Shared helpers | Shared algebra |
-|--------|-------|---------------|----------------|
-| **Indexed** (positional) | `text`, `sequence`, `movable`, `richtext` | `sequence-helpers.ts` — `at()`, `installTextWriteOps`, `installListWriteOps`, `installRichTextWriteOps`, `installSequenceReadable`, `installSequenceNavigation`, `installSequenceCaching` | `Instruction`, `foldInstructions`, `transformIndex`, `advanceAddresses` |
-| **Keyed** (named) | `map` | `keyed-helpers.ts` — `installKeyedWriteOps`, `installKeyedReadable`, `installKeyedNavigation`, `installKeyedCaching` | `MapChange`, keyed addressing (the coordinate trie) |
-| **Leaf** (terminal) | `scalar`, `text`, `counter`, `richtext`, **`set`** | `wireChangefeed` in `with-changefeed.ts` unifies changefeed boilerplate; `set-helpers.ts` provides `installSetReadable` and `installSetWriteOps` for the value-addressed set surface | `createNodeChangefeed`, `SetChange`, `samePlainValue` |
-| **Structural** (unique) | `product`, `sum`, `tree` | None — each has unique per-case logic | Product: schema-driven fields + discriminant. Sum: store-based variant dispatch. Tree: thin pass-through. |
+| Family | Kinds | Shared members | Shared algebra |
+|--------|-------|----------------|----------------|
+| **Indexed** (positional) | `text`, `sequence`, `movable`, `richtext` | `at()` (`ref/write.ts`); list navigation and writes (`sequenceMembers`, `listMembers`) for `sequence` and `movable` | `Instruction`, `foldInstructions`, `transformIndex`, `advanceAddresses` |
+| **Keyed** (named) | `map` | `mapMembers` (`ref/navigate.ts`), `recordMembers` (`ref/write.ts`) | `MapChange`, keyed coordinates |
+| **Leaf** (terminal) | `scalar`, `text`, `counter`, `richtext`, **`set`** | the read and `Symbol.toPrimitive` (`ref/read.ts`); the set's value-addressed surface (`ref/read.ts`, `ref/write.ts`) | `SetChange`, `samePlainValue` |
+| **Structural** (unique) | `product`, `sum`, `tree` | None: products have field getters, sums a proxy, trees `treeMembers` | Product: schema-driven fields and discriminant. Sum: variant dispatch from σ. Tree: node navigation by id. |
 
-**`text` and `richtext` straddle two families.** They are indexed for writable (share `at()` and the retain/insert/delete instruction stream with sequence/movable) but leaf for readable, navigation, and changefeed (return `string` / delta directly, not a fold over children). Characters are not independently addressable refs.
+**`text` and `richtext` straddle two families.** They are indexed for writing (they share `at()` and the retain/insert/delete instruction stream with sequence and movable) but leaves for reading, navigation and observation: `()` returns a `string` or delta, and characters are not refs.
 
-The straddle is about these interpreter families and nothing else. For **storage** both are plainly containers — each is its own CRDT type — and `storageClass` (`schema.ts`) classifies them that way without qualification. Worth stating because the leaf half is the memorable one: `richtext` was once classified as a leaf for storage on the strength of it, which is the defect §"Value materialization — the write-side unfold" describes.
+The straddle is about these ref families and nothing else. For **storage** both are plainly containers — each is its own CRDT type — and `storageClass` (`schema.ts`) classifies them that way without qualification. Worth stating because the leaf half is the memorable one: `richtext` was once classified as a leaf for storage on the strength of it, which is the defect §"Value materialization — the write-side unfold" describes.
 
 **`set` is leaf-shaped at the ref layer.** Although the catamorphism dispatches set children by string key (mirroring `map`), there are no per-member child refs at the user-facing API. The surface is `.has(value)`, `.add(value)`, `.delete(value)`, `.clear()`, `.size`, `[Symbol.iterator]`, callable returning `readonly Plain<I>[]` — narrower than `map`'s, and value-addressed (no `.at(value)`). A set is read whole. See [§Set: value-addressed leaf](#set-value-addressed-leaf).
 
-The `Interpreter` interface retains separate cases per kind — the sharing is internal to the built-in transformers. Substrate authors implement one case per kind; they never see the shared helpers.
-
 The materialize interpreter is another duplication family — all CRDT backends share the same 11-case structure, varying only in resolution. The `MaterializeResolver` abstraction captures this by decomposing resolution into leaf resolvers (value, text, counter, richtext) and container shape resolvers (length, keys) that mirror the indexed/keyed duplication families.
-
-**`attachNative` is intentionally skipped for sums in `interpretImpl`.** Sums are structurally transparent — the result carrier is the dispatched variant's carrier, which already has the correct `[NATIVE]` from its own interpreter case (product, scalar, etc.). Calling `attachNative` on the sum would double-define the property, crashing in substrates where the product resolves to a real container but the sum resolves to `undefined` (`configurable: false` + different value → `TypeError`).
 
 ### `NativeMap` and the escape hatch
 
 `NativeMap<S>` is a type-level mapping from schema kinds to substrate-native types. `ref[NATIVE]` returns the underlying container — `LoroText` for a `text` on Loro, `Y.Map` for a `product` on Yjs, a plain object for the plain substrate. `[NATIVE]` is a getter that asks the substrate's `nativeResolver` on each access, so `unwrap(doc)` on plain is always the current root, though a write that copies a frozen root replaces it. `unwrap(ref)` (`src/unwrap.ts`) is the typed escape hatch that returns `NativeMap<S>`.
 
-Application code rarely touches `[NATIVE]`. Backends use it to dispatch to substrate-specific APIs. It is the only path through which substrate-specific behaviour leaks through the interpreter stack — and it is explicit at the call site.
+Application code rarely touches `[NATIVE]`. Backends use it to dispatch to substrate-specific APIs. It is the only path through which substrate-specific behaviour leaks through a ref — and it is explicit at the call site.
 
-### Read tracking — `withTracking` + the tracking context
+### Read tracking
 
-Source: `src/interpreters/with-tracking.ts` (the layer) + `src/tracking.ts` (the pure context). Consumed by `@kyneta/reactive` for fine-grained auto-tracked reactivity (`useSelector`/`useValue` ultimately rest on it).
+Source: `src/ref/track.ts` (the reports) + `src/tracking.ts` (the pure context). Consumed by `@kyneta/reactive` for fine-grained auto-tracked reactivity (`useSelector`/`useValue` ultimately rest on it).
 
-`withTracking` is the **outermost** layer in the canonical `createRef` stack (`.with(readable).with(writable).with(observation).with(tracking)`). When a *tracking scope* is active, every user-facing read reports a `Dependency` (a stable handle + an `Aspect`); when no scope is active, every wrapped accessor is a one-guard passthrough (the full suite passes unchanged either way). Subscription *policy* (aspect → changefeed primitive) lives in the runtime, not here.
+When a *tracking scope* is active, every user-facing read reports a `Dependency` (a stable key, an `Aspect`, and the ref); when none is, a report is one guard. Each member that reads the document calls `report` itself, so nothing is wrapped around it. Subscription *policy* (aspect → changefeed primitive) lives in the runtime, not here.
 
 **The pure context (`tracking.ts`)** is the functional core: a save/restore scope discipline (`withReadScope(fn) → { value, deps }`) and a single mutation point (`reportRead`, a no-op when no scope is active). FC/IS exemplars: `@kyneta/index`'s `integrate` and `@kyneta/machine`'s `Program`/runtime.
 
@@ -1115,13 +1129,13 @@ Source: `src/interpreters/with-tracking.ts` (the layer) + `src/tracking.ts` (the
 | `.at` / `.length` / iteration / `.keys` / `.has` / `.size` / `.entries` / `.values` | sequence/movable/map | `structure` |
 | `.get(k)` | sequence/movable/map | `structure` on the container, and the child's own `value` or `deep` |
 
-Products report nothing on field navigation (fixed fields); the child carrier reports its own reads. **`identity` is folded into `structure` for v1**: navigating a dynamic container reports `structure`, which soundly catches moves/deletes — so the runtime needs only `subscribeNode`/`subscribeDescendants`, no `address.listeners` wiring. Completeness (no missed reads) is verified against the helpers: every accessor that touches the substrate is wrapped, or delegates to one that is (iteration routes through `.at`; map `.has`/`.keys`/`.size`/`.entries`/`.values` read `reader.keys`/`hasKey` directly, so all are wrapped).
+Products report nothing on field navigation (fixed fields); the child ref reports its own reads. **`identity` is folded into `structure` for v1**: navigating a dynamic container reports `structure`, which soundly catches moves/deletes — so the runtime needs only `subscribeNode`/`subscribeDescendants`, no `address.listeners` wiring. Completeness (no missed reads): every member that touches the substrate reports, or delegates to one that does (iteration routes through `.at`; a record's `.has`, `.keys`, `.size`, `.entries` and `.values` read `reader.keys` or `hasKey` and report `structure` themselves).
 
-**`.get` inside a scope goes through `.at`.** Outside a scope `.get(k)` reads the child from the container's σ value and builds nothing. Inside one, `withTracking` sends it through `.at(k)` and the child's `()`, so it reports the same two dependencies it always did, and a write to one entry re-runs only the readers of that entry. That builds one ref per key read: refs exist for what a program navigates to, and a tracked `.get` is targeted navigation. Reporting `deep` on the container instead would be sound but too broad, re-running a reader of one row on a change to any row.
+**`.get` inside a scope goes through `.at`.** Outside a scope `.get(k)` reads the child from the container's σ value and builds nothing. Inside one, it goes through `.at(k)` and the child's `()`, so it reports the same two dependencies it always did, and a write to one entry re-runs only the readers of that entry. That builds one ref per key read: refs exist for what a program navigates to, and a tracked `.get` is targeted navigation. Reporting `deep` on the container instead would be sound but too broad, re-running a reader of one row on a change to any row.
 
-**Stable keys without addressing internals.** Dependency keys are derived from the carrier's *object identity* (a `WeakMap<carrier, id>`), which is already **cursor-stable** — `.at(i)` returns the carrier kept on the item's coordinate in the trie (`installSequenceCaching` in `sequence-helpers.ts`), so the same logical element yields the same carrier object across structural change. A dep key is therefore invariant under inserts/deletes (an insert before a tracked element does not change its key), and keeps one key across a replace of a parent and one per tree node — no addressing-internals integration needed.
+**Stable keys.** A dependency is keyed by the ref it was read through: its `trackingId`, assigned on its first report and kept in its state. There is one canonical ref per coordinate while it is held, and a scope holds the refs it depends on (`Dependency.ref`), so the same logical element keeps its key across structural change: an insert before a tracked element does not change its key, and a replace of a parent keeps it too.
 
-The aspect vocabulary harmonizes with `@kyneta/compiler`'s `DependencyClassification` (`experimental/compiler/src/classify.ts` — `structural`/`item`/`external`): `structural` is shared; `value`/`identity` refine the compiler's `item`; the compiler's `external` (reading another reactive source) is the runtime's plain-`HasChangefeed` `.subscribe` branch, not a schema-ref read. One classification model — the compiler is its AOT face, `withTracking` its JIT face.
+The aspect vocabulary harmonizes with `@kyneta/compiler`'s `DependencyClassification` (`experimental/compiler/src/classify.ts` — `structural`/`item`/`external`): `structural` is shared; `value`/`identity` refine the compiler's `item`; the compiler's `external` (reading another reactive source) is the runtime's plain-`HasChangefeed` `.subscribe` branch, not a schema-ref read. One classification model — the compiler is its AOT face, the ref's reports its JIT face.
 
 ---
 
@@ -1211,13 +1225,13 @@ For every built-in change type:
 
 `applyTextInstructions(target, instructions)` replays a `TextInstruction[]` delta onto a live `TextRef`. It is the **imperative shell over `textInstructionsToPatches`** — it converts the cursor-based instructions to absolute-offset patches, then dispatches each to `TextRef.insert`/`.delete` (the `TextRef` counterpart to applying those patches to a DOM `Text` node via `insertData`/`deleteData`; see [Position algebra](#transformindex-and-textinstructionstopatches)). It is *not* built on `foldInstructions`: that is a dual source/target cursor fold for diffs, whose `insert` case carries only a length, not content — the wrong sibling for single-cursor, content-carrying replay.
 
-These are the primitives `step`, `with-changefeed`, and `Position` build on.
+These are the primitives `step`, delivery and `Position` build on.
 
 ---
 
 ## The write path
 
-Source: `packages/schema/src/facade/batch.ts`, `src/step.ts`, `src/inverse.ts`, `src/interpreters/with-changefeed.ts`, `src/interpreters/writable.ts`.
+Source: `packages/schema/src/facade/batch.ts`, `src/step.ts`, `src/inverse.ts`, `src/writable-context.ts`, `src/delivery.ts`, `src/interpreters/writable.ts`.
 
 `batch(doc, fn)` is the atomic mutation facade. `ctx.runBatch` returns the authored ops its frame captured, so `batch` is one line:
 
@@ -1232,15 +1246,15 @@ End-to-end flow:
 1. `change` resolves `ref[TRANSACT]` → the `WritableContext`.
 2. `ctx.runBatch(work, opts)` opens a frame (push on `frameStarts`/`inverseStack`). At depth-0 entry it opens the batch's **trace** and invokes the substrate's `runBatch` bracket (Loro `doc.commit()` after the body, Yjs `Y.transact`) inside the delivery dispatcher's `hold`.
 3. `fn(doc)` runs. Inside `fn`, each helper (`.set`, `.push`, `.insert`, …) routes through `ctx.dispatch(path, change)` — the depth-aware combinator. Inside a frame, dispatch is just `ctx.prepare`; outside any frame it opens an implicit single-op runBatch (auto-commit).
-4. `ctx.prepare(path, change, { ingress: "author" })` runs the [prepare pipeline](#the-prepare-pipeline): it resolves the path, completes the change against the schema it lands at, runs every layer's `before` stage, calls `substrate.prepare(path, change, recordInverse)` and appends the op to the trace, then runs every `after` stage. The substrate captures σ at the change's target path, computes the inverse via `invert(pre, change)` and records it on the active frame, then advances σ and λ in lockstep.
-5. After `fn` returns, still inside the bracket, the depth-0 release calls `substrate.afterBatch()` and **seals** the batch: the trace becomes a `SealedBatch` (`{ options, ops }`) and is dispatched for delivery. The native commit closes, the `hold` ends, and the delivery dispatcher calls `ctx.deliver(batch)` → `planDelivery` → `deliverNotifications`. One `Changeset` per affected subscriber.
+4. `ctx.prepare(path, change, { ingress: "author" })` runs the [prepare pipeline](#the-prepare-pipeline): it locates the path, completes the change against the schema it lands at, advances a list's addresses, calls `substrate.prepare(path, change, recordInverse)` and appends the op to the trace, then settles what the change rewrote and marks what it populated. The substrate captures σ at the change's target path, computes the inverse via `invert(pre, change)` and records it on the active frame, then advances σ and λ in lockstep.
+5. After `fn` returns, still inside the bracket, the depth-0 release calls `substrate.afterBatch()` and **seals** the batch: the trace becomes a `SealedBatch` (`{ options, ops }`) and is dispatched for delivery. The native commit closes, the `hold` ends, and the delivery dispatcher calls `planDelivery` → `deliverNotifications`. One `Changeset` per affected subscriber.
 6. If `fn` throws, the catch path replays this frame's recorded inverses LIFO through `ctx.prepare(path, inverse, { ingress: "compensate" })` (reaching the substrate with `recordInverse === null`), runs `afterBatch`, seals the batch with `aborted: true`, then rethrows once it has been delivered. External observers see one batched native event whose ops net to zero.
 
 The substrate's `runBatch` bracket invocation is gated on `frameStarts.length === 0`: substrate.runBatch is invoked at most once per outermost block, regardless of how deeply `dispatch` nests. The exchange sees the transaction as a single `merge` source: after commit the substrate's `exportSince()` captures the entire delta.
 
 ### Depth-aware `dispatch`
 
-`WritableContext.dispatch` is a depth-aware combinator. The 5 ref-helper files (`scalar.set`, `sequence.push`, etc.) and the addressing layer's `REMOVE` handler all route through it, and it branches on one local condition: `dispatch = frameStarts.length === 0 ? implicitSingleOpRunBatch : justPrepare`. Inside a batch a dispatch is just a prepare, because the outer frame owns the seal; outside one it opens an auto-committing single-op `runBatch`.
+`WritableContext.dispatch` is a depth-aware combinator. Every write member (`scalar.set`, `sequence.push`, etc., `src/ref/write.ts`) and `[REMOVE]` route through it, and it branches on one local condition: `dispatch = frameStarts.length === 0 ? implicitSingleOpRunBatch : justPrepare`. Inside a batch a dispatch is just a prepare, because the outer frame owns the seal; outside one it opens an auto-committing single-op `runBatch`.
 
 Keeping the combinator rather than converting every helper is what lets in-block helpers collapse into one substrate commit and one `Changeset`, with no per-helper bracket re-entry.
 
@@ -1272,7 +1286,7 @@ Source: `src/interpreters/writable.ts` (`buildWritableContext`, `TraceEntry`, `S
   - **The trace is what to deliver.** A stack of traces, each a list of `{ op, at }`: every op prepared, compensations included. The outermost `runBatch` frame opens one, and so does `announce`. The base `prepare` appends every op to the top trace; with no trace open it throws. An announcement made while an authored batch is open gets its own trace, so neither batch can pick up the other's ops.
   - **The frame stack is what the batch did** (`frame-stack.ts`, pure). Each `runBatch` frame opens a frame; `prepare` records an authored op with its inverse once `substrate.prepare` returns, so an op whose `prepare` threw is never recorded. A frame that ends returns its ops (`batch()`'s return), nested frames that ended included. A frame that throws hands back its inverses to compensate, last first, and leaves the stack, so no frame around it reports its ops. When the outermost frame ends, the stack's content is the `BatchOutcome` `afterBatch` receives. Its entries are a list built from the head, so recording, compensating and truncating copy nothing.
 - **Seal.** At the end of the outermost frame, inside the bracket, `afterBatch` runs and the trace becomes a `SealedBatch`. The trace is popped at once, so a stray prepare afterwards throws instead of joining a sealed batch.
-- **Release.** Each context has one delivery dispatcher (`createDispatcher`, label `"changefeed"`, message `{ type: "deliver", batch }`, the context's `lease`), created on first use. `runBatch` runs the substrate bracket inside `deliveries.hold(...)`: anything sealed while it runs — the batch itself, and any announcement a native listener triggers during the commit — queues, and drains in seal order when the commit closes. The dispatcher's handler calls `ctx.deliver(batch)`, which the changefeed layer wraps.
+- **Release.** Each context has one delivery dispatcher (`createDispatcher`, label `"changefeed"`, message `{ type: "deliver", batch }`, the context's `lease`), created on first use. `runBatch` runs the substrate bracket inside `deliveries.hold(...)`: anything sealed while it runs — the batch itself, and any announcement a native listener triggers during the commit — queues, and drains in seal order when the commit closes. The dispatcher's handler plans the batch's notifications (`planDelivery`) and fires them (`deliverNotifications`).
 
 Two consequences worth knowing:
 
@@ -1281,28 +1295,20 @@ Two consequences worth knowing:
 
 ### The prepare pipeline
 
-Source: `src/interpreters/writable.ts` (`buildWritableContext`, `PrepareStage`), `src/subtree-effect.ts`.
+Source: `src/writable-context.ts` (`buildWritableContext`), `src/subtree-effect.ts`.
 
-Every op reaches `ctx.prepare` — authored (`dispatch`), announced (`announce`) and compensating — and `prepare` is a fixed pipeline:
+Every op reaches `ctx.prepare` — authored (`dispatch`), announced (`announce`) and compensating — and `prepare` calls each step itself, in one order:
 
-1. **Resolve.** When the context's root path is addressed, `resolveToAddressed` turns a raw path (from `announce` or `applyChanges`) into the addressed path whose `key` the listeners and the coordinate trie use. Idempotent for a path addressed in this context's trie; one addressed in another document's is resolved by its coordinates, since its addresses say nothing about which coordinates are alive here.
-2. **Complete.** An authored change that carries values is replaced by `completeAt(schema, σ, path, change)`, which is `completeChange(at, change)` at the schema the change lands at. `buildWritableContext(substrate, schema, capabilities)` takes the document's root schema, and `WritableContext.schema` exposes it. `landingSchema` finds `at` from σ: `liveSchemaAt` for a `replace`, whose value decides a sum's variant, and the variant σ holds for any other change, which presupposes it (a `push` onto a nullable list is a sequence change at the sum's own path). Everything after this step sees the completed change: the stages, the substrate, the trace, delivery, the inverse pairing and so undo. A compensation is read from σ and an announcement comes from a substrate that applied it, so neither is completed again.
-3. **`before` stages.** σ still holds the state before the change.
-4. **Base.** The substrate call for the ingress (none for an announcement, whose σ has already moved) and the op joining the open batch's trace.
-5. **`after` stages.** σ holds the state after the change.
+1. **Locate.** `CoordinateTrie.locate` turns the op's raw path into the live path the change is prepared at: the addresses the trie has, and raw segments below its reach ([The coordinate trie](#the-coordinate-trie)). It creates nothing. It decides only the live path (`TraceEntry.at`, the frame stack's `Recorded.at`); the op itself is raw, and frozen here, once.
+2. **Complete.** An authored change that carries values is replaced by `completeAt(schema, σ, path, change)`, which is `completeChange(at, change)` at the schema the change lands at. `buildWritableContext(substrate, schema, capabilities)` takes the document's root schema, and `WritableContext.schema` exposes it. `landingSchema` finds `at` from σ: `liveSchemaAt` for a `replace`, whose value decides a sum's variant, and the variant σ holds for any other change, which presupposes it (a `push` onto a nullable list is a sequence change at the sum's own path). Everything after this step sees the completed change: the substrate, the trace, delivery, the inverse pairing and so undo. A compensation is read from σ and an announcement comes from a substrate that applied it, so neither is completed again.
+3. **Advance.** A sequence change advances its list's item addresses, and kills the items it deleted (`advance`). σ still holds the state before the change.
+4. **Apply.** The substrate call for the ingress (none for an announcement, whose σ has already moved) and the op joining the open batch's trace.
+5. **Settle.** Every coordinate the change may have rewritten is settled (`settle`, [The coordinate trie](#the-coordinate-trie)). σ holds the state after the change.
+6. **Mark.** `SubscriberTrie.markPopulated` marks what the change populated: the path, its ancestors, and the part below it the change rewrote ([Tree-observable changefeeds](#tree-observable-changefeeds)).
 
-A layer registers one stage per context, with `ctx.addPrepareStage(layer, { before?, after? })`; a second registration under the same layer symbol is ignored. `prepare` itself is never reassigned. Stages within a phase must commute, so order comes from the pipeline's shape and never from the order in which layers happened to install themselves — which, with interpretation lazy, is the order in which each first interpreted a node. (When three layers each wrapped `prepare`, the addressing wrapper, usually installed last, ran outside the changefeed wrapper's path resolution and missed a remote change to a nested list.) A read during a `prepare` (a death listener a stage fires) reads σ, which is always current.
+The writable context owns both tries (`ctx.trie`, `ctx.subscribers`), so the order is this function's, not an order in which independent parts attached themselves. A read during a `prepare` (a death listener `settle` fires) reads σ, which is always current. Delivery is the context's own too: its dispatcher plans each sealed batch's notifications (`planDelivery`) and fires them (`deliverNotifications`).
 
-The stages:
-
-| Layer | `before` | `after` |
-|-------|----------|---------|
-| `withAddressing` | A sequence change advances its list's item addresses, and drops the items it deleted | Settles every coordinate the change may have rewritten ([The coordinate trie](#the-coordinate-trie)) |
-| `withChangefeed` | — | Marks what the change populated: the path, its ancestors, and the part below it the change rewrote |
-
-`withChangefeed` also wraps `ctx.deliver`, the context's one remaining wrapper, so there is no wrapping order to depend on.
-
-**What a change rewrote.** Both stages need to know which part of the tree below a change's path it may have rewritten, and one pure function answers for both, so they cannot disagree — a disagreement would be a stale ref or a missed delivery:
+**What a change rewrote.** Settling and marking both need to know which part of the tree below a change's path it may have rewritten, and one pure function answers for both, so they cannot disagree — a disagreement would be a stale ref or a missed delivery:
 
 | Change | `planSubtreeEffect(change)` |
 |--------|------------------------------|
@@ -1461,7 +1467,7 @@ To derive "pure pre-mutation state," consume the `Changeset` semantically; do no
 
 ## Batch metadata
 
-Source: `src/substrate.ts`, `src/interpreters/writable.ts`, `src/interpreters/with-changefeed.ts`.
+Source: `src/substrate.ts`, `src/interpreters/writable.ts`, `src/delivery.ts`.
 
 Every batch declares how it reached the changefeed, in a **required** `ingress`. Nothing defaults: a call site that forgets to say it is a compile error rather than a silent claim of local authorship.
 
@@ -1488,7 +1494,7 @@ interface AnnounceOptions extends MergeOptions { local: boolean; source?: unknow
 
 The union encodes two contracts. An echo token names a local caller and never survives a merge: `source` comes from an authored batch, or from a local announcement of a write a local caller asked the substrate to make natively (a Loro undo, applied with `applyDiff`). Only an authored batch can be `aborted`.
 
-`BatchOptions` does not extend `BatchMetadata`. The four `Changeset` channels are derived from it by one pure function, `changesetMetadata` (`with-changefeed.ts`), at delivery:
+`BatchOptions` does not extend `BatchMetadata`. The four `Changeset` channels are derived from it by one pure function, `changesetMetadata` (`delivery.ts`), at delivery:
 
 - **`origin`** — opaque application-level label. Propagates to `Changeset.origin` so subscribers can categorize batches (`"sync"`, `"undo"`, `"migration"` — or anything else). The schema layer and the exchange **never branch on origin's value**. It is *free vocabulary* for app code.
 
@@ -1572,7 +1578,7 @@ interface Revertible<R> {
 
 ## Tree-observable changefeeds
 
-Source: `packages/schema/src/changefeed.ts`, `src/interpreters/with-changefeed.ts`.
+Source: `packages/schema/src/changefeed.ts`, `src/ref/observe.ts`, `src/delivery.ts`, `src/interpreters/subscriber-trie.ts`.
 
 Every schema-issued changefeed implements `RecursiveChangefeedProtocol` — the schema-specific extension of `@kyneta/changefeed`'s universal `ChangefeedProtocol`. It adds `subscribeDescendants`, which delivers own-path + every descendant in one `Changeset<Op>` where each `Op = { path, change }` carries the relative path from the subscription point.
 
@@ -1603,7 +1609,7 @@ Two functions form the notification engine:
 1. `planDelivery(entries, trie)` → `DeliveryPlan` — the Functional Core. Walks a sealed batch's entries **once**, in dispatch order, and answers both channels. The plan is keyed by subscriber-trie node.
 2. `deliverNotifications(plan, options)` → the Imperative Shell. Builds changesets and calls functions. All the deciding already happened.
 
-**Subscribers live in a trie** (`SubscriberTrie`, `src/interpreters/subscriber-trie.ts`), one per context, keyed by segment identity like the coordinate trie: each node holds its coordinate's own-path and deep subscribers, its population state, and a count of the callbacks at or below it, so walks skip what nobody watches. A path key would do for a lookup, but not for enumerating a subtree, and it conflates two coordinates whose joined keys collide (`field("a\0b")` and `field("a").field("b")`); the trie keeps them apart. It is not the `CoordinateTrie`: a subscription lasts as long as its subscriber, not its coordinate, and a subscriber at a list item or tree node must hear the change that kills it, while addressing unlinks those coordinates before delivery.
+**Subscribers live in a trie** (`SubscriberTrie`, `src/interpreters/subscriber-trie.ts`), one per context (`ctx.subscribers`), keyed by segment identity (a list item's id, a field's or entry's key): each node holds its coordinate's own-path and deep subscribers, its population state, and a count of the callbacks at or below it, so walks skip what nobody watches. A path key would do for a lookup, but not for enumerating a subtree, and it conflates two coordinates whose joined keys collide (`field("a\0b")` and `field("a").field("b")`); the trie keeps them apart. It is not the `CoordinateTrie`: a subscription lasts as long as its subscriber, not its coordinate, and a subscriber at a list item or tree node must hear the change that kills it, while `settle` unlinks those coordinates before delivery.
 
 **The two channels group differently, and the reason is structural.** A node's own path is a single key, so own-path changes can only come from one place. A node's *subtree* spans many paths, so a deep subscriber's changeset gathers ops from all of them. That gathering is the whole point: **one `batch()` reaches each subscriber as one `Changeset`.**
 
@@ -1661,13 +1667,25 @@ Grain is not grouping. A merge on Loro or Yjs reconstructs ops from a CRDT diff,
 
 ### Why there are no dynamic-collection changefeed factories
 
-Sequence, map, and tree used to share a pattern: an own-path listener plus a **per-key forwarder map** holding `child[CHANGEFEED].subscribeDescendants(...)` unsubscribes, plus **structural-change-driven wire/unwire** triggered from the own-path callback. Each kept its forwarders keyed by something stable — the sequence by address ID from `withAddressing`, the map by entry key, the tree by TreeID — and each rebuilt them as items came and went.
+Sequence, map, and tree used to share a pattern: an own-path listener plus a **per-key forwarder map** holding `child[CHANGEFEED].subscribeDescendants(...)` unsubscribes, plus **structural-change-driven wire/unwire** triggered from the own-path callback. Each kept its forwarders keyed by something stable — the sequence by address id, the map by entry key, the tree by TreeID — and each rebuilt them as items came and went.
 
-All of it is gone. Those three mechanisms existed to keep a *derived* structure aligned with a document whose shape changes at runtime, and the relation they encoded — "which subscribers care about this change" — is recomputable in O(depth) at delivery from the changed path alone. There is no longer a factory *per kind* at all: `createNodeChangefeed` serves every schema case, the tree included, and does nothing but register own-path and deep subscribers in the subscriber trie. None of them touches a child ref.
+All of it is gone. Those three mechanisms existed to keep a *derived* structure aligned with a document whose shape changes at runtime, and the relation they encoded — "which subscribers care about this change" — is recomputable in O(depth) at delivery from the changed path alone. There is no factory per kind: every ref's `[CHANGEFEED]` (`observeMembers`, `src/ref/observe.ts`) registers own-path and deep subscribers at its own coordinate in the subscriber trie, and touches no child ref.
 
-The bug that forced the question was in `product`, which had **no** repair machinery because a struct's fields are fixed. That is true of the fields, and not of what sits behind them: `withChangefeed.sum()` is a pass-through, so a `.nullable()` field's `[CHANGEFEED]` resolves to *the live variant's* feed. A product that subscribed to its fields once captured the null variant's feed, and a later variant shift left it listening to nothing. Subscribing to a document before an optional field was populated meant never hearing about writes inside it, permanently — and because the Exchange wires its document subscription at creation time, that was every synced document.
+The bug that forced the question was in `product`, which had **no** repair machinery because a struct's fields are fixed. That is true of the fields, and not of what sits behind them: a sum's `[CHANGEFEED]` is its live variant's, so a `.nullable()` field's feed changes with the variant. A product that subscribed to its fields once captured the null variant's feed, and a later variant shift left it listening to nothing. Subscribing to a document before an optional field was populated meant never hearing about writes inside it, permanently — and because the Exchange wires its document subscription at creation time, that was every synced document.
 
-The stability the sequence used to get from the address table it now gets for free: an index address's `identity` is `@${id}`, so a path key already survives inserts and reorders.
+A list item's subscribers follow it across inserts and reorders because the subscriber trie is keyed by its address's identity, its id.
+
+### Population
+
+`populated(ref)` says whether a change has reached the ref's coordinate: an op landed at or below it, or an op above it rewrote a part of the tree containing it. It never reverts, so a held dead ref keeps answering true. The subscriber trie holds the marks: a node's `populated`, and what a change there rewrote below it (`rewroteAll`, or `rewroteKeys`).
+
+**A mark creates only what it adds.** `markPopulated(path, effect)` (step 6 of [the prepare pipeline](#the-prepare-pipeline)) returns before creating a node when the mark is implied: an ancestor rewrote all below it, or rewrote the key toward `path`, or the node is populated already and `effect` adds nothing. After a document's first whole-document adopt, every later mark is implied, so ops leave no nodes behind.
+
+**A list's items are populated exactly when the list is.** An item exists only because an insert carried its value, and a list starts empty, so no change can find an item in a list nothing populated. So `isPopulated` answers true on stepping from a populated node into an index segment, raw or addressed, and `markPopulated` marks a path only down to its first index segment. Nothing is keyed by an index, and a raw index, which names another item after an insert, is never used as a key. Populating a list fires the population listeners at and below its items, without marking those nodes: the list's mark answers for them.
+
+**The live path's tail below the coordinate trie's reach is raw** ([The coordinate trie](#the-coordinate-trie)): marks and delivery key a raw field or entry segment by its key, as they would its address.
+
+**A known cost, not a leak.** A receiver that never adopts a whole document, starting from `createDoc` and merging only deltas, adds each new record key it receives to its record's `rewroteKeys`. Deleted keys stay, since population never reverts. The cost is bounded by the keys the document has ever held, about one string per key; removing it needs another representation of population.
 
 ### Terminal-on-delete
 
@@ -1677,15 +1695,15 @@ It is not a special case. A tree delete rewrites the nodes it deletes (`planSubt
 
 The terminal is a tree's alone because of **identity semantics**: TreeIDs are CRDT-stable identifiers (minted at create-time, never reused, never re-anchored on shifts), and a subscriber at `d.tree.node(id)` holds a meaningful identity reference. A deleted map key's subscribers hear `replace(undefined)` instead — the key can be set again, and its subscribers then hear that too — and a list item removed by a sequence edit learns of it through `[DELETED]`, since a sequence edit names positions, not coordinates.
 
-### Per-ref-instance carrier multiplication
+### One ref per coordinate, while held
 
-Closed: there is one carrier per coordinate for list items, map entries and tree nodes, kept on the coordinate's trie node by `withCaching`, so `d.tree.node(id)`, `.roots` and iteration hand back the same carrier every time ([The coordinate trie](#the-coordinate-trie)). Product fields are memoized per product carrier.
+There is one canonical ref per coordinate for list items, map entries and tree nodes while something holds it, kept weakly on the coordinate, so `d.tree.node(id)`, `.roots` and iteration hand back the same ref each time ([The coordinate trie](#the-coordinate-trie)). Product fields are kept per parent ref.
 
-One case of several carriers at a path remains, and is deliberate: two variants of a sum that each declare a field of one name each memoize their own field carrier, since one kept by coordinate could hand one variant's carrier to the other.
+One case of several refs at a path remains: two variants of a sum that each declare a field of one name each keep their own field ref, since one kept by coordinate could hand one variant's ref to the other.
 
-**Registrations never multiplied with carriers once registration followed subscribers.** They used to, and that was the sharper half of the problem. Own-path listeners were registered when a carrier was *built*, by a fan-out shim that discarded the unsubscribe it was handed, so the shared set grew *monotonically* — one dead entry per discarded carrier, for the document's lifetime. Registration now follows subscribers — established on the first, released on the last — so a carrier nobody subscribes to never enters the registry. `src/__tests__/listener-registration.test.ts` pins this, with two variant carriers at one path.
+**Registrations follow subscribers, not refs:** established on the first subscriber, released on the last, so a ref nobody subscribes to never enters the subscriber trie, and a subscription outlives its ref. `src/__tests__/listener-registration.test.ts` pins this, with two variant refs at one path.
 
-One thing several carriers at a path do *not* cost is changeset allocation. `deliverNotifications` builds one `Changeset` per key and shares it across every callback registered there.
+Several refs at a path cost no extra changesets: `deliverNotifications` builds one `Changeset` per key and shares it across every callback registered there.
 
 ### One registration discipline for both channels
 
@@ -1771,7 +1789,7 @@ Three pure helpers used by `PlainPosition`, by `@kyneta/react`'s `text-adapter`,
 
 Source: `packages/schema/src/tree-position.ts`.
 
-Rich text editors (ProseMirror, CodeMirror, Slate, Lexical) address positions in a document tree using a single flat integer. The tree-position algebra bridges between these flat integers and kyneta's `(path, offset)` pairs in the schema tree — pure functions that require only a `Reader` and a `Schema`, no interpreter stack, no substrate-specific code.
+Rich text editors (ProseMirror, CodeMirror, Slate, Lexical) address positions in a document tree using a single flat integer. The tree-position algebra bridges between these flat integers and kyneta's `(path, offset)` pairs in the schema tree — pure functions that require only a `Reader` and a `Schema`, no ref, no substrate-specific code.
 
 ### Counting convention
 
@@ -1813,7 +1831,7 @@ Tree-position and `Position` operate at different layers:
 1. **Tree-position** finds the structural location: "flat position 7 is at `items[1].content`, character offset 2."
 2. **`Position`** creates a stable cursor: `ref[POSITION].createPosition(2, "right")` at the ref for `items[1].content`.
 
-The caller composes: `resolveTreePosition` → navigate to the ref at the resolved path → `ref[POSITION].createPosition(offset, side)`. This separation preserves composability — tree-position needs only `Reader`, while `Position` needs the full interpreter stack.
+The caller composes: `resolveTreePosition` → navigate to the ref at the resolved path → `ref[POSITION].createPosition(offset, side)`. This separation preserves composability — tree-position needs only `Reader`, while `Position` needs a ref.
 
 ### Ordering contracts
 
@@ -1831,7 +1849,7 @@ The caller composes: `resolveTreePosition` → navigate to the ref at the resolv
 
 ## Sequence extension composition
 
-Source: `packages/schema/src/change.ts` (types), `packages/schema/src/interpreters/sequence-helpers.ts` (write wiring).
+Source: `packages/schema/src/change.ts` (types), `packages/schema/src/ref/write.ts` (write wiring).
 
 The positional algebra (`Instruction`, `foldInstructions`, `transformIndex`, `advanceAddresses`) is shared across `text`, `sequence`, `movable`, and `richtext`. Extensions compose in two orthogonal patterns:
 
@@ -2063,45 +2081,21 @@ holds. This section records the limits. Every remaining cast in
 
 ### The erasure frontier
 
-**Augmenting a carrier typed as a type parameter.** Each interpreter layer
-takes the value the layer below produced, adds members, and returns it as
-`A & Has…`. Assigning to a property of a value typed `A` is a type error — `A`
-might have that member at another type — so this used to be written `as any`,
-which disabled checking for the whole case body.
-
-It reads like a demand for higher-kinded types, and it is not. `Object.assign`
-has the signature `<T, U>(target: T, source: U): T & U`, which is exactly "a
-`T`, plus these members, still a `T`". The interpreter layers now use it, plus
-assertion functions (`asserts x is T & …`) for members that must be attached
-with `Object.defineProperty`. What the conversion actually needed was one
-constraint: `withWritable<A extends object>`, because `Object.assign` will not
-take an unconstrained type parameter.
-
-**Phantom brands.** `HasNavigation`, `HasRead` and `HasCaching` each carry a
-symbol that is declared but never assigned, marking a capability with no
-runtime representation. Nothing structural can produce one, so `markNavigation`,
-`markRead` and `markCaching` in `bottom.ts` are assertion functions **with
-empty bodies** — the honest shape for a claim that is entirely type-level. They
-are the reason those layers still end each case with an assertion, and the
-assertion is now one named call rather than `as any` over the whole body.
-
-The brands have a second consequence, which is where most of the remaining
-narrowings come from. Because a brand says *that* a capability exists without
-saying what it looks like, a layer cannot see the surface an inner layer
-installed: the readable layer calls `.at`, but its carrier type does not carry
-it. `NavigableCarrier<K>` names that dependency at each site instead of
-reaching for `any`. Making the brands structural would remove those narrowings
-and move the cost into every layer's return type, which is where the `TS2589`
-budget would go.
+**A member's `this`.** A prototype member is one function shared by every
+ref of its template, so it is typed `this: unknown`: nothing stops a caller
+from taking it off its ref. `stateOf` checks at run time that `this` is a ref,
+and the member then names the one surface it calls on it (`this as { at(key:
+string): unknown }`) rather than the ref's full type, which depends on the
+schema the template was built for.
 
 **The `TS2589` depth ceiling.** "Type instantiation is excessively deep" is a
 hard compiler limit, not a warning, and this codebase runs near it. The
 interpreter's generic recursion is where it originates, and consumers inherit
 the depth: `@kyneta/exchange` carries documented workarounds in `exchange.ts`
 and `runtime.ts` — a deferred conditional to avoid tripping the `SchemaRef`
-tree, a non-generic internal path, an `as never` bridge. `create-doc.ts` casts
-the interpreter builder for the same reason, with the reason written next to
-it. Anything that deepens instantiation must be checked against `@kyneta/
+tree, a non-generic internal path, an `as never` bridge. `create-doc.ts`'s
+`createDoc` is typed through a call signature for the same reason, with the
+reason written next to it. Anything that deepens instantiation must be checked against `@kyneta/
 exchange` *first*, because it has the least headroom.
 
 **The third-party boundary.** `loro-crdt` and `yjs` do not describe every value
@@ -2124,8 +2118,8 @@ independence bought with four assertions.
 
 Counts, not a line-by-line inventory, which would go stale immediately.
 What remains in `packages/schema` falls into four causes, and every surviving
-cast carries a comment naming which one it sits on. The interpreter layers hold
-none.
+cast carries a comment naming which one it sits on, except the narrowings of a
+member's `this`, which the erasure frontier above covers.
 
 | Cause | Fixable? |
 |---|---|
@@ -2180,8 +2174,8 @@ introduce a deliberate typo where it was      -> checking actually restored?
 Three of those steps exist because of specific failures.
 
 **Cumulative, not individual.** Removals that are each clean alone can fail
-together. `with-addressing.ts` is the worked example: eight casts, each
-individually removable, none removable as a set.
+together: the addressing layer that `src/ref/address.ts` replaced had eight
+casts, each individually removable, none removable as a set.
 
 **Consumers, not just the package.** Strengthening an internal type can widen
 an emitted `.d.ts` and cost depth downstream, where the error surfaces as
@@ -2194,35 +2188,6 @@ to be and confirm the compiler objects.
 
 A note on counting them: `grep "as any"` also matches the prose "h*as any*".
 Use a word boundary.
-
-### The deferred piece
-
-**Nothing in this category remains.** The installers were typed too — 17
-`install…` helpers across `sequence-helpers.ts`, `keyed-helpers.ts`,
-`set-helpers.ts` and `tree-helpers.ts` that used to take `result: any`. Those
-that *add* members are assertion functions declaring what they attach
-(`ListWriteOps`, `KeyedNavigation`, `TreeReadable` and so on), so a member
-installed in one place is visible in the carrier's type at the call site.
-
-Three still cannot assert: `installKeyedCaching`, `installSequenceCaching` and
-`installAddressTable` (in `with-addressing.ts`) take the symbol they attach as
-a *parameter*, so there is no member to name in a type. They take
-`result: object` and narrow internally, which is honest about their being
-dynamic by design.
-
-`installAddressTable` is shared: sequences and maps had one installer each,
-character-for-character identical, because every difference between them is
-passed in as an argument. It lives in `with-addressing.ts`, its only caller.
-
-One structural fact is worth knowing before touching this code. **Layers
-describe each other with phantom brands, not structurally.** `installKeyedReadable`
-calls `.at`, which the navigation layer installed further in — but
-`HasNavigation` is a brand, so that surface is invisible in the type at the
-readable layer. Each such helper names the single member it depends on rather
-than reaching for `any`. Making the brands structural would remove those
-narrowings and is the obvious next question; it would also mean every layer's
-return type carrying its full installed surface, which is where the depth
-budget would get spent.
 
 ---
 
@@ -2240,8 +2205,9 @@ Selection of the most-used types. Full list in the **Canonical symbols** line at
 | `BoundSchema<S>`, `BoundReplica<V>` | `src/bind.ts` | Static binding types. |
 | `EphemeralLaws` | `src/bind.ts` | `"lww" \| "lww-per-key" \| "lww-tag-replaced"` — the LWW-family law set. |
 | `Interpret`, `Replicate`, `Defer`, `Reject` | `src/bind.ts` | Resolve-outcome variants. |
-| `Interpreter<Ctx, A>`, `InterpreterLayer<Ctx, In, Out>` | `src/interpret.ts` | F-algebra + layer transformer. |
-| `Ref<S>`, `RRef<S>`, `RWRef<S>`, `DocRef<S>` | `src/ref.ts` | Refs at each capability tier. |
+| `Interpreter<Ctx, A>` | `src/interpret.ts` | The F-algebra `interpret` folds a schema with. |
+| `Ref<S>`, `RRef<S>`, `DocRef<S>` | `src/ref.ts` | A ref; its read surface alone; a document's root ref. |
+| `RefState`, `RefTemplate`, `RefPosition` | `src/ref/state.ts`, `src/ref/prototype.ts` | What one ref holds; what every ref of a schema node and position shares; where a ref sits. Package-internal. |
 | `Substrate<V>`, `Replica<V>`, `SubstrateFactory<V>`, `ReplicaFactory<V>` | `src/substrate.ts` | Interfaces. |
 | `SubstratePayload` | `src/substrate.ts` | Opaque transfer shape. |
 | `SyncMode`, `WriterModel`, `Delivery`, `Durability` | `src/substrate.ts` | Structured sync mode and its three axes. |
@@ -2260,10 +2226,8 @@ Selection of the most-used types. Full list in the **Canonical symbols** line at
 | `CALL`, `NATIVE`, `SUBSTRATE`, `BACKING_DOC`, `KIND`, `LAWS`, `POSITION`, `MIGRATION_CHAIN`, `REMOVE`, `TRANSACT`, `DELETED` | various | Symbol-keyed runtime protocol tags. |
 | `Reader`, `PlainState` | `src/reader.ts` | Plain-state reader primitive. |
 | `Path`, `Segment`, `Address` | `src/path.ts` | Path and address types. `Path.segmentKeys` is the structural key derivation; `key` joins them. |
-| `CoordinateTrie`, `CoordinateNode`, `SequenceAddressTable` | `src/coordinate-trie.ts` | One node per coordinate: address, schema, list table, carrier, read. |
+| `CoordinateTrie`, `Coordinate` | `src/coordinate-trie.ts`, `src/path.ts` | A context's coordinates; one coordinate, which is its address: liveness, schema, canonical ref, ref count, children. |
 | `SubtreeEffect` | `src/subtree-effect.ts` | What a change may have rewritten below its path. |
-| `PrepareStage` | `src/interpreters/writable.ts` | One layer's `before`/`after` part in `ctx.prepare`. |
-| `HasAddressing` | `src/interpreters/bottom.ts` | Brand: every path is addressed; `withCaching` requires it. |
 | `walkPath`, `PathWalk`, `foldPath`, `pathSchema`, `findOpaqueBoundary`, `OpaqueBoundaryHit`, `PathStepper`, `PathFoldResult`, `extendSchemaPathKey` | `src/fold-path.ts` | The one schema-guided traversal and its projections (the substrate-blind sibling of `Path.read(state)`), plus the shared binding-key accumulator. The single-step primitive `stepSchema` is package-internal by design — see [Why one traversal, not many](#why-one-traversal-not-many). |
 
 ---
@@ -2314,7 +2278,7 @@ Mark such a symbol with:
 
 The marker asserts two things at once: this is package-internal despite the `export` keyword, and its absence from the barrel is a decision rather than an oversight. Without it a future reader has no way to tell which, and is as likely to promote the symbol as to delete it.
 
-The worked example is `__countKeptRefs` (`src/coordinate-trie.ts`), a backdoor for asserting that a value read keeps no refs. It earns its place because a ref kept by a read has no public symptom but memory — there is no public-surface proxy, so a behavioural test would pass whether or not refs accreted. Where the sole symptom is resource growth, inspecting the structure is the honest instrument; `__getListenerCountAtPath` (`with-changefeed.ts`) is the same instrument for subscriber registrations.
+The worked example is `__countKeptRefs` (`src/coordinate-trie.ts`), a backdoor for asserting that a value read keeps no refs; `__countTrieNodes` beside it counts coordinates, for asserting that ops and dropped refs leave none behind. It earns its place because a ref kept by a read has no public symptom but memory — there is no public-surface proxy, so a behavioural test would pass whether or not refs accreted. Where the sole symptom is resource growth, inspecting the structure is the honest instrument; `__getListenerCountAtPath` (`ref/observe.ts`) is the same instrument for subscriber registrations.
 
 ---
 
@@ -2332,29 +2296,30 @@ The worked example is `__countKeptRefs` (`src/coordinate-trie.ts`), a backdoor f
 | `src/complete.ts` | `completeValue`, `completeChange` — a value or change shaped by its schema before it enters σ; `completeAt`, a change completed at the schema it lands at in σ. Pure over a reader. |
 | `src/reconcile-shadow.ts` | `planReconcile`, `reconcileShadow` — σ brought up to date from λ where a change touched it: plan (pure), gather, execute. |
 | `src/diff-ops.ts` | `diffOps` — the ops a local writer would have produced between two states; the state-based merges' announcer. Pure. |
-| `src/coordinate-trie.ts` | `CoordinateTrie` — one node per coordinate; `coordinatePath`; `__countKeptRefs`. |
+| `src/coordinate-trie.ts` | `CoordinateTrie` — a context's coordinates: navigation, `locate`, `advance`, `drop`, `prune`; `coordinateNeeded`; `__countKeptRefs`, `__countTrieNodes`. |
 | `src/coordinate-exists.ts` | `coordinateExists`, `childSchema`, `activeSchema`, `liveSchemaAt`, `landingSchema` — existence and schema of a coordinate, sums resolved from σ. Pure over a reader. |
 | `src/address-fates.ts` | `planAddressFates` — which coordinates a change killed, dropped or revived. Pure. |
-| `src/clone.ts` | `deepClonePlain`, `frozenClone`, `freezeTree`, `thaw`, `isDeeplyFrozen` — the copy and freeze primitives, and the frozen invariant. |
+| `src/clone.ts` | `deepClonePlain`, `freezeTree`, `thaw`, `isDeeplyFrozen` — the copy and freeze primitives, and the frozen invariant. |
 | `src/plain-access.ts` | `childOf`, `withChild` — one way to step from a plain container to its child, the flat forest included. |
-| `src/interpret.ts` | `interpret`, `Interpreter`, `InterpretBuilder`, `InterpreterLayer`, `dispatchSum`, `RawPath`. |
-| `src/interpreters/bottom.ts` | Bottom layer: `[CHANGEFEED]`, `[NATIVE]`, `[SUBSTRATE]`, `[CALL]`. |
-| `src/interpreters/sequence-helpers.ts` | Shared indexed-coalgebra helpers: `at()`, `installTextWriteOps`, `installListWriteOps`, `installRichTextWriteOps`, `installSequenceReadable`, `installSequenceNavigation`, `installSequenceCaching`. |
-| `src/interpreters/keyed-helpers.ts` | Shared keyed-coalgebra helpers: `installKeyedWriteOps`, `installKeyedReadable`, `installKeyedNavigation`, `installKeyedCaching`. |
-| `src/interpreters/with-navigation.ts` | Structural descent. Sequence/movable and map/set cases delegate to shared helpers. |
-| `src/interpreters/with-readable.ts` | Every kind's `()`, through `readAt`; `.get` and the set and tree read surfaces through shared helpers. |
-| `src/interpreters/read-at.ts` | `readAt`, `readChildAt`, `valueAt` — the one rule for what a value read returns. |
-| `src/interpreters/with-addressing.ts` | Addressing layer: owns the context's `CoordinateTrie`, records schemas, and registers the prepare stage that advances, kills and revives addresses; `[DELETED]`, `[REMOVE]`. |
-| `src/interpreters/with-caching.ts` | Identity-preserving memoization of carriers. Sequence/movable, map and tree cases delegate to shared helpers. |
-| `src/interpreters/writable.ts` | Mutation primitives + `REMOVE` + `TRANSACT` + the batch lifecycle (`buildWritableContext`, `SealedBatch`, `TraceEntry`) + the prepare pipeline (`PrepareStage`) + `hasPreparePipeline`. Text/sequence/movable/map/set cases delegate to shared helpers. |
+| `src/interpret.ts` | `interpret`, `Interpreter`, `createInterpreter`, `dispatchSum`. |
+| `src/interpreters/writable.ts` | The writable context's types: `WritableContext`, `TraceEntry`, `SealedBatch`; `TRANSACT`, `PATH`, `REMOVE`; the write surfaces by kind. |
+| `src/writable-context.ts` | `buildWritableContext`: the batch lifecycle, `prepare` (locate, complete, advance, apply, settle, mark), delivery, and the context's two tries. |
 | `src/interpreters/frame-stack.ts` | What an authored batch did, frame by frame: `openFrame`, `record`, `closeFrame`, `abortFrame`. Pure. |
-| `src/interpreters/with-changefeed.ts` | Observation layer + `planDelivery` + `deliverNotifications` + `createNodeChangefeed` + `wireChangefeed`. All cases, the tree included, use `wireChangefeed`. The notification engine itself is internal — not exported. |
+| `src/delivery.ts` | `planDelivery` (pure), `deliverNotifications`, `changesetMetadata`, `liftToOps`. Internal: not exported. |
 | `src/interpreters/subscriber-trie.ts` | `SubscriberTrie` — a context's subscribers and population state, one node per coordinate, with the up and down walks delivery and population need. |
 | `src/interpreters/validate.ts` | Validation interpreter. |
 | `src/interpreters/plain.ts` | Plain-state interpreter (reader + canonical shape). |
 | `src/interpreters/navigable.ts`, `readable.ts` | ~100 each | Type-interface modules. |
-| `src/layers.ts` | Pre-built `navigation`, `readable`, `addressing`, `writable`, `observation` layer values. |
-| `src/ref.ts` | `Ref<S>`, `RRef<S>`, `RWRef<S>`, `DocRef<S>`, `Wrap`, `RefMode`. |
+| `src/ref.ts` | `Ref<S>`, `RRef<S>`, `DocRef<S>`, `SchemaRef`, `Wrap`. |
+| `src/ref/state.ts` | `RefState`, `bindState`, `refBase`, `stateOf`: what a ref holds, and how a member reaches it. |
+| `src/ref/prototype.ts` | `templateFor`, `RefPosition`: the prototype, bound function and own properties shared per schema node and position. |
+| `src/ref/create.ts` | `createRootRef`, `createRefAt`, `canonicalChild`, sum proxies, and the finalization that prunes. |
+| `src/ref/read.ts` | `CALL`, `readAt`, `readChildAt`, `valueAt`, the read members. |
+| `src/ref/navigate.ts` | Field getters, `LENGTH`, the navigation members. |
+| `src/ref/write.ts` | The write members, `[TRANSACT]`, `[PATH]`. |
+| `src/ref/observe.ts` | `[CHANGEFEED]`, `[POPULATED]`, `populated`, `populatedFeed`, `feedCarrier`. |
+| `src/ref/address.ts` | `[DELETED]`, `[REMOVE]`, `deleted`, `deletedFeed`; `advance` and `settle`. |
+| `src/ref/track.ts` | `report`, `reportFeed`: the dependency reports. |
 | `src/position.ts` | `Position`, `Side`, `POSITION`, `HasPosition`, `PlainPosition`, `decodePlainPosition`. |
 | `src/tree-position.ts` | Tree-position algebra: `nodeSize`, `contentSize`, `isLeaf`, `resolveTreePosition`, `flattenTreePosition`, `ResolvedTreePosition`. Pure functions over `Reader` + `Schema` for flat↔tree position mapping (ProseMirror convention). |
 | `src/changefeed.ts` | `Op`, `RecursiveChangefeedProtocol`, `HasRecursiveChangefeed`, `expandProductMapChanges`. |
@@ -2366,8 +2331,8 @@ The worked example is `__countKeptRefs` (`src/coordinate-trie.ts`), a backdoor f
 | `src/version-vector.ts` | `versionVectorMeet`, `versionVectorCompare`. |
 | `src/hash.ts` | `computeSchemaHash` (FNV-1a-128), `peerNumber` (FNV-1a-64), and the `Digest` lanes. |
 | `src/native.ts` | `NativeMap`, `NATIVE`, `SUBSTRATE`, `HasNative`. |
-| `src/path.ts` | Path/segment/address types + constructors + `AddressedPath`. |
-| `src/create-doc.ts` | `createDoc`, `createRef` — convenience factories. |
+| `src/path.ts` | Paths, raw segments, and addresses, each its coordinate (`Coordinate`); `AddressedPath`, a parent and one segment. |
+| `src/create-doc.ts` | `createDoc`, `createDocAs`, `createRef`. |
 | `src/describe.ts` | ASCII schema tree printer. |
 | `src/zero.ts` | `Zero`, `scalarDefault`. |
 | `src/interpreters/materialize.ts` | Generic CRDT→PlainState materialization: `MaterializeResolver` interface, `createMaterializeInterpreter`, `plainResolution`, `plainValueResolver`. |
@@ -2386,13 +2351,13 @@ The worked example is `__countKeptRefs` (`src/coordinate-trie.ts`), a backdoor f
 | `src/substrates/ephemeral.ts`, `substrates/state-tree.ts` | ~570 + ~770 | Ephemeral substrate: CvRDT field-level LWW and its state space. |
 | `src/basic/index.ts` | — | Test-only helpers (re-exports). |
 | `src/sync.ts` | `version`, `exportEntirety`, `exportSince`, `merge` — generic over `ref[SUBSTRATE]`. |
-| `src/__tests__/` | ~56 files | Every test file is pure; no I/O, no timers. |
+| `src/__tests__/` | ~120 files | Pure tests, run with `--expose-gc` (`vitest.config.ts`) so the ref lifetime tests can force a collection. |
 
 ---
 
 ## Testing
 
-Every test in this package is pure. Substrates-under-test are the plain substrate (for everything) and structured mocks. Interpreters are tested by constructing minimal refs and asserting on method results. Migrations are tested by deriving manifests for known schemas and asserting on the hash values. Validation is tested by running `validate` over synthetic inputs and asserting on the error tree.
+Every test in this package is pure, except that `ref-lifetime.test.ts` forces garbage collections and awaits finalizers. Substrates-under-test are the plain substrate (for everything) and structured mocks. Refs are tested through `createDoc`, or over a plain state the test holds (`src/__tests__/stack.ts`). Migrations are tested by deriving manifests for known schemas and asserting on the hash values. Validation is tested by running `validate` over synthetic inputs and asserting on the error tree.
 
 The full suite serves as the specification of the `Substrate<V>` contract: `@kyneta/loro-schema` and `@kyneta/yjs-schema` run this same suite (adapted) against their substrates. Position conformance tests import `positionConformance` and `PositionTestEnv` from `@kyneta/schema/testing`; general substrate conformance helpers live in `@kyneta/schema/basic`.
 

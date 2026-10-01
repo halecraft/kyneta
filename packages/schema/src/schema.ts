@@ -720,7 +720,7 @@ function discriminatedSum<D extends string, V extends PlainProductSchema[]>(
   variants: [...V],
 ): DiscriminatedSumSchema<D, V, "lww-tag-replaced" | ExtractLaws<V[number]>> {
   const variantMap = buildVariantMap(discriminant, variants)
-  // Stamp each variant with the discriminant key so interpreter layers
+  // Stamp each variant with the discriminant key so refs and interpreters
   // can identify and special-case the discriminant field at runtime.
   //
   // `discriminantKey` is declared `readonly`, which describes the schema as

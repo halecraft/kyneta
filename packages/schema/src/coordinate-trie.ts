@@ -1,154 +1,162 @@
-// coordinate-trie — one node per coordinate a context has navigated to.
+// coordinate-trie — one coordinate per place a context has navigated to.
 //
-// A ref is a pointer to a coordinate, and every piece of per-coordinate state
-// hangs off one node here: its address and the schema it was interpreted
-// with (`withAddressing`), and its memoized carrier (`withCaching`). A
-// coordinate's state lives and dies with its node, so no layer has to keep a
-// parallel table in step with another.
+// A ref is a pointer to a coordinate, and everything kept per coordinate
+// lives on one object: its address, which is its node here (`Coordinate`).
+// It holds the address's liveness and death listeners, the schema the ref
+// there was made with, the canonical ref and the count of refs anchored
+// there. A coordinate's state lives and dies with it, so nothing keeps a
+// parallel table in step with the trie.
 //
-// Children are keyed by segment identity (`Segment.identity`), so the trie
-// enumerates a subtree exactly: a key that joins segments with a separator
-// can be split wrongly, a trie cannot.
+// Children are keyed by coordinate: a field's or entry's key, a list item's
+// current index, so a list's children are its address table, re-keyed as
+// its items move (`advance`).
 //
-// Every lookup descends from the root, matching each segment's address by
-// identity, and nothing outside the trie holds a node. So a node that has
-// been unlinked is unreachable: a stale path finds nothing rather than a
-// stale address or carrier.
+// Every lookup descends from the root, matching each address as the very
+// object found, and nothing outside the trie links coordinates. So a
+// coordinate that has been unlinked is unreachable: a stale path finds
+// nothing rather than a stale address or ref.
 
+import type { Instruction } from "./change.js"
+import { advanceAddresses } from "./change.js"
 import {
   type Address,
   AddressedPath,
+  Coordinate,
   entryAddress,
+  FieldAddress,
   fieldAddress,
+  type IndexAddress,
   indexAddress,
+  isAddress,
   type Path,
-  RawPath,
-  resolveToAddressed,
+  rawOf,
+  type Segment,
   setDead,
 } from "./path.js"
-import type { Schema as SchemaNode } from "./schema.js"
 import type { SubtreeEffect } from "./subtree-effect.js"
 
 /**
- * `path` as a path into the context's trie.
+ * The number of coordinates whose canonical ref (a list item's, record
+ * entry's or tree node's) is alive in `ctx`'s trie.
  *
- * Every path an addressing stack derives is addressed. The exception is the
- * path of `interpret`'s entry call (the root, or a caller's raw path), which
- * is computed before the addressing layer's first case installs the addressed
- * root, and arrives raw; it is resolved against that root here.
- */
-export function coordinatePath(ctx: object, path: Path): AddressedPath {
-  if (path instanceof AddressedPath) return path
-  const root = (ctx as { readonly rootPath?: Path }).rootPath
-  if (root instanceof AddressedPath) return resolveToAddressed(path, root.trie)
-  throw new Error(
-    `A path in an addressing stack is not addressed: "${path.format()}". ` +
-      "Compose withAddressing beneath this layer.",
-  )
-}
-
-/**
- * The number of coordinates holding a carrier in `ctx`'s trie.
- *
- * @internal Test-only. A kept carrier has no public symptom, only memory, so
+ * @internal Test-only. A kept ref has no public symptom, only memory, so
  * reading the structure is the only test that can hold.
  */
-export function __countKeptRefs(ctx: object): number {
-  const trie = coordinatePath(ctx, RawPath.empty).trie
-  let count = trie.node(trie.root)?.ref === undefined ? 0 : 1
-  for (const [, node] of trie.below(trie.root)) {
-    if (node.ref !== undefined) count++
+export function __countKeptRefs(ctx: {
+  readonly trie: CoordinateTrie
+}): number {
+  let count = 0
+  for (const [, node] of ctx.trie.below(ctx.trie.root)) {
+    if (node.ref?.deref() !== undefined) count++
   }
   return count
 }
 
-/** A list's live item addresses by current index, for `.at(i)`. */
-export interface SequenceAddressTable {
-  readonly byIndex: Map<number, Address>
+/**
+ * The number of coordinates in `ctx`'s trie, the root excluded.
+ *
+ * @internal Test-only, for the same reason as `__countKeptRefs`: a coordinate
+ * nothing needs costs only memory.
+ */
+export function __countTrieNodes(ctx: {
+  readonly trie: CoordinateTrie
+}): number {
+  return ctx.trie.below(ctx.trie.root).length
 }
 
-/** The per-coordinate slots, each owned by one layer. */
-export interface CoordinateNode {
-  // withAddressing
-  /** The coordinate's address. Absent only at the root. */
-  readonly address?: Address
-  /** The schema the interpreter saw here, a sum's own schema at a sum. Kept
-   *  current by the fates walk (`planAddressFates`). */
-  schema?: SchemaNode
-  /** At a list: its live item addresses by index. */
-  sequenceTable?: SequenceAddressTable
-  // withCaching
-  /** The memoized carrier for a list item, map entry or tree node. */
-  ref?: unknown
+/** What keeps a coordinate in the trie, as the shell gathers it. */
+export interface CoordinateNeeds {
+  /** Live refs holding the coordinate: its anchor's (`Coordinate.refs`). */
+  readonly refs: number
+  /** Coordinates below it in the trie. */
+  readonly children: number
+  /** Listeners for its death, on its address. */
+  readonly listeners: number
+  /** Whether a subscriber sits at or below it (`SubscriberTrie.holdsAt`). */
+  readonly subscribed: boolean
 }
 
-class TrieNode implements CoordinateNode {
-  schema?: SchemaNode
-  sequenceTable?: SequenceAddressTable
-  ref?: unknown
-  readonly children = new Map<string, TrieNode>()
+/**
+ * Whether a coordinate must stay in the trie. A subscriber holds it because
+ * a subscription is keyed by the coordinate's identity, a list item's address
+ * id included: pruned, a later change would resolve to a new address and miss
+ * the subscription.
+ */
+export function coordinateNeeded(needs: CoordinateNeeds): boolean {
+  return (
+    needs.refs > 0 ||
+    needs.children > 0 ||
+    needs.listeners > 0 ||
+    needs.subscribed
+  )
+}
 
-  constructor(readonly address?: Address) {}
+/** The trie's root: the document's coordinate, which is no segment. */
+class RootCoordinate extends Coordinate {
+  constructor() {
+    super(false)
+  }
 }
 
 /** One coordinate below a path, with the path that names it. */
-export type RegisteredNode = readonly [
-  path: AddressedPath,
-  node: CoordinateNode,
-]
+export type RegisteredNode = readonly [path: AddressedPath, node: Address]
 
 /**
- * The coordinates of one context. Created by `withAddressing`, reached
- * through the context's root path (`AddressedPath.trie`).
+ * The coordinates of one context, owned by its writable context (`ctx.trie`).
+ *
+ * Only a ref creates a coordinate: navigation (`AddressedPath.field`,
+ * `.entry`, `.item`) asks the trie for addresses, and only ref construction
+ * navigates. An op's path is located (`locate`), which creates nothing. A
+ * coordinate leaves when nothing needs it any more (`prune`), or when it no
+ * longer exists (`drop`).
  */
 export class CoordinateTrie {
-  private readonly rootNode = new TrieNode()
+  private readonly rootNode = new RootCoordinate()
+
+  /**
+   * `subscribed(at)` says whether a subscriber sits at or below a
+   * coordinate (`SubscriberTrie.holdsAt`), which keeps it from pruning.
+   */
+  constructor(
+    private readonly subscribed: (at: AddressedPath) => boolean = () => false,
+  ) {}
 
   /** The empty path into this trie. */
-  readonly root: AddressedPath = new AddressedPath([], this)
+  readonly root: AddressedPath = AddressedPath.empty(this)
 
-  /** The node at `path`, or `undefined` if any coordinate on the way is
-   *  not in the trie. */
-  node(path: Path): CoordinateNode | undefined {
-    return this.find(path)
+  /** The coordinate at `path`, or `undefined` if any coordinate on the way
+   *  is not in the trie. */
+  node(path: AddressedPath): Coordinate | undefined {
+    const { parent, last } = path
+    if (parent === undefined || last === undefined) return this.rootNode
+    const node = this.node(parent)
+    return node === undefined ? undefined : childMatching(node, last)
   }
 
-  /** The nodes from the root down to `path`, inclusive, as far as they are
-   *  in the trie. */
-  *ancestors(path: Path): Iterable<CoordinateNode> {
-    let node: TrieNode | undefined = this.rootNode
-    yield node
-    for (const segment of path.segments) {
-      node = childMatching(node, segment)
-      if (node === undefined) return
-      yield node
-    }
-  }
-
-  /** The nodes strictly below `path`, parents before children. */
+  /** The coordinates strictly below `path`, parents before children. */
   below(path: AddressedPath): RegisteredNode[] {
-    const start = this.find(path)
+    const start = this.node(path)
     if (start === undefined) return []
-    const out: [AddressedPath, CoordinateNode][] = []
+    const out: [AddressedPath, Address][] = []
     collect(start, path, out)
     return out
   }
 
   /**
-   * The nodes a change with `effect` at `path` may have rewritten, parents
-   * before children: everything below `path` for `"all"`, each named child
-   * and everything below it for `{ keys }`, nothing for `"none"`.
+   * The coordinates a change with `effect` at `path` may have rewritten,
+   * parents before children: everything below `path` for `"all"`, each named
+   * child and everything below it for `{ keys }`, nothing for `"none"`.
    */
   within(path: AddressedPath, effect: SubtreeEffect): RegisteredNode[] {
     if (effect === "none") return []
     if (effect === "all") return this.below(path)
-    const start = this.find(path)
+    const start = this.node(path)
     if (start === undefined) return []
-    const out: [AddressedPath, CoordinateNode][] = []
+    const out: [AddressedPath, Address][] = []
     for (const key of effect.keys) {
       const child = start.children.get(key)
-      if (child?.address === undefined) continue
-      const childPath = path.child(child.address)
+      if (child === undefined) continue
+      const childPath = path.child(child)
       out.push([childPath, child])
       collect(child, childPath, out)
     }
@@ -156,132 +164,214 @@ export class CoordinateTrie {
   }
 
   /**
-   * Unlink `path` and everything below it, first marking every address in
-   * the subtree dead. Once unlinked a node cannot be reached to be told, and
-   * a held ref inside it must still report `deleted`.
+   * `path` located in this trie: each segment the trie has, as its address
+   * (a list item by its current index), and the rest as raw segments.
+   * Creates nothing. A path addressed in another document's trie is located
+   * by its coordinates, since its addresses say nothing about which
+   * coordinates are alive here.
    */
-  drop(path: Path): void {
-    if (path.length === 0) throw new Error("The trie's root cannot be dropped.")
-    const parent = this.find(path.slice(0, -1))
-    const segment = path.segments[path.length - 1]
-    if (parent === undefined || segment === undefined) return
-    const node = childMatching(parent, segment)
-    if (node === undefined) return
-    killSubtree(node)
-    parent.children.delete(segment.identity)
-    const table = parent.sequenceTable
-    if (table !== undefined && node.address?.kind === "index") {
-      if (table.byIndex.get(node.address.index) === node.address) {
-        table.byIndex.delete(node.address.index)
-      }
+  locate(path: Path): AddressedPath {
+    if (path instanceof AddressedPath && path.trie === this) return path
+    let located = this.root
+    let node: Coordinate | undefined = this.rootNode
+    for (const segment of path.segments) {
+      const raw = rawOf(segment)
+      const child: Address | undefined =
+        node === undefined ? undefined : childMatching(node, raw)
+      located = located.child(child ?? raw)
+      node = child
     }
+    return located
   }
 
-  /** Unlink every list item below `path`'s list, marking each dead. */
-  clearSequence(path: AddressedPath): void {
-    const node = this.find(path)
-    if (node?.sequenceTable === undefined) return
-    for (const address of [...node.sequenceTable.byIndex.values()]) {
-      this.drop(path.child(address))
+  /**
+   * Move the items of the list at `path` through a sequence change: re-key
+   * those that remain by their new index, and kill those it deleted, with
+   * everything below them.
+   */
+  advance(path: AddressedPath, instructions: readonly Instruction[]): void {
+    const list = this.node(path)
+    if (list === undefined || list.children.size === 0) return
+    const items = [...list.children.values()] as IndexAddress[]
+    const removed = new Set(advanceAddresses(items, instructions))
+    list.relink(items.filter(item => !removed.has(item)))
+    for (const item of removed) killSubtree(item)
+  }
+
+  /**
+   * Unlink `path` and everything below it, first marking every address in
+   * the subtree dead. Once unlinked a coordinate cannot be reached to be
+   * told, and a held ref inside it must still report `deleted`.
+   */
+  drop(path: AddressedPath): void {
+    const parent = path.parent
+    if (parent === undefined) {
+      throw new Error("The trie's root cannot be dropped.")
     }
-    node.sequenceTable = undefined
+    const node = this.node(path)
+    const above = this.node(parent)
+    if (!isAddress(node) || above === undefined) return
+    killSubtree(node)
+    above.unlink(node)
+  }
+
+  /** Kill and unlink every item of the list at `path`. */
+  clearList(path: AddressedPath): void {
+    const list = this.node(path)
+    if (list === undefined) return
+    for (const item of list.children.values()) killSubtree(item)
+    list.relink([])
+  }
+
+  /**
+   * Unlink what nothing needs (`coordinateNeeded`) once the anchor at `path`
+   * has lost a ref: the field coordinates its refs held, children first,
+   * then the anchor itself, then its parent, and so on up, so an emptied
+   * branch goes. No address is marked dead: nothing holds it to be told.
+   */
+  prune(path: AddressedPath): void {
+    const chain = this.chain(path)
+    if (chain === undefined) return
+    const anchor = chain[chain.length - 1]
+    if (anchor === undefined || anchor.refs > 0) return
+    this.pruneFields(anchor, path)
+    let at = path
+    for (let i = chain.length - 1; i > 0; i--) {
+      const node = chain[i]
+      const parent = chain[i - 1]
+      if (!isAddress(node) || parent === undefined) return
+      if (this.needed(node, at, heldRefs(chain, i))) return
+      parent.unlink(node)
+      at = at.slice(0, -1)
+    }
   }
 
   // -------------------------------------------------------------------------
-  // Addresses: the only way a node comes into being
+  // Addresses: the only way a coordinate comes into being
   // -------------------------------------------------------------------------
 
   /** The address of declared field `key` below `parent`. */
-  fieldAddress(parent: Path, key: string): Address {
-    return this.childAddress(parent, key, "field", dead =>
+  fieldAddress(parent: AddressedPath, key: string): Address {
+    return this.keyedAddress(parent, key, "field", dead =>
       fieldAddress(key, dead),
     )
   }
 
   /** The address of runtime key `key` (map entry, set member, tree node id)
    *  below `parent`. */
-  entryAddress(parent: Path, key: string): Address {
-    return this.childAddress(parent, key, "entry", dead =>
+  entryAddress(parent: AddressedPath, key: string): Address {
+    return this.keyedAddress(parent, key, "entry", dead =>
       entryAddress(key, dead),
     )
   }
 
   /** The address of the item at `index` in the list at `parent`. */
-  itemAddress(parent: Path, index: number): Address {
-    const node = this.find(parent)
+  itemAddress(parent: AddressedPath, index: number): Address {
+    const node = this.node(parent)
     // A path whose coordinate has left the trie names nothing: its children
-    // are as dead as it is, and must not bring a node back.
+    // are as dead as it is, and must not bring a coordinate back.
     if (node === undefined) return indexAddress(index, true)
-    node.sequenceTable ??= { byIndex: new Map() }
-    const existing = node.sequenceTable.byIndex.get(index)
+    const existing = node.children.get(index)
     if (existing !== undefined) return existing
     const address = indexAddress(index)
-    node.sequenceTable.byIndex.set(index, address)
-    node.children.set(address.identity, new TrieNode(address))
+    node.link(address)
     return address
   }
 
-  private childAddress(
-    parent: Path,
+  private keyedAddress(
+    parent: AddressedPath,
     key: string,
     role: "field" | "entry",
     make: (dead: boolean) => Address,
   ): Address {
-    const node = this.find(parent)
+    const node = this.node(parent)
     if (node === undefined) return make(true)
     const existing = node.children.get(key)
-    if (existing?.address?.role === role) return existing.address
+    if (existing?.role === role) return existing
     if (existing !== undefined) {
       // The same key in the other role: the coordinate changed kind under a
       // sum, and what was there is gone.
       killSubtree(existing)
-      node.children.delete(key)
+      node.unlink(existing)
     }
     const address = make(false)
-    node.children.set(key, new TrieNode(address))
+    node.link(address)
     return address
   }
 
-  private find(path: Path): TrieNode | undefined {
-    let node: TrieNode | undefined = this.rootNode
-    for (const segment of path.segments) {
-      node = childMatching(node, segment)
-      if (node === undefined) return undefined
+  /** Unlink the unneeded field coordinates below an anchor no ref holds. */
+  private pruneFields(node: Coordinate, at: AddressedPath): void {
+    for (const child of [...node.children.values()]) {
+      if (!(child instanceof FieldAddress)) continue
+      const childPath = at.child(child)
+      this.pruneFields(child, childPath)
+      if (!this.needed(child, childPath, 0)) node.unlink(child)
     }
-    return node
+  }
+
+  private needed(node: Address, at: AddressedPath, refs: number): boolean {
+    return coordinateNeeded({
+      refs,
+      children: node.children.size,
+      listeners: node.listeners?.size ?? 0,
+      subscribed: this.subscribed(at),
+    })
+  }
+
+  /** The coordinates from the root to `path`, or `undefined` if one is
+   *  missing. */
+  private chain(path: AddressedPath): Coordinate[] | undefined {
+    const { parent, last } = path
+    if (parent === undefined || last === undefined) return [this.rootNode]
+    const above = this.chain(parent)
+    const node =
+      above === undefined
+        ? undefined
+        : childMatching(above[above.length - 1] ?? this.rootNode, last)
+    if (above === undefined || node === undefined) return undefined
+    above.push(node)
+    return above
   }
 }
 
 /**
- * The child of `node` at `segment`. For an addressed segment, the child's
- * address must be that very object: a path holding an address that has since
- * been replaced names a coordinate the trie no longer has.
+ * The child of `node` at `segment`'s coordinate. An address must be that very
+ * object: a path holding an address that has since been replaced names a
+ * coordinate the trie no longer has. A raw segment matches by role, so a raw
+ * index names the item now at that index.
  */
 function childMatching(
-  node: TrieNode,
-  segment: Path["segments"][number],
-): TrieNode | undefined {
-  const child = node.children.get(segment.identity)
+  node: Coordinate,
+  segment: Segment,
+): Address | undefined {
+  const child = node.children.get(segment.coord())
   if (child === undefined) return undefined
-  if ("kind" in segment && child.address !== segment) return undefined
-  return child
+  if (isAddress(segment)) return child === segment ? child : undefined
+  return child.role === segment.role ? child : undefined
+}
+
+/** The live refs holding `chain[i]`: those anchored at the nearest
+ *  coordinate at or above it that is no field. */
+function heldRefs(chain: readonly Coordinate[], i: number): number {
+  let j = i
+  while (chain[j] instanceof FieldAddress) j--
+  return chain[j]?.refs ?? 0
 }
 
 function collect(
-  node: TrieNode,
+  node: Coordinate,
   at: AddressedPath,
-  out: [AddressedPath, CoordinateNode][],
+  out: [AddressedPath, Address][],
 ): void {
   for (const child of node.children.values()) {
-    if (child.address === undefined) continue
-    const childPath = at.child(child.address)
+    const childPath = at.child(child)
     out.push([childPath, child])
     collect(child, childPath, out)
   }
 }
 
 /** Mark every address in `node`'s subtree dead, parents first. */
-function killSubtree(node: TrieNode): void {
-  if (node.address !== undefined) setDead(node.address, true)
+function killSubtree(node: Address): void {
+  setDead(node, true)
   for (const child of node.children.values()) killSubtree(child)
 }

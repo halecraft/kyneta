@@ -6,22 +6,13 @@ import {
   applyChanges,
   batch,
   deleted,
-  interpret,
-  observation,
-  plainContext,
   RawPath,
-  readable,
   replaceChange,
-  resolveToAddressed,
   Schema,
-  withNavigation,
-  withReadable,
-  writable,
 } from "../index.js"
-import type { RefContext } from "../interpreter-types.js"
-import { bottomInterpreter } from "../interpreters/bottom.js"
+import { PATH } from "../interpreters/writable.js"
 import { AddressedPath } from "../path.js"
-import { plainReader } from "../reader.js"
+import { contextOver, refOver } from "./stack.js"
 
 // ===========================================================================
 // Shared fixtures
@@ -42,23 +33,15 @@ const mapSchema = Schema.struct({
 
 function createTodoDoc(initialTodos: Array<{ text: string; done: boolean }>) {
   const store = { todos: initialTodos }
-  const ctx = plainContext(todoSchema, store)
-  const doc = interpret(todoSchema, ctx)
-    .with(readable)
-    .with(writable)
-    .with(observation)
-    .done() as any
+  const ctx = contextOver(todoSchema, store)
+  const doc = refOver(todoSchema, ctx) as any
   return { doc, store, ctx }
 }
 
 function createMapDoc(initialMetadata: Record<string, string>) {
   const store = { metadata: initialMetadata }
-  const ctx = plainContext(mapSchema, store)
-  const doc = interpret(mapSchema, ctx)
-    .with(readable)
-    .with(writable)
-    .with(observation)
-    .done() as any
+  const ctx = contextOver(mapSchema, store)
+  const doc = refOver(mapSchema, ctx) as any
   return { doc, store, ctx }
 }
 
@@ -66,7 +49,7 @@ function createMapDoc(initialMetadata: Record<string, string>) {
 // Sequence addressing — identity and advancement
 // ===========================================================================
 
-describe("withAddressing: sequences", () => {
+describe("addressing: sequences", () => {
   it("ref at shifted index still reads correct value after insert", () => {
     const { doc, store } = createTodoDoc([
       { text: "alpha", done: false },
@@ -173,8 +156,9 @@ describe("withAddressing: sequences", () => {
     expect(doc.todos.at(0).text()).toBe("b")
     expect(doc.todos.at(1).text()).toBe("c")
 
-    // NOTE: Identity preservation (doc.todos.at(0) === b) requires
-    // Phase 5, where withCaching delegates to the address table.
+    // A held item is the ref its new index hands back
+    expect(doc.todos.at(0)).toBe(b)
+    expect(doc.todos.at(1)).toBe(c)
   })
 })
 
@@ -182,7 +166,7 @@ describe("withAddressing: sequences", () => {
 // Map addressing — tombstoning and resurrection
 // ===========================================================================
 
-describe("withAddressing: maps", () => {
+describe("addressing: maps", () => {
   it("ref for deleted entry has dead address; read is undefined", () => {
     const { doc } = createMapDoc({ version: "1.0", author: "alice" })
 
@@ -245,45 +229,23 @@ describe("withAddressing: maps", () => {
 // ===========================================================================
 
 // ===========================================================================
-// Stack composition and rootPath propagation
+// Addressing reaches every ref
 // ===========================================================================
 
-describe("withAddressing: composition", () => {
-  it("stacks without withAddressing use RawPath (fallback works)", () => {
-    const store = { x: 42 }
-    const schema = Schema.struct({ x: Schema.number() })
-    // Build a stack WITHOUT withAddressing (and so without withCaching,
-    // which needs it)
-    const interp = withReadable(withNavigation(bottomInterpreter))
-    const ctx: RefContext = { reader: plainReader({ current: store }) }
-    const doc = interpret(schema, interp, ctx) as any
-
-    expect(doc.x()).toBe(42)
-    // The context should NOT have rootPath set (or it's undefined/RawPath)
-    expect(ctx.rootPath).toBeUndefined()
+describe("addressing: composition", () => {
+  it("every ref's path is addressed in the context's trie", () => {
+    const store = { todos: [{ text: "test", done: false }] }
+    const ctx = contextOver(todoSchema, store)
+    const doc = refOver(todoSchema, ctx) as any
+    const path = doc.todos.at(0).text[PATH]
+    expect(path).toBeInstanceOf(AddressedPath)
+    expect(path.trie).toBe(ctx.trie)
   })
 
-  it("readable layer includes withAddressing — paths are addressed", () => {
+  it("every ref below the root tracks deletion", () => {
     const store = { todos: [{ text: "test", done: false }] }
-    const ctx = plainContext(todoSchema, store)
-    const _doc = interpret(todoSchema, ctx)
-      .with(readable)
-      .with(writable)
-      .done() as any
-
-    // ctx.rootPath should be set by withAddressing
-    expect(ctx.rootPath).toBeDefined()
-    expect(ctx.rootPath?.isAddressed).toBe(true)
-    expect(ctx.rootPath).toBeInstanceOf(AddressedPath)
-  })
-
-  it("ctx.rootPath determines path type for entire tree", () => {
-    const store = { todos: [{ text: "test", done: false }] }
-    const ctx = plainContext(todoSchema, store)
-    const doc = interpret(todoSchema, ctx)
-      .with(readable)
-      .with(writable)
-      .done() as any
+    const ctx = contextOver(todoSchema, store)
+    const doc = refOver(todoSchema, ctx) as any
 
     // Access a deeply nested ref and verify it has `deleted` property
     const item = doc.todos.at(0)
@@ -296,10 +258,10 @@ describe("withAddressing: composition", () => {
 })
 
 // ===========================================================================
-// onRefCreated hook — deleted getter and ref registration
+// Deletion state
 // ===========================================================================
 
-describe("withAddressing: onRefCreated", () => {
+describe("addressing: deletion state by position", () => {
   it("attaches deleted getter on all ref types (product, sequence item)", () => {
     const { doc } = createTodoDoc([{ text: "test", done: false }])
 
@@ -321,7 +283,7 @@ describe("withAddressing: onRefCreated", () => {
 // ReplaceChange handling
 // ===========================================================================
 
-describe("withAddressing: ReplaceChange", () => {
+describe("addressing: ReplaceChange", () => {
   it("replaceChange on a sequence marks all addresses dead", () => {
     const { doc } = createTodoDoc([
       { text: "alpha", done: false },
@@ -351,7 +313,7 @@ describe("withAddressing: ReplaceChange", () => {
 // Phase 3 — Dead Address Detection (end-to-end verification)
 // ===========================================================================
 
-describe("withAddressing: dead ref detection", () => {
+describe("addressing: dead ref detection", () => {
   it("reading through a child ref of a deleted sequence item returns undefined", () => {
     const { doc } = createTodoDoc([
       { text: "alpha", done: false },
@@ -497,29 +459,27 @@ describe("withAddressing: dead ref detection", () => {
 // Phase 4 — Addressed Changefeed Routing
 // ===========================================================================
 
-describe("resolveToAddressed", () => {
-  it("is idempotent — already-addressed path passes through unchanged", () => {
+describe("CoordinateTrie.locate", () => {
+  it("is idempotent — a path addressed in the same trie passes through", () => {
     const trie = new CoordinateTrie()
-    const addressed = new AddressedPath([], trie).field("a").item(0)
-    const resolved = resolveToAddressed(addressed, trie)
-    expect(resolved).toBe(addressed)
+    const addressed = AddressedPath.empty(trie).field("a").item(0)
+    expect(trie.locate(addressed)).toBe(addressed)
   })
 
-  it("converts a RawPath to an AddressedPath with matching key", () => {
+  it("locates a RawPath at the addresses navigation made, with matching key", () => {
     const trie = new CoordinateTrie()
     const raw = RawPath.empty.field("todos").item(0).field("done")
-
-    // First, create the addresses via the trie (simulating .at(0) access)
-    const addrRoot = new AddressedPath([], trie)
-    const expected = addrRoot.field("todos").item(0).field("done")
-
-    const resolved = resolveToAddressed(raw, trie)
-    expect(resolved.isAddressed).toBe(true)
-    expect(resolved.key).toBe(expected.key)
+    const expected = AddressedPath.empty(trie)
+      .field("todos")
+      .item(0)
+      .field("done")
+    const located = trie.locate(raw)
+    expect(located).toBeInstanceOf(AddressedPath)
+    expect(located.key).toBe(expected.key)
   })
 })
 
-describe("withAddressing: external mutation routing", () => {
+describe("addressing: external mutation routing", () => {
   it("applyChanges with RawPath fires leaf-level subscriber", () => {
     const { doc } = createTodoDoc([{ text: "alpha", done: false }])
 
@@ -540,7 +500,7 @@ describe("withAddressing: external mutation routing", () => {
   })
 })
 
-describe("withAddressing: subscription survival after structural change", () => {
+describe("addressing: subscription survival after structural change", () => {
   it("leaf subscription survives deletion of a preceding item", () => {
     const { doc } = createTodoDoc([
       { text: "alpha", done: false },

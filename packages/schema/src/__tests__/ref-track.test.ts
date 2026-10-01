@@ -1,6 +1,6 @@
-// with-tracking.test.ts — integration tests for the read-instrumentation
-// layer against real refs (createDoc + batch). Validates aspect inference
-// and the load-bearing stable-key-invariance property.
+// ref-track — the dependency reports a ref's members make in a tracking
+// scope, against real refs (createDoc + batch): aspect inference, and the
+// load-bearing stable-key-invariance property.
 
 import { describe, expect, it } from "vitest"
 import {
@@ -32,7 +32,7 @@ const seed = (doc: any, n: number) =>
     }
   })
 
-describe("withTracking — aspect inference", () => {
+describe("tracking — aspect inference", () => {
   it("leaf () reports a single value dep", () => {
     const doc = createDoc(TodoApp)
     const { deps } = withReadScope(() => (doc as any).title())
@@ -98,7 +98,7 @@ const seedMap = (doc: any, n: number) =>
     for (let i = 0; i < n; i++) d.items.set(`k${i}`, { val: i })
   })
 
-describe("withTracking — map aspect inference", () => {
+describe("tracking — map aspect inference", () => {
   it("map () reports a single deep dep (fold suppressed)", () => {
     const doc = createDoc(MapTest)
     seedMap(doc, 3)
@@ -155,19 +155,12 @@ describe("withTracking — map aspect inference", () => {
 // Sum aspect inference
 // ---------------------------------------------------------------------------
 //
-// Sums are structurally transparent at the tracking layer: withTracking's
-// `sum` case passes through to the base interpreter, and the dispatched
-// variant carrier is built through the full stack (including this layer),
-// so it reports its own reads. The Proxy installed by with-navigation
-// forwards every operation — including the `[CALL]` apply trap used by
-// `useValue` — to the currently active variant.
-//
-// The meaningful tracking contract for a sum is therefore:
-//   `node()` (the deep fold) reports a single `deep` dep against the ACTIVE
-//   variant carrier, exactly as a plain product would. The Proxy ensures
-//   that calling the SAME identity across a variant shift re-evaluates
-//   against the new variant, and useValue's `useTracked` re-runs the thunk
-//   (capturing the new carrier) when the deep subscription fires.
+// A sum ref is a Proxy that forwards every operation, the apply trap
+// `useValue` calls through included, to its active variant's ref, which
+// reports its own reads. So `node()` reports a single `deep` dep against the
+// active variant, as a product would; calling the same sum ref after a
+// variant switch reads the new variant, and `useTracked` re-runs the thunk
+// when the deep subscription fires.
 
 const SumTest = Schema.struct({
   node: Schema.discriminatedUnion("type", [
@@ -176,7 +169,7 @@ const SumTest = Schema.struct({
   ]),
 })
 
-describe("withTracking — sum aspect inference", () => {
+describe("tracking — sum aspect inference", () => {
   it("calling a sum ref reports a single deep dep against the active variant", () => {
     const doc = createDoc(SumTest)
     batch(doc, (d: any) => {
@@ -186,8 +179,8 @@ describe("withTracking — sum aspect inference", () => {
     const { deps, value } = withReadScope(() => (doc as any).node())
 
     expect(value).toEqual({ type: "present", value: 42 })
-    // The sum Proxy forwards `()` to the active variant's `[CALL]`, which is
-    // wrapped by withTracking as a composite fold → a single `deep` dep.
+    // The sum Proxy forwards `()` to the active variant's read, which reports
+    // a composite read: a single `deep` dep.
     expect(deps).toHaveLength(1)
     expect(deps[0]?.aspect).toBe("deep")
   })
@@ -197,7 +190,7 @@ const TreeTest = Schema.struct({
   outline: Schema.tree(Schema.struct({ label: Schema.string() })),
 })
 
-describe("withTracking — tree aspect inference", () => {
+describe("tracking — tree aspect inference", () => {
   it("tree () reports a single deep dep (fold suppressed)", () => {
     const doc = createDoc(TreeTest)
     let _id = ""
@@ -244,7 +237,7 @@ describe("withTracking — tree aspect inference", () => {
   })
 })
 
-describe("withTracking — stable key invariance (cursor-stable identity)", () => {
+describe("tracking — stable key invariance (cursor-stable identity)", () => {
   it("a value dep key is invariant under a structural insert before it", () => {
     const doc = createDoc(TodoApp)
     batch(doc, (d: any) => d.todos.push({ id: "a", text: "x", done: false }))
@@ -285,7 +278,7 @@ describe("withTracking — stable key invariance (cursor-stable identity)", () =
 // .get — precise inside a scope, ref-free outside one
 // ---------------------------------------------------------------------------
 
-describe("withTracking — .get", () => {
+describe("tracking — .get", () => {
   const Rows = Schema.struct({
     rec: Schema.record(Schema.struct({ n: Schema.number() })),
     list: Schema.list(Schema.struct({ n: Schema.number() })),

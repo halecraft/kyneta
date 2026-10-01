@@ -59,7 +59,7 @@ describe("CHANGEFEED symbol identity", () => {
   it("matches Symbol.for('kyneta:changefeed') — cross-package detection works", () => {
     // This is the critical invariant of the package extraction:
     // any object created with Symbol.for("kyneta:changefeed") (e.g. by
-    // @kyneta/schema's withChangefeed interpreter) must be detectable
+    // every @kyneta/schema ref) must be detectable
     // by hasChangefeed from @kyneta/changefeed.
     const externalSymbol = Symbol.for("kyneta:changefeed")
     const obj: Record<symbol, unknown> = {}

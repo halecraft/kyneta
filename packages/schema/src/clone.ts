@@ -2,7 +2,7 @@
 //
 // A leaf module by design. The change vocabulary, the store, the inverse
 // algebra, the ephemeral substrate and the read layer all copy or freeze plain
-// values, and they sit at different levels of the stack. Putting the
+// values, and they sit at different levels of the package. Putting the
 // primitives where none of them import each other keeps any of them free to
 // reach for them without creating an import cycle.
 //
@@ -31,34 +31,6 @@ export function deepClonePlain<T>(value: T): T {
   const t = typeof value
   if (t === "object") return structuredClone(value)
   return value
-}
-
-/**
- * Copy a plain-JSON value and freeze every object in the copy, in one pass.
- * A byte array is copied and left unfrozen, since no typed array can be
- * frozen. Primitives are returned as they are.
- *
- * What a read on a read-only stack returns: the value there may be the
- * caller's own data, which a read must not freeze.
- */
-export function frozenClone<T>(value: T): T {
-  if (value === null || typeof value !== "object") return value
-  if (ArrayBuffer.isView(value)) return copyView(value) as T
-  if (Array.isArray(value)) {
-    return Object.freeze(value.map(item => frozenClone(item))) as T
-  }
-  const copy: Record<string, unknown> = {}
-  for (const [key, item] of Object.entries(value)) copy[key] = frozenClone(item)
-  return Object.freeze(copy) as T
-}
-
-function copyView(view: ArrayBufferView): ArrayBufferView {
-  if (view instanceof DataView) {
-    const start = view.byteOffset
-    return new DataView(view.buffer.slice(start, start + view.byteLength))
-  }
-  // Every typed array has `slice`, which copies.
-  return (view as Uint8Array).slice()
 }
 
 /**

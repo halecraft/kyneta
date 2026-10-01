@@ -4,27 +4,14 @@
 // changeset holds only that batch's ops, and a commit a raw listener makes in
 // reaction to ours is announced after ours.
 
-import {
-  batch,
-  interpret,
-  observation,
-  readable,
-  Schema,
-  subscribe,
-  unwrap,
-  writable,
-} from "@kyneta/schema"
+import { batch, createRef, Schema, subscribe, unwrap } from "@kyneta/schema"
 import type { LoroDoc } from "loro-crdt"
 import { describe, expect, it } from "vitest"
 import { loroSubstrateFactory } from "../substrate.js"
 
 function build<S extends ReturnType<typeof Schema.struct>>(schema: S) {
   const substrate = loroSubstrateFactory.create(schema)
-  const doc = interpret(schema, substrate.context())
-    .with(readable)
-    .with(writable)
-    .with(observation)
-    .done() as any
+  const doc = createRef(schema, substrate) as any
   const seen: { replay: boolean | undefined; n: number }[] = []
   subscribe(doc, cs => seen.push({ replay: cs.replay, n: cs.changes.length }))
   return { substrate, doc, native: unwrap(doc) as LoroDoc, seen }

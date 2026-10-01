@@ -1,8 +1,8 @@
 // tree-changefeed.test.ts — integration tests for `Schema.tree` reactive
 // observation through the plain substrate.
 //
-// `with-changefeed.ts` is substrate-agnostic; the plain substrate
-// surfaces the wiring without any backend interference. A single
+// Observation is substrate-agnostic; the plain substrate shows it without
+// any backend in the way. A single
 // cross-substrate parity check lives in
 // `packages/schema/backends/loro/src/__tests__/tree.test.ts`.
 

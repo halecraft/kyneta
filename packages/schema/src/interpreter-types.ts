@@ -1,18 +1,10 @@
 // interpreter-types — shared type definitions used across interpreters.
 //
-// These are pure type-level definitions with no runtime code. They live
-// here to break the circular dependency between readable.ts and writable.ts:
-//
-//   - RefContext is the minimal read-only context (used by readable, extended by writable)
-//   - Plain<S> is the schema-to-plain-JS-type mapping (used by readable, writable, validate)
-//
-// Previously RefContext lived in writable.ts (and was re-exported by readable.ts)
-// and Plain<S> lived in writable.ts (forcing readable.ts to duplicate it as ReadablePlain<S>).
+// These are pure type-level definitions with no runtime code. `Plain<S>`, the
+// schema-to-plain-JS-type mapping, lives here so the readable, writable and
+// validate types can all use it without importing each other.
 
 import type { RichTextDelta } from "./change.js"
-import type { Path } from "./path.js"
-import type { PositionCapable } from "./position.js"
-import type { Reader } from "./reader.js"
 
 // ---------------------------------------------------------------------------
 // INTERPRETER — runtime marker for Interpreter instances
@@ -59,68 +51,6 @@ import type {
   TextSchema,
   TreeSchema,
 } from "./schema.js"
-
-// ---------------------------------------------------------------------------
-// RefContext — minimal context for read-only interpretation
-// ---------------------------------------------------------------------------
-
-/**
- * The minimal context for read-only interpretation. Contains only a
- * reader — enough to read values at any path.
- *
- * This is the base context type. `WritableContext` extends it with
- * dispatch and transaction support (`beginTransaction`/`commit`/`abort`).
- * Each layer adds only what it needs.
- */
-export interface RefContext {
-  readonly reader: Reader
-  /**
-   * The root path for the interpreter stack. Determines the concrete
-   * Path type for all descendants.
-   *
-   * - `undefined` (default): `interpretImpl` uses `RawPath.empty` —
-   *   all paths are positional `RawPath` instances.
-   * - Set by `withAddressing` to an `AddressedPath` root — all paths
-   *   are identity-stable `AddressedPath` instances.
-   */
-  readonly rootPath?: Path
-  /**
-   * Hook called after each child ref is created by `interpretImpl`.
-   *
-   * Installed by `withAddressing` for ref registration (linking the
-   * Address to its ref) and attaching the `deleted` getter.
-   *
-   * Non-addressing stacks don't set this — the optional call is a no-op.
-   */
-  readonly onRefCreated?: (path: Path, ref: unknown) => void
-  /**
-   * Resolve the native container at a schema position.
-   *
-   * Provided by the substrate (via monkey-patch on the cached WritableContext).
-   * Returns the substrate-native container (LoroText, Y.Map, etc.) or
-   * `undefined` for scalars without a dedicated container.
-   *
-   * Used by `interpretImpl` to attach `[NATIVE]` on every ref during
-   * interpretation. When absent (e.g. bare readable-only stacks), `[NATIVE]`
-   * is not attached.
-   */
-  readonly nativeResolver?: (schema: Schema, path: Path) => unknown
-  /**
-   * Resolve the position capability for a text node at a schema position.
-   *
-   * Provided by the substrate (via monkey-patch on the cached WritableContext).
-   * Returns a `PositionCapable` that can create and decode `Position` values
-   * for text refs at the given path.
-   *
-   * Used by `interpretImpl` to attach `[POSITION]` on text refs during
-   * interpretation. When absent (e.g. bare readable-only stacks), `[POSITION]`
-   * is not attached.
-   */
-  readonly positionResolver?: (
-    schema: TextSchema | RichTextSchema,
-    path: Path,
-  ) => PositionCapable
-}
 
 // ---------------------------------------------------------------------------
 // Plain<S> — type-level interpretation from schema type to plain JS type

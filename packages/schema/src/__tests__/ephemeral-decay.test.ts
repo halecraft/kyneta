@@ -15,20 +15,17 @@ import {
   bind,
   computeSchemaHash,
   ephemeral,
-  interpret,
   json,
-  observation,
   plainReplicaFactory,
-  readable,
   Schema,
   SYNC_COLLABORATIVE,
   subscribe,
-  writable,
 } from "../index.js"
 import { RawPath } from "../path.js"
 import { ephemeralSubstrateFactory } from "../substrates/ephemeral.js"
 import type { StateTree } from "../substrates/state-tree.js"
 import { projectStateTree } from "../substrates/state-tree.js"
+import { refOver } from "./stack.js"
 
 // ---------------------------------------------------------------------------
 // Schema DSL
@@ -188,11 +185,7 @@ describe("state substrate tick() decay sweep", () => {
 
   /** A full ref over `substrate`, with the changefeed wired. */
   function makeRef(substrate: { context: () => WritableContext }) {
-    return interpret(PresenceSchema, substrate.context())
-      .with(readable)
-      .with(writable)
-      .with(observation)
-      .done()
+    return refOver(PresenceSchema, substrate.context())
   }
 
   it("tick() reverts expired presence fields to structural zero", () => {
@@ -431,11 +424,7 @@ describe("state substrate tick() decay sweep", () => {
       },
       RosterSchema,
     )
-    const ref = interpret(RosterSchema, substrate.context())
-      .with(readable)
-      .with(writable)
-      .with(observation)
-      .done()
+    const ref = refOver(RosterSchema, substrate.context())
 
     const seen: Changeset<Op>[] = []
     const unsub = subscribe(ref, (changeset: Changeset<Op>) => {

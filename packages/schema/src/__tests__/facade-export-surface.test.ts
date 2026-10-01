@@ -29,19 +29,23 @@ describe("facade export surface: batch, not change", () => {
 // Notification-engine internals stay internal
 // ---------------------------------------------------------------------------
 
-describe("the changefeed observation layer's internals are not public", () => {
-  // These two were exported with no importer anywhere outside this package.
-  // `withChangefeed` is reachable through the `observation` layer that wraps
-  // it, which is the composition the interpreter-stack docs point callers at.
-  it("attachChangefeed and withChangefeed are exported nowhere", () => {
-    for (const name of ["attachChangefeed", "withChangefeed"]) {
+describe("the ref construction's internals are not public", () => {
+  // A document's refs are one fixed construction: there are no layers to
+  // compose, and nothing of the construction is exported.
+  it("the layers and the notification engine are exported nowhere", () => {
+    for (const name of [
+      "attachChangefeed",
+      "withChangefeed",
+      "observation",
+      "readable",
+      "writable",
+      "planDelivery",
+      "createRefAt",
+      "createRootRef",
+    ]) {
       expect(name in schema).toBe(false)
       expect(name in basic).toBe(false)
     }
-  })
-
-  it("observation is the supported way to compose the layer", () => {
-    expect(schema.observation).toBeDefined()
   })
 
   // Kept deliberately, so a future reader counting usages does not "clean up"

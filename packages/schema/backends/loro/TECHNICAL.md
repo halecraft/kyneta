@@ -133,7 +133,7 @@ The predecessor design held a static container map built at `bind()`. It broke t
 - **External mutations don't update the cache.** `doc.import(update)` can create, delete, or re-parent containers outside kyneta's write path.
 - **Map keys are unbounded.** A precomputed map would need to be rebuilt on every key mutation.
 
-Live navigation pays a small cost per access (one container lookup per segment) but has no invalidation burden and is transparent to any source of mutation. Memoization happens at the **interpreter-stack** level (`withCaching` from `@kyneta/schema`), not the substrate level — and that cache invalidates on every kyneta-observed change via the changefeed pipeline.
+Live navigation pays a small cost per access (one container lookup per segment) but has no invalidation burden and is transparent to any source of mutation. Nothing about containers is cached above the substrate either: `@kyneta/schema` keeps one ref per coordinate while something holds it, and a ref's read is the functional shadow's frozen value, which every kyneta-observed change brings up to date.
 
 ### What live navigation is NOT
 
@@ -304,7 +304,7 @@ The buffer ALSO handles `struct.json` / `list.json` / `record.json` boundary wri
 
 In practice: use `exportEntirety` / `exportSince` + `merge` for replication. The Loro substrate's event bridge translates incoming binary updates into kyneta `Op` events via `batchToOps`, so subscribers still see `TreeChange` deliveries for remote mutations — but the inbound path is binary, not Op-replay.
 
-Subscriber semantics (topology fan-out, per-node forwarders, terminal-on-delete) are substrate-agnostic and live in the schema-layer interpreter transformer. See `packages/schema/TECHNICAL.md` §Tree-observable changefeeds (§Dynamic-collection changefeed factories, §Terminal-on-delete).
+Subscriber semantics (delivery up and down the tree, terminal-on-delete) are substrate-agnostic and live in `@kyneta/schema`'s delivery. See `packages/schema/TECHNICAL.md` §Tree-observable changefeeds (§Why there are no dynamic-collection changefeed factories, §Terminal-on-delete).
 
 ### Nested-commit semantics under re-entry
 

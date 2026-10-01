@@ -1,8 +1,9 @@
 // subscriber-trie — where a context's changefeed subscribers and population
 // state live, one node per coordinate that has either.
 //
-// Keyed by segment identity (`Path.segmentKeys`), like the coordinate trie,
-// so two coordinates whose joined `path.key` strings collide are two nodes,
+// Keyed by segment identity (`Segment.identity`: a list item's id, a field's
+// or entry's key), so a subscription follows a list item across inserts, two
+// coordinates whose joined `path.key` strings collide are two nodes,
 // and a subtree can be enumerated exactly. That enumeration is what delivery
 // needs: a change reaches the subscribers on its path's ancestor chain and
 // the subscribers inside the part of the tree it rewrote.
@@ -10,7 +11,7 @@
 // It is not the `CoordinateTrie`. A subscription belongs to its subscriber,
 // not to the coordinate it names: a subscriber at a list item or tree node a
 // change kills must still hear that change, and the coordinate trie unlinks
-// such nodes in addressing's `after` stage, before delivery.
+// such coordinates when `prepare` settles the change, before delivery.
 
 import type { ChangeBase } from "../change.js"
 import type { Changeset, Op } from "../changefeed.js"
@@ -28,7 +29,7 @@ export interface SubscriberNode {
   /** The segment naming this node under its parent; absent at the root. */
   readonly segment: Segment | undefined
   readonly parent: SubscriberNode | undefined
-  readonly children: Map<string, SubscriberNode>
+  readonly children: Map<string | number, SubscriberNode>
   own: Set<OwnCallback> | undefined
   deep: Set<DeepCallback> | undefined
   /** One-shot callbacks waiting for this coordinate to become populated. */
@@ -38,7 +39,7 @@ export interface SubscriberNode {
   /** An op here rewrote everything below it. */
   rewroteAll: boolean
   /** Keys of children an op here rewrote. */
-  rewroteKeys: Set<string> | undefined
+  rewroteKeys: Set<string | number> | undefined
   /** Callbacks of every kind at or below this node, so walks skip the rest. */
   watchers: number
 }
@@ -73,8 +74,8 @@ export class SubscriberTrie {
   /** The node at `path`, if it exists. */
   find(path: Path): SubscriberNode | undefined {
     let node: SubscriberNode | undefined = this.root
-    for (const key of path.segmentKeys) {
-      node = node.children.get(key)
+    for (const { identity } of path.segments) {
+      node = node.children.get(identity)
       if (node === undefined) return undefined
     }
     return node
@@ -101,8 +102,8 @@ export class SubscriberTrie {
   chain(path: Path): SubscriberNode[] {
     const out: SubscriberNode[] = [this.root]
     let node: SubscriberNode | undefined = this.root
-    for (const key of path.segmentKeys) {
-      node = node.children.get(key)
+    for (const { identity } of path.segments) {
+      node = node.children.get(identity)
       if (node === undefined) break
       out.push(node)
     }
@@ -179,13 +180,26 @@ export class SubscriberTrie {
   }
 
   /**
+   * Whether a subscriber of any kind (own, deep, or one waiting for
+   * population) sits at or below `path`. A populated mark alone does not
+   * count: it is answered for any coordinate, held or not.
+   */
+  holdsAt(path: Path): boolean {
+    return (this.find(path)?.watchers ?? 0) > 0
+  }
+
+  /**
    * Whether `path` is populated: an op landed at or below it, or an op at an
-   * ancestor rewrote a part of the tree containing it.
+   * ancestor rewrote a part of the tree containing it. A list's items are
+   * populated exactly when the list is: an item exists only because an
+   * insert carried its value, and a list starts empty.
    */
   isPopulated(path: Path): boolean {
     let node: SubscriberNode = this.root
-    for (const key of path.segmentKeys) {
+    for (const segment of path.segments) {
+      const key = segment.identity
       if (node.rewroteAll || node.rewroteKeys?.has(key)) return true
+      if (segment.role === "index" && node.populated) return true
       const child = node.children.get(key)
       if (child === undefined) return false
       node = child
@@ -197,30 +211,81 @@ export class SubscriberTrie {
    * Mark what a change at `path` populated: `path` and its ancestors, and
    * the part below it that `effect` names. Fires the population listeners of
    * every node that became populated.
+   *
+   * Creates only what the mark adds. The path stops before its first list
+   * index, since a list's items are populated with it, so nothing is keyed
+   * by an index (a raw index names another item after an insert). And a
+   * mark an ancestor's rewrite already implies, or one that adds nothing to
+   * a populated node, returns before creating a node.
    */
   markPopulated(path: Path, effect: SubtreeEffect): void {
-    const node = this.ensure(path)
-    for (let at: SubscriberNode | undefined = node; at; at = at.parent) {
-      if (at.populated) break // ancestors of a populated node are populated
-      populate(at)
+    const index = path.segments.findIndex(s => s.role === "index")
+    const at = index === -1 ? path : path.slice(0, index)
+    const added = index === -1 ? effect : "none"
+    if (this.implied(at, added)) return
+    const node = this.ensure(at)
+    for (let up: SubscriberNode | undefined = node; up; up = up.parent) {
+      if (up.populated) break // ancestors of a populated node are populated
+      populate(up)
     }
-    if (effect === "all") node.rewroteAll = true
-    else if (effect !== "none") {
+    if (added === "all") node.rewroteAll = true
+    else if (added !== "none") {
       node.rewroteKeys ??= new Set()
-      for (const key of effect.keys) node.rewroteKeys.add(key)
+      for (const key of added.keys) node.rewroteKeys.add(key)
     }
-    for (const [below] of this.scope(node, effect)) populate(below)
+    for (const [below] of this.scope(node, added)) populate(below)
+  }
+
+  /** Whether marking `path` with `effect` would change nothing. */
+  private implied(path: Path, effect: SubtreeEffect): boolean {
+    let node: SubscriberNode = this.root
+    for (const { identity } of path.segments) {
+      if (node.rewroteAll || node.rewroteKeys?.has(identity)) return true
+      const child = node.children.get(identity)
+      if (child === undefined) return false
+      node = child
+    }
+    if (!node.populated) return false
+    if (effect === "none" || node.rewroteAll) return true
+    if (effect === "all") return false
+    return effect.keys.every(key => node.rewroteKeys?.has(key) === true)
   }
 }
 
+/**
+ * Mark `node` populated and fire its population listeners, and those at and
+ * below its list items, which became populated with it. Those are not
+ * marked: a list's populated mark answers for them (`isPopulated`).
+ */
 function populate(node: SubscriberNode): void {
-  if (node.populated) return
-  node.populated = true
+  if (!node.populated) {
+    node.populated = true
+    fire(node)
+  }
+  for (const child of node.children.values()) {
+    if (child.segment?.role === "index" && child.watchers > 0) {
+      fireBelow(child)
+    }
+  }
+}
+
+/** Fire the population listeners at and below `node`. */
+function fireBelow(node: SubscriberNode): void {
+  for (const child of node.children.values()) {
+    if (child.watchers > 0) fireBelow(child)
+  }
+  fire(node)
+}
+
+/** Fire and remove the population listeners at `node`, and unlink it if
+ *  that leaves it holding nothing. */
+function fire(node: SubscriberNode): void {
   const listeners = node.populatedListeners
   if (listeners === undefined) return
   node.populatedListeners = undefined
   adjustWatchers(node, -listeners.size)
   for (const callback of listeners) callback()
+  prune(node)
 }
 
 function adjustWatchers(node: SubscriberNode, by: number): void {
@@ -238,6 +303,8 @@ function prune(node: SubscriberNode): void {
   }
 }
 
+/** Whether `node` holds nothing: a populated mark is something, since it
+ *  answers `isPopulated` below it. */
 function isEmpty(node: SubscriberNode): boolean {
   return (
     node.watchers === 0 &&

@@ -6,21 +6,17 @@ import {
   batch,
   deepClonePlain,
   incrementChange,
-  interpret,
-  observation,
   own,
-  plainContext,
   populatedFeed,
   RawPath,
-  readable,
   replaceChange,
   Schema,
   sequenceChange,
   subscribe,
   subscribeNode,
   textChange,
-  writable,
 } from "../index.js"
+import { contextOver, refOver } from "./stack.js"
 
 // ===========================================================================
 // Shared fixtures
@@ -57,12 +53,8 @@ function createSeed() {
 // otherwise share its nested containers and see each other's writes.
 function createChatDoc(storeOverrides: Record<string, unknown> = {}) {
   const store = { ...createSeed(), ...deepClonePlain(storeOverrides) }
-  const ctx = plainContext(chatDocSchema, store)
-  const doc = interpret(chatDocSchema, ctx)
-    .with(readable)
-    .with(writable)
-    .with(observation)
-    .done()
+  const ctx = contextOver(chatDocSchema, store)
+  const doc = refOver(chatDocSchema, ctx)
   return { store, ctx, doc }
 }
 

@@ -5,26 +5,15 @@ import { own, replaceChange, trustAsOwned } from "../change.js"
 import {
   BACKING_DOC,
   batch,
-  bottomInterpreter,
-  type ChangefeedBrand,
   type CounterRef,
   type CounterSchema,
   type ExtractLaws,
-  type HasCaching,
-  type HasCall,
-  type HasRead,
-  type HasTransact,
-  type InterpretBuilder,
-  type Interpreter,
-  type InterpreterLayer,
-  interpret,
   KIND,
   type MapSchema,
   MIGRATION_CHAIN,
   type MovableSequenceSchema,
   type NavigableMapRef,
   type NavigableSequenceRef,
-  observation,
   type Plain,
   type PlainDiscriminatedSumSchema,
   type PlainMapSchema,
@@ -34,20 +23,12 @@ import {
   type PlainSequenceSchema,
   type ProductRef,
   type ProductSchema,
-  plainContext,
-  plainReader,
   type Readable,
-  type ReadableBrand,
   type ReadableMapRef,
   type ReadableSequenceRef,
   type Ref,
-  type RefContext,
-  type Resolve,
-  type ResolveCarrier,
   type RestrictLaws,
   type RRef,
-  type RWRef,
-  readable,
   type ScalarPlain,
   type ScalarRef,
   type ScalarSchema,
@@ -63,18 +44,10 @@ import {
   type TreeSchema,
   type Wrap,
   type Writable,
-  type WritableBrand,
-  type WritableContext,
   type WritableMapRef,
-  withAddressing,
-  withCaching,
-  withNavigation,
-  withReadable,
-  withWritable,
-  writable,
 } from "../index.js"
-import { withChangefeed } from "../interpreters/with-changefeed.js"
 import type { DeepReadonly } from "./deep-readonly.js"
+import { contextOver, refOver } from "./stack.js"
 
 // ---------------------------------------------------------------------------
 // Strict narrowing tests — toEqualTypeOf finds the REAL boundaries where
@@ -1286,7 +1259,7 @@ describe("type-level: Ref<S> no .at() overload conflict on sequences", () => {
 })
 
 // ===========================================================================
-// Ref tier differentiation: RRef, RWRef, Ref
+// Ref tiers: RRef, Ref
 // ===========================================================================
 
 describe("type-level: RRef<S> is Readable<S>", () => {
@@ -1298,32 +1271,6 @@ describe("type-level: RRef<S> is Readable<S>", () => {
   it("RRef<ProductSchema> equals Readable<ProductSchema>", () => {
     type S = ProductSchema<{ x: ScalarSchema<"number"> }>
     expectTypeOf<RRef<S>>().toEqualTypeOf<Readable<S>>()
-  })
-})
-
-describe("type-level: RWRef<S> has HasTransact but not HasChangefeed", () => {
-  it("RWRef<scalar> has set, call signature, and [TRANSACT]", () => {
-    type Result = RWRef<ScalarSchema<"number">>
-    expectTypeOf<Result>().toBeCallableWith()
-    expectTypeOf<Result>().toHaveProperty("set")
-    expectTypeOf<Result>().toHaveProperty(TRANSACT)
-  })
-
-  it("RWRef<scalar> does NOT have [CHANGEFEED]", () => {
-    type Result = RWRef<ScalarSchema<"number">>
-    // HasChangefeed requires [CHANGEFEED] property — RWRef should not have it
-    type HasCF = Result extends HasChangefeed ? true : false
-    expectTypeOf<HasCF>().toEqualTypeOf<false>()
-  })
-
-  it("RWRef<product> children also lack [CHANGEFEED]", () => {
-    type S = ProductSchema<{ x: ScalarSchema<"number"> }>
-    type Child = RWRef<S>["x"]
-    // Child has TRANSACT
-    expectTypeOf<Child>().toHaveProperty(TRANSACT)
-    // Child does NOT have CHANGEFEED
-    type ChildHasCF = Child extends HasChangefeed ? true : false
-    expectTypeOf<ChildHasCF>().toEqualTypeOf<false>()
   })
 })
 
@@ -1374,19 +1321,10 @@ describe("type-level: Ref<S> has HasTransact AND HasChangefeed", () => {
   })
 })
 
-describe("type-level: Wrap<T, M> dispatches by mode", () => {
-  it("Wrap<T, 'rw'> has HasTransact but not HasChangefeed", () => {
+describe("type-level: Wrap<T> adds every ref's cross-cutting concerns", () => {
+  it("Wrap<T> has HasTransact AND HasChangefeed", () => {
     type Base = { x: number }
-    type Result = Wrap<Base, "rw">
-    expectTypeOf<Result>().toHaveProperty("x")
-    expectTypeOf<Result>().toHaveProperty(TRANSACT)
-    type HasCF = Result extends HasChangefeed ? true : false
-    expectTypeOf<HasCF>().toEqualTypeOf<false>()
-  })
-
-  it("Wrap<T, 'rwc'> has HasTransact AND HasChangefeed", () => {
-    type Base = { x: number }
-    type Result = Wrap<Base, "rwc">
+    type Result = Wrap<Base>
     expectTypeOf<Result>().toHaveProperty("x")
     expectTypeOf<Result>().toHaveProperty(TRANSACT)
     expectTypeOf<Result>().toHaveProperty(CHANGEFEED)
@@ -1394,256 +1332,10 @@ describe("type-level: Wrap<T, M> dispatches by mode", () => {
 })
 
 // ===========================================================================
-// Fluent builder inference: Resolve<S, Brands>
-// ===========================================================================
-
-describe("type-level: Resolve<S, Brands> selects the correct tier", () => {
-  type S = ProductSchema<{ x: ScalarSchema<"number"> }>
-
-  it("ReadableBrand → RRef<S>", () => {
-    type Result = Resolve<S, ReadableBrand>
-    expectTypeOf<Result>().toEqualTypeOf<RRef<S>>()
-  })
-
-  it("ReadableBrand & WritableBrand → RWRef<S>", () => {
-    type Result = Resolve<S, ReadableBrand & WritableBrand>
-    expectTypeOf<Result>().toEqualTypeOf<RWRef<S>>()
-  })
-
-  it("ReadableBrand & WritableBrand & ChangefeedBrand → Ref<S>", () => {
-    type Result = Resolve<S, ReadableBrand & WritableBrand & ChangefeedBrand>
-    expectTypeOf<Result>().toEqualTypeOf<Ref<S>>()
-  })
-
-  it("unknown brands → unknown", () => {
-    type Result = Resolve<S, unknown>
-    expectTypeOf<Result>().toEqualTypeOf<unknown>()
-  })
-
-  it("WritableBrand alone (no readable) → unknown", () => {
-    type Result = Resolve<S, WritableBrand>
-    expectTypeOf<Result>().toEqualTypeOf<unknown>()
-  })
-
-  it("ChangefeedBrand alone (no readable or writable) → unknown", () => {
-    type Result = Resolve<S, ChangefeedBrand>
-    expectTypeOf<Result>().toEqualTypeOf<unknown>()
-  })
-
-  it("brand accumulation is order-independent", () => {
-    // writable & readable (reversed order) → same as readable & writable
-    type WR = Resolve<S, WritableBrand & ReadableBrand>
-    type RW = Resolve<S, ReadableBrand & WritableBrand>
-    expectTypeOf<WR>().toEqualTypeOf<RW>()
-    expectTypeOf<WR>().toEqualTypeOf<RWRef<S>>()
-
-    // changefeed & writable & readable (reversed) → same as canonical order
-    type CWR = Resolve<S, ChangefeedBrand & WritableBrand & ReadableBrand>
-    type RWC = Resolve<S, ReadableBrand & WritableBrand & ChangefeedBrand>
-    expectTypeOf<CWR>().toEqualTypeOf<RWC>()
-    expectTypeOf<CWR>().toEqualTypeOf<Ref<S>>()
-  })
-})
-
-// ===========================================================================
-// Fluent builder: .done() inference
-// ===========================================================================
-
-describe("type-level: fluent builder .done() infers correct tier", () => {
-  const pointSchema = Schema.struct({
-    x: Schema.number(),
-    y: Schema.number(),
-  })
-
-  it(".with(readable).done() → RRef<S>", () => {
-    const ctx: RefContext = { reader: plainReader({ current: { x: 0, y: 0 } }) }
-    const result = interpret(pointSchema, ctx).with(readable).done()
-    expectTypeOf(result).toEqualTypeOf<RRef<typeof pointSchema>>()
-  })
-
-  it(".with(readable).with(writable).done() → RWRef<S>", () => {
-    const ctx = plainContext(pointSchema, { x: 0, y: 0 })
-    const result = interpret(pointSchema, ctx)
-      .with(readable)
-      .with(writable)
-      .done()
-    expectTypeOf(result).toEqualTypeOf<RWRef<typeof pointSchema>>()
-  })
-
-  it(".with(readable).with(writable).with(observation).done() → Ref<S>", () => {
-    const ctx = plainContext(pointSchema, { x: 0, y: 0 })
-    const result = interpret(pointSchema, ctx)
-      .with(readable)
-      .with(writable)
-      .with(observation)
-      .done()
-    expectTypeOf(result).toEqualTypeOf<Ref<typeof pointSchema>>()
-  })
-
-  it("full-stack result has [TRANSACT] and [CHANGEFEED]", () => {
-    const ctx = plainContext(pointSchema, { x: 0, y: 0 })
-    const result = interpret(pointSchema, ctx)
-      .with(readable)
-      .with(writable)
-      .with(observation)
-      .done()
-    expectTypeOf(result).toHaveProperty(TRANSACT)
-    expectTypeOf(result).toHaveProperty(CHANGEFEED)
-  })
-
-  it("read-only result does NOT have .set or [TRANSACT]", () => {
-    const ctx: RefContext = { reader: plainReader({ current: { x: 0, y: 0 } }) }
-    const result = interpret(pointSchema, ctx).with(readable).done()
-    // RRef<S> = Readable<S> — no mutation, no transact
-    type HasSet = typeof result extends { set: any } ? true : false
-    expectTypeOf<HasSet>().toEqualTypeOf<false>()
-    type HasTx = typeof result extends HasTransact ? true : false
-    expectTypeOf<HasTx>().toEqualTypeOf<false>()
-  })
-
-  it("custom unbranded layer .done() → unknown", () => {
-    const tagging: InterpreterLayer<RefContext, RefContext> = {
-      name: "tagging",
-      transform(base: Interpreter<RefContext, any>) {
-        return base
-      },
-    }
-    const ctx: RefContext = { reader: plainReader({ current: { x: 0, y: 0 } }) }
-    const result = interpret(pointSchema, ctx).with(tagging).done()
-    expectTypeOf(result).toEqualTypeOf<unknown>()
-  })
-})
-
-// ===========================================================================
-// ResolveCarrier<S, A> — structural dispatch on carrier capabilities
-// ===========================================================================
-
-describe("type-level: ResolveCarrier<S, A> selects the correct tier", () => {
-  type S = ProductSchema<{ x: ScalarSchema<"number"> }>
-
-  it("HasRead & HasTransact & HasChangefeed → Ref<S>", () => {
-    type Result = ResolveCarrier<S, HasRead & HasTransact & HasChangefeed>
-    expectTypeOf<Result>().toEqualTypeOf<Ref<S>>()
-  })
-
-  it("HasRead & HasCaching & HasTransact → RWRef<S>", () => {
-    type Result = ResolveCarrier<S, HasRead & HasCaching & HasTransact>
-    expectTypeOf<Result>().toEqualTypeOf<RWRef<S>>()
-  })
-
-  it("HasRead & HasTransact (no changefeed) → RWRef<S>", () => {
-    type Result = ResolveCarrier<S, HasRead & HasTransact>
-    expectTypeOf<Result>().toEqualTypeOf<RWRef<S>>()
-  })
-
-  it("HasCall & HasTransact (no HasRead) → raw A fallback (can't read → not a ref tier)", () => {
-    type A = HasCall & HasTransact
-    type Result = ResolveCarrier<S, A>
-    // HasTransact is present but HasRead is absent — a write-only carrier
-    // can't read, so it has no business being typed as RWRef<S> (which
-    // promises a call signature returning Plain<S>). Falls through to raw A.
-    type IsRWRef = Result extends RWRef<S> ? true : false
-    expectTypeOf<IsRWRef>().toEqualTypeOf<false>()
-    // Still has HasTransact (preserved from A)
-    expectTypeOf<Result>().toMatchTypeOf<HasTransact>()
-  })
-
-  it("HasRead & HasCaching (no HasTransact) → raw A fallback (preserves carrier brands)", () => {
-    type A = HasRead & HasCaching
-    type Result = ResolveCarrier<S, A>
-    // Read-only stacks fall through to raw A (preserves carrier brands)
-    type IsRWRef = Result extends RWRef<S> ? true : false
-    expectTypeOf<IsRWRef>().toEqualTypeOf<false>()
-    // Still has HasRead and HasCaching (preserved from A)
-    expectTypeOf<Result>().toMatchTypeOf<HasRead>()
-    expectTypeOf<Result>().toMatchTypeOf<HasCaching>()
-  })
-})
-
-// ===========================================================================
-// Three-arg interpret: honest transformer return types
-// ===========================================================================
-
-describe("type-level: withWritable contributes HasTransact to A", () => {
-  it("withWritable return type includes HasTransact", () => {
-    const interp = withWritable(
-      withCaching(
-        withAddressing(withReadable(withNavigation(bottomInterpreter))),
-      ),
-    )
-    // The interpreter's A type should include HasTransact
-    expectTypeOf(interp).toMatchTypeOf<
-      Interpreter<WritableContext, HasTransact>
-    >()
-  })
-
-  it("withWritable(bottom) return type includes HasTransact", () => {
-    const interp = withWritable(bottomInterpreter)
-    expectTypeOf(interp).toMatchTypeOf<
-      Interpreter<WritableContext, HasTransact>
-    >()
-  })
-})
-
-describe("type-level: withChangefeed contributes HasChangefeed to A", () => {
-  it("withChangefeed return type includes HasChangefeed", () => {
-    const interp = withChangefeed(
-      withWritable(
-        withCaching(
-          withAddressing(withReadable(withNavigation(bottomInterpreter))),
-        ),
-      ),
-    )
-    expectTypeOf(interp).toMatchTypeOf<Interpreter<RefContext, HasChangefeed>>()
-  })
-
-  it("full stack has HasTransact & HasChangefeed in carrier type", () => {
-    const interp = withChangefeed(
-      withWritable(
-        withCaching(
-          withAddressing(withReadable(withNavigation(bottomInterpreter))),
-        ),
-      ),
-    )
-    expectTypeOf(interp).toMatchTypeOf<
-      Interpreter<RefContext, HasTransact & HasChangefeed>
-    >()
-  })
-})
-
-// ===========================================================================
-// InterpretBuilder carries schema type and brands
-// ===========================================================================
-
-describe("type-level: InterpretBuilder<S, Ctx, Brands>", () => {
-  it("two-arg interpret returns InterpretBuilder with schema type", () => {
-    const pointSchema = Schema.struct({
-      x: Schema.number(),
-      y: Schema.number(),
-    })
-    const ctx: RefContext = { reader: plainReader({ current: { x: 0, y: 0 } }) }
-    const builder = interpret(pointSchema, ctx)
-    expectTypeOf(builder).toMatchTypeOf<
-      InterpretBuilder<typeof pointSchema, RefContext, unknown>
-    >()
-  })
-
-  it("field access on inferred builder result is well-typed", () => {
-    const docSchema = Schema.struct({ title: Schema.string() })
-    const ctx: RefContext = {
-      reader: plainReader({ current: { title: "hi" } }),
-    }
-    const result = interpret(docSchema, ctx).with(readable).done()
-    // RRef<S> = Readable<S> — should be callable
-    expectTypeOf(result.title).toBeCallableWith()
-  })
-})
-
-// ===========================================================================
 // batch() callback inference from fluent-built docs
 // ===========================================================================
 
-describe("type-level: batch() callback infers draft type from fluent-built doc", () => {
+describe("type-level: batch() callback infers draft type from a doc", () => {
   const docSchema = Schema.struct({
     title: Schema.text(),
     count: Schema.counter(),
@@ -1653,35 +1345,27 @@ describe("type-level: batch() callback infers draft type from fluent-built doc",
     }),
   })
 
-  it("full-stack .done() result is accepted by batch() without cast", () => {
-    const ctx = plainContext(docSchema, {
+  it("a doc is accepted by batch() without cast", () => {
+    const ctx = contextOver(docSchema, {
       title: "",
       count: 0,
       items: [],
       settings: { darkMode: false },
     })
-    const doc = interpret(docSchema, ctx)
-      .with(readable)
-      .with(writable)
-      .with(observation)
-      .done()
+    const doc = refOver(docSchema, ctx)
 
     // batch() should accept doc without any cast — D is inferred as Ref<S>
     expectTypeOf(batch).toBeCallableWith(doc, () => {})
   })
 
   it("callback parameter d has typed field access (not any)", () => {
-    const ctx = plainContext(docSchema, {
+    const ctx = contextOver(docSchema, {
       title: "",
       count: 0,
       items: [],
       settings: { darkMode: false },
     })
-    const doc = interpret(docSchema, ctx)
-      .with(readable)
-      .with(writable)
-      .with(observation)
-      .done()
+    const doc = refOver(docSchema, ctx)
 
     // The callback d should have the same type as doc — verify typed methods exist.
     // If d were `any`, these assertions would vacuously pass, so we also
@@ -1696,47 +1380,26 @@ describe("type-level: batch() callback infers draft type from fluent-built doc",
       expectTypeOf<HasBogus>().toEqualTypeOf<false>()
     })
   })
-
-  it("RWRef .done() result is accepted by batch() (has HasTransact)", () => {
-    const ctx = plainContext(docSchema, {
-      title: "",
-      count: 0,
-      items: [],
-      settings: { darkMode: false },
-    })
-    const doc = interpret(docSchema, ctx).with(readable).with(writable).done()
-
-    // RWRef<S> has HasTransact — batch() should accept it
-    expectTypeOf(batch).toBeCallableWith(doc, () => {})
-  })
 })
 
 // ===========================================================================
-// Fluent .done() results satisfy facade function signatures
+// Refs satisfy facade function signatures
 // ===========================================================================
 
-describe("type-level: fluent results are accepted by facade functions", () => {
+describe("type-level: refs are accepted by facade functions", () => {
   const schema = Schema.struct({ x: Schema.number() })
 
-  it("subscribeNode() accepts Ref<S> field from full-stack .done()", () => {
-    const ctx = plainContext(schema, { x: 0 })
-    const doc = interpret(schema, ctx)
-      .with(readable)
-      .with(writable)
-      .with(observation)
-      .done()
+  it("subscribeNode() accepts a Ref<S> field", () => {
+    const ctx = contextOver(schema, { x: 0 })
+    const doc = refOver(schema, ctx)
 
     // subscribeNode requires HasChangefeed — Ref<S> children have it
     expectTypeOf(subscribeNode).toBeCallableWith(doc.x, () => {})
   })
 
-  it("subscribe() accepts Ref<S> from full-stack .done()", () => {
-    const ctx = plainContext(schema, { x: 0 })
-    const doc = interpret(schema, ctx)
-      .with(readable)
-      .with(writable)
-      .with(observation)
-      .done()
+  it("subscribe() accepts a Ref<S>", () => {
+    const ctx = contextOver(schema, { x: 0 })
+    const doc = refOver(schema, ctx)
 
     // subscribe accepts any schema-issued ref (HasRecursiveChangefeed).
     // Composites first: doc is a product ref.
@@ -1863,25 +1526,6 @@ describe("type-level: RRef<S> for discriminated sums (hybrid discriminant)", () 
     type Result = RRef<typeof _nullableStringSchema>
     type CallReturn = Result extends (...args: any[]) => infer R ? R : never
     expectTypeOf<CallReturn>().toEqualTypeOf<string | null>()
-  })
-})
-
-describe("type-level: RWRef<S> for sums", () => {
-  it("RWRef<DiscriminatedSumSchema> resolves (not unknown)", () => {
-    type Result = RWRef<typeof _discUnionSchema>
-    expectTypeOf<Result>().not.toEqualTypeOf<unknown>()
-  })
-
-  it("RWRef discriminant field is a raw string literal", () => {
-    type Result = RWRef<typeof _discUnionSchema>
-    type TypeField = Result extends { readonly type: infer T } ? T : never
-    expectTypeOf<TypeField>().toEqualTypeOf<"text" | "image">()
-  })
-
-  it("RWRef<nullable(string)> has .set(string | null) — not never", () => {
-    type Result = RWRef<typeof _nullableStringSchema>
-    type SetParam = Result extends { set: (value: infer P) => void } ? P : never
-    expectTypeOf<SetParam>().toEqualTypeOf<string | null>()
   })
 })
 

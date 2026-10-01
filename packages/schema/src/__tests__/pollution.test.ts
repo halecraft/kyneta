@@ -6,7 +6,7 @@
 // making the user's data unreachable.
 //
 // The framework stores this metadata under unique symbols instead
-// (`[POPULATED]` in with-changefeed.ts, `[DELETED]` in with-addressing.ts),
+// (`[POPULATED]` in `ref/observe.ts`, `[DELETED]` in `ref/address.ts`),
 // read through the free-function facades `populated(ref)` / `populatedFeed(ref)`
 // and `deleted(ref)` / `deletedFeed(ref)`.
 //

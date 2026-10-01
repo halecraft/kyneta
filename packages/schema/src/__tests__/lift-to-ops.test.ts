@@ -11,7 +11,7 @@
 
 import type { ChangeBase, Changeset } from "@kyneta/changefeed"
 import { describe, expect, it } from "vitest"
-import { liftToOps } from "../interpreters/with-changefeed.js"
+import { liftToOps } from "../delivery.js"
 import { RawPath } from "../path.js"
 
 // ---------------------------------------------------------------------------

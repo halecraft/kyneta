@@ -2,10 +2,9 @@
 //
 // Readiness, sync mode and the sync handle belong to a document, but callers
 // hold refs, and often not the root one: `useText(doc.title)`,
-// `useDocStatus(doc.items)`. Every writable ref in a document carries the same
-// context under `[TRANSACT]` (attached by `withWritable`), so that context
-// names the document from any of its refs. A ref without one, such as a
-// read-only stack's, stands for itself.
+// `useDocStatus(doc.items)`. Every ref in a document carries the same context
+// under `[TRANSACT]`, so that context names the document from any of its refs.
+// A value without one, which is no schema ref, stands for itself.
 
 import { hasTransact, TRANSACT } from "@kyneta/schema"
 

@@ -13,7 +13,7 @@ import {
   Schema,
   type SubstratePayload,
 } from "../index.js"
-import { type Address, AddressedPath } from "../path.js"
+import { type Address, AddressedPath, RawPath } from "../path.js"
 import { decodePlainPayload } from "../substrates/plain.js"
 
 const Candidate = Schema.struct({
@@ -152,7 +152,7 @@ describe("plain op-log: history survives deletion and reordering", () => {
   it("format() does not throw on a path with a deleted segment", () => {
     // format() feeds error messages; if it threw on a dead segment it would
     // mask the real error. The toContain assertion also fails if format throws.
-    const p = new AddressedPath([], new CoordinateTrie())
+    const p = AddressedPath.empty(new CoordinateTrie())
       .field("candidates")
       .entry(KEY)
     ;(p.segments[1] as Address).dead = true
@@ -160,13 +160,13 @@ describe("plain op-log: history survives deletion and reordering", () => {
   })
 
   it("toRaw() projects a path with a deleted segment, preserving its coordinates", () => {
-    const p = new AddressedPath([], new CoordinateTrie())
+    const p = AddressedPath.empty(new CoordinateTrie())
       .field("candidates")
       .entry(KEY)
       .field("status")
     ;(p.segments[1] as Address).dead = true
     const raw = p.toRaw()
-    expect(raw.isAddressed).toBe(false)
+    expect(raw).toBeInstanceOf(RawPath)
     expect(raw.segments.map(s => s.coord())).toEqual([
       "candidates",
       KEY,

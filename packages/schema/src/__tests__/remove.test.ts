@@ -4,16 +4,12 @@ import {
   batch,
   deleted,
   hasRemove,
-  interpret,
-  observation,
-  plainContext,
   REMOVE,
-  readable,
   remove,
   Schema,
   subscribe,
-  writable,
 } from "../index.js"
+import { contextOver, refOver } from "./stack.js"
 
 // ===========================================================================
 // Shared fixtures
@@ -58,56 +54,36 @@ const nestedSchema = Schema.struct({
 
 function createTodoDoc(initialTodos: Array<{ text: string; done: boolean }>) {
   const store = { todos: initialTodos }
-  const ctx = plainContext(todoSchema, store)
-  const doc = interpret(todoSchema, ctx)
-    .with(readable)
-    .with(writable)
-    .with(observation)
-    .done() as any
+  const ctx = contextOver(todoSchema, store)
+  const doc = refOver(todoSchema, ctx) as any
   return { doc, store }
 }
 
 function createMapDoc(initialMetadata: Record<string, string>) {
   const store = { metadata: initialMetadata }
-  const ctx = plainContext(mapSchema, store)
-  const doc = interpret(mapSchema, ctx)
-    .with(readable)
-    .with(writable)
-    .with(observation)
-    .done() as any
+  const ctx = contextOver(mapSchema, store)
+  const doc = refOver(mapSchema, ctx) as any
   return { doc, store }
 }
 
 function createSetDoc(initialTags: string[]) {
   const store = { tags: initialTags }
-  const ctx = plainContext(setSchema, store)
-  const doc = interpret(setSchema, ctx)
-    .with(readable)
-    .with(writable)
-    .with(observation)
-    .done() as any
+  const ctx = contextOver(setSchema, store)
+  const doc = refOver(setSchema, ctx) as any
   return { doc, store }
 }
 
 function createMovableDoc(initialItems: Array<{ name: string }>) {
   const store = { items: initialItems }
-  const ctx = plainContext(movableSchema, store)
-  const doc = interpret(movableSchema, ctx)
-    .with(readable)
-    .with(writable)
-    .with(observation)
-    .done() as any
+  const ctx = contextOver(movableSchema, store)
+  const doc = refOver(movableSchema, ctx) as any
   return { doc, store }
 }
 
 function createNestedDoc(groups: Array<{ items: Array<{ name: string }> }>) {
   const store = { groups }
-  const ctx = plainContext(nestedSchema, store)
-  const doc = interpret(nestedSchema, ctx)
-    .with(readable)
-    .with(writable)
-    .with(observation)
-    .done() as any
+  const ctx = contextOver(nestedSchema, store)
+  const doc = refOver(nestedSchema, ctx) as any
   return { doc, store }
 }
 
@@ -387,26 +363,6 @@ describe("[REMOVE]: changefeed", () => {
     expect(events.length).toBe(1)
     expect(doc.todos.length).toBe(1)
     expect(doc.todos.at(0).text()).toBe("b")
-  })
-})
-
-// ===========================================================================
-// Read-only stack has no [REMOVE]
-// ===========================================================================
-
-describe("[REMOVE]: read-only stack", () => {
-  it("refs on a readable-only stack do not have [REMOVE]", () => {
-    const store = {
-      todos: [{ text: "a", done: false }],
-    }
-    const ctx = plainContext(todoSchema, store)
-    const doc = interpret(todoSchema, ctx)
-      .with(readable)
-      .with(observation)
-      .done() as any
-
-    const item = doc.todos.at(0)
-    expect(hasRemove(item)).toBe(false)
   })
 })
 

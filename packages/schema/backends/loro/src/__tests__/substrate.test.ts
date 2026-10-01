@@ -2,16 +2,13 @@ import type { Substrate, SubstratePayload } from "@kyneta/schema"
 import {
   BACKING_DOC,
   batch,
-  interpret,
-  observation,
+  createRef,
   RawPath,
   type Ref,
-  readable,
   Schema,
   type SchemaNode,
   subscribe,
   unwrap,
-  writable,
 } from "@kyneta/schema"
 import { defined } from "@kyneta/schema/testing"
 import { LoroDoc } from "loro-crdt"
@@ -58,11 +55,7 @@ type InterpretSubstrate = <S extends SchemaNode>(
 ) => Ref<S>
 
 const interpretSubstrate: InterpretSubstrate = (schema, substrate) =>
-  interpret(schema, substrate.context())
-    .with(readable)
-    .with(writable)
-    .with(observation)
-    .done()
+  createRef(schema, substrate)
 
 // ===========================================================================
 // Factory create

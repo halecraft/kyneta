@@ -12,16 +12,12 @@ import {
   batch,
   expandProductMapChanges,
   hasRecursiveChangefeed,
-  interpret,
-  observation,
-  plainContext,
-  readable,
   Schema,
   TRANSACT,
-  writable,
 } from "../index.js"
 import { RawPath } from "../path.js"
 import { projectChange } from "../subtree-effect.js"
+import { contextOver, refOver } from "./stack.js"
 
 /** Narrowed helper: return the key variant of RawSegment. */
 function keySeg(
@@ -82,12 +78,8 @@ function createChatDoc(storeOverrides: Record<string, unknown> = {}) {
     metadata: { version: 1 },
     ...storeOverrides,
   }
-  const ctx = plainContext(chatDocSchema, store)
-  const doc = interpret(chatDocSchema, ctx)
-    .with(readable)
-    .with(writable)
-    .with(observation)
-    .done()
+  const ctx = contextOver(chatDocSchema, store)
+  const doc = refOver(chatDocSchema, ctx)
   return { store, ctx, doc }
 }
 
@@ -104,7 +96,7 @@ function getChangefeed(obj: unknown): {
 }
 
 // ===========================================================================
-// Baseline tests (migrated from old with-changefeed.test.ts)
+// Baseline tests
 // ===========================================================================
 
 // ---------------------------------------------------------------------------
@@ -611,7 +603,7 @@ describe("changefeed: coexistence of subscribe and subscribeDescendants", () => 
 // ---------------------------------------------------------------------------
 
 describe("changefeed: TRANSACT preserved", () => {
-  it("refs still have [TRANSACT] after withChangefeed layer", () => {
+  it("refs that carry [CHANGEFEED] carry [TRANSACT] too", () => {
     const { ctx, doc } = createChatDoc()
     expect(doc[TRANSACT]).toBe(ctx)
     expect(doc.title[TRANSACT]).toBe(ctx)
@@ -632,12 +624,8 @@ describe("changefeed: batch() block integration", () => {
       x: Schema.number(),
       y: Schema.number(),
     })
-    const ctx = plainContext(schema, store)
-    const doc = interpret(schema, ctx)
-      .with(readable)
-      .with(writable)
-      .with(observation)
-      .done()
+    const ctx = contextOver(schema, store)
+    const doc = refOver(schema, ctx)
 
     const xChangesets: Changeset[] = []
     getChangefeed(doc.x).subscribe(changeset => xChangesets.push(changeset))
@@ -696,12 +684,8 @@ describe("changefeed: batch() block integration", () => {
       x: Schema.number(),
       y: Schema.number(),
     })
-    const ctx = plainContext(schema, store)
-    const doc = interpret(schema, ctx)
-      .with(readable)
-      .with(writable)
-      .with(observation)
-      .done()
+    const ctx = contextOver(schema, store)
+    const doc = refOver(schema, ctx)
 
     const captured = batch(doc, d => {
       d.x.set(10)
@@ -722,12 +706,8 @@ describe("changefeed: batch() block integration", () => {
       x: Schema.number(),
       y: Schema.number(),
     })
-    const ctx = plainContext(schema, store)
-    const doc = interpret(schema, ctx)
-      .with(readable)
-      .with(writable)
-      .with(observation)
-      .done()
+    const ctx = contextOver(schema, store)
+    const doc = refOver(schema, ctx)
 
     const xChangesets: Changeset[] = []
     getChangefeed(doc.x).subscribe(changeset => xChangesets.push(changeset))
@@ -757,12 +737,8 @@ describe("changefeed: batched notification", () => {
       x: Schema.number(),
       y: Schema.number(),
     })
-    const ctx = plainContext(schema, store)
-    const doc = interpret(schema, ctx)
-      .with(readable)
-      .with(writable)
-      .with(observation)
-      .done()
+    const ctx = contextOver(schema, store)
+    const doc = refOver(schema, ctx)
 
     let observedX: unknown
     let observedY: unknown
@@ -802,12 +778,8 @@ describe("changefeed: batched notification", () => {
       x: Schema.number(),
       y: Schema.number(),
     })
-    const ctx = plainContext(schema, store)
-    const doc = interpret(schema, ctx)
-      .with(readable)
-      .with(writable)
-      .with(observation)
-      .done()
+    const ctx = contextOver(schema, store)
+    const doc = refOver(schema, ctx)
 
     const xChangesets: Changeset[] = []
     getChangefeed(doc.x).subscribe(changeset => xChangesets.push(changeset))
@@ -853,12 +825,8 @@ describe("changefeed: batched notification", () => {
       x: Schema.number(),
       y: Schema.number(),
     })
-    const ctx = plainContext(schema, store)
-    const doc = interpret(schema, ctx)
-      .with(readable)
-      .with(writable)
-      .with(observation)
-      .done()
+    const ctx = contextOver(schema, store)
+    const doc = refOver(schema, ctx)
 
     const xChangesets: Changeset[] = []
     const yChangesets: Changeset[] = []
@@ -886,12 +854,8 @@ describe("changefeed: batched notification", () => {
       x: Schema.number(),
       y: Schema.number(),
     })
-    const ctx = plainContext(schema, store)
-    const doc = interpret(schema, ctx)
-      .with(readable)
-      .with(writable)
-      .with(observation)
-      .done()
+    const ctx = contextOver(schema, store)
+    const doc = refOver(schema, ctx)
 
     // Only subscribe to x, not y
     const xChangesets: Changeset[] = []
@@ -965,12 +929,8 @@ describe("changefeed: edge cases", () => {
   it("subscribe on leaf ref at scalar path fires on set", () => {
     const schema = Schema.struct({ n: Schema.number() })
     const store = { n: 42 }
-    const ctx = plainContext(schema, store)
-    const doc = interpret(schema, ctx)
-      .with(readable)
-      .with(writable)
-      .with(observation)
-      .done()
+    const ctx = contextOver(schema, store)
+    const doc = refOver(schema, ctx)
 
     const changesets: Changeset[] = []
     getChangefeed(doc.n).subscribe((changeset: Changeset) =>
@@ -987,12 +947,8 @@ describe("changefeed: edge cases", () => {
       items: Schema.list(Schema.string()),
     })
     const store = { items: [] as string[] }
-    const ctx = plainContext(schema, store)
-    const doc = interpret(schema, ctx)
-      .with(readable)
-      .with(writable)
-      .with(observation)
-      .done()
+    const ctx = contextOver(schema, store)
+    const doc = refOver(schema, ctx)
 
     expect(hasRecursiveChangefeed(doc.items)).toBe(true)
   })
@@ -1002,12 +958,8 @@ describe("changefeed: edge cases", () => {
       labels: Schema.record(Schema.string()),
     })
     const store = { labels: {} }
-    const ctx = plainContext(schema, store)
-    const doc = interpret(schema, ctx)
-      .with(readable)
-      .with(writable)
-      .with(observation)
-      .done()
+    const ctx = contextOver(schema, store)
+    const doc = refOver(schema, ctx)
 
     expect(hasRecursiveChangefeed(doc.labels)).toBe(true)
   })
@@ -1253,12 +1205,8 @@ describe("changefeed: flush boundary enforcement", () => {
   it("batch() propagates subscriber error, not secondary abort error", () => {
     const store = { x: 0 }
     const schema = Schema.struct({ x: Schema.number() })
-    const ctx = plainContext(schema, store)
-    const doc = interpret(schema, ctx)
-      .with(readable)
-      .with(writable)
-      .with(observation)
-      .done()
+    const ctx = contextOver(schema, store)
+    const doc = refOver(schema, ctx)
 
     // Subscribe with a callback that throws
     getChangefeed(doc.x).subscribe(() => {
@@ -1280,12 +1228,8 @@ describe("changefeed: flush boundary enforcement", () => {
       x: Schema.number(),
       y: Schema.number(),
     })
-    const ctx = plainContext(schema, store)
-    const doc = interpret(schema, ctx)
-      .with(readable)
-      .with(writable)
-      .with(observation)
-      .done()
+    const ctx = contextOver(schema, store)
+    const doc = refOver(schema, ctx)
 
     // Subscribe to x; when x changes, mutate y via batch().
     // Pre-1.6.0 this threw "Mutation during notification delivery is not

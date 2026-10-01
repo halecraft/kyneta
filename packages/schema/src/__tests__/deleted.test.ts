@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { deletedFeed } from "../interpreters/with-addressing.js"
+import { deletedFeed } from "../ref/address.js"
 
 describe("deletedFeed()", () => {
   it("returns undefined for null/undefined", () => {

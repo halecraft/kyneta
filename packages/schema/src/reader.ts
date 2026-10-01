@@ -36,7 +36,7 @@ export interface FlatTreeNodeTopology {
 
 /**
  * σ, the document as a plain JS object. Every substrate keeps one, and every
- * read of a writable stack is served from it.
+ * read of a ref is served from it.
  */
 export type PlainState = Record<string, unknown>
 
@@ -50,7 +50,7 @@ export interface StateCell {
 // ---------------------------------------------------------------------------
 
 /**
- * Abstract read interface for the interpreter stack.
+ * Abstract read interface over σ, for refs and interpreters.
  *
  * Interpreters read from state exclusively through this interface,
  * allowing substrates to provide their own read semantics. The plain

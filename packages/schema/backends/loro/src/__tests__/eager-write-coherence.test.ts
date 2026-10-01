@@ -23,16 +23,13 @@
 import {
   applyChanges,
   batch,
-  interpret,
+  createRef,
   mapChange,
-  observation,
   own,
   RawPath,
-  readable,
   Schema,
   subscribe,
   unwrap,
-  writable,
 } from "@kyneta/schema"
 import { defined, projectionConformance } from "@kyneta/schema/testing"
 import { LoroDoc, type LoroDoc as LoroDocType } from "loro-crdt"
@@ -50,11 +47,7 @@ import {
 
 function build<S extends ReturnType<typeof Schema.struct>>(schema: S) {
   const substrate = loroSubstrateFactory.create(schema)
-  const doc = interpret(schema, substrate.context())
-    .with(readable)
-    .with(writable)
-    .with(observation)
-    .done() as any
+  const doc = createRef(schema, substrate) as any
   return { substrate, doc }
 }
 
@@ -75,11 +68,7 @@ function buildUnbound<S extends ReturnType<typeof Schema.struct>>(
   ensureLoroContainers(doc, schema)
   doc.commit()
   const substrate = createLoroSubstrate(doc, schema)
-  const view = interpret(schema, substrate.context())
-    .with(readable)
-    .with(writable)
-    .with(observation)
-    .done() as any
+  const view = createRef(schema, substrate) as any
   return { substrate, doc: view }
 }
 

@@ -8,9 +8,9 @@ Everything you need to build reactive, syncable documents. One import, batteries
 bun run example/basic/main.ts
 ```
 
-## [`advanced/`](./advanced/) — The Composition Algebra
+## [`advanced/`](./advanced/) — Under the Hood
 
-Under the hood: how the interpreter stack decomposes into five composable layers, and how to mix and match them for custom use cases.
+What `createDoc` does: a document's root ref over a substrate (`createRef`), how refs are made, a custom interpreter for `interpret`, and ops replayed between documents.
 
 ```sh
 bun run example/advanced/main.ts

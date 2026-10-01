@@ -5,6 +5,8 @@
 // Two collections, because one can leave objects a finalizer or weak
 // reference only released during it.
 
+import { getHeapSnapshot } from "node:v8"
+
 const gc = (globalThis as { gc?: () => void }).gc
 
 function collect(): number {
@@ -54,3 +56,24 @@ export interface Result {
 
 export const KiB = 1024
 export const MiB = 1024 * 1024
+
+/**
+ * The number of objects on the heap, from a heap snapshot's header. Taking
+ * the snapshot collects garbage first.
+ */
+export function heapObjects(): number {
+  collect()
+  const stream = getHeapSnapshot()
+  let head = ""
+  let chunk: Buffer | null = stream.read() as Buffer | null
+  while (chunk !== null) {
+    head += chunk.toString()
+    const match = /"node_count":(\d+)/.exec(head)
+    if (match?.[1] !== undefined) {
+      stream.destroy()
+      return Number(match[1])
+    }
+    chunk = stream.read() as Buffer | null
+  }
+  throw new Error("The heap snapshot has no node count.")
+}

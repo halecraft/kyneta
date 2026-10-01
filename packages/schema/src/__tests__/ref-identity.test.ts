@@ -1,28 +1,14 @@
 import { describe, expect, it } from "vitest"
-import {
-  interpret,
-  own,
-  plainContext,
-  plainInterpreter,
-  plainReader,
-  replaceChange,
-  Schema,
-  sequenceChange,
-  withWritable,
-} from "../index.js"
-import type { Interpreter } from "../interpret.js"
-import type { RefContext } from "../interpreter-types.js"
-import type {
-  HasCaching,
-  HasCall,
-  HasNavigation,
-} from "../interpreters/bottom.js"
-import { bottomInterpreter } from "../interpreters/bottom.js"
-import { withAddressing } from "../interpreters/with-addressing.js"
-import { withCaching } from "../interpreters/with-caching.js"
-import { withNavigation } from "../interpreters/with-navigation.js"
-import { withReadable } from "../interpreters/with-readable.js"
+import { own, replaceChange, Schema, sequenceChange } from "../index.js"
+import { TRANSACT } from "../interpreters/writable.js"
 import { RawPath } from "../path.js"
+import type { Schema as SchemaNode } from "../schema.js"
+import {
+  contextOver,
+  refOver,
+  untypedDocOver,
+  untypedRefOver,
+} from "./stack.js"
 
 // ===========================================================================
 // Shared fixtures
@@ -47,27 +33,15 @@ const annotatedDocSchema = Schema.struct({
   ),
 })
 
-// Default interpreter: includes withAddressing for identity-preserving
-// sequence/map caching via the address table.
-const cachedInterp = withCaching(
-  withAddressing(withReadable(withNavigation(bottomInterpreter))),
-)
-
-function createDoc(
-  schema: Parameters<typeof interpret>[0],
-  store: Record<string, unknown>,
-) {
-  const ctx: RefContext = { reader: plainReader({ current: store }) }
-  const doc = interpret(schema, cachedInterp, ctx) as any
+function createDoc(schema: SchemaNode, store: Record<string, unknown>) {
+  const doc = untypedDocOver(schema, store) as any
+  const ctx = doc[TRANSACT]
   return { doc, store, ctx }
 }
 
-function createWritableDoc(
-  schema: Parameters<typeof interpret>[0],
-  store: Record<string, unknown>,
-) {
-  const ctx = plainContext(schema, store)
-  const doc = interpret(schema, withWritable(cachedInterp), ctx) as any
+function createWritableDoc(schema: SchemaNode, store: Record<string, unknown>) {
+  const ctx = contextOver(schema, store)
+  const doc = untypedRefOver(schema, ctx) as any
   return { doc, store, ctx }
 }
 
@@ -75,7 +49,7 @@ function createWritableDoc(
 // Product: referential identity
 // ===========================================================================
 
-describe("withCaching: product referential identity", () => {
+describe("ref identity: product referential identity", () => {
   it("returns the same ref on repeated access", () => {
     const { doc } = createDoc(structuralDocSchema, {
       settings: { darkMode: false, fontSize: 14 },
@@ -128,7 +102,7 @@ describe("withCaching: product referential identity", () => {
 // Sequence: referential identity
 // ===========================================================================
 
-describe("withCaching: sequence referential identity", () => {
+describe("ref identity: sequence referential identity", () => {
   const schema = Schema.struct({
     messages: Schema.list(
       Schema.struct({
@@ -212,7 +186,7 @@ describe("withCaching: sequence referential identity", () => {
 // Map: referential identity
 // ===========================================================================
 
-describe("withCaching: map referential identity", () => {
+describe("ref identity: map referential identity", () => {
   const schema = Schema.struct({
     metadata: Schema.record(Schema.number()),
   })
@@ -283,7 +257,7 @@ describe("withCaching: map referential identity", () => {
 // Hybrid discriminant: caching behavior
 // ===========================================================================
 
-describe("withCaching: hybrid discriminant", () => {
+describe("ref identity: hybrid discriminant", () => {
   const schema = Schema.struct({
     item: Schema.discriminatedUnion("type", [
       Schema.struct({ type: Schema.string("text"), body: Schema.string() }),
@@ -334,7 +308,7 @@ describe("withCaching: hybrid discriminant", () => {
 // Field refs live as long as their product ref
 // ===========================================================================
 
-describe("withCaching: field refs across a replace of their product", () => {
+describe("ref identity: field refs across a replace of their product", () => {
   it("a replace of the product keeps every field ref's identity", () => {
     const { doc } = createWritableDoc(structuralDocSchema, {
       settings: { darkMode: false, fontSize: 14 },
@@ -390,7 +364,7 @@ describe("withCaching: field refs across a replace of their product", () => {
 // Sum dispatch still works through caching layer
 // ===========================================================================
 
-describe("withCaching: sum dispatch", () => {
+describe("ref identity: sum dispatch", () => {
   it("discriminated sum dispatches correctly", () => {
     const schema = Schema.struct({
       item: Schema.discriminatedUnion("type", [
@@ -420,7 +394,7 @@ describe("withCaching: sum dispatch", () => {
 // Full doc tree with caching
 // ===========================================================================
 
-describe("withCaching: full doc tree", () => {
+describe("ref identity: full doc tree", () => {
   it("produces a complete navigable, cached tree with identity", () => {
     const { doc } = createDoc(annotatedDocSchema, {
       title: "Hello",
@@ -447,13 +421,7 @@ describe("withCaching: full doc tree", () => {
 // it, and memoized refs read through their paths, so none goes stale.
 // ===========================================================================
 
-describe("withCaching: writes through ctx.prepare", () => {
-  const fullInterpreter = withWritable(
-    withCaching(
-      withAddressing(withReadable(withNavigation(bottomInterpreter))),
-    ),
-  )
-
+describe("ref identity: writes through ctx.prepare", () => {
   const docSchema = Schema.struct({
     settings: Schema.struct({
       darkMode: Schema.boolean(),
@@ -475,8 +443,8 @@ describe("withCaching: writes through ctx.prepare", () => {
         { author: "Bob", body: "World" },
       ],
     }
-    const ctx = plainContext(docSchema, store)
-    const doc = interpret(docSchema, fullInterpreter, ctx) as any
+    const ctx = contextOver(docSchema, store)
+    const doc = refOver(docSchema, ctx) as any
     return { doc, store, ctx }
   }
 
@@ -537,84 +505,5 @@ describe("withCaching: writes through ctx.prepare", () => {
     expect(doc.messages.at(2)).toBe(_refBob)
     expect(_refAlice.author()).toBe("Alice")
     expect(_refBob.author()).toBe("Bob")
-  })
-})
-
-describe("withCaching: read-only stack backward compatibility", () => {
-  it("withCaching(withAddressing(withReadable(bottom))) with plain RefContext still works", () => {
-    const readOnlyInterp = withCaching(
-      withAddressing(withReadable(withNavigation(bottomInterpreter))),
-    )
-    const store = {
-      settings: { darkMode: false, fontSize: 14 },
-    }
-    const ctx: RefContext = { reader: plainReader({ current: store }) }
-    const schema = Schema.struct({
-      settings: Schema.struct({
-        darkMode: Schema.boolean(),
-        fontSize: Schema.number(),
-      }),
-    })
-    const doc = interpret(schema, readOnlyInterp, ctx) as any
-
-    // Reading works
-    expect(doc.settings.darkMode()).toBe(false)
-    // Caching works (identity preserved)
-    expect(doc.settings).toBe(doc.settings)
-  })
-})
-
-// ===========================================================================
-// Type-level tests
-// ===========================================================================
-
-describe("type-level: withCaching", () => {
-  it("withCaching(withAddressing(withReadable(bottomInterpreter))) is Interpreter<RefContext, HasCall & HasNavigation & HasCaching>", () => {
-    const cached = withCaching(
-      withAddressing(withReadable(withNavigation(bottomInterpreter))),
-    )
-    const _check: Interpreter<
-      RefContext,
-      HasCall & HasNavigation & HasCaching
-    > = cached
-    void _check
-  })
-
-  it("result of cached interpreter satisfies HasCaching", () => {
-    const cached = withCaching(
-      withAddressing(withReadable(withNavigation(bottomInterpreter))),
-    )
-    const ctx: RefContext = { reader: plainReader({ current: { n: 1 } }) }
-    const result = interpret(Schema.struct({ n: Schema.number() }), cached, ctx)
-    const _check: HasCaching = result
-    void _check
-  })
-
-  it("result of cached interpreter also satisfies HasNavigation and HasCall", () => {
-    const cached = withCaching(
-      withAddressing(withReadable(withNavigation(bottomInterpreter))),
-    )
-    const ctx: RefContext = { reader: plainReader({ current: "test" as any }) }
-    const result = interpret(Schema.string(), cached, ctx)
-    const _checkNav: HasNavigation = result
-    const _checkRead: HasCall = result
-    void _checkNav
-    void _checkRead
-  })
-
-  it("withCaching(bottomInterpreter) is a type error (bottom has HasCall, not HasNavigation)", () => {
-    // @ts-expect-error — bottomInterpreter produces HasCall, withCaching requires HasNavigation
-    const _bad = withCaching(bottomInterpreter)
-    void _bad
-  })
-
-  it("withCaching(plainInterpreter) is a type error", () => {
-    const unknownInterpreter = plainInterpreter as any as Interpreter<
-      RefContext,
-      unknown
-    >
-    // @ts-expect-error — unknown is not assignable to HasNavigation
-    const _bad = withCaching(unknownInterpreter)
-    void _bad
   })
 })

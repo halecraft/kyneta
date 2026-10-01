@@ -205,8 +205,8 @@ export function BoundReplica(
 /**
  * Disposition: full interpretation.
  *
- * The document is backed by a `Substrate` with a full interpreter stack:
- * readable store, writable context, changefeed, `Ref<S>`. This is the
+ * The document is backed by a `Substrate`, and read, written and observed
+ * through its refs (`Ref<S>`). This is the
  * default for client apps and application servers that read and write
  * document state.
  *

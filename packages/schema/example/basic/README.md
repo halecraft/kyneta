@@ -49,5 +49,5 @@ One import path. Batteries included.
 
 ## Next Steps
 
-- **Advanced example** — `example/advanced/` dives into the composable interpreter algebra: custom layer stacks, read-only documents, pure state transitions, and symbol-keyed hooks.
+- **Advanced example** — `example/advanced/` opens up `createDoc`: `createRef` over a substrate, how refs are made, a custom interpreter, pure state transitions, and symbol-keyed hooks.
 - **Recipe Book** — `examples/recipe-book/` is a full-stack SSR app with WebSocket sync, built entirely on `@kyneta/schema/basic`.

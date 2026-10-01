@@ -2,17 +2,9 @@
 // until a write copies it.
 import { describe, expect, it } from "vitest"
 import { batch, createDoc, Schema } from "../basic/index.js"
-import { __countKeptRefs, coordinatePath } from "../coordinate-trie.js"
-import {
-  bottomInterpreter,
-  interpret,
-  plainReader,
-  type RefContext,
-  unwrap,
-  withNavigation,
-  withReadable,
-} from "../index.js"
-import { TRANSACT } from "../interpreters/writable.js"
+import { __countKeptRefs, __countTrieNodes } from "../coordinate-trie.js"
+import { unwrap } from "../index.js"
+import { TRANSACT, type WritableContext } from "../interpreters/writable.js"
 import { RawPath } from "../path.js"
 
 const Doc = Schema.struct({
@@ -40,17 +32,14 @@ function fixture() {
   return doc
 }
 
-const contextOf = (doc: any) => doc[TRANSACT] as RefContext
+const contextOf = (doc: any) => doc[TRANSACT] as WritableContext
 
 /** σ at `path`, as the store holds it. */
 const sigma = (doc: any, path = RawPath.empty): any =>
   contextOf(doc).reader.read(path)
 
 /** The number of coordinates in the document's trie. */
-const trieSize = (doc: any): number => {
-  const trie = coordinatePath(contextOf(doc), RawPath.empty).trie
-  return trie.below(trie.root).length
-}
+const trieSize = (doc: any): number => __countTrieNodes(contextOf(doc))
 
 describe("a read is stable", () => {
   it("with no write in between, ref() === ref(), at the root and below", () => {
@@ -330,46 +319,5 @@ describe("unwrap(doc) on plain", () => {
     expect(unwrap(doc)).not.toBe(before)
     expect(unwrap(doc)).toBe(sigma(doc))
     expect((unwrap(doc) as { title: string }).title).toBe("u")
-  })
-})
-
-describe("read-only stacks", () => {
-  const readOnly = withReadable(withNavigation(bottomInterpreter))
-  const Partial = Schema.struct({
-    a: Schema.struct({ x: Schema.number(), y: Schema.string() }),
-    list: Schema.list(Schema.number()),
-  })
-
-  it("a read copies the caller's value, and never freezes it", () => {
-    const value = { a: { x: 1, y: "y" }, list: [1, 2] }
-    const doc: any = interpret(Partial, readOnly, {
-      reader: plainReader({ current: value }),
-    })
-    const read = doc()
-    expect(read).toEqual(value)
-    expect(read).not.toBe(value)
-    expect(Object.isFrozen(read.a)).toBe(true)
-    expect(Object.isFrozen(value)).toBe(false)
-    expect(Object.isFrozen(value.a)).toBe(false)
-    expect(doc.list.get(1)).toBe(2)
-  })
-
-  it("a bytes read is a copy of the caller's Uint8Array", () => {
-    const bytes = new Uint8Array([1, 2])
-    const doc: any = interpret(Schema.struct({ b: Schema.bytes() }), readOnly, {
-      reader: plainReader({ current: { b: bytes } }),
-    })
-    const read = doc.b()
-    expect(read).toBeInstanceOf(Uint8Array)
-    expect(read).not.toBe(bytes)
-    expect([...doc().b]).toEqual([1, 2])
-  })
-
-  it("a read completes a partial value", () => {
-    const doc: any = interpret(Partial, readOnly, {
-      reader: plainReader({ current: { a: { x: 1 } } }),
-    })
-    expect(doc()).toEqual({ a: { x: 1, y: "" }, list: [] })
-    expect(doc.a()).toEqual({ x: 1, y: "" })
   })
 })

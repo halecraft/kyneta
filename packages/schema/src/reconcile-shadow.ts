@@ -100,7 +100,7 @@ interface Candidate {
   readonly schema: SchemaNode
   readonly key?: string
   /** `path`, or `path.entry(key)`: what this candidate covers. */
-  readonly covers: readonly string[]
+  readonly covers: readonly (string | number)[]
 }
 
 /** The schema at each prefix of a path, and how much of it fits. */
@@ -183,7 +183,7 @@ function toCandidate(lifted: {
 /** The candidates no other candidate covers, in their first order. */
 function cover(candidates: readonly Candidate[]): readonly Candidate[] {
   interface Node {
-    readonly children: Map<string, Node>
+    readonly children: Map<string | number, Node>
     terminal: boolean
   }
   const trie: Node = { children: new Map(), terminal: false }

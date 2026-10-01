@@ -1,25 +1,9 @@
 import { hasChangefeed } from "@kyneta/changefeed"
 import { describe, expect, it } from "vitest"
-import type { Readable, RefContext } from "../index.js"
-import {
-  bottomInterpreter,
-  interpret,
-  plainContext,
-  plainReader,
-  Schema,
-  withAddressing,
-  withCaching,
-  withNavigation,
-  withReadable,
-  withWritable,
-} from "../index.js"
-import { withChangefeed } from "../interpreters/with-changefeed.js"
-
-// Composed interpreter stack — includes withAddressing for
-// identity-preserving sequence/map caching via the address table.
-const readableInterpreter = withCaching(
-  withAddressing(withReadable(withNavigation(bottomInterpreter))),
-)
+import type { Readable } from "../index.js"
+import { Schema } from "../index.js"
+import { TRANSACT } from "../interpreters/writable.js"
+import { docOver } from "./stack.js"
 
 // ===========================================================================
 // Shared fixtures
@@ -33,14 +17,14 @@ const structuralDocSchema = Schema.struct({
   metadata: Schema.record(Schema.any()),
 })
 
-function createReadOnlyDoc(storeOverrides: Record<string, unknown> = {}) {
+function createDoc(storeOverrides: Record<string, unknown> = {}) {
   const store = {
     settings: { darkMode: false, fontSize: 14 },
     metadata: { version: 1 },
     ...storeOverrides,
   }
-  const ctx: RefContext = { reader: plainReader({ current: store }) }
-  const doc = interpret(structuralDocSchema, readableInterpreter, ctx) as any
+  const doc = docOver(structuralDocSchema, store) as any
+  const ctx = doc[TRANSACT]
   return { store, ctx, doc }
 }
 
@@ -60,9 +44,7 @@ const annotatedDocSchema = Schema.struct({
   metadata: Schema.record(Schema.any()),
 })
 
-function createReadOnlyAnnotatedDoc(
-  storeOverrides: Record<string, unknown> = {},
-) {
+function createAnnotatedDoc(storeOverrides: Record<string, unknown> = {}) {
   const store = {
     title: "Hello",
     count: 42,
@@ -71,61 +53,51 @@ function createReadOnlyAnnotatedDoc(
     metadata: { version: 1 },
     ...storeOverrides,
   }
-  const ctx: RefContext = { reader: plainReader({ current: store }) }
-  const doc = interpret(annotatedDocSchema, readableInterpreter, ctx) as any
+  const doc = docOver(annotatedDocSchema, store) as any
+  const ctx = doc[TRANSACT]
   return { store, ctx, doc }
 }
 
 // ===========================================================================
-// Read-only document — basic callable behavior
+// Basic callable behavior
 // ===========================================================================
 
 describe("readable: callable refs", () => {
-  it("produces a navigable tree from a read-only context", () => {
-    const { doc } = createReadOnlyDoc()
+  it("produces a navigable tree", () => {
+    const { doc } = createDoc()
     expect(doc).toBeDefined()
     expect(typeof doc).toBe("function")
   })
 
   it("scalar ref returns current value when called", () => {
-    const { doc } = createReadOnlyDoc()
+    const { doc } = createDoc()
     expect(doc.settings.darkMode()).toBe(false)
     expect(doc.settings.fontSize()).toBe(14)
   })
 
   it("scalar ref reflects direct store mutations (live read)", () => {
-    const { store, doc } = createReadOnlyDoc()
+    const { store, doc } = createDoc()
     ;(store.settings as Record<string, unknown>).fontSize = 20
     expect(doc.settings.fontSize()).toBe(20)
   })
 
   it("text ref returns current string when called", () => {
-    const { doc } = createReadOnlyAnnotatedDoc()
+    const { doc } = createAnnotatedDoc()
     expect(doc.title()).toBe("Hello")
   })
 
   it("counter ref returns current number when called", () => {
-    const { doc } = createReadOnlyAnnotatedDoc()
+    const { doc } = createAnnotatedDoc()
     expect(doc.count()).toBe(42)
   })
 
-  it("counter ref returns 0 when store value is not a number", () => {
-    const { doc } = createReadOnlyAnnotatedDoc({ count: "not a number" })
-    expect(doc.count()).toBe(0)
-  })
-
-  it("text ref returns empty string when store value is null", () => {
-    const { doc } = createReadOnlyAnnotatedDoc({ title: null })
-    expect(doc.title()).toBe("")
-  })
-
   it("product ref returns deep plain snapshot when called", () => {
-    const { doc } = createReadOnlyDoc()
+    const { doc } = createDoc()
     expect(doc.settings()).toEqual({ darkMode: false, fontSize: 14 })
   })
 
   it("doc ref returns full deep snapshot when called", () => {
-    const { store, doc } = createReadOnlyDoc()
+    const { store, doc } = createDoc()
     expect(doc()).toEqual(store)
   })
 
@@ -134,20 +106,19 @@ describe("readable: callable refs", () => {
   // ---------------------------------------------------------------------------
 
   it("product ref() returns a frozen snapshot", () => {
-    const { doc, store } = createReadOnlyDoc()
+    const { doc, store } = createDoc()
     const snap = doc.settings()
     expect(Object.isFrozen(snap)).toBe(true)
     expect(() => {
       snap.darkMode = true
     }).toThrow(TypeError)
     expect((store.settings as any).darkMode).toBe(false)
-    // A read-only stack caches nothing: nothing would tell a cached read it
-    // is stale. Each read is a fresh value.
-    expect(doc.settings()).not.toBe(doc.settings())
+    // A read is σ's own value: the same object until a write copies it.
+    expect(doc.settings()).toBe(doc.settings())
   })
 
   it("sequence ref() returns a frozen snapshot", () => {
-    const { doc } = createReadOnlyAnnotatedDoc()
+    const { doc } = createAnnotatedDoc()
     const snap = doc.messages()
     expect(() => snap.push({ author: "Evil", body: "Injected" })).toThrow(
       TypeError,
@@ -156,7 +127,7 @@ describe("readable: callable refs", () => {
   })
 
   it("map ref() returns a frozen snapshot", () => {
-    const { doc } = createReadOnlyDoc()
+    const { doc } = createDoc()
     const snap = doc.metadata()
     expect(() => {
       ;(snap as any).evil = 999
@@ -164,18 +135,17 @@ describe("readable: callable refs", () => {
     expect(doc.metadata()).toEqual({ version: 1 })
   })
 
-  it("doc ref() is frozen all the way down, and shares nothing with the store", () => {
-    const { doc, store } = createReadOnlyDoc()
+  it("doc ref() is frozen all the way down", () => {
+    const { doc } = createDoc()
     const snap = doc()
     expect(Object.isFrozen((snap as any).settings)).toBe(true)
-    expect((snap as any).settings).not.toBe(store.settings)
     expect(() => {
       ;(snap as any).settings.darkMode = true
     }).toThrow(TypeError)
   })
 
   it("typeof every ref is 'function'", () => {
-    const { doc } = createReadOnlyDoc()
+    const { doc } = createDoc()
     expect(typeof doc).toBe("function")
     expect(typeof doc.settings).toBe("function")
     expect(typeof doc.settings.darkMode).toBe("function")
@@ -189,42 +159,42 @@ describe("readable: callable refs", () => {
 
 describe("readable: toPrimitive coercion", () => {
   it("counter ref in template literal produces string", () => {
-    const { doc } = createReadOnlyAnnotatedDoc()
+    const { doc } = createAnnotatedDoc()
     expect(`Stars: ${doc.count}`).toBe("Stars: 42")
   })
 
   it("text ref in template literal produces string", () => {
-    const { doc } = createReadOnlyAnnotatedDoc()
+    const { doc } = createAnnotatedDoc()
     expect(`Title: ${doc.title}`).toBe("Title: Hello")
   })
 
   it("counter toPrimitive with 'number' hint returns number", () => {
-    const { doc } = createReadOnlyAnnotatedDoc()
+    const { doc } = createAnnotatedDoc()
     expect(doc.count[Symbol.toPrimitive]("number")).toBe(42)
   })
 
   it("counter toPrimitive with 'string' hint returns string", () => {
-    const { doc } = createReadOnlyAnnotatedDoc()
+    const { doc } = createAnnotatedDoc()
     expect(doc.count[Symbol.toPrimitive]("string")).toBe("42")
   })
 
   it("counter toPrimitive with 'default' hint returns number", () => {
-    const { doc } = createReadOnlyAnnotatedDoc()
+    const { doc } = createAnnotatedDoc()
     expect(doc.count[Symbol.toPrimitive]("default")).toBe(42)
   })
 
   it("String(textRef) works via toPrimitive", () => {
-    const { doc } = createReadOnlyAnnotatedDoc()
+    const { doc } = createAnnotatedDoc()
     expect(String(doc.title)).toBe("Hello")
   })
 
   it("scalar toPrimitive with 'string' hint returns String(value)", () => {
-    const { doc } = createReadOnlyDoc()
+    const { doc } = createDoc()
     expect(doc.settings.fontSize[Symbol.toPrimitive]("string")).toBe("14")
   })
 
   it("scalar toPrimitive with 'default' hint returns raw value", () => {
-    const { doc } = createReadOnlyDoc()
+    const { doc } = createDoc()
     expect(doc.settings.fontSize[Symbol.toPrimitive]("default")).toBe(14)
   })
 })
@@ -235,12 +205,12 @@ describe("readable: toPrimitive coercion", () => {
 
 describe("readable: product lazy getters", () => {
   it("returns the same ref on repeated access (referential identity)", () => {
-    const { doc } = createReadOnlyDoc()
+    const { doc } = createDoc()
     expect(doc.settings).toBe(doc.settings)
   })
 
   it("Object.keys returns only schema field names", () => {
-    const { doc } = createReadOnlyDoc()
+    const { doc } = createDoc()
     expect(Object.keys(doc)).toEqual(["settings", "metadata"])
   })
 
@@ -249,8 +219,8 @@ describe("readable: product lazy getters", () => {
       name: Schema.string(),
     })
     const store = { name: "test-value" }
-    const ctx: RefContext = { reader: plainReader({ current: store }) }
-    const doc = interpret(schema, readableInterpreter, ctx) as any
+    const doc = docOver(schema, store) as any
+    const _ctx = doc[TRANSACT]
     // The lazy getter should return a child ref, not the function's name
     expect(typeof doc.name).toBe("function")
     expect(doc.name()).toBe("test-value")
@@ -261,8 +231,8 @@ describe("readable: product lazy getters", () => {
       length: Schema.number(),
     })
     const store = { length: 99 }
-    const ctx: RefContext = { reader: plainReader({ current: store }) }
-    const doc = interpret(schema, readableInterpreter, ctx) as any
+    const doc = docOver(schema, store) as any
+    const _ctx = doc[TRANSACT]
     expect(typeof doc.length).toBe("function")
     expect(doc.length()).toBe(99)
   })
@@ -274,26 +244,26 @@ describe("readable: product lazy getters", () => {
 
 describe("readable: sequence ref", () => {
   it(".length reflects the store array length", () => {
-    const { doc } = createReadOnlyAnnotatedDoc()
+    const { doc } = createAnnotatedDoc()
     expect(doc.messages.length).toBe(1)
   })
 
   it(".at(i) returns a child ref that is itself callable", () => {
-    const { doc } = createReadOnlyAnnotatedDoc()
+    const { doc } = createAnnotatedDoc()
     const msg = doc.messages.at(0) as any
     expect(typeof msg).toBe("function")
     expect(msg.author()).toBe("Alice")
   })
 
   it("sequence ref is callable and returns plain array", () => {
-    const { doc } = createReadOnlyAnnotatedDoc()
+    const { doc } = createAnnotatedDoc()
     const arr = doc.messages()
     expect(Array.isArray(arr)).toBe(true)
     expect(arr).toEqual([{ author: "Alice", body: "Hi" }])
   })
 
   it("iteration via for..of yields child refs", () => {
-    const { doc } = createReadOnlyAnnotatedDoc({
+    const { doc } = createAnnotatedDoc({
       messages: [
         { author: "Alice", body: "Hi" },
         { author: "Bob", body: "Hey" },
@@ -307,35 +277,35 @@ describe("readable: sequence ref", () => {
   })
 
   it(".at(i) caches child refs (referential identity via address table)", () => {
-    const { doc } = createReadOnlyAnnotatedDoc()
+    const { doc } = createAnnotatedDoc()
     expect(doc.messages.at(0)).toBe(doc.messages.at(0))
   })
 
   it(".at(i) returns undefined for out-of-bounds index", () => {
-    const { doc } = createReadOnlyAnnotatedDoc()
+    const { doc } = createAnnotatedDoc()
     expect(doc.messages.at(100)).toBeUndefined()
   })
 
   it(".at(i) returns undefined for negative index", () => {
-    const { doc } = createReadOnlyAnnotatedDoc()
+    const { doc } = createAnnotatedDoc()
     expect(doc.messages.at(-1)).toBeUndefined()
   })
 
   it(".get(i) returns the plain value directly (not a function)", () => {
-    const { doc } = createReadOnlyAnnotatedDoc()
+    const { doc } = createAnnotatedDoc()
     const val = doc.messages.get(0)
     expect(typeof val).not.toBe("function")
     expect(val).toEqual({ author: "Alice", body: "Hi" })
   })
 
   it(".get(i) returns undefined for out-of-bounds index", () => {
-    const { doc } = createReadOnlyAnnotatedDoc()
+    const { doc } = createAnnotatedDoc()
     expect(doc.messages.get(100)).toBeUndefined()
     expect(doc.messages.get(-1)).toBeUndefined()
   })
 
   it(".get(i) returns a deep plain snapshot for structural items", () => {
-    const { doc } = createReadOnlyAnnotatedDoc({
+    const { doc } = createAnnotatedDoc({
       messages: [
         { author: "Alice", body: "Hi" },
         { author: "Bob", body: "Hey" },
@@ -355,8 +325,8 @@ describe("readable: sequence ref", () => {
       settings: { darkMode: false, fontSize: 14 },
       metadata: {},
     }
-    const ctx: RefContext = { reader: plainReader({ current: store }) }
-    const doc = interpret(annotatedDocSchema, readableInterpreter, ctx) as any
+    const doc = docOver(annotatedDocSchema, store) as any
+    const _ctx = doc[TRANSACT]
     expect(doc.messages.get(0)).toEqual({ author: "Alice", body: "Hi" })
     // Mutate store directly
     ;(store.messages as unknown[]).push({ author: "Bob", body: "Hey" })
@@ -370,50 +340,50 @@ describe("readable: sequence ref", () => {
 
 describe("readable: map ref", () => {
   it(".at(key) returns a callable child ref", () => {
-    const { doc } = createReadOnlyDoc()
+    const { doc } = createDoc()
     const versionRef = doc.metadata.at("version")
     expect(typeof versionRef).toBe("function")
     expect(versionRef?.()).toBe(1)
   })
 
   it(".at(key) returns undefined for missing key", () => {
-    const { doc } = createReadOnlyDoc()
+    const { doc } = createDoc()
     expect(doc.metadata.at("nonexistent")).toBeUndefined()
   })
 
   it("map ref is callable and returns plain record", () => {
-    const { doc } = createReadOnlyDoc()
+    const { doc } = createDoc()
     expect(doc.metadata()).toEqual({ version: 1 })
   })
 
   it(".keys() returns the store's dynamic keys", () => {
-    const { doc } = createReadOnlyDoc()
+    const { doc } = createDoc()
     expect(doc.metadata.keys()).toEqual(["version"])
   })
 
   it(".has(key) checks store keys", () => {
-    const { doc } = createReadOnlyDoc()
+    const { doc } = createDoc()
     expect(doc.metadata.has("version")).toBe(true)
     expect(doc.metadata.has("nonexistent")).toBe(false)
   })
 
   it("typeof map ref is 'function'", () => {
-    const { doc } = createReadOnlyDoc()
+    const { doc } = createDoc()
     expect(typeof doc.metadata).toBe("function")
   })
 
   it(".size reflects store entry count", () => {
-    const { doc } = createReadOnlyDoc()
+    const { doc } = createDoc()
     expect(doc.metadata.size).toBe(1)
   })
 
   it(".size reflects store with multiple entries", () => {
-    const { doc } = createReadOnlyDoc({ metadata: { a: 1, b: 2, c: 3 } })
+    const { doc } = createDoc({ metadata: { a: 1, b: 2, c: 3 } })
     expect(doc.metadata.size).toBe(3)
   })
 
   it(".entries() yields [key, childRef] pairs", () => {
-    const { doc } = createReadOnlyDoc({ metadata: { a: 1, b: 2 } })
+    const { doc } = createDoc({ metadata: { a: 1, b: 2 } })
     const entries = [...doc.metadata.entries()]
     expect(entries.length).toBe(2)
     expect(entries[0]?.[0]).toBe("a")
@@ -422,7 +392,7 @@ describe("readable: map ref", () => {
   })
 
   it(".values() yields child refs", () => {
-    const { doc } = createReadOnlyDoc({ metadata: { a: 1, b: 2 } })
+    const { doc } = createDoc({ metadata: { a: 1, b: 2 } })
     const vals = [...doc.metadata.values()]
     expect(vals.length).toBe(2)
     expect(typeof vals[0]).toBe("function")
@@ -430,7 +400,7 @@ describe("readable: map ref", () => {
   })
 
   it("[Symbol.iterator] yields [key, childRef] pairs", () => {
-    const { doc } = createReadOnlyDoc({ metadata: { x: 10, y: 20 } })
+    const { doc } = createDoc({ metadata: { x: 10, y: 20 } })
     const pairs: [string, unknown][] = []
     for (const entry of doc.metadata) {
       pairs.push(entry)
@@ -441,19 +411,19 @@ describe("readable: map ref", () => {
   })
 
   it(".at(key) caches child refs (referential identity via address table)", () => {
-    const { doc } = createReadOnlyDoc()
+    const { doc } = createDoc()
     expect(doc.metadata.at("version")).toBe(doc.metadata.at("version"))
   })
 
   it(".get(key) returns the plain value directly (not a function)", () => {
-    const { doc } = createReadOnlyDoc()
+    const { doc } = createDoc()
     const val = doc.metadata.get("version")
     expect(typeof val).not.toBe("function")
     expect(val).toBe(1)
   })
 
   it(".get(key) returns undefined for missing key", () => {
-    const { doc } = createReadOnlyDoc()
+    const { doc } = createDoc()
     expect(doc.metadata.get("nonexistent")).toBeUndefined()
   })
 
@@ -469,8 +439,8 @@ describe("readable: map ref", () => {
     const store = {
       records: { bug: { color: "red", priority: 1 } },
     }
-    const ctx: RefContext = { reader: plainReader({ current: store }) }
-    const doc = interpret(schema, readableInterpreter, ctx) as any
+    const doc = docOver(schema, store) as any
+    const _ctx = doc[TRANSACT]
     expect(doc.records.get("bug")).toEqual({ color: "red", priority: 1 })
   })
 
@@ -479,13 +449,13 @@ describe("readable: map ref", () => {
       labels: Schema.record(Schema.string()),
     })
     const store = { labels: { bug: "red" } }
-    const ctx: RefContext = { reader: plainReader({ current: store }) }
-    const doc = interpret(schema, readableInterpreter, ctx) as any
+    const doc = docOver(schema, store) as any
+    const _ctx = doc[TRANSACT]
     expect(JSON.stringify(doc.labels.get("bug"))).toBe('"red"')
   })
 
   it(".get(key) reflects store mutations (live read)", () => {
-    const { store, doc } = createReadOnlyDoc()
+    const { store, doc } = createDoc()
     expect(doc.metadata.get("version")).toBe(1)
     // Mutate store directly
     ;(store.metadata as Record<string, unknown>).version = 42
@@ -507,15 +477,15 @@ describe("readable: discriminated sum", () => {
 
   it("dispatches to the correct variant based on store discriminant", () => {
     const store = { item: { type: "image", url: "pic.png" } }
-    const ctx: RefContext = { reader: plainReader({ current: store }) }
-    const doc = interpret(schema, readableInterpreter, ctx) as any
+    const doc = docOver(schema, store) as any
+    const _ctx = doc[TRANSACT]
     expect(doc.item.url()).toBe("pic.png")
   })
 
   it("falls back to first variant when discriminant is missing", () => {
     const store = { item: {} }
-    const ctx: RefContext = { reader: plainReader({ current: store }) }
-    const doc = interpret(schema, readableInterpreter, ctx) as any
+    const doc = docOver(schema, store) as any
+    const _ctx = doc[TRANSACT]
     expect(typeof doc.item.body).toBe("function")
   })
 })
@@ -527,34 +497,31 @@ describe("readable: nullable (positional sum)", () => {
 
   it("null store value dispatches to the null variant", () => {
     const store = { bio: null }
-    const ctx: RefContext = { reader: plainReader({ current: store }) }
-    const doc = interpret(schema, readableInterpreter, ctx) as any
+    const doc = docOver(schema, store) as any
+    const _ctx = doc[TRANSACT]
     expect(doc.bio()).toBe(null)
   })
 
   it("non-null store value dispatches to the inner variant", () => {
     const store = { bio: "Hello world" }
-    const ctx: RefContext = { reader: plainReader({ current: store }) }
-    const doc = interpret(schema, readableInterpreter, ctx) as any
+    const doc = docOver(schema, store) as any
+    const _ctx = doc[TRANSACT]
     expect(doc.bio()).toBe("Hello world")
   })
 })
 
 // ===========================================================================
-// Composition with withChangefeed
+// Observation
 // ===========================================================================
 
-describe("readable: composition with withChangefeed", () => {
-  it("withChangefeed(withWritable(readableInterpreter)) attaches [CHANGEFEED] to callable refs", () => {
+describe("readable: refs carry [CHANGEFEED]", () => {
+  it("every callable ref has a changefeed", () => {
     const store = { title: "Hello", count: 42 }
     const schema = Schema.struct({
       title: Schema.text(),
       count: Schema.counter(),
     })
-    // withChangefeed needs WritableContext (extends RefContext)
-    const ctx = plainContext(schema, store)
-    const enriched = withChangefeed(withWritable(readableInterpreter))
-    const doc = interpret(schema, enriched, ctx) as any
+    const doc = docOver(schema, store) as any
 
     expect(hasChangefeed(doc)).toBe(true)
     expect(hasChangefeed(doc.title)).toBe(true)

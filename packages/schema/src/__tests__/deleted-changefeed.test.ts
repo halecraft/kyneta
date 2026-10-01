@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest"
 import { batch, createDoc } from "../basic/index.js"
 import { hasRecursiveChangefeed } from "../changefeed.js"
-import { deletedFeed } from "../interpreters/with-addressing.js"
+import { deletedFeed } from "../ref/address.js"
+import { populatedFeed } from "../ref/observe.js"
 import { Schema } from "../schema.js"
 
 const TodoDoc = Schema.product({
@@ -15,7 +16,7 @@ const TodoDoc = Schema.product({
 })
 
 describe("deletedFeed() changefeed", () => {
-  it("should NOT have a recursive changefeed", () => {
+  it("carries the same protocol as populatedFeed, so the subscribe facade takes it", () => {
     const doc = createDoc(TodoDoc)
     batch(doc, (d: typeof doc) => {
       d.todos.push({ id: "t1", text: "", done: false })
@@ -25,6 +26,7 @@ describe("deletedFeed() changefeed", () => {
 
     const d = deletedFeed(ref)
 
-    expect(hasRecursiveChangefeed(d)).toBe(false)
+    expect(hasRecursiveChangefeed(d)).toBe(true)
+    expect(hasRecursiveChangefeed(populatedFeed(ref))).toBe(true)
   })
 })

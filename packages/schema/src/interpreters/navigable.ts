@@ -26,7 +26,7 @@
  * No call signature (no reading), no mutation methods.
  */
 export interface NavigableSequenceRef<T = unknown> {
-  at: (index: number) => T | undefined
+  at(this: NavigableSequenceRef<T>, index: number): T | undefined
   readonly length: number
   [Symbol.iterator](): Iterator<T>
 }
@@ -46,11 +46,11 @@ export interface NavigableSequenceRef<T = unknown> {
  * No call signature (no reading), no mutation methods.
  */
 export interface NavigableMapRef<T = unknown> {
-  at(key: string): T | undefined
-  has(key: string): boolean
-  keys(): string[]
+  at(this: NavigableMapRef<T>, key: string): T | undefined
+  has(this: NavigableMapRef<T>, key: string): boolean
+  keys(this: NavigableMapRef<T>): string[]
   readonly size: number
-  entries(): IterableIterator<[string, T]>
-  values(): IterableIterator<T>
+  entries(this: NavigableMapRef<T>): IterableIterator<[string, T]>
+  values(this: NavigableMapRef<T>): IterableIterator<T>
   [Symbol.iterator](): IterableIterator<[string, T]>
 }

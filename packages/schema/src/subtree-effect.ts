@@ -3,7 +3,7 @@
 //
 // Pure. A change either edits the node at its path in place, or may rewrite
 // part of the tree below it wholesale. Everything that keeps per-coordinate
-// state (addresses, memoized carriers, subscribers, population)
+// state (addresses, canonical refs, subscribers, population)
 // asks `planSubtreeEffect` where that state may no longer hold, so no two of
 // them can disagree.
 

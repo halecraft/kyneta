@@ -54,10 +54,9 @@ export type SettleTerm = (() => boolean) & HasChangefeed<boolean>
 /**
  * Build a `SettleTerm` from a reader and a subscribe function.
  *
- * Follows `attachIsPopulated` in `@kyneta/schema`'s `with-changefeed.ts`: a
- * plain function with the protocol attached under `[CHANGEFEED]` as a
- * non-enumerable property. Using the same construction keeps settle terms
- * indistinguishable from every other carrier in the codebase.
+ * Follows `feedCarrier` in `@kyneta/schema`'s `ref/observe.ts`: a plain
+ * function with the protocol attached under `[CHANGEFEED]` as a
+ * non-enumerable property, as `populatedFeed` and `deletedFeed` return.
  *
  * @internal
  */

@@ -20,28 +20,17 @@
 
 import { describe, expect, it } from "vitest"
 import { replaceChange } from "../change.js"
-import {
-  applyChanges,
-  interpret,
-  observation,
-  plainContext,
-  readable,
-  Schema,
-  writable,
-} from "../index.js"
+import { applyChanges, Schema } from "../index.js"
 import { RawPath } from "../path.js"
+import { contextOver, refOver } from "./stack.js"
 
 describe("applyChanges bulk perf-sanity", () => {
   it("10_000 replace ops in a single batch complete without budget exhaustion", () => {
     const schema = Schema.struct({
       n: Schema.number(),
     })
-    const ctx = plainContext(schema, { n: 0 })
-    const doc = interpret(schema, ctx)
-      .with(readable)
-      .with(writable)
-      .with(observation)
-      .done() as any
+    const ctx = contextOver(schema, { n: 0 })
+    const doc = refOver(schema, ctx) as any
 
     const ops = Array.from({ length: 10_000 }, (_, i) => ({
       path: RawPath.empty.field("n"),

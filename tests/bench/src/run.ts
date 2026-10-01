@@ -14,6 +14,7 @@ import {
   mapWrites,
   navigation,
   reads,
+  receivedLog,
   remoteStreaming,
 } from "./cases.ts"
 import type { Result } from "./measure.ts"
@@ -32,6 +33,7 @@ const groups: Readonly<Record<string, () => Result[]>> = {
   write: () => mapWrites(rows),
   "local-stream": () => localStreaming(rows, tokens),
   "remote-stream": () => remoteStreaming(rows, tokens),
+  log: () => receivedLog(2000),
 }
 
 const only = flag("group")

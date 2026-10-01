@@ -4,10 +4,9 @@
 // granularity (`Aspect`), so the reactive runtime (jj:kpywvkpr) can subscribe
 // to precisely those nodes (Fork A — handle dispatch). This module is the
 // **functional core** of read-tracking: a pure scope stack plus a single
-// mutation point (`reportRead`). The interpreter-side instrumentation that
-// *calls* `reportRead` lives in `withTracking` (`interpreters/with-tracking.ts`);
-// the subscription *policy* (aspect → changefeed primitive) lives entirely in
-// the runtime — this module is unaware of it.
+// mutation point (`reportRead`). A ref's members call `reportRead` themselves
+// (`ref/track.ts`); the subscription *policy* (aspect → changefeed primitive)
+// lives entirely in the runtime — this module is unaware of it.
 //
 // Aspect vocabulary harmonizes with `@kyneta/compiler`'s `DependencyClassification`
 // (`experimental/compiler/src/classify.ts`), which classifies the same
@@ -20,15 +19,14 @@
 // `@kyneta/machine`'s pure `Program.update` + effect-interpreting runtime.
 
 import type { HasChangefeed } from "@kyneta/changefeed"
-import type { Address } from "./path.js"
 
 // ---------------------------------------------------------------------------
 // Aspect — the granularity of a read
 // ---------------------------------------------------------------------------
 
 /**
- * The granularity at which a node was read, inferred from read-method ×
- * node-kind by `withTracking`:
+ * The granularity at which a node was read, by read method and node kind
+ * (`ref/track.ts`):
  *
  * - `value` — a leaf's value (`scalar`/`text`/`counter`/`richtext`/`set` `()`).
  * - `deep` — a composite's whole subtree (`product`/`sequence`/`map`/`tree` `()`).
@@ -48,23 +46,18 @@ export type Aspect = "value" | "deep" | "structure"
 /**
  * A single captured read: a stable handle plus its aspect. The runtime
  * (jj:kpywvkpr) maps `aspect` → an existing subscription primitive
- * (`subscribeNode` / `subscribeDescendants` / `address.listeners` / a plain
- * `[CHANGEFEED]` `.subscribe`) and dedups by `key`.
+ * (`subscribeNode` / `subscribeDescendants` / a plain `[CHANGEFEED]`
+ * `.subscribe`) and dedups by `key`.
  *
- * - `key` — a stable dedup key (addressed-path + aspect; see `dependencyKey`).
- *   Invariant under structural change because index segments key on the
- *   cursor-stable `Address.id`, never on positional index.
- * - `ref` — the node read. Carries `[CHANGEFEED]` at runtime (the carrier
- *   identity is preserved through the stack; the observation layer attaches
- *   `[CHANGEFEED]` to the same object).
- * - `address` — present for container children; lets the runtime attach to
- *   `address.listeners` for identity/structural invalidation.
+ * - `key` — a stable dedup key (the ref's tracking id + aspect; see
+ *   `dependencyKey`). The ref is the canonical one for its coordinate while
+ *   held, and the scope holds it here, so the key survives structural change.
+ * - `ref` — the node read, carrying `[CHANGEFEED]`.
  */
 export interface Dependency {
   readonly key: string
   readonly aspect: Aspect
   readonly ref: HasChangefeed
-  readonly address?: Address
 }
 
 // ---------------------------------------------------------------------------
@@ -82,8 +75,8 @@ interface Collector {
 let activeScope: Collector | null = null
 
 /**
- * Whether a tracking scope is active. `withTracking` guards every read on
- * this — when no scope is active, reads are byte-identical passthroughs.
+ * Whether a tracking scope is active. Every report guards on this, so with
+ * no scope active a read reports nothing.
  */
 export function currentScope(): boolean {
   return activeScope !== null
@@ -124,14 +117,11 @@ export function withReadScope<T>(fn: () => T): {
 // ---------------------------------------------------------------------------
 
 /**
- * Build a stable dependency key from an addressed-path string and an aspect.
- *
- * `addressedPath` must be derived from stable identity — `Address.id` for
- * sequence/movable index segments, entry keys for maps/sets, field keys for
- * products — so the key is invariant under structural change (an insert
- * before a tracked element does not change its key). `withTracking` builds
- * `addressedPath`; this helper only joins it with the aspect.
+ * Build a stable dependency key from a node's key and an aspect. `node`
+ * must not change while the node is held, so the key is invariant under
+ * structural change (an insert before a tracked element does not change its
+ * key): `ref/track.ts` passes the ref's tracking id.
  */
-export function dependencyKey(addressedPath: string, aspect: Aspect): string {
-  return `${addressedPath}\0${aspect}`
+export function dependencyKey(node: string, aspect: Aspect): string {
+  return `${node}\0${aspect}`
 }

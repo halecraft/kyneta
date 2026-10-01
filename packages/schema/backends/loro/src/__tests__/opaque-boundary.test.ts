@@ -26,14 +26,7 @@
 // no container to push into, so widening is the entire mechanism.
 
 import type { Ref, SchemaNode, Substrate } from "@kyneta/schema"
-import {
-  batch,
-  interpret,
-  observation,
-  readable,
-  Schema,
-  writable,
-} from "@kyneta/schema"
+import { batch, createRef, Schema } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import { createDoc, loro, loroSubstrateFactory } from "../index.js"
 import type { LoroVersion } from "../version.js"
@@ -62,11 +55,7 @@ function interpretSubstrate<S extends SchemaNode>(
   schema: S,
   substrate: Substrate<LoroVersion>,
 ): Ref<S> {
-  return interpret(schema, substrate.context())
-    .with(readable)
-    .with(writable)
-    .with(observation)
-    .done()
+  return createRef(schema, substrate)
 }
 
 /**
@@ -85,12 +74,7 @@ function afterMerge(schema: SchemaNode, write: (d: any) => void): unknown {
   // generic in the schema, and asking it to build `Ref<S>` for these shapes
   // exceeds TypeScript's instantiation-depth limit. Erasing the inference is
   // the point of the cast; these tests assert on runtime values anyway.
-  const mk = (sub: Substrate<LoroVersion>): any =>
-    (interpret as any)(schema, sub.context())
-      .with(readable)
-      .with(writable)
-      .with(observation)
-      .done()
+  const mk = (sub: Substrate<LoroVersion>): any => createRef(schema, sub)
 
   const subA = loroSubstrateFactory.create(schema)
   const docA = mk(subA)

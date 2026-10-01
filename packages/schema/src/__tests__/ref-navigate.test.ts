@@ -1,21 +1,7 @@
-import { hasChangefeed } from "@kyneta/changefeed"
 import { describe, expect, it } from "vitest"
-import {
-  bottomInterpreter,
-  interpret,
-  plainContext,
-  Schema,
-  withAddressing,
-  withCaching,
-  withReadable,
-  withWritable,
-} from "../index.js"
-import type { Interpreter } from "../interpret.js"
-import type { RefContext } from "../interpreter-types.js"
-import type { HasCall, HasNavigation, HasRead } from "../interpreters/bottom.js"
-import { withChangefeed } from "../interpreters/with-changefeed.js"
-import { withNavigation } from "../interpreters/with-navigation.js"
-import { plainReader } from "../reader.js"
+import { Schema } from "../index.js"
+import { TRANSACT } from "../interpreters/writable.js"
+import { contextOver, docOver, refOver } from "./stack.js"
 
 // ===========================================================================
 // Shared fixtures
@@ -40,16 +26,14 @@ const _annotatedDocSchema = Schema.struct({
   ),
 })
 
-const navInterp = withNavigation(bottomInterpreter)
-
 function createNavDoc(storeOverrides: Record<string, unknown> = {}) {
   const store = {
     settings: { darkMode: false, fontSize: 14 },
     metadata: { version: 1 },
     ...storeOverrides,
   }
-  const ctx: RefContext = { reader: plainReader({ current: store }) }
-  const doc = interpret(structuralDocSchema, navInterp, ctx) as any
+  const doc = docOver(structuralDocSchema, store) as any
+  const ctx = doc[TRANSACT]
   return { store, ctx, doc }
 }
 
@@ -57,7 +41,7 @@ function createNavDoc(storeOverrides: Record<string, unknown> = {}) {
 // Product: field getters
 // ===========================================================================
 
-describe("withNavigation: product field getters", () => {
+describe("navigation: product field getters", () => {
   it("defines enumerable getters for each schema field", () => {
     const { doc } = createNavDoc()
     // Product field keys should be enumerable
@@ -78,32 +62,19 @@ describe("withNavigation: product field getters", () => {
     expect(typeof settings.darkMode).toBe("function")
     expect(typeof settings.fontSize).toBe("function")
   })
-
-  it("calling a carrier throws (no reader configured)", () => {
-    const { doc } = createNavDoc()
-    expect(() => doc()).toThrow("No call behavior configured")
-    expect(() => doc.settings()).toThrow("No call behavior configured")
-    expect(() => doc.settings.darkMode()).toThrow("No call behavior configured")
-  })
-
-  it("field getters are not cached (each access forces thunk)", () => {
-    const { doc } = createNavDoc()
-    // Without caching, each access returns a different ref
-    expect(doc.settings).not.toBe(doc.settings)
-  })
 })
 
 // ===========================================================================
 // Sequence: .at(), .length, [Symbol.iterator]
 // ===========================================================================
 
-describe("withNavigation: sequence navigation", () => {
+describe("navigation: sequence navigation", () => {
   const seqSchema = Schema.list(Schema.string())
 
   function createSeqDoc(items: string[]) {
     const store = items as any
-    const ctx: RefContext = { reader: plainReader({ current: store }) }
-    const result = interpret(seqSchema, navInterp, ctx) as any
+    const result = docOver(seqSchema, store) as any
+    const ctx = result[TRANSACT]
     return { store, ctx, result }
   }
 
@@ -111,12 +82,6 @@ describe("withNavigation: sequence navigation", () => {
     const { result } = createSeqDoc(["a", "b", "c"])
     const child = result.at(0)
     expect(typeof child).toBe("function")
-  })
-
-  it(".at(i) calling the child throws (no reader)", () => {
-    const { result } = createSeqDoc(["a", "b", "c"])
-    const child = result.at(0)
-    expect(() => child()).toThrow("No call behavior configured")
   })
 
   it(".at(-1) returns undefined", () => {
@@ -159,13 +124,13 @@ describe("withNavigation: sequence navigation", () => {
 // Map: .at(), .has(), .keys(), .size, .entries(), .values(), iterator
 // ===========================================================================
 
-describe("withNavigation: map navigation", () => {
+describe("navigation: map navigation", () => {
   const mapSchema = Schema.record(Schema.number())
 
   function createMapDoc(data: Record<string, number>) {
     const store = data as any
-    const ctx: RefContext = { reader: plainReader({ current: store }) }
-    const result = interpret(mapSchema, navInterp, ctx) as any
+    const result = docOver(mapSchema, store) as any
+    const ctx = result[TRANSACT]
     return { store, ctx, result }
   }
 
@@ -235,7 +200,7 @@ describe("withNavigation: map navigation", () => {
 // Sum dispatch
 // ===========================================================================
 
-describe("withNavigation: sum dispatch", () => {
+describe("navigation: sum dispatch", () => {
   it("discriminated union dispatches to correct variant", () => {
     const schema = Schema.struct({
       item: Schema.discriminatedUnion("type", [
@@ -244,8 +209,8 @@ describe("withNavigation: sum dispatch", () => {
       ]),
     })
     const store = { item: { type: "image", url: "pic.png" } }
-    const ctx: RefContext = { reader: plainReader({ current: store }) }
-    const doc = interpret(schema, navInterp, ctx) as any
+    const doc = docOver(schema, store) as any
+    const _ctx = doc[TRANSACT]
 
     // item should be a carrier (the resolved variant)
     expect(typeof doc.item).toBe("function")
@@ -265,8 +230,8 @@ describe("withNavigation: sum dispatch", () => {
       ]),
     })
     const store: any = { server: { type: "absent" } }
-    const ctx: RefContext = { reader: plainReader({ current: store }) }
-    const doc = interpret(schema, navInterp, ctx) as any
+    const doc = docOver(schema, store) as any
+    const _ctx = doc[TRANSACT]
 
     // Capture the ref identity
     const serverRef = doc.server
@@ -279,13 +244,9 @@ describe("withNavigation: sum dispatch", () => {
     // Mutate the store directly
     store.server = { type: "present", peerId: "1234" }
 
-    // Without `withCaching`, `doc.server` evaluates the getter to a fresh Proxy each time.
-    // To prove the identical proxy correctly forwards to the new active variant
-    // without tracking external identities, we check `serverRef` directly:
+    // The held proxy forwards to the new active variant.
     expect(typeof serverRef.peerId).toBe("function")
-    // Note: without withReadable, the primitive scalar doesn't have [CALL] yet.
-    // However, serverRef.type evaluates directly to the primitive because withNavigation
-    // intercepts discriminant fields.
+    // A discriminant reads as its raw value, not a ref.
     expect(serverRef.type).toBe("present")
   })
 
@@ -296,15 +257,15 @@ describe("withNavigation: sum dispatch", () => {
 
     // Non-null case
     const store1 = { bio: "hello" }
-    const ctx1: RefContext = { reader: plainReader({ current: store1 }) }
-    const doc1 = interpret(schema, navInterp, ctx1) as any
+    const doc1 = docOver(schema, store1) as any
+    const _ctx1 = doc1[TRANSACT]
     // bio resolves to the string variant (a carrier)
     expect(typeof doc1.bio).toBe("function")
 
     // Null case
     const store2 = { bio: null }
-    const ctx2: RefContext = { reader: plainReader({ current: store2 }) }
-    const doc2 = interpret(schema, navInterp, ctx2) as any
+    const doc2 = docOver(schema, store2) as any
+    const _ctx2 = doc2[TRANSACT]
     // bio resolves to the null variant (a carrier)
     expect(typeof doc2.bio).toBe("function")
   })
@@ -314,8 +275,8 @@ describe("withNavigation: sum dispatch", () => {
       maybeList: Schema.list(Schema.string()).nullable(),
     })
     const store: any = { maybeList: null }
-    const ctx: RefContext = { reader: plainReader({ current: store }) }
-    const doc = interpret(schema, navInterp, ctx) as any
+    const doc = docOver(schema, store) as any
+    const _ctx = doc[TRANSACT]
 
     const maybeListRef = doc.maybeList
     expect(typeof maybeListRef).toBe("function")
@@ -346,8 +307,8 @@ describe("withNavigation: sum dispatch", () => {
       ]),
     })
     const store: any = { server: { type: "absent" } }
-    const ctx: RefContext = { reader: plainReader({ current: store }) }
-    const doc = interpret(schema, navInterp, ctx) as any
+    const doc = docOver(schema, store) as any
+    const _ctx = doc[TRANSACT]
 
     const keysBefore = Object.keys(doc.server)
     expect(keysBefore).toContain("type")
@@ -365,15 +326,15 @@ describe("withNavigation: sum dispatch", () => {
 // Annotated: delegation
 // ===========================================================================
 
-describe("withNavigation: first-class types", () => {
+describe("navigation: first-class types", () => {
   it("struct with first-class type children has field getters", () => {
     const schema = Schema.struct({
       title: Schema.text(),
       count: Schema.counter(),
     })
     const store = { title: "Hello", count: 0 }
-    const ctx: RefContext = { reader: plainReader({ current: store }) }
-    const doc = interpret(schema, navInterp, ctx) as any
+    const doc = docOver(schema, store) as any
+    const _ctx = doc[TRANSACT]
 
     // product — field getters should work
     expect(Object.keys(doc)).toContain("title")
@@ -382,32 +343,12 @@ describe("withNavigation: first-class types", () => {
     expect(typeof doc.count).toBe("function")
   })
 
-  it("text produces a carrier (no toPrimitive — that's withReadable)", () => {
-    const schema = Schema.text()
-    const store = "Hello" as any
-    const ctx: RefContext = { reader: plainReader({ current: store }) }
-    const result = interpret(schema, navInterp, ctx) as any
-
-    expect(typeof result).toBe("function")
-    // CALL slot should NOT be filled (still throws)
-    expect(() => result()).toThrow("No call behavior configured")
-  })
-
-  it("counter produces a carrier (no toPrimitive)", () => {
-    const schema = Schema.counter()
-    const store = 42 as any
-    const ctx: RefContext = { reader: plainReader({ current: store }) }
-    const result = interpret(schema, navInterp, ctx) as any
-
-    expect(typeof result).toBe("function")
-    expect(() => result()).toThrow("No call behavior configured")
-  })
-
   it("movableList delegates to inner sequence", () => {
-    const schema = Schema.movableList(Schema.struct({ title: Schema.string() }))
-    const store = [{ title: "A" }, { title: "B" }] as any
-    const ctx: RefContext = { reader: plainReader({ current: store }) }
-    const result = interpret(schema, navInterp, ctx) as any
+    const schema = Schema.struct({
+      list: Schema.movableList(Schema.struct({ title: Schema.string() })),
+    })
+    const result = docOver(schema, { list: [{ title: "A" }, { title: "B" }] })
+      .list as any
 
     // Sequence navigation should be present
     expect(result.length).toBe(2)
@@ -415,46 +356,24 @@ describe("withNavigation: first-class types", () => {
     const child = result.at(0)
     expect(typeof child).toBe("function")
   })
-
-  it("tree delegates to inner", () => {
-    const schema = Schema.tree(Schema.string())
-    const store = "leaf" as any
-    const ctx: RefContext = { reader: plainReader({ current: store }) }
-    const result = interpret(schema, navInterp, ctx) as any
-
-    expect(typeof result).toBe("function")
-  })
 })
 
 // ===========================================================================
-// Integration: navigate + write (no reading layer)
+// Integration: navigate and write
 // ===========================================================================
 
-describe("withNavigation: navigate + write stack", () => {
-  const navWriteInterp = withWritable(withNavigation(bottomInterpreter))
-
+describe("navigation: navigate and write", () => {
   it("product field navigation works", () => {
     const schema = Schema.struct({
       title: Schema.string(),
       count: Schema.number(),
     })
     const store = { title: "hello", count: 0 }
-    const ctx = plainContext(schema, store)
-    const doc = interpret(schema, navWriteInterp, ctx) as any
+    const ctx = contextOver(schema, store)
+    const doc = refOver(schema, ctx) as any
 
     expect(Object.keys(doc)).toContain("title")
     expect(typeof doc.title).toBe("function")
-  })
-
-  it("ref() throws (no reader configured)", () => {
-    const schema = Schema.struct({
-      title: Schema.string(),
-    })
-    const store = { title: "hello" }
-    const ctx = plainContext(schema, store)
-    const doc = interpret(schema, navWriteInterp, ctx) as any
-
-    expect(() => doc.title()).toThrow("No call behavior configured")
   })
 
   it(".set() works on navigated scalar child", () => {
@@ -462,8 +381,8 @@ describe("withNavigation: navigate + write stack", () => {
       title: Schema.string(),
     })
     const store: Record<string, unknown> = { title: "hello" }
-    const ctx = plainContext(schema, store)
-    const doc = interpret(schema, navWriteInterp, ctx) as any
+    const ctx = contextOver(schema, store)
+    const doc = refOver(schema, ctx) as any
 
     doc.title.set("world")
     expect(store.title).toBe("world")
@@ -474,8 +393,8 @@ describe("withNavigation: navigate + write stack", () => {
       items: Schema.list(Schema.struct({ name: Schema.string() })),
     })
     const store = { items: [{ name: "a" }, { name: "b" }] }
-    const ctx = plainContext(schema, store)
-    const doc = interpret(schema, navWriteInterp, ctx) as any
+    const ctx = contextOver(schema, store)
+    const doc = refOver(schema, ctx) as any
 
     expect(doc.items.length).toBe(2)
     const item = doc.items.at(0)
@@ -494,8 +413,8 @@ describe("withNavigation: navigate + write stack", () => {
       items: Schema.list(Schema.string()),
     })
     const store = { items: ["a", "b"] }
-    const ctx = plainContext(schema, store)
-    const doc = interpret(schema, navWriteInterp, ctx) as any
+    const ctx = contextOver(schema, store)
+    const doc = refOver(schema, ctx) as any
 
     doc.items.push("c")
     expect(store.items).toEqual(["a", "b", "c"])
@@ -506,8 +425,8 @@ describe("withNavigation: navigate + write stack", () => {
       title: Schema.text(),
     })
     const store = { title: "hello" }
-    const ctx = plainContext(schema, store)
-    const doc = interpret(schema, navWriteInterp, ctx) as any
+    const ctx = contextOver(schema, store)
+    const doc = refOver(schema, ctx) as any
 
     doc.title.update("world")
     expect(store.title).toBe("world")
@@ -518,149 +437,13 @@ describe("withNavigation: navigate + write stack", () => {
       labels: Schema.record(Schema.string()),
     })
     const store = { labels: { color: "red" } }
-    const ctx = plainContext(schema, store)
-    const doc = interpret(schema, navWriteInterp, ctx) as any
+    const ctx = contextOver(schema, store)
+    const doc = refOver(schema, ctx) as any
 
     doc.labels.set("size", "large")
     expect((store.labels as any).size).toBe("large")
 
     doc.labels.delete("color")
     expect((store.labels as any).color).toBeUndefined()
-  })
-})
-
-// ===========================================================================
-// Integration: read-only changefeed stack (Moore machine)
-// ===========================================================================
-
-describe("withNavigation: read-only changefeed stack", () => {
-  const readOnlyInterp = withChangefeed(
-    withCaching(
-      withAddressing(withReadable(withNavigation(bottomInterpreter))),
-    ),
-  )
-
-  it("produces refs with [CHANGEFEED]", () => {
-    const schema = Schema.struct({
-      title: Schema.string(),
-      count: Schema.number(),
-    })
-    const store = { title: "Hello", count: 42 }
-    const ctx: RefContext = { reader: plainReader({ current: store }) }
-    const doc = interpret(schema, readOnlyInterp, ctx) as any
-
-    expect(hasChangefeed(doc)).toBe(true)
-    expect(hasChangefeed(doc.title)).toBe(true)
-  })
-
-  it(".current returns a value (valid Moore machine)", () => {
-    const schema = Schema.struct({
-      title: Schema.string(),
-    })
-    const store = { title: "Hello" }
-    const ctx: RefContext = { reader: plainReader({ current: store }) }
-    const doc = interpret(schema, readOnlyInterp, ctx) as any
-
-    const CF_SYM = Symbol.for("kyneta:changefeed")
-    const cf = doc.title[CF_SYM]
-    expect(cf.current).toBe("Hello")
-  })
-
-  it(".subscribe returns an unsubscribe function (never fires)", () => {
-    const schema = Schema.struct({
-      title: Schema.string(),
-    })
-    const store = { title: "Hello" }
-    const ctx: RefContext = { reader: plainReader({ current: store }) }
-    const doc = interpret(schema, readOnlyInterp, ctx) as any
-
-    const CF_SYM = Symbol.for("kyneta:changefeed")
-    const cf = doc.title[CF_SYM]
-    const unsub = cf.subscribe(() => {
-      throw new Error("should never fire on read-only stack")
-    })
-    expect(typeof unsub).toBe("function")
-    // No mutation possible — subscriber should never fire
-    unsub()
-  })
-
-  it("on a read-only stack, composite .current is a fresh frozen snapshot", () => {
-    const schema = Schema.struct({
-      settings: Schema.struct({
-        darkMode: Schema.boolean(),
-        fontSize: Schema.number(),
-      }),
-    })
-    const store = { settings: { darkMode: false, fontSize: 14 } }
-    const ctx: RefContext = { reader: plainReader({ current: store }) }
-    const doc = interpret(schema, readOnlyInterp, ctx) as any
-
-    const CF_SYM = Symbol.for("kyneta:changefeed")
-    const cf = doc.settings[CF_SYM]
-    expect(cf.current).toEqual({ darkMode: false, fontSize: 14 })
-    // Nothing could invalidate a cached read here, so none is kept.
-    expect(cf.current).not.toBe(cf.current)
-    expect(Object.isFrozen(cf.current)).toBe(true)
-  })
-})
-
-// ===========================================================================
-// Type-level tests
-// ===========================================================================
-
-describe("type-level: withNavigation", () => {
-  it("withNavigation(bottomInterpreter) compiles", () => {
-    const nav = withNavigation(bottomInterpreter)
-    void nav
-  })
-
-  it("withNavigation(bottomInterpreter) produces Interpreter<RefContext, HasCall & HasNavigation>", () => {
-    const nav = withNavigation(bottomInterpreter)
-    const _check: Interpreter<RefContext, HasCall & HasNavigation> = nav
-    void _check
-  })
-
-  it("result satisfies HasNavigation", () => {
-    const nav = withNavigation(bottomInterpreter)
-    const ctx: RefContext = { reader: plainReader({ current: "test" as any }) }
-    const result = interpret(Schema.string(), nav, ctx)
-    const _check: HasNavigation = result
-    void _check
-  })
-
-  it("result also satisfies HasCall", () => {
-    const nav = withNavigation(bottomInterpreter)
-    const ctx: RefContext = { reader: plainReader({ current: "test" as any }) }
-    const result = interpret(Schema.string(), nav, ctx)
-    const _check: HasCall = result
-    void _check
-  })
-
-  it("result does NOT satisfy HasRead (negative test)", () => {
-    const nav = withNavigation(bottomInterpreter)
-    const ctx: RefContext = { reader: plainReader({ current: "test" as any }) }
-    const result = interpret(Schema.string(), nav, ctx)
-    // @ts-expect-error — withNavigation does not produce HasRead
-    const _bad: HasRead = result
-    void _bad
-  })
-
-  it("withWritable(withNavigation(bottomInterpreter)) compiles", () => {
-    // Navigate + write without reading — valid composition
-    const navWrite = withWritable(withNavigation(bottomInterpreter))
-    void navWrite
-  })
-
-  it("withReadable(withNavigation(bottomInterpreter)) compiles", () => {
-    const navRead = withReadable(withNavigation(bottomInterpreter))
-    void navRead
-  })
-
-  it("withCaching(withAddressing(withNavigation(bottomInterpreter))) compiles", () => {
-    // Caching without reading — valid composition
-    const navCache = withCaching(
-      withAddressing(withNavigation(bottomInterpreter)),
-    )
-    void navCache
   })
 })

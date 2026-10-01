@@ -23,10 +23,11 @@ before and after the work, with its result held.
 | group | what it measures |
 |---|---|
 | read | a whole-record value read: first, again with no write, and again after one write |
-| navigate | the memory of one entry ref and one field ref |
+| navigate | the memory of refs held after navigating to them: an entry, its scalar and nullable fields, the entry with all six fields, a list item; and the time to create 10,000 entry refs |
 | write | one `set` into a wide record |
 | local stream | one token written into one row, with and without a whole-record read after it; the record is read once before the first token |
 | remote stream | the receiver's cost to merge one token's delta from a peer, with and without a read; the receiver reads the record once before the first token |
+| log | the heap objects and bytes a json receiver keeps per merged batch, each batch writing a field of a different row, counted by heap snapshot |
 
 The ephemeral substrate has no text, so it streams string replacements.
 
@@ -176,3 +177,73 @@ plan's.
 | `Schema.struct.json` (6 fields) | 466 ms, 300.5 MiB | 398 ms, 300.4 MiB | 1 ms, 0.1 MiB |
 | `Schema.struct` (6 fields) | 463 ms, 300.5 MiB | 395 ms, 300.4 MiB | 1 ms, 0.1 MiB |
 | `Schema.any()` | 70 ms, 38.5 MiB | 65 ms, 38.5 MiB | 1 ms, 0.1 MiB |
+
+## Before `PLAN-2026-10-01-refs-share-their-behaviour`
+
+The baseline that plan's criteria compare against, at `kszlnxqo` ("undo and
+redo by document on one undo stack"), Node 24, 10,000 rows:
+
+### navigate, 10000 rows
+
+| metric | json |
+|---|---:|
+| entry ref | 6328 B |
+| scalar field ref | 4373 B |
+| nullable field ref | 5659 B |
+| struct with its six fields | 35117 B |
+| list item ref | 6381 B |
+| create 10000 entry refs | 88.3 ms |
+
+### log, 2000 batches
+
+| metric | json |
+|---|---:|
+| objects kept per batch | 40.8 |
+| bytes kept per batch | 2784 B |
+
+The plan's Background counted 88 objects per batch with a different write;
+this group writes one field of a row that already exists, so each batch's op
+path reaches below the row.
+
+## After `PLAN-2026-10-01-refs-share-their-behaviour`
+
+A ref is its state, bound to a function on one prototype per schema node,
+and lives while something holds it. A coordinate is one object, its address,
+and a path is its parent and one segment. Node 24, 10,000 rows:
+
+### navigate, 10000 rows
+
+| metric | before | after | criterion |
+|---|---:|---:|---:|
+| entry ref | 6328 B | 462 B | ≤ 500 B |
+| scalar field ref | 4373 B | 365 B | ≤ 400 B |
+| nullable field ref | 5659 B | 401 B | ≤ 1 KB |
+| struct with its six fields | 35117 B | 2624 B | ≤ 3 KB |
+| list item ref | 6381 B | 462 B | ≤ 500 B |
+| create 10000 entry refs | 88.3 ms | 13.7–15.1 ms | ≥ 5× faster |
+
+An entry ref's bytes: its bound function (about 40), its state record (72),
+its path (56), its address (80), the address's `WeakRef` to it (32), its
+finalization registration (72), and its share of the record's children map.
+A field ref has no `WeakRef` and no registration: it and its parent hold each
+other, and are collected together.
+
+### log, 2000 batches
+
+| metric | before | after |
+|---|---:|---:|
+| objects kept per batch | 40.8 | 14.8 |
+| bytes kept per batch | 2784 B | 627 B |
+
+No batch leaves a coordinate-trie or subscriber-trie node behind any more
+(`op-growth.test.ts` checks it). What a batch keeps is the logged batch (its
+array, the op, its change, its path and the path's three segments, the row
+key) and the state it wrote (the row's copy, whose number V8 boxes). The log
+is the history the json substrate serves to peers (`exportSince`); the
+exchange's compaction trims it.
+
+### Every other group
+
+`read`, `write`, `local stream` and `remote stream` are within run-to-run
+noise of `kszlnxqo`, by three to five runs of each against a checkout of it:
+Loro's "merge, no read", for one, measured 77–95 µs before and 78–84 µs after.

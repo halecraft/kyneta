@@ -68,7 +68,7 @@ import type { CommitOptions } from "../substrate.js"
  * // ops is Op[] — can be sent to another doc via applyChanges
  * ```
  *
- * @param ref - Any ref with a `[TRANSACT]` symbol (from `withWritable`).
+ * @param ref - A document ref, or any ref below one (each carries `[TRANSACT]`).
  * @param fn - Mutation function receiving the draft proxy.
  * @param options - Optional metadata (e.g. `{ origin: "undo" }`).
  *
@@ -82,8 +82,7 @@ export function batch<D extends object>(
 ): Op[] {
   if (!hasTransact(ref)) {
     throw new Error(
-      "batch() requires a ref with [TRANSACT]. " +
-        "Use a ref produced by interpret() with withWritable.",
+      "batch() requires a document ref, or a ref below one (a ref with [TRANSACT]).",
     )
   }
   const ctx: WritableContext = ref[TRANSACT]
@@ -123,7 +122,7 @@ export function batch<D extends object>(
  * deeply frozen, such as a payload a subscriber received, is shared, and
  * anything else is copied. The caller's objects are never frozen.
  *
- * @param ref - Any ref with a `[TRANSACT]` symbol (from `withWritable`).
+ * @param ref - A document ref, or any ref below one (each carries `[TRANSACT]`).
  * @param ops - The changes to apply. May be empty (no-op).
  * @param options - Optional provenance metadata.
  * @returns The same `ops` array (pass-through for chaining).
@@ -137,8 +136,7 @@ export function applyChanges(
 ): ReadonlyArray<Op> {
   if (!hasTransact(ref)) {
     throw new Error(
-      "applyChanges() requires a ref with [TRANSACT]. " +
-        "Use a ref produced by interpret() with withWritable.",
+      "applyChanges() requires a document ref, or a ref below one (a ref with [TRANSACT]).",
     )
   }
   const ctx: WritableContext = ref[TRANSACT]

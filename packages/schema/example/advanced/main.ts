@@ -1,10 +1,11 @@
 // ═══════════════════════════════════════════════════════════════════════════
 //
-//   @kyneta/schema — Advanced: The Composition Algebra
+//   @kyneta/schema — Advanced: Under the Hood
 //
-//   Under the hood of @kyneta/schema/basic. This example shows how the
-//   interpreter stack decomposes into five composable layers and how
-//   you can mix and match them for custom use cases.
+//   Under the hood of @kyneta/schema/basic. This example builds a document
+//   by hand over a substrate, shows how its refs are made, writes a custom
+//   interpreter for the schema catamorphism, and replays ops between
+//   documents.
 //
 //   If you're looking to get started, see example/basic/ instead.
 //
@@ -13,20 +14,19 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { hasChangefeed } from "@kyneta/changefeed"
-import type { Ref, RRef } from "../../src/index.js"
+import type { Ref, RRef, Schema as SchemaNode } from "../../src/index.js"
 import {
   applyChanges,
   batch,
+  createInterpreter,
+  createRef,
   describe,
   hasRecursiveChangefeed,
   hasTransact,
   incrementChange,
   interpret,
-  observation,
-  plainContext,
   plainSubstrateFactory,
   RawPath,
-  readable,
   Schema,
   sequenceChange,
   stepIncrement,
@@ -34,7 +34,6 @@ import {
   stepText,
   subscribe,
   textChange,
-  writable,
 } from "../../src/index.js"
 
 import { json, log, section } from "../helpers.js"
@@ -86,26 +85,15 @@ log(`
     In the basic example, createDoc is a black box. Here we open it up.
 
     Step 1: plainSubstrateFactory.create(schema)   → substrate
-    Step 2: substrate.context()                    → WritableContext
-    Step 3: interpret(schema, ctx)
-              .with(readable)     // navigation + reading + caching
-              .with(writable)     // .set, .insert, .increment
-              .with(observation)  // subscribe / subscribeNode
-              .done()
+    Step 2: createRef(schema, substrate)           → the document's root ref
 
-    Each .with() appends a transformer. .done() composes left-to-right
-    starting from bottomInterpreter, then runs the catamorphism.
+    createRef makes the root ref over the substrate's writable context.
+    Every other ref is made when you navigate to it.
 `)
 
 const substrate = plainSubstrateFactory.create(ProjectSchema)
 
-const ctx = substrate.context()
-
-const doc: Ref<typeof ProjectSchema> = interpret(ProjectSchema, ctx)
-  .with(readable)
-  .with(writable)
-  .with(observation)
-  .done() as any
+const doc: Ref<typeof ProjectSchema> = createRef(ProjectSchema, substrate)
 
 log(`    doc.name() → "${doc.name()}"    doc.stars() → ${doc.stars()}`)
 
@@ -134,74 +122,65 @@ log(`
 `)
 
 // ═══════════════════════════════════════════════════════════════════════════
-//   4. THE FIVE LAYERS
+//   4. HOW A REF IS MADE
 // ═══════════════════════════════════════════════════════════════════════════
 
-section(4, "The Five Layers")
-
-log(`
-    ┌─────────────┬──────────────────────────────────────────────────────┐
-    │ Layer       │ What it adds                                        │
-    ├─────────────┼──────────────────────────────────────────────────────┤
-    │ bottom      │ Function-shaped carriers with [CALL] slot           │
-    │ navigation  │ Structural addressing (field getters, .at(), .keys) │
-    │ readable    │ [CALL] filled with store reader, addressing, caching│
-    │ writable    │ .set(), .insert(), .increment(), .delete()          │
-    │ observation │ [CHANGEFEED] protocol — subscribe / subscribeNode   │
-    └─────────────┴──────────────────────────────────────────────────────┘
-
-    Fluent:  .with(readable).with(writable).with(observation).done()
-
-    The 'readable' layer itself composes four sub-transformers:
-      withCaching(withAddressing(withReadable(withNavigation(base))))
-
-    Partial manual expansion:
-      observation.transform(
-        withWritable(withCaching(withAddressing(withReadable(withNavigation(bottomInterpreter))))),
-      )
-
-    'observation' is as far down as this goes. The transformer it wraps is an
-    internal of the changefeed layer and is not exported.
-`)
-
-// ═══════════════════════════════════════════════════════════════════════════
-//   5. READ-ONLY DOCUMENTS
-// ═══════════════════════════════════════════════════════════════════════════
-
-section(5, "Read-Only Documents")
-
-log(`
-    Drop layers to shed capabilities — not permissions, entire code paths.
-`)
+section(4, "How a Ref Is Made")
 
 {
-  // A read is frozen and shared, so the store for a new document is a copy.
-  const roStore = structuredClone(doc()) as Record<string, unknown>
-  const roDoc: RRef<typeof ProjectSchema> = interpret(
-    ProjectSchema,
-    plainContext(ProjectSchema, roStore),
-  )
-    .with(readable)
-    .done()
-
+  const first = doc.tasks.at(0)
+  const second = doc.tasks.at(1)
   log(`
-    const roDoc = interpret(schema, plainContext(schema, store)).with(readable).done()
+    A ref is a callable holding its state: its context, its path, its parent,
+    and a few slots filled on first use. What it does (reading, navigation,
+    writing, observation) lives on a prototype built once per schema node.
 
-    roDoc.name() → "${roDoc.name()}"
-    roDoc.tasks.at(0)?.title() → "${roDoc.tasks.at(0)?.title()}"
+    Object.getPrototypeOf(doc.tasks.at(0)) === Object.getPrototypeOf(doc.tasks.at(1))
+      → ${Object.getPrototypeOf(first) === Object.getPrototypeOf(second)}
 
-    "set" in roDoc.stars → ${"set" in roDoc.stars}  (absent, not disabled)
-    "insert" in roDoc.name → ${"insert" in roDoc.name}
-    hasChangefeed(roDoc) → ${hasChangefeed(roDoc)}
-    hasTransact(roDoc) → ${hasTransact(roDoc)}
+    So a method needs its ref: pass (v) => ref.set(v), not ref.set.
+
+    A list item's or record entry's ref lives while something holds it, and
+    while it is held, .at() hands back the same one.
   `)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-//   6. REFERENTIAL IDENTITY AND CACHING
+//   5. YOUR OWN INTERPRETER
 // ═══════════════════════════════════════════════════════════════════════════
 
-section(6, "Referential Identity and Caching")
+section(5, "Your Own Interpreter")
+
+log(`
+    interpret(schema, interpreter, ctx) is the catamorphism over a schema:
+    one case per kind, children as thunks the case may force or not.
+    Materializing, zeroing, validating and describing are all interpreters.
+    Here is one that lists every leaf's path.
+`)
+
+{
+  const leaves = createInterpreter<void, string[]>(
+    (_ctx, path) => [path.format()],
+    {
+      product: (_ctx, _path, _schema, fields) =>
+        Object.values(fields).flatMap(field => field()),
+      // A list's item is the same at every index: list it once, at [0].
+      sequence: (_ctx, _path, _schema, item) => item(0),
+      map: (_ctx, _path, _schema, item) => item("*"),
+    },
+  )
+  const paths = interpret(ProjectSchema as SchemaNode, leaves, undefined)
+  log(`
+    interpret(ProjectSchema, leaves, undefined) →
+      ${paths.join("\n      ")}
+  `)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//   6. REFERENTIAL IDENTITY
+// ═══════════════════════════════════════════════════════════════════════════
+
+section(6, "Referential Identity")
 
 // Two reads of each, compared below.
 const [name1, name2] = [doc.name, doc.name]
@@ -214,8 +193,8 @@ doc.stars.increment(1)
 const after = doc()
 
 log(`
-    withCaching (included in 'readable') ensures repeated field access
-    returns the same object identity — critical for React memoization.
+    Repeated navigation returns the same ref while it is held — critical
+    for React memoization.
 
     doc.name === doc.name → ${name1 === name2}
     doc.settings === doc.settings → ${settings1 === settings2}
@@ -248,7 +227,7 @@ log(`
     ┌──────────────────┬───────────────────────────────────────────────┐
     │ Symbol           │ Purpose                                       │
     ├──────────────────┼───────────────────────────────────────────────┤
-    │ [CALL]           │ Controls what carrier() does (read from store)│
+    │ [CALL]           │ What calling a ref does: ref() reads σ        │
     │ [TRANSACT]       │ Context discovery from any ref                │
     │ [CHANGEFEED]     │ Observation coalgebra (Moore machine)         │
     └──────────────────┴───────────────────────────────────────────────┘
@@ -259,7 +238,7 @@ log(`
     hasRecursiveChangefeed(doc) → ${hasRecursiveChangefeed(doc)}  (product — composed tree subscribe)
     hasRecursiveChangefeed(doc.settings) → ${hasRecursiveChangefeed(doc.settings)}  (product)
     hasRecursiveChangefeed(doc.name) → ${hasRecursiveChangefeed(doc.name)}  (leaf — trivial own-path lift, subscribeDescendants is degenerate)
-    hasTransact(doc) → ${hasTransact(doc)}  (writable installed [TRANSACT])
+    hasTransact(doc) → ${hasTransact(doc)}
 `)
 
 // Demonstrate TRANSACT discovery
@@ -324,44 +303,16 @@ log(`
 `)
 
 // ═══════════════════════════════════════════════════════════════════════════
-//   9. COMPOSING CUSTOM STACKS
+//   9. A REPLICA THAT RECEIVES OPS
 // ═══════════════════════════════════════════════════════════════════════════
 
-section(9, "Composing Custom Stacks")
-
-log(`
-    Mix and match layers for your use case:
-`)
+section(9, "A Replica That Receives Ops")
 
 {
-  // Pure read-only
-  const roSubstrate = plainSubstrateFactory.create(ProjectSchema)
-
-  const pureReadOnly: RRef<typeof ProjectSchema> = interpret(
+  const replicaDoc = createRef(
     ProjectSchema,
-    roSubstrate.context(),
-  )
-    .with(readable)
-    .done()
-
-  log(`
-    readable only:
-      pureReadOnly.name() → "${pureReadOnly.name()}"
-      "set" in pureReadOnly.name → ${"set" in pureReadOnly.name}
-      hasTransact(pureReadOnly) → ${hasTransact(pureReadOnly)}
-  `)
-
-  // Full reactive replica — can receive external ops
-  const replicaSub = plainSubstrateFactory.create(ProjectSchema)
-
-  const replicaDoc: Ref<typeof ProjectSchema> = interpret(
-    ProjectSchema,
-    replicaSub.context(),
-  )
-    .with(readable)
-    .with(writable)
-    .with(observation)
-    .done() as any
+    plainSubstrateFactory.create(ProjectSchema),
+  ) as Ref<typeof ProjectSchema>
 
   const events: string[] = []
   subscribe(replicaDoc, cs => {
@@ -379,23 +330,16 @@ log(`
     { origin: "external" },
   )
 
-  log(`
-    readable + writable + changefeed (reactive replica):
-      After applyChanges(replicaDoc, [...], { origin: "external" }):
-        events → [${events.map(e => `"${e}"`).join(", ")}]
-        replicaDoc.name() → "${replicaDoc.name()}"
+  // Code that only reads can take the read surface alone.
+  const readOnly: RRef<typeof ProjectSchema> = replicaDoc
 
-    Note: applyChanges() requires [TRANSACT] — writable must be present
-    for any doc that receives external ops.
+  log(`
+    After applyChanges(replicaDoc, [...], { origin: "external" }):
+      events → [${events.map(e => `"${e}"`).join(", ")}]
+      replicaDoc.name() → "${replicaDoc.name()}"
+      readOnly.name() → "${readOnly.name()}"   (RRef<S>: the read surface)
   `)
 }
-
-log(`
-    Stack cheat sheet:
-      readable                           → snapshot rendering, validation
-      readable + writable                → local mutation, no observation
-      readable + writable + observation  → full reactive document (default)
-`)
 
 // ═══════════════════════════════════════════════════════════════════════════
 //   10. THE ROUND-TRIP AT THE ALGEBRA LEVEL
@@ -405,29 +349,19 @@ section(10, "The Round-Trip at the Algebra Level")
 
 log(`
     batch() captures Ops. applyChanges() replays them on any doc.
-    Ops are (Path, Change) pairs — no reference to originating interpreter.
+    Ops are (Path, Change) pairs — values, with no reference to the document
+    they came from.
 `)
 
 {
-  const subA = plainSubstrateFactory.create(ProjectSchema)
-  const docA: Ref<typeof ProjectSchema> = interpret(
+  const docA: Ref<typeof ProjectSchema> = createRef(
     ProjectSchema,
-    subA.context(),
+    plainSubstrateFactory.create(ProjectSchema),
   )
-    .with(readable)
-    .with(writable)
-    .with(observation)
-    .done() as any
-
-  const subB = plainSubstrateFactory.create(ProjectSchema)
-  const docB: Ref<typeof ProjectSchema> = interpret(
+  const docB: Ref<typeof ProjectSchema> = createRef(
     ProjectSchema,
-    subB.context(),
+    plainSubstrateFactory.create(ProjectSchema),
   )
-    .with(readable)
-    .with(writable)
-    .with(observation)
-    .done() as any
 
   const syncOps = batch(docA, d => {
     d.name.insert(d.name().length, " (synced)")
@@ -464,13 +398,11 @@ log(
 
 log(`
     ─────────────────────────────────────────────────────────
-    Summary: The composition algebra gives you precise control.
+    Summary
 
-    • Need read-only?       .with(readable).done()
-    • Need mutation?        .with(readable).with(writable).done()
-    • Need observation?     Add .with(observation)
-    • Need custom layers?   Implement InterpreterLayer and .with() it
-
-    Every combination is valid. Capabilities compose, not configure.
+    • A document:            createRef(schema, substrate), or createDoc(bound)
+    • Code that only reads:  type it RRef<S>
+    • A fold over a schema:  interpret(schema, interpreter, ctx)
+    • Moving changes:        batch() captures ops, applyChanges() replays them
     ─────────────────────────────────────────────────────────
 `)

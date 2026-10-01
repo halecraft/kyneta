@@ -10,21 +10,14 @@
 // - First-class CRDT types (text, counter, set, tree, movable) each
 //   have a dedicated interpreter case
 //
-// The module also provides:
-// - InterpreterLayer — a typed wrapper around an interpreter transformer
-// - InterpretBuilder — fluent API for composing layers before running
-//   the catamorphism: `interpret(schema, ctx).with(readable).with(writable).done()`
-// - Pre-built layers live in `./layers.ts` to avoid circular imports.
+// It is the fold for what varies by use: materialize, zero, validate and
+// describe each supply an interpreter. A document's refs are not built by it:
+// they are one fixed construction (`ref/create.ts`).
 
-import type { HasChangefeed } from "@kyneta/changefeed"
 import { isNonNullObject } from "./guards.js"
 import { INTERPRETER } from "./interpreter-types.js"
-import type { HasRead } from "./interpreters/bottom.js"
-import { bottomInterpreter } from "./interpreters/bottom.js"
-import type { HasTransact } from "./interpreters/writable.js"
 import type { Path } from "./path.js"
-import { AddressedPath, RawPath, resolveToAddressed } from "./path.js"
-import type { Ref, RRef, RWRef } from "./ref.js"
+import { RawPath } from "./path.js"
 import {
   type CounterSchema,
   type DiscriminatedSumSchema,
@@ -100,9 +93,7 @@ export interface FlatTreeNode<A> {
  * take item closures (keyed by string / indexed by number). `tree` gets
  * two views over the same flat forest: `nodes()` for whole-forest
  * snapshots (matches the shadow / Loro `toArray()` / `TreeChange` shape)
- * and `node(id)` for per-id lookup (the keyed-helper pattern map uses).
- * Helpers like `installTreeReadable` use the latter to expose `.node(id)`
- * on the user-facing ref.
+ * and `node(id)` for per-id lookup, as a map's item closure is keyed.
  */
 export interface Interpreter<Ctx, A> {
   readonly [INTERPRETER]: true
@@ -171,8 +162,8 @@ export interface SumVariants<A> {
 /**
  * Resolves which sum variant to use based on runtime store state.
  *
- * Used by `readableInterpreter`, `withReadable`, and any interpreter
- * that needs store-driven variant dispatch. The logic is:
+ * The one rule for which variant σ holds: a sum ref's proxy, `materialize`,
+ * `completeValue` and coordinate existence all apply it. The logic is:
  *
  * 1. **Discriminated sums**: read the discriminant field from `value`.
  *    If the discriminant matches a variant in `variantMap`, dispatch
@@ -227,317 +218,30 @@ export function dispatchSum<A>(
 }
 
 // ---------------------------------------------------------------------------
-// Phantom brands — for fluent builder type inference
+// interpret — the catamorphism
 // ---------------------------------------------------------------------------
 
 /**
- * Phantom brand symbols for the fluent builder path. Each pre-built layer
- * carries a brand; `.with()` accumulates brands via intersection; `.done()`
- * uses `Resolve<S, Brands>` to select the correct ref tier.
+ * Walks a schema tree, applying the interpreter at each node, and returns
+ * the root's result.
  *
- * These are type-only — zero runtime cost. The three-arg path uses
- * structural checks on `A` (via `ResolveCarrier`) instead.
- */
-declare const READABLE_BRAND: unique symbol
-declare const WRITABLE_BRAND: unique symbol
-declare const CHANGEFEED_BRAND: unique symbol
-
-export type ReadableBrand = { readonly [READABLE_BRAND]: true }
-export type WritableBrand = { readonly [WRITABLE_BRAND]: true }
-export type ChangefeedBrand = { readonly [CHANGEFEED_BRAND]: true }
-
-// ---------------------------------------------------------------------------
-// Resolve<S, Brands> — fluent builder tier selection
-// ---------------------------------------------------------------------------
-
-/**
- * Selects the schema-level ref type based on accumulated phantom brands
- * from the fluent builder's `.with()` chain.
- *
- * - `ReadableBrand & WritableBrand & ChangefeedBrand` → `Ref<S>` (full stack)
- * - `ReadableBrand & WritableBrand` → `RWRef<S>` (read-write, no changefeed)
- * - `ReadableBrand` → `RRef<S>` (read-only)
- * - Otherwise → `unknown` (custom/unbranded layers — cast needed)
- *
- * Order matters — most specific first.
- */
-export type Resolve<S extends Schema, Brands> = Brands extends ReadableBrand &
-  WritableBrand &
-  ChangefeedBrand
-  ? Ref<S>
-  : Brands extends ReadableBrand & WritableBrand
-    ? RWRef<S>
-    : Brands extends ReadableBrand
-      ? RRef<S>
-      : unknown
-
-// ---------------------------------------------------------------------------
-// ResolveCarrier<S, A> — three-arg tier selection
-// ---------------------------------------------------------------------------
-
-/**
- * Selects the schema-level ref type based on structural capabilities
- * present in the carrier type `A` from the three-arg `interpret()` path.
- *
- * This works because transformer return types are now honest:
- * - `withWritable` returns `Interpreter<Ctx, A & HasTransact>`
- * - `withChangefeed` returns `Interpreter<Ctx, A & HasChangefeed>`
- * - `withReadable` returns `Interpreter<Ctx, A & HasRead>` (already the case)
- *
- * Resolution tiers:
- * - `HasRead & HasTransact & HasChangefeed` → `Ref<S>` (full stack)
- * - `HasRead & HasTransact` (no changefeed) → `RWRef<S>` (read-write)
- * - Otherwise → raw `A` (read-only or degraded stacks keep carrier brands)
- *
- * Both `Ref<S>` and `RWRef<S>` require `HasRead` — a carrier that can't
- * read has no business being typed as a schema-level ref (which promises
- * a call signature returning `Plain<S>`). Write-only stacks
- * (`withWritable(bottom)`) fall through to raw `A`.
- *
- * Read-only stacks also fall through to `A` rather than resolving to
- * `RRef<S>`. This preserves carrier brand types (`HasCaching`, `HasRead`,
- * etc.) that internal tests verify. Users who want `Readable<S>` on a
- * read-only stack should use the fluent builder path instead.
- *
- * **Usage**: `ResolveCarrier` cannot appear directly in an overload return
- * type because `Ref<S>` / `RWRef<S>` are deeply recursive (~20 conditional
- * levels) and TypeScript hits TS2589 when `S` is an abstract generic. The
- * three-arg `interpret()` overload returns raw `A` instead. Use
- * `ResolveCarrier` explicitly at call sites or in type annotations:
- *
- * ```ts
- * const doc: ResolveCarrier<typeof schema, typeof interp extends Interpreter<any, infer A> ? A : never>
- *   = interpret(schema, interp, ctx)
- * // Or more commonly, just use the fluent builder which infers automatically.
- * ```
- */
-export type ResolveCarrier<S extends Schema, A> = [A] extends [
-  HasRead & HasTransact & HasChangefeed,
-]
-  ? Ref<S>
-  : [A] extends [HasRead & HasTransact]
-    ? RWRef<S>
-    : A
-
-// ---------------------------------------------------------------------------
-// InterpreterLayer — typed wrapper for interpreter transformers
-// ---------------------------------------------------------------------------
-
-/**
- * An `InterpreterLayer` wraps an interpreter transformer function with
- * explicit input/output context types and an optional phantom brand.
- * Layers are the building blocks of the fluent `InterpretBuilder` API.
- *
- * Each layer takes a base interpreter and returns an enhanced interpreter.
- * The context type may widen (e.g. `RefContext` → `WritableContext`) and
- * the result type may gain capabilities (e.g. `A & HasNavigation`).
- *
- * The `Brand` type parameter (default `unknown`) is a phantom type used
- * by the fluent builder to accumulate capability information via `.with()`.
- * Pre-built layers (`readable`, `writable`, `observation`) carry specific
- * brands; custom/user-defined layers keep the default `unknown`.
- *
- * ```ts
- * import { readable, writable, observation } from "@kyneta/schema"
- *
- * interpret(schema, ctx)
- *   .with(readable)
- *   .with(writable)
- *   .with(observation)
- *   .done()
- * ```
- *
- * Pre-built layers are exported from `./layers.ts` (and re-exported
- * from the barrel `index.ts`).
- */
-export interface InterpreterLayer<InCtx, OutCtx, _Brand = unknown> {
-  /** Human-readable name for debugging and toString(). */
-  readonly name: string
-  /**
-   * Transforms a base interpreter into an enhanced interpreter.
-   * May widen the context type (InCtx → OutCtx).
-   */
-  readonly transform: (
-    base: Interpreter<InCtx, any>,
-  ) => Interpreter<OutCtx, any>
-}
-
-// ---------------------------------------------------------------------------
-// InterpretBuilder — fluent API for composing interpreters
-// ---------------------------------------------------------------------------
-
-/**
- * A fluent builder for composing interpreter layers before running the
- * catamorphism. Created by `interpret(schema, ctx)` (the two-arg overload).
- *
- * The builder carries the schema type `S` (for tier resolution), the
- * current context type `Ctx` (for layer compatibility), and accumulated
- * `Brands` (for `.done()` return type selection via `Resolve<S, Brands>`).
- *
- * ```ts
- * const doc = interpret(schema, ctx)
- *   .with(readable)    // Brands = unknown & ReadableBrand = ReadableBrand
- *   .with(writable)    // Brands = ReadableBrand & WritableBrand
- *   .with(observation)  // Brands = ReadableBrand & WritableBrand & ChangefeedBrand
- *   .done()            // → Ref<typeof schema>
- * ```
- *
- * Each `.with(layer)` applies a transformer and intersects the layer's brand.
- * `.done()` runs the catamorphism and returns `Resolve<S, Brands>`.
- *
- * The builder accumulates layers — each `.with()` returns a new builder
- * with the layer appended.
- */
-export interface InterpretBuilder<S extends Schema, Ctx, Brands> {
-  /**
-   * Add a layer to the interpreter stack.
-   *
-   * The layer's `transform` receives the current interpreter and returns
-   * an enhanced interpreter. The context type may widen. The layer's
-   * phantom brand `B` is intersected into the accumulated `Brands`.
-   */
-  with<NewCtx, B = unknown>(
-    layer: InterpreterLayer<Ctx, NewCtx, B>,
-  ): InterpretBuilder<S, NewCtx, Brands & B>
-
-  /**
-   * Run the catamorphism with the composed interpreter and return the result.
-   *
-   * Returns `Resolve<S, Brands>` — the schema-level ref type selected by
-   * the accumulated brands. For standard compositions:
-   * - `readable` → `RRef<S>`
-   * - `readable + writable` → `RWRef<S>`
-   * - `readable + writable + observation` → `Ref<S>`
-   * - Custom/unbranded → `unknown`
-   */
-  done(): Resolve<S, Brands>
-}
-
-// ---------------------------------------------------------------------------
-// interpret — the catamorphism (with fluent overload)
-// ---------------------------------------------------------------------------
-
-/**
- * Walks a schema tree, applying the interpreter at each node.
- *
- * This is the single generic tree walker that replaces the 10+ parallel
- * `switch (shape._type)` dispatch sites in the current codebase.
- *
- * **Three-arg form** (direct):
  * ```ts
  * const result = interpret(mySchema, myInterpreter, myContext)
  * ```
  *
- * **Two-arg form** (fluent builder):
- * ```ts
- * const doc = interpret(schema, ctx)
- *   .with(readable)
- *   .with(writable)
- *   .with(observation)
- *   .done()
- * ```
- *
- * The catamorphism is bottom-up: children are interpreted before parents,
- * but lazily — product children are wrapped in thunks, and sequence/map
- * children are wrapped in closures, so the interpreter controls when
- * (and whether) children are actually evaluated.
+ * Product children are thunks and sequence and map children closures, so
+ * each case decides when, and whether, a child is interpreted. `path` is where the walk
+ * starts, the root by default.
  */
-// Three-arg overload: returns `A` (the raw carrier type).
-//
-// The carrier type is already honest — `withWritable` contributes
-// `& HasTransact`, `withChangefeed` contributes `& HasChangefeed` —
-// so `A` carries full capability information. Users who need a
-// schema-level type can use `ResolveCarrier<S, A>` explicitly, or
-// use the fluent builder path which infers automatically.
-//
-// We intentionally return `A` rather than `ResolveCarrier<S, A>` because
-// `Ref<S>` / `RWRef<S>` are deeply recursive conditional types that
-// cause TS2589 "excessively deep" when placed in overload return positions
-// with abstract `S extends Schema`.
 export function interpret<S extends Schema, Ctx, A>(
   schema: S,
   interp: Interpreter<Ctx, A>,
   ctx: Ctx,
-  path?: Path,
-): A
-
-// Two-arg overload — fluent builder.
-export function interpret<S extends Schema, Ctx>(
-  schema: S,
-  ctx: Ctx,
-): InterpretBuilder<S, Ctx, unknown>
-export function interpret(
-  schema: Schema,
-  interpOrCtx: unknown,
-  ctx?: unknown,
-  path?: Path,
-): any {
-  // Overload resolution: if the second argument has all six interpreter
-  // methods, it's an Interpreter. Otherwise it's a context object.
-  if (isInterpreter(interpOrCtx)) {
-    return interpretImpl(
-      schema,
-      interpOrCtx as Interpreter<any, any>,
-      ctx,
-      path,
-    )
-  }
-  // Two-arg form: return a fluent builder
-  return createBuilder(schema, interpOrCtx)
+  path: Path = RawPath.empty,
+): A {
+  return interpretImpl(schema, interp, ctx, path)
 }
 
-/**
- * Returns true if `value` looks like an Interpreter (has all six case methods).
- */
-function isInterpreter(value: unknown): boolean {
-  return (
-    value !== null &&
-    value !== undefined &&
-    typeof value === "object" &&
-    INTERPRETER in value
-  )
-}
-
-/**
- * Creates a fluent InterpretBuilder that accumulates layers and runs the
- * catamorphism on `.done()`.
- *
- * The builder starts with `bottomInterpreter` as the base. Each `.with(layer)`
- * appends a transformer. `.done()` composes all layers left-to-right, then
- * runs `interpretImpl(schema, composedInterpreter, ctx, [])`.
- *
- * Layers are captured as an immutable snapshot — each `.with()` creates a
- * new array rather than mutating a shared one, so branching builders is safe.
- */
-function createBuilder(
-  schema: Schema,
-  ctx: unknown,
-  layers: ReadonlyArray<InterpreterLayer<any, any, any>> = [],
-): { with(layer: InterpreterLayer<any, any, any>): any; done(): unknown } {
-  return {
-    with(layer: InterpreterLayer<any, any, any>) {
-      return createBuilder(schema, ctx, [...layers, layer])
-    },
-    done(): unknown {
-      if (layers.length === 0) {
-        throw new Error(
-          "InterpretBuilder: no layers added. Use .with(readable) etc. before .done()",
-        )
-      }
-      // Start from bottomInterpreter and apply each layer's transform
-      // in sequence. The import is safe because bottom.ts only has
-      // `import type` from interpret.ts (erased at compile time).
-      let interp: Interpreter<any, any> = bottomInterpreter
-      for (const layer of layers) {
-        interp = layer.transform(interp)
-      }
-      return interpretImpl(schema, interp, ctx)
-    },
-  }
-}
-
-// ---------------------------------------------------------------------------
-// interpretImpl — the actual catamorphism walk
 // ---------------------------------------------------------------------------
 // interpretImpl — the actual catamorphism walk
 // ---------------------------------------------------------------------------
@@ -546,85 +250,40 @@ function interpretImpl<Ctx, A>(
   schema: Schema,
   interp: Interpreter<Ctx, A>,
   ctx: Ctx,
-  path?: Path,
+  path: Path,
 ): A {
-  // The path this node is interpreted at. An addressing layer installs an
-  // addressed `ctx.rootPath` when its first case runs, which is after this
-  // call computed its own path — so the entry call's path (the root, or a
-  // caller's raw path) may be raw here. Every child path is derived later, by
-  // `effectivePath()`, which reads `ctx.rootPath` then and resolves a raw
-  // path against it, so descendants are addressed whenever the stack is.
-  //
-  // `rootPath` and `onRefCreated` below are installed on the context by
-  // `withAddressing` at runtime; `RefContext` does not declare them, because a
-  // stack composed without that layer has neither. Naming the optional shape
-  // asks the question without switching off checking on `ctx` entirely.
-  const resolvedPath: Path =
-    path ?? (ctx as { rootPath?: Path })?.rootPath ?? RawPath.empty
-
-  // onRefCreated hook — called after each child ref is created.
-  // Installed by withAddressing for ref registration and deleted getter.
-  // Read lazily so that hooks installed during interpretation are visible.
-  const getOnRefCreated = () =>
-    (ctx as { onRefCreated?: (path: Path, ref: unknown) => void })?.onRefCreated
-
-  const effectivePath = (): Path => {
-    if (resolvedPath instanceof AddressedPath) return resolvedPath
-    const root = (ctx as { rootPath?: Path })?.rootPath
-    return root instanceof AddressedPath
-      ? resolveToAddressed(resolvedPath, root.trie)
-      : resolvedPath
-  }
-
   switch (schema[KIND]) {
     case "scalar": {
-      return interp.scalar(ctx, resolvedPath, schema)
+      return interp.scalar(ctx, path, schema)
     }
 
     case "product": {
-      // Build thunks for each field — lazy, not pre-computed.
-      // Thunks call effectivePath() at execution time (not capture time)
-      // so that ctx.rootPath set by withAddressing is picked up.
+      // Thunks, so the interpreter decides when and whether a field is
+      // interpreted.
       const fieldThunks: Record<string, () => A> = {}
       for (const key of Object.keys(schema.fields)) {
         const fieldSchema = schema.fields[key]
-        fieldThunks[key] = () => {
-          const childPath = effectivePath().field(key)
-          const result = interpretImpl(fieldSchema, interp, ctx, childPath)
-          getOnRefCreated()?.(childPath, result)
-          return result
-        }
+        fieldThunks[key] = () =>
+          interpretImpl(fieldSchema, interp, ctx, path.field(key))
       }
-      const productResult = interp.product(
-        ctx,
-        resolvedPath,
-        schema,
-        fieldThunks,
-      )
-      return productResult
+      return interp.product(ctx, path, schema, fieldThunks)
     }
 
     case "sequence": {
       // Item closure: caller provides an index, gets back an interpreted child.
       const itemFn = (index: number): A => {
-        const childPath = effectivePath().item(index)
-        const result = interpretImpl(schema.item, interp, ctx, childPath)
-        getOnRefCreated()?.(childPath, result)
-        return result
+        return interpretImpl(schema.item, interp, ctx, path.item(index))
       }
-      return interp.sequence(ctx, resolvedPath, schema, itemFn)
+      return interp.sequence(ctx, path, schema, itemFn)
     }
 
     case "map": {
       // Item closure: caller provides a key, gets back an interpreted child.
       // Map keys are runtime entries — `.entry(key)`, not `.field(key)`.
       const itemFn = (key: string): A => {
-        const childPath = effectivePath().entry(key)
-        const result = interpretImpl(schema.item, interp, ctx, childPath)
-        getOnRefCreated()?.(childPath, result)
-        return result
+        return interpretImpl(schema.item, interp, ctx, path.entry(key))
       }
-      return interp.map(ctx, resolvedPath, schema, itemFn)
+      return interp.map(ctx, path, schema, itemFn)
     }
 
     case "sum": {
@@ -641,7 +300,7 @@ function interpretImpl<Ctx, A>(
               `interpret: discriminated sum has no variant for key "${key}"`,
             )
           }
-          return interpretImpl(variantSchema, interp, ctx, resolvedPath)
+          return interpretImpl(variantSchema, interp, ctx, path)
         }
       } else {
         // Positional sum
@@ -655,32 +314,26 @@ function interpretImpl<Ctx, A>(
               `interpret: positional sum has no variant at index ${index}`,
             )
           }
-          return interpretImpl(variantSchema, interp, ctx, resolvedPath)
+          return interpretImpl(variantSchema, interp, ctx, path)
         }
       }
-      // No attachNative: the dispatched variant already carries [NATIVE]
-      // from its own interpreter case. A sum has no container of its own;
-      // the fallback bare carrier intentionally omits [NATIVE].
-      return interp.sum(ctx, resolvedPath, schema, variants)
+      return interp.sum(ctx, path, schema, variants)
     }
 
     case "text": {
-      return interp.text(ctx, resolvedPath, schema)
+      return interp.text(ctx, path, schema)
     }
 
     case "counter": {
-      return interp.counter(ctx, resolvedPath, schema)
+      return interp.counter(ctx, path, schema)
     }
 
     case "set": {
       // Set members are runtime entries (value-addressed via hash key).
       const itemFn = (key: string): A => {
-        const childPath = effectivePath().entry(key)
-        const result = interpretImpl(schema.item, interp, ctx, childPath)
-        getOnRefCreated()?.(childPath, result)
-        return result
+        return interpretImpl(schema.item, interp, ctx, path.entry(key))
       }
-      return interp.set(ctx, resolvedPath, schema, itemFn)
+      return interp.set(ctx, path, schema, itemFn)
     }
 
     case "tree": {
@@ -692,16 +345,12 @@ function interpretImpl<Ctx, A>(
       // substrates without a Reader.forestTopology hook (defensive `?.`)
       // emit an empty forest rather than throwing.
       const nodeFn = (id: string): A => {
-        const nodePath = effectivePath().node(id)
-        const data = interpretImpl(schema.item, interp, ctx, nodePath)
-        getOnRefCreated()?.(nodePath, data)
-        return data
+        return interpretImpl(schema.item, interp, ctx, path.node(id))
       }
       const nodesThunk = (): readonly FlatTreeNode<A>[] => {
-        const treePath = effectivePath()
         const topology = (
           ctx as unknown as { reader?: import("./reader.js").Reader }
-        ).reader?.forestTopology(treePath)
+        ).reader?.forestTopology(path)
         if (!topology) return []
         const out: FlatTreeNode<A>[] = []
         for (const n of topology) {
@@ -714,22 +363,18 @@ function interpretImpl<Ctx, A>(
         }
         return out
       }
-      return interp.tree(ctx, resolvedPath, schema, nodesThunk, nodeFn)
+      return interp.tree(ctx, path, schema, nodesThunk, nodeFn)
     }
 
     case "movable": {
       const itemFn = (index: number): A => {
-        const childPath = effectivePath().item(index)
-        const result = interpretImpl(schema.item, interp, ctx, childPath)
-        getOnRefCreated()?.(childPath, result)
-        return result
+        return interpretImpl(schema.item, interp, ctx, path.item(index))
       }
-      return interp.movable(ctx, resolvedPath, schema, itemFn)
+      return interp.movable(ctx, path, schema, itemFn)
     }
 
     case "richtext": {
-      const richtextResult = interp.richtext(ctx, resolvedPath, schema)
-      return richtextResult
+      return interp.richtext(ctx, path, schema)
     }
   }
 }

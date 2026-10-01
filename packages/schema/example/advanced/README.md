@@ -1,43 +1,43 @@
-# @kyneta/schema — Advanced: The Composition Algebra
+# @kyneta/schema — Advanced: Under the Hood
 
 > **Looking to get started?** See [`example/basic/`](../basic/) instead.
-> This example is for developers who want to understand the interpreter
-> stack under the hood.
+> This example is for developers who want to see what `createDoc` does.
 
-This example exercises the full composable interpreter toolkit — the
-Layer 1 API exported from `@kyneta/schema`. It shows how `createDoc`
-from `@kyneta/schema/basic` is built from five independent layers,
-and how you can mix and match them for custom use cases.
+This example builds a document by hand over a substrate, shows how its refs
+are made, writes a custom interpreter for the schema catamorphism, and replays
+ops between documents.
 
 ## Architecture
 
-The interpreter stack decomposes into **five composable layers**, each independently useful:
+Two things are open to you:
 
-| Layer | What it provides | Context needed |
-|---|---|---|
-| `navigation` | Structural addressing — product field getters, `.at()`, `.keys()`, `.length`, sum dispatch | `RefContext { store }` |
-| `readable` | Fills the `[CALL]` slot — `ref()` returns the current plain value, frozen | `RefContext { store }` |
-| `addressing` | One coordinate per position, alive while it exists — a list item keeps its identity as it moves | `RefContext { store }` |
-| `caching` | Identity-preserving memoization of refs (`doc.name === doc.name`) and, on a writable stack, of reads (`doc() === doc()` until something changes) — needs `addressing` | `RefContext { store }` |
-| `writable` | Mutation methods — `.set()`, `.insert()`, `.increment()`, `.push()`, `.delete()` | `WritableContext { store, dispatch, … }` |
-| `observation` | Observation protocol — `[CHANGEFEED]`, `subscribe`, `subscribeNode` | `RefContext` (works on read-only stacks too) |
+- **`createRef(schema, substrate)`** makes a document's root ref over any
+  `Substrate`. `createDoc` from `@kyneta/schema/basic` is this over a plain
+  substrate.
+- **`interpret(schema, interpreter, ctx)`** folds a schema with your own
+  `Interpreter`: one case per kind, children as thunks a case may force or
+  not. Materializing, zeroing, validating and describing are interpreters.
 
-The pre-built `readable` layer bundles navigation + reading + addressing + caching in one step:
+Refs themselves are one fixed construction. A ref is its state (its context,
+its path, its parent, and a few slots filled on first use), bound to a
+function whose prototype carries everything the ref does. There is one
+prototype per schema node and position, so two items of one list share one.
+A method needs its ref: pass `(v) => ref.set(v)`, not `ref.set`.
 
 ```ts
-// Fluent composition (what createDoc does internally):
-const doc = interpret(schema, ctx)
-  .with(readable)
-  .with(writable)
-  .with(observation)
-  .done()   // → Ref<typeof schema>
+const substrate = plainSubstrateFactory.create(ProjectSchema)
+const doc: Ref<typeof ProjectSchema> = createRef(ProjectSchema, substrate)
 
-// Manual composition (equivalent). `observation` is as far down as this goes —
-// the transformer it wraps is internal to the changefeed layer and not exported.
-const interp = observation.transform(
-  withWritable(withCaching(withAddressing(withReadable(withNavigation(bottomInterpreter))))),
+const leaves = createInterpreter<void, string[]>(
+  (_ctx, path) => [path.format()],
+  {
+    product: (_ctx, _path, _schema, fields) =>
+      Object.values(fields).flatMap(field => field()),
+    sequence: (_ctx, _path, _schema, item) => item(0),
+    map: (_ctx, _path, _schema, item) => item("*"),
+  },
 )
-const doc = interpret(schema, interp, ctx)
+interpret(ProjectSchema, leaves, undefined) // ["name", "stars", "tasks[0].title", …]
 ```
 
 ## Running
@@ -50,28 +50,21 @@ bun run example/advanced/main.ts
 ## What This Example Covers
 
 1. **The Schema** — same `ProjectSchema` as the basic example
-2. **Constructing createDoc by Hand** — `plainSubstrateFactory` → `substrate.context()` → `interpret` → layer composition
+2. **Constructing createDoc by Hand** — `plainSubstrateFactory` → `createRef`
 3. **Quick Mutations** — a brief recap
-4. **The Five Layers** — what each adds, fluent vs manual composition
-5. **Read-Only Documents** — dropping layers to get `RRef<S>` (no mutation, no observation)
-6. **Referential Identity and Caching** — `doc.name === doc.name`, `doc() === doc()` until a write, shared subtrees, namespace isolation
+4. **How a Ref Is Made** — state on the ref, behaviour on a shared prototype
+5. **Your Own Interpreter** — a fold that lists every leaf's path
+6. **Referential Identity** — `doc.name === doc.name`, `doc() === doc()` until a write, shared subtrees, namespace isolation
 7. **Symbol-Keyed Hooks** — `CALL`, `TRANSACT`, `CHANGEFEED`
-8. **Pure State Transitions** — `stepText`, `stepSequence`, `stepIncrement` without interpreter machinery
-9. **Composing Custom Stacks** — read-only replicas, navigate + write without reading
-10. **The Round-Trip at the Algebra Level**
+8. **Pure State Transitions** — `stepText`, `stepSequence`, `stepIncrement`
+9. **A Replica That Receives Ops** — `applyChanges` from elsewhere, and `RRef<S>` for code that only reads
+10. **The Round-Trip at the Algebra Level** — `batch` captures ops, `applyChanges` replays them
 11. **Final Snapshot**
 
-## Symbol-Keyed Composability Hooks
+## Symbol-Keyed Hooks
 
 | Symbol | Module | Purpose |
 |---|---|---|
-| `CALL` (`kyneta:call`) | `bottom.ts` | Controls what `carrier()` does — `withReadable` fills it |
-| `TRANSACT` (`kyneta:transact`) | `writable.ts` | Context discovery — refs carry a reference to their `WritableContext` |
-| `CHANGEFEED` (`kyneta:changefeed`) | `with-changefeed.ts` | Observation coalgebra — `withChangefeed` attaches it |
-
-## Key Insight
-
-The `@kyneta/schema/basic` API (`createDoc`, `change`, `subscribe`, etc.) is
-a thin layer over this composable toolkit. Everything it does, you can do
-yourself — with full control over which layers to include, what context to
-provide, and how the interpreter stack is wired.
+| `CALL` (`kyneta:call`) | `ref/read.ts` | What calling a ref does: `ref()` is `ref[CALL]()` |
+| `TRANSACT` (`kyneta:transact`) | `interpreters/writable.ts` | Context discovery: a ref's `WritableContext` |
+| `CHANGEFEED` (`kyneta:changefeed`) | `@kyneta/changefeed` | Observation: every ref's feed, made on first access |

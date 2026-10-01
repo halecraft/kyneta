@@ -1,7 +1,7 @@
-// Pure-helper unit tests for the changefeed layer's Functional Core.
+// delivery-helpers — the pure helpers of delivery (`delivery.ts`).
 
 import { describe, expect, it } from "vitest"
-import { changesetMetadata } from "../interpreters/with-changefeed.js"
+import { changesetMetadata } from "../delivery.js"
 
 // ---------------------------------------------------------------------------
 // changesetMetadata — table tests

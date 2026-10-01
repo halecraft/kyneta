@@ -4,9 +4,14 @@ import { CoordinateTrie } from "../coordinate-trie.js"
 import {
   type Address,
   AddressedPath,
+  entryAddress,
   fieldAddress,
+  IndexAddress,
   indexAddress,
   RawPath,
+  rawEntry,
+  rawField,
+  rawIndex,
   resetAddressIdCounter,
 } from "../path.js"
 import { applyChange } from "../reader.js"
@@ -112,7 +117,6 @@ describe("RawPath", () => {
       const p = RawPath.empty.field("x").item(0)
       const sliced = p.slice(0, 1)
       expect(sliced).toBeInstanceOf(RawPath)
-      expect(sliced.isAddressed).toBe(false)
     })
   })
 
@@ -125,13 +129,13 @@ describe("RawPath", () => {
       expect(c.format()).toBe("a.b[0]")
     })
 
-    it("promotes to AddressedPath when passed an AddressedPath", () => {
+    it("stays raw when passed an AddressedPath, taking its coordinates", () => {
       const raw = RawPath.empty.field("a")
       const trie = new CoordinateTrie()
-      const addressed = new AddressedPath([], trie).field("b")
+      const addressed = AddressedPath.empty(trie).field("b")
       const result = raw.concat(addressed)
-      expect(result.isAddressed).toBe(true)
-      expect(result.length).toBe(2)
+      expect(result).toBeInstanceOf(RawPath)
+      expect(result.format()).toBe("a.b")
     })
   })
 
@@ -159,11 +163,6 @@ describe("RawPath", () => {
         RawPath.empty.field("messages").item(2).field("author").format(),
       ).toBe("messages[2].author")
     })
-  })
-
-  it("isAddressed is false", () => {
-    expect(RawPath.empty.isAddressed).toBe(false)
-    expect(RawPath.empty.field("x").isAddressed).toBe(false)
   })
 
   it("root() returns RawPath.empty", () => {
@@ -216,7 +215,7 @@ describe("AddressedPath", () => {
   })
 
   it("field(key) creates a field address in the trie", () => {
-    const root = new AddressedPath([], trie)
+    const root = AddressedPath.empty(trie)
     const child = root.field("title")
     expect(child).toBeInstanceOf(AddressedPath)
     expect(child.length).toBe(1)
@@ -228,7 +227,7 @@ describe("AddressedPath", () => {
   })
 
   it("item(index) creates a cursor address in the trie", () => {
-    const root = new AddressedPath([], trie)
+    const root = AddressedPath.empty(trie)
     const child = root.item(0)
     expect(child).toBeInstanceOf(AddressedPath)
     expect(child.length).toBe(1)
@@ -241,7 +240,7 @@ describe("AddressedPath", () => {
 
   describe("idempotency", () => {
     it("field() with same arguments returns same Address object", () => {
-      const root = new AddressedPath([], trie)
+      const root = AddressedPath.empty(trie)
       const a = root.field("title")
       const b = root.field("title")
       // Same Address object reference
@@ -249,7 +248,7 @@ describe("AddressedPath", () => {
     })
 
     it("item() with same index returns same Address object", () => {
-      const root = new AddressedPath([], trie)
+      const root = AddressedPath.empty(trie)
       const a = root.item(0)
       const b = root.item(0)
       // Same Address object reference
@@ -259,7 +258,7 @@ describe("AddressedPath", () => {
 
   describe("key", () => {
     it("cursor-addressed segments produce stable strings across index changes", () => {
-      const root = new AddressedPath([], trie)
+      const root = AddressedPath.empty(trie)
       const child = root.item(5)
       const key1 = child.key
 
@@ -270,12 +269,12 @@ describe("AddressedPath", () => {
       // Key should NOT change — it uses cursor.id, not cursor.index
       // (Note: key is memoized, so this also verifies memoization correctness
       // for the addressed case where it MUST use id, not index)
-      const freshPath = new AddressedPath([addr], trie)
+      const freshPath = AddressedPath.of([addr], trie)
       expect(freshPath.key).toBe(key1)
     })
 
     it("key-addressed segments use the key string", () => {
-      const root = new AddressedPath([], trie)
+      const root = AddressedPath.empty(trie)
       const child = root.field("settings").field("darkMode")
       expect(child.key).toBe("settings\0darkMode")
     })
@@ -284,7 +283,7 @@ describe("AddressedPath", () => {
   describe("read", () => {
     it("reads correct store location via seg.resolve()", () => {
       const store = { items: [{ name: "alice" }, { name: "bob" }] }
-      const root = new AddressedPath([], trie)
+      const root = AddressedPath.empty(trie)
       const p = root.field("items").item(1).field("name")
       expect(p.read(store)).toBe("bob")
     })
@@ -293,7 +292,7 @@ describe("AddressedPath", () => {
       // read() is total: a deleted coordinate reads as absent (the store no
       // longer has the key), not a throw. Writes still guard (see below).
       // Context: jj:mlurlzqt.
-      const root = new AddressedPath([], trie)
+      const root = AddressedPath.empty(trie)
       const child = root.item(0)
       const addr = child.segments[0] as any as Address
       addr.dead = true
@@ -301,51 +300,32 @@ describe("AddressedPath", () => {
     })
   })
 
-  it("lastAddress() returns the last Address segment", () => {
-    const root = new AddressedPath([], trie)
-    const p = root.field("items").item(2)
-    const last = p.lastAddress() as any
-    expect(last.kind).toBe("index")
-    expect(last.resolve()).toBe(2)
-  })
-
-  it("lastAddress() returns undefined for empty path", () => {
-    const root = new AddressedPath([], trie)
-    expect(root.lastAddress()).toBeUndefined()
-  })
-
   describe("concat", () => {
     it("concatenates two addressed paths", () => {
-      const a = new AddressedPath([], trie).field("a")
-      const b = new AddressedPath([], trie).field("b")
+      const a = AddressedPath.empty(trie).field("a")
+      const b = AddressedPath.empty(trie).field("b")
       const c = a.concat(b)
       expect(c.length).toBe(2)
       expect(c).toBeInstanceOf(AddressedPath)
     })
 
-    it("promotes RawPath to AddressedPath when concatenating", () => {
-      const addressed = new AddressedPath([], trie).field("a")
+    it("concatenating a RawPath keeps its segments raw, creating nothing", () => {
+      const addressed = AddressedPath.empty(trie).field("a")
       const raw = RawPath.empty.field("b")
       const result = addressed.concat(raw)
-      expect(result.isAddressed).toBe(true)
-      expect(result.length).toBe(2)
       expect(result).toBeInstanceOf(AddressedPath)
+      expect(result.length).toBe(2)
+      expect(trie.node(result)).toBeUndefined()
     })
   })
 
-  it("isAddressed is true", () => {
-    const root = new AddressedPath([], trie)
-    expect(root.isAddressed).toBe(true)
-    expect(root.field("x").isAddressed).toBe(true)
-  })
-
   it("root() returns an empty AddressedPath with same trie", () => {
-    const root = new AddressedPath([], trie)
+    const root = AddressedPath.empty(trie)
     const child = root.field("a").item(0)
     const r = child.root()
     expect(r).toBeInstanceOf(AddressedPath)
     expect(r.length).toBe(0)
-    expect(r.isAddressed).toBe(true)
+    expect(r).toBe(root)
     // Verify same trie by creating an address and checking idempotency
     const x = r.field("x")
     const y = root.field("x")
@@ -353,7 +333,7 @@ describe("AddressedPath", () => {
   })
 
   it("format() works identically to RawPath for equivalent segments", () => {
-    const root = new AddressedPath([], trie)
+    const root = AddressedPath.empty(trie)
     const p = root.field("todos").item(2).field("done")
     expect(p.format()).toBe("todos[2].done")
   })
@@ -410,16 +390,16 @@ describe("Monoid laws", () => {
     })
 
     it("right identity: path.concat(path.root()).key === path.key", () => {
-      const root = new AddressedPath([], trie)
+      const root = AddressedPath.empty(trie)
       const p = root.field("a").field("b")
       expect(p.concat(p.root()).key).toBe(p.key)
     })
 
     it("left identity: path.root().concat(path).key === path.key", () => {
-      const root = new AddressedPath([], trie)
+      const root = AddressedPath.empty(trie)
       const p = root.field("a").field("b")
       // Need to build a proper two-segment path by extracting segments
-      const twoSeg = new AddressedPath(p.segments, trie)
+      const twoSeg = AddressedPath.of(p.segments, trie)
       const leftIdentity = p.root().concat(twoSeg)
       expect(leftIdentity.key).toBe(p.key)
     })
@@ -442,7 +422,7 @@ describe("dead address propagation", () => {
   it("applyChange throws when path contains a dead address", () => {
     const store = { current: { items: [{ name: "alice" }] } }
     const trie = new CoordinateTrie()
-    const root = new AddressedPath([], trie)
+    const root = AddressedPath.empty(trie)
     const p = root.field("items").item(0).field("name")
 
     // Kill the index address
@@ -456,7 +436,7 @@ describe("dead address propagation", () => {
 
   it("read() returns undefined (does not throw) when a path segment is dead", () => {
     const trie = new CoordinateTrie()
-    const root = new AddressedPath([], trie)
+    const root = AddressedPath.empty(trie)
     const p = root.field("settings").field("theme")
 
     // Kill the field address
@@ -488,15 +468,87 @@ describe("segmentKeys", () => {
   })
 
   it("key an index by its address id on an addressed path", () => {
-    const root = new AddressedPath([], new CoordinateTrie())
+    const root = AddressedPath.empty(new CoordinateTrie())
     const path = root.field(tricky).item(0).entry("k")
     const index = path.segments[1]
-    if (index.kind !== "index") throw new Error("expected an index address")
-    expect(path.segmentKeys).toEqual([tricky, `@${index.id}`, "k"])
+    if (!(index instanceof IndexAddress)) {
+      throw new Error("expected an index address")
+    }
+    expect(path.segmentKeys).toEqual([tricky, index.id, "k"])
+    expect(path.key).toBe([tricky, `@${index.id}`, "k"].join("\0"))
   })
 
   it("the root has none, and the empty key", () => {
     expect(RawPath.empty.segmentKeys).toEqual([])
     expect(RawPath.empty.key).toBe("")
+  })
+})
+
+describe("segments and addresses share their behaviour", () => {
+  it("raw segments resolve and project to their coordinate", () => {
+    expect(rawField("a").resolve()).toBe("a")
+    expect(rawEntry("k").coord()).toBe("k")
+    expect(rawIndex(3).resolve()).toBe(3)
+    expect(rawIndex(3).identity).toBe("3")
+  })
+
+  it("two segments or addresses of one kind share their methods", () => {
+    expect(rawField("a").resolve).toBe(rawField("b").resolve)
+    expect(indexAddress(0).resolve).toBe(indexAddress(1).resolve)
+    expect(entryAddress("a").coord).toBe(entryAddress("b").coord)
+  })
+
+  it("a dead address throws on resolve, and still projects", () => {
+    const item = indexAddress(2, true)
+    expect(() => item.resolve()).toThrow("Ref access on deleted list item")
+    expect(item.coord()).toBe(2)
+    expect(() => fieldAddress("f", true).resolve()).toThrow(
+      'The field "f" this ref pointed to has been removed.',
+    )
+    expect(() => entryAddress("k", true).resolve()).toThrow(
+      'The entry "k" this ref pointed to has been removed.',
+    )
+  })
+
+  it("an address of a class has one shape, listeners included", () => {
+    expect(Object.keys(fieldAddress("a"))).toEqual(
+      Object.keys(fieldAddress("b", true)),
+    )
+    expect("listeners" in indexAddress(0)).toBe(true)
+  })
+})
+
+describe("an addressed path is its parent and one segment", () => {
+  const trie = new CoordinateTrie()
+  const parent = trie.root.field("items").item(1)
+  const path = parent.field("title")
+
+  it("a child shares its parent, and an ancestor is a prefix of the chain", () => {
+    expect(path.parent).toBe(parent)
+    expect(path.slice(0, -1)).toBe(parent)
+    expect(path.slice(0, 1)).toBe(parent.parent)
+    expect(path.slice(0, 0)).toBe(trie.root)
+    expect(path.root()).toBe(trie.root)
+    expect(path.length).toBe(3)
+  })
+
+  it("segments, read and a slice from the middle agree with the raw path", () => {
+    const raw = RawPath.empty.field("items").item(1).field("title")
+    expect(path.segments.map(s => s.coord())).toEqual(
+      raw.segments.map(s => s.coord()),
+    )
+    const store = { items: [{ title: "a" }, { title: "b" }] }
+    expect(path.read(store)).toBe("b")
+    expect(path.toRaw().key).toBe(raw.key)
+    expect(path.slice(1).toRaw().key).toBe(raw.slice(1).key)
+  })
+
+  it("is dead while a coordinate on it is", () => {
+    const item = parent.last
+    if (!(item instanceof IndexAddress)) throw new Error("an item address")
+    expect(path.dead).toBe(false)
+    item.dead = true
+    expect(path.dead).toBe(true)
+    item.dead = false
   })
 })

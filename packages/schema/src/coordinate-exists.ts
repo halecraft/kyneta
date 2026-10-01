@@ -107,7 +107,7 @@ export function liveSchemaAt(
  * A `replace` lands at the declared schema, since its value decides a sum's
  * variant. Any other change presupposes the variant σ holds: a `push` onto a
  * nullable list is a sequence change at the sum's own path, because the sum
- * forwards to its variant's carrier, which shares the path.
+ * forwards to its variant's ref, which shares the path.
  */
 export function landingSchema(
   root: SchemaNode,

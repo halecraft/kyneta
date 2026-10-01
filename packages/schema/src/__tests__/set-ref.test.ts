@@ -6,25 +6,15 @@
 
 import { describe, expect, expectTypeOf, it } from "vitest"
 import type { SchemaNode } from "../index.js"
-import {
-  interpret,
-  observation,
-  plainContext,
-  readable,
-  Schema,
-  writable,
-} from "../index.js"
+import { Schema } from "../index.js"
 import type { Plain } from "../interpreter-types.js"
 import type { DeepReadonly } from "./deep-readonly.js"
+import { contextOver, untypedRefOver } from "./stack.js"
 
 function createSetDoc(schema: SchemaNode, initial: unknown): any {
   const store = { tags: initial }
-  const ctx = plainContext(schema, store as Record<string, unknown>)
-  return (interpret as any)(schema, ctx)
-    .with(readable)
-    .with(writable)
-    .with(observation)
-    .done()
+  const ctx = contextOver(schema, store as Record<string, unknown>)
+  return untypedRefOver(schema, ctx)
 }
 
 describe("SetRef: primitive items (Schema.set(Schema.string()))", () => {

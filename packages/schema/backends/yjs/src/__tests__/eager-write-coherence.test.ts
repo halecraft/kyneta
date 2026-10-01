@@ -19,16 +19,13 @@
 import {
   applyChanges,
   batch,
-  interpret,
+  createRef,
   mapChange,
-  observation,
   own,
   RawPath,
-  readable,
   Schema,
   subscribe,
   unwrap,
-  writable,
 } from "@kyneta/schema"
 import { projectionConformance } from "@kyneta/schema/testing"
 import { describe, expect, it } from "vitest"
@@ -43,11 +40,7 @@ import { createYjsSubstrate, yjsSubstrateFactory } from "../substrate.js"
 
 function build<S extends ReturnType<typeof Schema.struct>>(schema: S) {
   const substrate = yjsSubstrateFactory.create(schema)
-  const doc = interpret(schema, substrate.context())
-    .with(readable)
-    .with(writable)
-    .with(observation)
-    .done() as any
+  const doc = createRef(schema, substrate) as any
   return { substrate, doc }
 }
 
@@ -64,11 +57,7 @@ function buildUnbound<S extends ReturnType<typeof Schema.struct>>(
   if (from !== undefined) Y.applyUpdate(doc, Y.encodeStateAsUpdate(from))
   ensureContainers(doc, schema)
   const substrate = createYjsSubstrate(doc, schema)
-  const view = interpret(schema, substrate.context())
-    .with(readable)
-    .with(writable)
-    .with(observation)
-    .done() as any
+  const view = createRef(schema, substrate) as any
   return { substrate, doc: view }
 }
 

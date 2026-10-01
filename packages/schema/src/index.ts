@@ -105,13 +105,8 @@ export {
 export {
   deepClonePlain,
   freezeTree,
-  frozenClone,
   isDeeplyFrozen,
 } from "./clone.js"
-export type {
-  CoordinateNode,
-  SequenceAddressTable,
-} from "./coordinate-trie.js"
 export { CoordinateTrie } from "./coordinate-trie.js"
 // Create-doc — generic document construction for any substrate
 export { createDoc, createDocAs, createRef } from "./create-doc.js"
@@ -173,17 +168,7 @@ export {
 } from "./guards.js"
 // Peer numbers — a peer id's CRDT identity, shared by the Yjs and Loro bindings
 export { peerNumber } from "./hash.js"
-export type {
-  ChangefeedBrand,
-  InterpretBuilder,
-  Interpreter,
-  InterpreterLayer,
-  ReadableBrand,
-  Resolve,
-  ResolveCarrier,
-  SumVariants,
-  WritableBrand,
-} from "./interpret.js"
+export type { Interpreter, SumVariants } from "./interpret.js"
 // interpret — the generic catamorphism over the schema functor
 export {
   createInterpreter,
@@ -195,37 +180,8 @@ export {
   rawIndex,
 } from "./interpret.js"
 // Shared interpreter types (canonical location)
-export type {
-  Plain,
-  PlainFlatTreeNode,
-  RefContext,
-} from "./interpreter-types.js"
+export type { Plain, PlainFlatTreeNode } from "./interpreter-types.js"
 export { INTERPRETER } from "./interpreter-types.js"
-export type {
-  HasAddressing,
-  HasCaching,
-  HasCall,
-  HasNavigation,
-  HasRead,
-} from "./interpreters/bottom.js"
-// Bottom interpreter — universal foundation and capability lattice
-export {
-  bottomInterpreter,
-  CALL,
-  makeCarrier,
-  markAddressing,
-  markCaching,
-  markNavigation,
-  markRead,
-} from "./interpreters/bottom.js"
-// Carrier surfaces — what each `install…` helper attaches. Exported so a
-// custom interpreter layer can name the same shapes rather than redeclaring
-// them; the public ref types come from the facade's `DocRef` family instead.
-export type {
-  KeyedNavigation,
-  KeyedReadable,
-  KeyedWriteOps,
-} from "./interpreters/keyed-helpers.js"
 // Materialize interpreter — generic CRDT→PlainState materialization
 export type {
   MaterializeContext,
@@ -244,29 +200,14 @@ export type {
 } from "./interpreters/navigable.js"
 export { plainInterpreter } from "./interpreters/plain.js"
 // Readable types — type-level interpretation for readable refs
-// (The monolithic readableInterpreter is removed; use
-// withCaching(withReadable(bottomInterpreter)) instead.)
 export type {
   Readable,
   ReadableMapRef,
   ReadableSequenceRef,
   ReadableSetRef,
+  ReadableTreeNode,
+  ReadableTreeRef,
 } from "./interpreters/readable.js"
-export type {
-  ListWriteOps,
-  RichTextWriteOps,
-  SequenceNavigation,
-  SequenceReadable,
-  TextWriteOps,
-} from "./interpreters/sequence-helpers.js"
-// Positional algebra — cursor-positioning kernel
-export { at } from "./interpreters/sequence-helpers.js"
-export type { SetReadable, SetWriteOps } from "./interpreters/set-helpers.js"
-export type {
-  TreeNavigation,
-  TreeReadable,
-  TreeWriteOps,
-} from "./interpreters/tree-helpers.js"
 export type { ValidateContext } from "./interpreters/validate.js"
 // Validate interpreter — schema-driven validation with collecting errors
 export {
@@ -275,44 +216,6 @@ export {
   validate,
   validateInterpreter,
 } from "./interpreters/validate.js"
-// withAddressing — stable identity for all composite refs
-export {
-  DELETED,
-  deleted,
-  deletedFeed,
-  type HasDeleted,
-  hasDeleted,
-  withAddressing,
-} from "./interpreters/with-addressing.js"
-// withCaching — interposition transformer (identity-preserving caching)
-export { withCaching } from "./interpreters/with-caching.js"
-// Path types — re-exported from path.ts via interpret.ts
-// (Path, RawPath, RawSegment, Segment, etc. are exported above)
-// Changefeed observation layer.
-//
-// The notification engine itself is no longer exported. `planDelivery` (was
-// `planNotifications`), `deliverNotifications`, `DeliveryPlan` (was
-// `NotificationPlan`), `attachChangefeed` and `withChangefeed` were all public
-// with no importer outside this package. `withChangefeed` is reached through
-// the `observation` layer that wraps it (see `layers.ts`), which is the
-// composition the interpreter-stack docs point callers at. Removed in 4.0.
-//
-// What remains is the populated protocol, kept deliberately: `POPULATED` has no
-// external importer either, but removing a protocol symbol would foreclose
-// implementing that protocol outside this package.
-export {
-  type HasPopulated,
-  hasPopulated,
-  POPULATED,
-  populated,
-  populatedFeed,
-} from "./interpreters/with-changefeed.js"
-// withNavigation — structural navigation (coalgebraic addressing, no reading)
-export { withNavigation } from "./interpreters/with-navigation.js"
-// withReadable — refinement transformer (reading only, requires navigation)
-export { withReadable } from "./interpreters/with-readable.js"
-// withTracking — read-dependency capture for reactive scopes (jj:kpywvkpr)
-export { withTracking } from "./interpreters/with-tracking.js"
 export type {
   CounterRef,
   HasRemove,
@@ -322,20 +225,18 @@ export type {
   ScalarRef,
   SealedBatch,
   SequenceRef,
-  SubstrateCapabilities,
   TextRef,
   Writable,
   WritableContext,
   WritableMapRef,
   WritableSetRef,
+  WritableTreeRef,
 } from "./interpreters/writable.js"
 export {
-  buildWritableContext,
   hasRemove,
   hasTransact,
   REMOVE,
   TRANSACT,
-  withWritable,
 } from "./interpreters/writable.js"
 // Inverse — reverse arrows for the change groupoid (abort and undo)
 export {
@@ -349,15 +250,6 @@ export {
   invertText,
   invertTree,
 } from "./inverse.js"
-// Pre-built interpreter layers for fluent composition
-export {
-  addressing,
-  navigation,
-  observation,
-  readable,
-  tracking,
-  writable,
-} from "./layers.js"
 // materializeValue — write-side counterpart to foldPath: unfolds a plain value
 // into a backend-agnostic, identity-keyed container-shape IR.
 export type { EagerPolicy, MaterializedNode } from "./materialize-value.js"
@@ -417,6 +309,7 @@ export {
 // Re-export path types from their canonical location
 export type {
   Address,
+  Coordinate,
   IndexAddress,
   Path,
   RawSegment,
@@ -429,7 +322,6 @@ export {
   indexAddress,
   nextAddressId,
   resetAddressIdCounter,
-  resolveToAddressed,
 } from "./path.js"
 // Position algebra — substrate-agnostic cursor stability
 export type {
@@ -461,14 +353,31 @@ export {
   reconcileShadow,
   touchedBy,
 } from "./reconcile-shadow.js"
-// Ref tier types — parameterized recursive refs for composed interpreter stacks
+// Refs — one construction per schema node (`ref/`): the deletion and
+// population protocols, the read symbol, and each kind's surface by concern
+export {
+  DELETED,
+  deleted,
+  deletedFeed,
+  type HasDeleted,
+  hasDeleted,
+} from "./ref/address.js"
+export {
+  type HasPopulated,
+  hasPopulated,
+  POPULATED,
+  populated,
+  populatedFeed,
+} from "./ref/observe.js"
+export { CALL } from "./ref/read.js"
+// Positional algebra — cursor-positioning kernel
+export { at } from "./ref/write.js"
+// Ref types — a document's refs, typed by schema
 export type {
   DocRef,
   Ref,
-  RefMode,
   Removable,
   RRef,
-  RWRef,
   SchemaRef,
   Wrap,
 } from "./ref.js"
@@ -628,7 +537,6 @@ export {
   objectToReplaceOps,
   type PlainPayload,
   PlainVersion,
-  plainContext,
   plainReplicaFactory,
   plainSubstrateFactory,
   supersedes,
@@ -663,5 +571,8 @@ export {
   versionVectorJoin,
   versionVectorMeet,
 } from "./version-vector.js"
+// The writable context every ref of a document shares
+export type { SubstrateCapabilities } from "./writable-context.js"
+export { buildWritableContext } from "./writable-context.js"
 // Zero — default values derived from the schema grammar
 export { scalarDefault, Zero, zeroInterpreter } from "./zero.js"

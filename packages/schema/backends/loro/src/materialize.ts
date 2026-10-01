@@ -104,7 +104,7 @@ export function createLoroResolver(
       // LoroTree.toArray() returns a NESTED `TreeNodeValue[]` (roots at
       // top, descendants under `.children`). The kyneta topology contract
       // is flat — walk depth-first and emit each node with its parent
-      // link so `forestTopology` consumers (materializer, tree-helpers
+      // link so `forestTopology` consumers (the materializer, a tree ref's
       // navigation) see every node.
       type NestedRow = {
         id: string

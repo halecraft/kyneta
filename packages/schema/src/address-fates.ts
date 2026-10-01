@@ -10,11 +10,12 @@
 // - A list item is dropped. A rewrite leaves it no correspondence, and its
 //   identity is its address, which nothing can name again.
 // - A tree node is dropped. Its id is minted once and never reused.
-// - A field or map entry is kept, dead, with its address and carrier. A
-//   product field's carrier is memoized in its parent's carrier, not in the
-//   trie, so a revived parent hands the old field carrier back; its address
-//   has to be there, dead, to revive with it. A map key carries identity by
-//   its string, and revives the same way.
+// - A field or map entry is kept, dead, while something holds it (a ref, a
+//   death listener, a subscriber; `CoordinateTrie.prune`). A product's field
+//   ref is kept in its parent ref, not in the trie, so a revived parent hands
+//   the old field ref back; its address has to be there, dead, to revive
+//   with it. A map key carries identity by its string, and revives the same
+//   way.
 
 import type { AddressedPath, Segment } from "./path.js"
 import { KIND, type Schema as SchemaNode } from "./schema.js"
@@ -24,7 +25,7 @@ export interface RegisteredCoordinate {
   readonly path: AddressedPath
   /** The segment naming it under its parent (`path`'s last). */
   readonly segment: Segment
-  /** The schema recorded on it, if it was ever interpreted. */
+  /** The schema recorded on it, if a ref was ever made for it. */
   readonly schema: SchemaNode | undefined
   readonly dead: boolean
 }

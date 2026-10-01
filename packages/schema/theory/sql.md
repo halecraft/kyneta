@@ -107,8 +107,8 @@ export interface StoreReader {
 ```
 
 All four methods are synchronous. This is not a soft assumption — the
-entire interpreter stack (`withNavigation`, `withReadable`, `withCaching`,
-`withWritable`, `withChangefeed`) depends on synchronous reads. This
+ref construction (`src/ref/*`: navigation, reading, writing and
+observation) depends on synchronous reads. This
 rules out async-only SQL libraries and mandates `better-sqlite3` (which
 is synchronous by design).
 

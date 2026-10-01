@@ -4,14 +4,11 @@ import type { Op, Substrate, SubstratePayload } from "../index.js"
 import {
   applyChanges,
   batch,
-  interpret,
-  observation,
   PlainVersion,
   plainReplicaFactory,
   plainSubstrateFactory,
   RawPath,
   reaches,
-  readable,
   replaceChange,
   replicaTypesCompatible,
   requiresBidirectionalSync,
@@ -20,7 +17,6 @@ import {
   SYNC_COLLABORATIVE,
   SYNC_EPHEMERAL,
   subscribe,
-  writable,
   Zero,
 } from "../index.js"
 import {
@@ -33,6 +29,7 @@ import {
   EMPTY_HISTORY,
   planMerge,
 } from "../substrates/plain.js"
+import { refOver } from "./stack.js"
 
 // Helper: parse the store snapshot as a plain object for assertions.
 // Exercises the public export API rather than reaching through to the
@@ -92,11 +89,7 @@ const TestSchema = Schema.struct({
 
 // Helper: create a full interpreter tree from a substrate
 function interpretSubstrate(substrate: Substrate<PlainVersion>) {
-  return interpret(TestSchema, substrate.context())
-    .with(readable)
-    .with(writable)
-    .with(observation)
-    .done()
+  return refOver(TestSchema, substrate.context())
 }
 
 // ===========================================================================
@@ -1582,11 +1575,7 @@ describe("plain replica materialization", () => {
   it("reflects merge, advance and reset without corrupting its base", () => {
     const S = Schema.struct({ items: Schema.list(Schema.number()) })
     const source = plainSubstrateFactory.create(S)
-    const doc = interpret(S, source.context())
-      .with(readable)
-      .with(writable)
-      .with(observation)
-      .done()
+    const doc = refOver(S, source.context())
     const genesis = source.version()
     batch(doc, d => d.items.push(1))
     const afterFirst = source.version()

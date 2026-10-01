@@ -1,14 +1,7 @@
 // discriminated-union — integration tests for sums on the Loro substrate.
 
 import type { Ref, SchemaNode, Substrate } from "@kyneta/schema"
-import {
-  batch,
-  interpret,
-  observation,
-  readable,
-  Schema,
-  writable,
-} from "@kyneta/schema"
+import { batch, createRef, Schema } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import { createDoc, loro, loroSubstrateFactory } from "../index.js"
 import type { LoroVersion } from "../version.js"
@@ -45,11 +38,7 @@ function interpretSubstrate<S extends SchemaNode>(
   schema: S,
   substrate: Substrate<LoroVersion>,
 ): Ref<S> {
-  return interpret(schema, substrate.context())
-    .with(readable)
-    .with(writable)
-    .with(observation)
-    .done()
+  return createRef(schema, substrate)
 }
 
 // ===========================================================================

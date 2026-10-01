@@ -3,8 +3,8 @@
 
 import { describe, expect, it } from "vitest"
 import { batch, createDoc, Schema } from "../basic/index.js"
-import { deleted } from "../interpreters/with-addressing.js"
 import { hasRemove } from "../interpreters/writable.js"
+import { deleted } from "../ref/address.js"
 
 const Doc = Schema.struct({
   outer: Schema.struct({

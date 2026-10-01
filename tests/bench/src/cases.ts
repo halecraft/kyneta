@@ -7,6 +7,7 @@
 
 import { loro } from "@kyneta/loro-schema"
 import {
+  applyChanges,
   batch,
   createDoc,
   ephemeral,
@@ -14,11 +15,20 @@ import {
   exportSince,
   json,
   merge,
+  RawPath,
+  replaceChange,
   Schema,
   version,
 } from "@kyneta/schema"
 import { yjs } from "@kyneta/yjs-schema"
-import { KiB, MiB, measure, microsPer, type Result } from "./measure.ts"
+import {
+  heapObjects,
+  KiB,
+  MiB,
+  measure,
+  microsPer,
+  type Result,
+} from "./measure.ts"
 
 // Documents are untyped here, as in the conformance harness: the cases run
 // one body over every substrate, and a typed ref per schema would exceed the
@@ -46,6 +56,11 @@ const rowFields = {
 /** S63's row: six fields, one of them opaque. */
 const SessionRows = Schema.struct({
   rows: Schema.record(Schema.struct(rowFields)),
+})
+
+/** The same rows, as a list. */
+const SessionList = Schema.struct({
+  items: Schema.list(Schema.struct(rowFields)),
 })
 
 const row = (i: number) => ({
@@ -148,31 +163,115 @@ export function reads(rows: number): Result[] {
   return out
 }
 
-/** What navigating to one ref costs, on the json substrate. */
+/**
+ * What navigating to refs costs, on the json substrate: an entry, its six
+ * fields (three scalars, two nullables and the opaque payload), and a list
+ * item. Every ref is held while measured, and each kind is measured on refs
+ * not yet made.
+ */
 export function navigation(rows: number): Result[] {
   const doc = sessionDoc(SUBSTRATES[0][1], rows)
   const group = `navigate, ${rows} rows`
+  const per = (metric: string, bytes: number, count: number): Result => ({
+    group,
+    substrate: "json",
+    metric,
+    value: bytes / count,
+    unit: "B",
+  })
   const entries = measure(() => {
     const held: Doc[] = []
     for (let i = 0; i < rows; i++) held.push(doc.rows.at(`row-${i}`))
     return held
   })
-  const fields = measure(() =>
+  const scalars = measure(() =>
     entries.value.map((entry: Doc) => [entry.id, entry.type, entry.timestamp]),
   )
+  const nullables = measure(() =>
+    entries.value.map((entry: Doc) => [entry.parentId, entry.fromId]),
+  )
+  const payloads = measure(() =>
+    entries.value.map((entry: Doc) => entry.payload),
+  )
+  const struct =
+    entries.retainedBytes +
+    scalars.retainedBytes +
+    nullables.retainedBytes +
+    payloads.retainedBytes
+
+  const list = create(json.bind(SessionList))
+  batch(list, (d: Doc) => {
+    for (let i = 0; i < rows; i++) d.items.push(row(i))
+  })
+  const items = measure(() => {
+    const held: Doc[] = []
+    for (let i = 0; i < rows; i++) held.push(list.items.at(i))
+    return held
+  })
+
+  return [
+    per("entry ref", entries.retainedBytes, rows),
+    per("scalar field ref", scalars.retainedBytes, rows * 3),
+    per("nullable field ref", nullables.retainedBytes, rows * 2),
+    per("struct with its six fields", struct, rows),
+    per("list item ref", items.retainedBytes, rows),
+    {
+      group,
+      substrate: "json",
+      metric: `create ${rows} entry refs`,
+      value: entries.ms,
+      unit: "ms",
+    },
+  ]
+}
+
+/**
+ * The heap objects a json receiver keeps per received batch, each batch
+ * writing a field of a different row. The rows arrive first, in one batch,
+ * before the census. The writer's payloads are exported first and held
+ * throughout, so the census counts only what the receiver keeps. The writer
+ * writes through raw paths (`applyChanges`), so it keeps no refs either.
+ */
+export function receivedLog(batches: number): Result[] {
+  const writer = create(json.bind(SessionRows))
+  const seed = version(writer)
+  batch(writer, (d: Doc) => {
+    for (let i = 0; i < batches; i++) d.rows.set(`row-${i}`, row(i))
+  })
+  const rows = exportSince(writer, seed)
+  const payloads: unknown[] = []
+  for (let i = 0; i < batches; i++) {
+    const since = version(writer)
+    applyChanges(writer, [
+      {
+        path: RawPath.empty.field("rows").entry(`row-${i}`).field("timestamp"),
+        change: replaceChange(-i),
+      },
+    ])
+    payloads.push(exportSince(writer, since))
+  }
+  const receiver = create(json.bind(SessionRows))
+  merge(receiver, rows as never)
+  const before = heapObjects()
+  const kept = measure(() => {
+    for (const payload of payloads) merge(receiver, payload as never)
+    return receiver
+  })
+  const after = heapObjects()
+  const group = `log, ${batches} batches`
   return [
     {
       group,
       substrate: "json",
-      metric: "entry ref",
-      value: entries.retainedBytes / rows,
-      unit: "B",
+      metric: "objects kept per batch",
+      value: (after - before) / batches,
+      unit: "",
     },
     {
       group,
       substrate: "json",
-      metric: "scalar field ref",
-      value: fields.retainedBytes / rows / 3,
+      metric: "bytes kept per batch",
+      value: kept.retainedBytes / batches,
       unit: "B",
     },
   ]

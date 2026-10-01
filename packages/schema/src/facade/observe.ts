@@ -50,8 +50,8 @@ import { hasRecursiveChangefeed } from "../changefeed.js"
  * })
  * ```
  *
- * @param ref - A schema-issued ref with a `[CHANGEFEED]` symbol that
- *   includes `subscribeDescendants` (from `withChangefeed`).
+ * @param ref - A schema-issued ref: its `[CHANGEFEED]` carries
+ *   `subscribeDescendants`.
  * @param callback - Called with a `Changeset<Op>` on each notification.
  * @returns An unsubscribe function.
  *
@@ -64,8 +64,7 @@ export function subscribe(
 ): () => void {
   if (!hasRecursiveChangefeed(ref)) {
     throw new Error(
-      "subscribe() requires a schema-issued ref with [CHANGEFEED] carrying " +
-        "subscribeDescendants. Use a ref produced by interpret() with withChangefeed.",
+      "subscribe() requires a schema-issued ref (a [CHANGEFEED] carrying subscribeDescendants).",
     )
   }
   return ref[CHANGEFEED].subscribeDescendants(callback)
@@ -94,7 +93,7 @@ export function subscribe(
  * })
  * ```
  *
- * @param ref - Any ref with a `[CHANGEFEED]` symbol (from `withChangefeed`).
+ * @param ref - Any ref with a `[CHANGEFEED]` symbol.
  * @param callback - Called with a `Changeset` on each notification.
  * @returns An unsubscribe function.
  *
@@ -105,10 +104,7 @@ export function subscribeNode(
   callback: (changeset: Changeset) => void,
 ): () => void {
   if (!hasChangefeed(ref)) {
-    throw new Error(
-      "subscribeNode() requires a ref with [CHANGEFEED]. " +
-        "Use a ref produced by interpret() with withChangefeed.",
-    )
+    throw new Error("subscribeNode() requires a ref with [CHANGEFEED].")
   }
   return ref[CHANGEFEED].subscribe(callback)
 }

@@ -1,5 +1,5 @@
-// substrate — the formal interface between state management, the
-// interpreter stack, and the replication layer.
+// substrate — the formal interface between state management, a document's
+// refs, and the replication layer.
 //
 // Two orthogonal concerns are factored into separate interfaces:
 //
@@ -29,8 +29,8 @@
 //                          compacts storage. Needs ReplicaFactory + Replica.
 //                          Does NOT need a schema.
 //
-//   Full interpreter    — reads, writes, observes document state via the
-//                          schema-driven interpreter stack. Needs
+//   Full interpreter    — reads, writes, observes document state through
+//                          the document's refs. Needs
 //                          SubstrateFactory + Substrate + SchemaNode.
 //
 // Context: jj:wmyomqzw (SubstratePrepare), jj:wqoqzzpp (Substrate)
@@ -685,11 +685,12 @@ export interface BatchOutcome {
  * which then brings σ into agreement with λ and announces the ops through
  * `ctx.announce`, which never calls back into `prepare` or `afterBatch`.
  *
- * Caching and changefeed layers wrap the context built over these; the
- * substrate never needs to know about those layers.
+ * The writable context built over these (`buildWritableContext`) keeps the
+ * coordinates, the subscribers and delivery; the substrate knows none of
+ * them.
  */
 export interface SubstratePrepare {
-  /** The readable reader for the interpreter's RefContext. */
+  /** Reads σ: the reader every ref of the document reads through. */
   readonly reader: Reader
 
   /**
@@ -742,20 +743,20 @@ export interface SubstratePrepare {
  * and transfer semantics.
  *
  * Extends `Replica<V>` with the schema-driven interpretation surface:
- * readable reader, writable context, prepare/flush pipeline. This is the
- * full-stack interface required by participants that read, write, or
+ * readable reader, writable context, prepare pipeline. This is the
+ * interface required by participants that read, write, or
  * observe document state (clients, application servers with game logic,
  * etc.).
  *
  * Responsibilities:
- * 1. Provide a readable reader + WritableContext for the interpreter stack
+ * 1. Provide a readable reader + WritableContext for the document's refs
  *    (from SubstratePrepare: reader, prepare, afterBatch, runBatch?)
  * 2. Track versioning via Version (from Replica)
  * 3. Export/import state for replication (from Replica)
  *
  * The substrate fires the `project` morphism automatically: after any
  * mutation (local or imported), the resulting Ops are delivered through
- * the CHANGEFEED attached by the interpreter's changefeed layer.
+ * every ref's `[CHANGEFEED]`.
  *
  * Two kinds of state absorption:
  * - `merge(payload)` absorbs a payload into a live substrate using

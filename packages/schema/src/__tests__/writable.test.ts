@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest"
 import type {
   ChangeBase,
   Path,
-  Ref,
   StateCell,
   SubstratePayload,
   SubstratePrepare,
@@ -12,48 +11,25 @@ import {
   applyChange,
   applyChanges,
   batch,
-  bottomInterpreter,
   buildWritableContext,
   createRef,
   exportSince,
   hasTransact,
-  interpret,
   invert,
   merge,
-  observation,
-  plainContext,
   plainReader,
   plainSubstrateFactory,
   RawPath,
-  readable,
   replaceChange,
   Schema,
   subscribe,
   TRANSACT,
-  withAddressing,
-  withCaching,
-  withNavigation,
-  withReadable,
-  withWritable,
-  writable,
 } from "../index.js"
+import { contextOver, refOver } from "./stack.js"
 
 // ===========================================================================
 // Composed stacks
 // ===========================================================================
-
-// Full stack: readable + caching + writable (the standard composition)
-const fullInterpreter = withWritable(
-  withCaching(withAddressing(withReadable(withNavigation(bottomInterpreter)))),
-)
-
-// Cacheless stack: readable + writable (no caching layer)
-const cachelessInterpreter = withWritable(
-  withReadable(withNavigation(bottomInterpreter)),
-)
-
-// Write-only stack: writable on bare carriers (ref() throws)
-const writeOnlyInterpreter = withWritable(bottomInterpreter)
 
 // ===========================================================================
 // Base grammar tests — Schema only, no annotations
@@ -77,11 +53,8 @@ function createStructuralDoc(storeOverrides: Record<string, unknown> = {}) {
     metadata: { version: 1 },
     ...storeOverrides,
   }
-  const ctx = plainContext(structuralDocSchema, store)
-  const doc = interpret(structuralDocSchema, ctx)
-    .with(readable)
-    .with(writable)
-    .done()
+  const ctx = contextOver(structuralDocSchema, store)
+  const doc = refOver(structuralDocSchema, ctx)
   return { store, ctx, doc }
 }
 
@@ -102,11 +75,8 @@ describe("writable: product lazy getters", () => {
       settings: { darkMode: true, fontSize: 16 },
       metadata: { version: 1 },
     }
-    const ctx = plainContext(structuralDocSchema, store)
-    const doc = interpret(structuralDocSchema, ctx)
-      .with(readable)
-      .with(writable)
-      .done()
+    const ctx = contextOver(structuralDocSchema, store)
+    const doc = refOver(structuralDocSchema, ctx)
 
     // Access settings — metadata should not be forced
     const settings = doc.settings
@@ -190,11 +160,8 @@ describe("writable: product .set()", () => {
       settings: { darkMode: false, fontSize: 14 },
       metadata: { version: 1 },
     }
-    const ctx = plainContext(structuralDocSchema, store)
-    const doc = interpret(structuralDocSchema, ctx)
-      .with(readable)
-      .with(writable)
-      .done()
+    const ctx = contextOver(structuralDocSchema, store)
+    const doc = refOver(structuralDocSchema, ctx)
 
     const flushed = batch(doc, d => {
       d.settings.set({ darkMode: true, fontSize: 20 })
@@ -305,8 +272,8 @@ describe("writable: batch() blocks", () => {
       x: Schema.number(),
       y: Schema.number(),
     })
-    const ctx = plainContext(schema, store)
-    const doc = interpret(schema, ctx).with(readable).with(writable).done()
+    const ctx = contextOver(schema, store)
+    const doc = refOver(schema, ctx)
 
     const flushed = batch(doc, d => {
       d.x.set(10)
@@ -321,8 +288,8 @@ describe("writable: batch() blocks", () => {
   it("dispatch applies immediately outside any batch() block (auto-commit)", () => {
     const store = { x: 0 }
     const schema = Schema.struct({ x: Schema.number() })
-    const ctx = plainContext(schema, store)
-    const doc = interpret(schema, ctx).with(readable).with(writable).done()
+    const ctx = contextOver(schema, store)
+    const doc = refOver(schema, ctx)
 
     doc.x.set(42)
     expect(store.x).toBe(42)
@@ -343,8 +310,8 @@ describe("writable: discriminated sum", () => {
 
   it("dispatches to the correct variant based on store discriminant", () => {
     const store = { item: { type: "image", url: "pic.png" } }
-    const ctx = plainContext(schema, store)
-    const doc = interpret(schema, ctx).with(readable).with(writable).done()
+    const ctx = contextOver(schema, store)
+    const doc = refOver(schema, ctx)
 
     // Should produce the "image" variant ref with a .url field
     expect((doc as any).item.url()).toBe("pic.png")
@@ -352,8 +319,8 @@ describe("writable: discriminated sum", () => {
 
   it("falls back to first variant when discriminant is missing", () => {
     const store = { item: {} }
-    const ctx = plainContext(schema, store)
-    const doc = interpret(schema, ctx).with(readable).with(writable).done()
+    const ctx = contextOver(schema, store)
+    const doc = refOver(schema, ctx)
 
     // First variant is "text" which has a .body field
     expect(typeof (doc as any).item.body).toBe("function")
@@ -361,16 +328,16 @@ describe("writable: discriminated sum", () => {
 
   it("falls back to first variant when store value is not an object", () => {
     const store = { item: 42 }
-    const ctx = plainContext(schema, store)
-    const doc = interpret(schema, ctx).with(readable).with(writable).done()
+    const ctx = contextOver(schema, store)
+    const doc = refOver(schema, ctx)
 
     expect(typeof (doc as any).item.body).toBe("function")
   })
 
   it(".set() switches variant and re-dispatches cached field", () => {
     const store = { item: { type: "text", body: "hello" } }
-    const ctx = plainContext(schema, store)
-    const doc = interpret(schema, ctx).with(readable).with(writable).done()
+    const ctx = contextOver(schema, store)
+    const doc = refOver(schema, ctx)
 
     expect((doc as any).item.type).toBe("text")
     expect((doc as any).item.body()).toBe("hello")
@@ -393,8 +360,8 @@ describe("writable: nullable (positional sum)", () => {
 
   it("null store value dispatches to the null variant", () => {
     const store = { bio: null }
-    const ctx = plainContext(schema, store)
-    const doc = interpret(schema, ctx).with(readable).with(writable).done()
+    const ctx = contextOver(schema, store)
+    const doc = refOver(schema, ctx)
 
     // The null variant is a scalar ref whose () returns null
     expect(doc.bio()).toBe(null)
@@ -402,16 +369,16 @@ describe("writable: nullable (positional sum)", () => {
 
   it("non-null store value dispatches to the inner variant", () => {
     const store = { bio: "Hello world" }
-    const ctx = plainContext(schema, store)
-    const doc = interpret(schema, ctx).with(readable).with(writable).done()
+    const ctx = contextOver(schema, store)
+    const doc = refOver(schema, ctx)
 
     expect(doc.bio()).toBe("Hello world")
   })
 
   it("mutation on the inner ref works", () => {
     const store = { bio: "old" }
-    const ctx = plainContext(schema, store)
-    const doc = interpret(schema, ctx).with(readable).with(writable).done()
+    const ctx = contextOver(schema, store)
+    const doc = refOver(schema, ctx)
 
     ;(doc.bio as any).set("new")
     expect(store.bio).toBe("new")
@@ -451,11 +418,8 @@ function createAnnotatedDoc(storeOverrides: Record<string, unknown> = {}) {
     metadata: { version: 1 },
     ...storeOverrides,
   }
-  const ctx = plainContext(annotatedDocSchema, store)
-  const doc = interpret(annotatedDocSchema, ctx)
-    .with(readable)
-    .with(writable)
-    .done()
+  const ctx = contextOver(annotatedDocSchema, store)
+  const doc = refOver(annotatedDocSchema, ctx)
   return { store, ctx, doc }
 }
 
@@ -616,8 +580,8 @@ describe("writable: invalidate-before-dispatch", () => {
 
   function createCachedListDoc(items: Array<{ name: string }>) {
     const store = { items }
-    const ctx = plainContext(listSchema, store)
-    const doc = interpret(listSchema, ctx).with(readable).with(writable).done()
+    const ctx = contextOver(listSchema, store)
+    const doc = refOver(listSchema, ctx)
     return { doc, store, ctx }
   }
 
@@ -677,93 +641,6 @@ describe("writable: invalidate-before-dispatch", () => {
     // Store is correctly updated
     expect(doc.items.length).toBe(2)
     expect(doc.items()).toEqual([{ name: "b" }, { name: "c" }])
-  })
-})
-
-// ===========================================================================
-// Cacheless stack (no caching, no crash)
-// ===========================================================================
-
-describe("writable: cacheless stack", () => {
-  it("push() works without caching, store updated, no crash", () => {
-    const schema = Schema.struct({
-      items: Schema.list(Schema.struct({ name: Schema.string() })),
-    })
-    const store = { items: [{ name: "a" }] }
-    const ctx = plainContext(schema, store)
-    const doc = interpret(schema, cachelessInterpreter, ctx) as unknown as Ref<
-      typeof schema
-    >
-
-    doc.items.push({ name: "b" })
-    expect((store.items as any[]).length).toBe(2)
-    expect((store.items as any[])[1]).toEqual({ name: "b" })
-  })
-
-  it("map .set() works without caching", () => {
-    const schema = Schema.struct({ meta: Schema.record(Schema.number()) })
-    const store = { meta: { a: 1 } }
-    const ctx = plainContext(schema, store)
-    const doc = interpret(schema, cachelessInterpreter, ctx) as unknown as Ref<
-      typeof schema
-    >
-
-    doc.meta.set("b", 2)
-    expect((store.meta as any).b).toBe(2)
-  })
-
-  it("scalar .set() works without caching", () => {
-    const schema = Schema.struct({ n: Schema.number() })
-    const store = { n: 0 }
-    const ctx = plainContext(schema, store)
-    const doc = interpret(schema, cachelessInterpreter, ctx) as unknown as Ref<
-      typeof schema
-    >
-
-    doc.n.set(42)
-    expect(store.n).toBe(42)
-  })
-})
-
-// ===========================================================================
-// Write-only stack (ref() throws, mutation works)
-// ===========================================================================
-
-describe("writable: write-only stack", () => {
-  it(".set() dispatches changes", () => {
-    // Write-only uses bottomInterpreter which ignores product fields,
-    // so we test with a bare scalar schema (not wrapped in doc).
-    const schema = Schema.number()
-    const store = {} as any
-    const dispatched: Array<{ path: any; change: any }> = []
-    const ctx: WritableContext = {
-      reader: store,
-      schema,
-      prepare: (path, change) => dispatched.push({ path, change }),
-      addPrepareStage: () => {},
-      deliver: () => {},
-      runBatch: work => {
-        work()
-        return []
-      },
-      announce: () => {},
-      dispatch: (path, change) => dispatched.push({ path, change }),
-    }
-    const ref = interpret(schema, writeOnlyInterpreter, ctx) as any
-
-    ref.set(42)
-    expect(dispatched.length).toBe(1)
-    expect(dispatched[0].change.type).toBe("replace")
-    expect(dispatched[0].change.value).toBe(42)
-  })
-
-  it("ref() throws (no call behavior configured)", () => {
-    const schema = Schema.number()
-    const store = {} as any
-    const ctx = plainContext(schema, store)
-    const ref = interpret(schema, writeOnlyInterpreter, ctx) as any
-
-    expect(() => ref()).toThrow("No call behavior configured")
   })
 })
 
@@ -837,7 +714,7 @@ describe("writable: mutation + read integration", () => {
 })
 
 // ===========================================================================
-// TRANSACT attachment — withWritable attaches [TRANSACT] to all refs
+// TRANSACT attachment — every ref carries [TRANSACT]
 // ===========================================================================
 
 describe("writable: TRANSACT attachment", () => {
@@ -900,7 +777,7 @@ describe("writable: compensation loop", () => {
       afterBatch: () => {},
     }
     const ctx = buildWritableContext(substrate, schema)
-    const doc = interpret(schema, fullInterpreter, ctx) as any
+    const doc = refOver(schema, ctx) as any
     return { doc, prepared }
   }
 
@@ -953,7 +830,7 @@ describe("writable: compensation loop", () => {
       afterBatch: () => {},
     }
     const ctx = buildWritableContext(substrate, schema)
-    const doc = interpret(schema, fullInterpreter, ctx) as any
+    const doc = refOver(schema, ctx) as any
     expect(() => doc.count.increment(1)).toThrow("exactly one inverse")
   })
 })
@@ -973,11 +850,7 @@ describe("writable: announcements never reach the substrate", () => {
       },
     }
     const ctx = buildWritableContext(stub, schema)
-    const doc = interpret(schema, ctx)
-      .with(readable)
-      .with(writable)
-      .with(observation)
-      .done() as any
+    const doc = refOver(schema, ctx) as any
     const replays: unknown[] = []
     subscribe(doc, cs => replays.push({ replay: cs.replay, origin: cs.origin }))
 
@@ -1031,11 +904,7 @@ function buildLifecycleDoc(options?: {
     },
   }
   ctx = buildWritableContext(stub, schema)
-  const doc = interpret(schema, ctx)
-    .with(readable)
-    .with(writable)
-    .with(observation)
-    .done() as any
+  const doc = refOver(schema, ctx) as any
   const seen: {
     replay: boolean | undefined
     aborted?: boolean
@@ -1191,107 +1060,6 @@ it("[TRANSACT] works on Proxy-backed map refs", () => {
   expect(doc.metadata.at("newKey")?.()).toBe("newValue")
 })
 
-it("[TRANSACT] is present on cacheless stack refs", () => {
-  const schema = Schema.struct({
-    n: Schema.number(),
-  })
-  const store = { n: 0 }
-  const ctx = plainContext(schema, store)
-  const doc = interpret(schema, cachelessInterpreter, ctx) as unknown as Ref<
-    typeof schema
-  >
-  expect(doc.n[TRANSACT]).toBe(ctx)
-  expect(doc[TRANSACT]).toBe(ctx)
-})
-
-it("[TRANSACT] is present on write-only stack refs", () => {
-  const schema = Schema.struct({ n: Schema.number() })
-  const store = { n: 0 }
-  const dispatched: unknown[] = []
-  const ctx: WritableContext = {
-    reader: plainReader({ current: store }),
-    schema,
-    prepare: (path, change) => dispatched.push({ path, change }),
-    addPrepareStage: () => {},
-    deliver: () => {},
-    runBatch: work => {
-      work()
-      return []
-    },
-    announce: () => {},
-    dispatch: (path, change) => dispatched.push({ path, change }),
-  }
-  const ref = interpret(schema, writeOnlyInterpreter, ctx) as any
-  // Write-only product ref has [TRANSACT] (child .n is not navigable
-  // without withReadable, so we test the product itself)
-  expect(ref[TRANSACT]).toBe(ctx)
-})
-
-// ===========================================================================
-// The prepare pipeline
-// ===========================================================================
-
-describe("writable: the prepare pipeline", () => {
-  const schema = Schema.struct({ n: Schema.number() })
-  const interp = withWritable(
-    withCaching(
-      withAddressing(withReadable(withNavigation(bottomInterpreter))),
-    ),
-  )
-
-  function setup() {
-    const store = { n: 1 }
-    const ctx = plainContext(schema, store)
-    interpret(schema, interp, ctx)
-    return ctx
-  }
-
-  it("runs `before` on the state before the change and `after` on the state after it, with an addressed path, whatever the registration order", () => {
-    const ctx = setup()
-    const seen: string[] = []
-    const record = (label: string) => (path: Path) => {
-      seen.push(`${label} ${path.isAddressed} ${ctx.reader.read(path)}`)
-    }
-    // Registered after-first and before-first, so order of registration and
-    // order of phase disagree.
-    ctx.addPrepareStage(Symbol("one"), {
-      after: record("after"),
-      before: record("before"),
-    })
-    ctx.addPrepareStage(Symbol("two"), { before: record("before") })
-    ctx.addPrepareStage(Symbol("three"), { after: record("after") })
-
-    ctx.runBatch(() => {
-      ctx.prepare(RawPath.empty.field("n"), replaceChange(2), {
-        ingress: "author",
-      })
-    }, {})
-
-    expect(seen).toEqual([
-      "before true 1",
-      "before true 1",
-      "after true 2",
-      "after true 2",
-    ])
-  })
-
-  it("ignores a second registration under the same layer", () => {
-    const ctx = setup()
-    const layer = Symbol("layer")
-    const calls: string[] = []
-    ctx.addPrepareStage(layer, { after: () => calls.push("first") })
-    ctx.addPrepareStage(layer, { after: () => calls.push("second") })
-
-    ctx.runBatch(() => {
-      ctx.prepare(RawPath.empty.field("n"), replaceChange(2), {
-        ingress: "author",
-      })
-    }, {})
-
-    expect(calls).toEqual(["first"])
-  })
-})
-
 // ===========================================================================
 // Completion: an authored change is completed before anything sees it
 // ===========================================================================
@@ -1302,20 +1070,14 @@ describe("writable: an authored change is completed first", () => {
 
   function setup() {
     const store: Record<string, unknown> = { rows: {} }
-    const ctx = plainContext(schema, store)
-    const doc = interpret(schema, ctx)
-      .with(readable)
-      .with(writable)
-      .with(observation)
-      .done() as any
+    const ctx = contextOver(schema, store)
+    const doc = refOver(schema, ctx) as any
     const before: ChangeBase[] = []
-    ctx.addPrepareStage(Symbol("observer"), {
-      before: (_path, change) => before.push(change),
-    })
+    subscribe(doc, cs => before.push(...cs.changes.map(op => op.change)))
     return { store, doc, before }
   }
 
-  it("a before stage sees an authored partial value completed", () => {
+  it("a subscriber hears an authored partial value completed", () => {
     const { store, doc, before } = setup()
     doc.rows.set("a", { x: 1, extra: true })
     expect(before).toEqual([

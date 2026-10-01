@@ -12,29 +12,17 @@ import type { Changeset } from "@kyneta/changefeed"
 import { CHANGEFEED } from "@kyneta/changefeed"
 import { describe, expect, it } from "vitest"
 import type { Op } from "../index.js"
-import {
-  applyChanges,
-  batch,
-  interpret,
-  observation,
-  plainContext,
-  readable,
-  Schema,
-  writable,
-} from "../index.js"
+import { applyChanges, batch, Schema } from "../index.js"
 import { RawPath } from "../path.js"
+import { contextOver, refOver } from "./stack.js"
 
 function buildDoc<S extends ReturnType<typeof Schema.struct>>(
   schema: S,
   seed: Record<string, unknown>,
 ) {
   const store = { ...seed }
-  const ctx = plainContext(schema, store)
-  const doc = interpret(schema, ctx)
-    .with(readable)
-    .with(writable)
-    .with(observation)
-    .done() as any
+  const ctx = contextOver(schema, store)
+  const doc = refOver(schema, ctx) as any
   return { store, ctx, doc }
 }
 

@@ -1,16 +1,10 @@
-// SchemaRef<S, M, N> — parameterized recursive type for composed interpreter refs.
+// SchemaRef<S, N> — the recursive type of a document's refs.
 //
-// SchemaRef<S, M, N> combines navigation, reading, writing, mode-dependent
-// cross-cutting concerns, and typed native container access into a single
-// recursive conditional type. It replaces the unsound `Readable<S> & Writable<S>`
-// intersection by giving each schema node a precise type where `.at()` returns
-// `SchemaRef<Child, M, N>` (not separate `Readable<Child>` / `Writable<Child>`
+// SchemaRef<S, N> combines navigation, reading, writing, observation and
+// typed native container access into a single recursive conditional type. It
+// gives each schema node a precise type where `.at()` returns
+// `SchemaRef<Child, N>` (not separate `Readable<Child>` / `Writable<Child>`
 // with conflicting `.at()` types).
-//
-// The mode parameter `M extends RefMode` controls which cross-cutting concerns
-// are intersected at every node:
-//   - `"rw"`  → `HasTransact` only (read-write without changefeed)
-//   - `"rwc"` → `HasTransact` + `HasChangefeed` (full stack)
 //
 // The native map parameter `N extends NativeMap` is the type-level functor
 // that maps schema kinds to substrate-native container types. Each branch
@@ -23,21 +17,21 @@
 // N is NOT recursive — it threads through unchanged at every level. Adding N
 // increases type width (one more parameter) but NOT recursive depth.
 //
-// Three named aliases provide the user-facing API:
-//   - `RRef<S>`       = `Readable<S>` — read-only tier (alias only, no new recursion)
-//   - `RWRef<S, N>`   = `SchemaRef<S, "rw", N>` — read-write tier
-//   - `Ref<S, N>`     = `SchemaRef<S, "rwc", N>` — full-stack tier (the common case)
+// Named aliases provide the user-facing API:
+//   - `Ref<S, N>`     = `SchemaRef<S, N>` — a document's ref (the common case)
+//   - `RRef<S>`       = `Readable<S>` — the read surface alone, for code that
+//     only reads (alias only, no new recursion)
 //   - `DocRef<S, N>`  = root ref with N["root"] override (e.g. LoroDoc, not LoroMap)
 //
 // Key design points:
-//   - Children are `SchemaRef<Child, M, N>`, preserving mode and native map recursively
-//   - Sequences use `ReadableSequenceRef<SchemaRef<I, M, N>, Plain<I>> & SequenceRef`
+//   - Children are `SchemaRef<Child, N>`, preserving the native map recursively
+//   - Sequences use `ReadableSequenceRef<SchemaRef<I, N>, Plain<I>> & SequenceRef`
 //     — navigation + reading from ReadableSequenceRef, mutation from
 //     SequenceRef (which has no `.at()`, so no overload conflict)
-//   - Maps use `ReadableMapRef<SchemaRef<I, M, N>, Plain<I>> & WritableMapRef<Plain<I>>`
+//   - Maps use `ReadableMapRef<SchemaRef<I, N>, Plain<I>> & WritableMapRef<Plain<I>>`
 //   - Sets use `ReadableSetRef<Plain<I>> & WritableSetRef<Plain<I>>` — leaf-shaped
 //     (no per-member child refs, no `.at(value)`)
-//   - `Wrap<T, M, Native>` intersects cross-cutting concerns per mode + HasNative<Native>
+//   - `Wrap<T, Native>` intersects the cross-cutting concerns + HasNative<Native>
 
 import type { HasChangefeed } from "@kyneta/changefeed"
 import type { RichTextDelta } from "./change.js"
@@ -80,19 +74,6 @@ import type {
 } from "./schema.js"
 
 // ---------------------------------------------------------------------------
-// RefMode — the mode parameter for SchemaRef
-// ---------------------------------------------------------------------------
-
-/**
- * The mode parameter that controls which cross-cutting concerns are
- * intersected at every node of a `SchemaRef<S, M, N>`.
- *
- * - `"rw"`  — read-write: `HasTransact` only
- * - `"rwc"` — read-write-changefeed: `HasTransact` + `HasChangefeed`
- */
-export type RefMode = "rw" | "rwc"
-
-// ---------------------------------------------------------------------------
 // Removable<T> — container-child ref wrapper
 // ---------------------------------------------------------------------------
 
@@ -102,29 +83,28 @@ export type RefMode = "rw" | "rwc"
  * Produced by `.at()` on sequence, map, and set refs. Product field refs
  * and top-level document refs are NOT `Removable`.
  *
- * At runtime, `withAddressing` attaches `[REMOVE]` on container-child refs
- * via the `onRefCreated` hook (writable stacks only).
+ * At runtime, `[REMOVE]` is on the prototype of every list item's and record
+ * entry's ref (`ref/address.ts`).
  */
 export type Removable<T> = T & HasRemove
 
 // ---------------------------------------------------------------------------
-// Wrap<T, M, Native> — mode-dispatched cross-cutting concern wrapper
+// Wrap<T, Native> — the cross-cutting concerns of every ref
 // ---------------------------------------------------------------------------
 
 /**
- * Intersects `T` with the cross-cutting concerns appropriate for mode `M`,
- * plus the typed `[NATIVE]` property via `HasNative<Native>`.
- *
- * - `"rw"`  → `T & HasTransact & HasNative<Native>`
- * - `"rwc"` → `T & HasTransact & HasChangefeed & HasNative<Native>`
+ * Intersects `T` with the cross-cutting concerns every ref has —
+ * `HasTransact` and `HasChangefeed` — and the typed `[NATIVE]` property via
+ * `HasNative<Native>`.
  *
  * This is the single edit point for cross-cutting concerns. Every node in
- * `SchemaRef` is wrapped through `Wrap<T, M, Native>`, so adding a new
- * concern here propagates recursively to all nodes.
+ * `SchemaRef` is wrapped through `Wrap<T, Native>`, so adding a new concern
+ * here propagates recursively to all nodes.
  */
-export type Wrap<T, M extends RefMode, Native = unknown> = M extends "rwc"
-  ? T & HasTransact & HasChangefeed & HasNative<Native>
-  : T & HasTransact & HasNative<Native>
+export type Wrap<T, Native = unknown> = T &
+  HasTransact &
+  HasChangefeed &
+  HasNative<Native>
 
 // ---------------------------------------------------------------------------
 // DiscriminantProductRef — hybrid product ref for discriminated union variants
@@ -148,40 +128,35 @@ export type Wrap<T, M extends RefMode, Native = unknown> = M extends "rwc"
  * ```
  *
  * TS homomorphic mapped types distribute over union type arguments, so
- * `DiscriminantProductRef<V[number]["fields"], D, M, N>` correctly produces
+ * `DiscriminantProductRef<V[number]["fields"], D, N>` correctly produces
  * a union of per-variant product refs — a proper TS discriminated union.
  */
 export type DiscriminantProductRef<
   F extends Record<string, Schema>,
   D extends string,
-  M extends RefMode,
   N extends NativeMap = UnknownNativeMap,
 > = Wrap<
   (() => { readonly [K in keyof F]: Plain<F[K]> }) & {
     readonly [K in keyof F]: K extends D ? Plain<F[K]> : Readable<F[K]>
   } & ProductRef<{ readonly [K in keyof F]: Plain<F[K]> }>,
-  M,
   N["sum"]
 >
 
 // ---------------------------------------------------------------------------
-// SchemaRef<S, M, N> — the parameterized recursive core
+// SchemaRef<S, N> — the recursive core
 // ---------------------------------------------------------------------------
 
 /**
- * Computes the composed ref type for a given schema type, mode, and native map.
- *
- * This is the core recursive conditional type. User-facing aliases:
- * - `Ref<S, N>`   = `SchemaRef<S, "rwc", N>` — full stack (common case)
- * - `RWRef<S, N>` = `SchemaRef<S, "rw", N>` — read-write without changefeed
+ * Computes the ref type for a given schema type and native map. `Ref<S, N>`
+ * is the user-facing alias.
  *
  * Every node is:
  *   - Callable (reading: `ref()` → `Plain<S>`)
- *   - Navigable (`.at()` returns `SchemaRef<Child, M, N>` for collections)
+ *   - Navigable (`.at()` returns `SchemaRef<Child, N>` for collections)
  *   - Writable (`.set()`, `.push()`, `.insert()`, `.delete()`, etc.)
  *   - Transactable (`ref[TRANSACT]` → `WritableContext`)
  *   - Native-accessible (`ref[NATIVE]` → substrate-native container)
- *   - Observable (if M = "rwc": `ref[CHANGEFEED]` → `Changefeed`)
+ *   - Observable (`ref[CHANGEFEED]` → `Changefeed`)
  *
  * The `N` parameter threads through unchanged — each branch indexes `N`
  * to pick the right native type (`N["text"]`, `N["list"]`, etc.).
@@ -189,7 +164,6 @@ export type DiscriminantProductRef<
  */
 export type SchemaRef<
   S extends Schema,
-  M extends RefMode,
   N extends NativeMap = UnknownNativeMap,
 > =
   // --- Text ---
@@ -198,7 +172,6 @@ export type SchemaRef<
         (() => string) & {
           [Symbol.toPrimitive](hint: string): string
         } & TextRef,
-        M,
         N["text"]
       >
     : // --- RichText ---
@@ -207,7 +180,6 @@ export type SchemaRef<
           (() => RichTextDelta) & {
             [Symbol.toPrimitive](hint: string): string
           } & RichTextRef,
-          M,
           N["richtext"]
         >
       : // --- Counter ---
@@ -216,29 +188,23 @@ export type SchemaRef<
             (() => number) & {
               [Symbol.toPrimitive](hint: string): number | string
             } & CounterRef,
-            M,
             N["counter"]
           >
         : // --- Set (leaf-shaped: value-addressed, no per-member child refs) ---
           S extends SetSchema<infer I>
-          ? Wrap<
-              ReadableSetRef<Plain<I>> & WritableSetRef<Plain<I>>,
-              M,
-              N["set"]
-            >
+          ? Wrap<ReadableSetRef<Plain<I>> & WritableSetRef<Plain<I>>, N["set"]>
           : // --- Tree (flat-forest with recursive read surface) ---
             S extends TreeSchema<infer Inner>
             ? Wrap<
-                ReadableTreeRef<Inner> & WritableTreeRef<Plain<Inner>>,
-                M,
+                ReadableTreeRef<Inner, SchemaRef<Inner, N>> &
+                  WritableTreeRef<Plain<Inner>>,
                 N["tree"]
               >
             : // --- MovableSequence ---
               S extends MovableSequenceSchema<infer I>
               ? Wrap<
-                  ReadableSequenceRef<Removable<SchemaRef<I, M, N>>, Plain<I>> &
+                  ReadableSequenceRef<Removable<SchemaRef<I, N>>, Plain<I>> &
                     SequenceRef,
-                  M,
                   N["movableList"]
                 >
               : // --- Scalar ---
@@ -247,38 +213,31 @@ export type SchemaRef<
                     (() => V) & {
                       [Symbol.toPrimitive](hint: string): V | string
                     } & ScalarRef<V>,
-                    M,
                     N["scalar"]
                   >
                 : // --- Product ---
                   S extends ProductSchema<infer F>
                   ? Wrap<
                       (() => { readonly [K in keyof F]: Plain<F[K]> }) & {
-                        readonly [K in keyof F]: SchemaRef<F[K], M, N>
+                        readonly [K in keyof F]: SchemaRef<F[K], N>
                       } & ProductRef<{ readonly [K in keyof F]: Plain<F[K]> }>,
-                      M,
                       N["struct"]
                     >
                   : // --- Sequence ---
                     S extends SequenceSchema<infer I>
                     ? Wrap<
                         ReadableSequenceRef<
-                          Removable<SchemaRef<I, M, N>>,
+                          Removable<SchemaRef<I, N>>,
                           Plain<I>
                         > &
                           SequenceRef,
-                        M,
                         N["list"]
                       >
                     : // --- Map ---
                       S extends MapSchema<infer I>
                       ? Wrap<
-                          ReadableMapRef<
-                            Removable<SchemaRef<I, M, N>>,
-                            Plain<I>
-                          > &
+                          ReadableMapRef<Removable<SchemaRef<I, N>>, Plain<I>> &
                             WritableMapRef<Plain<I>>,
-                          M,
                           N["map"]
                         >
                       : // --- Sum ---
@@ -294,13 +253,12 @@ export type SchemaRef<
                                   hint: string,
                                 ): Plain<Inner> | null | string
                               } & ScalarRef<Plain<Inner> | null>,
-                              M,
                               N["sum"]
                             >
                           : // General positional sum: distribute over variant union
-                            SchemaRef<V[number], M, N>
+                            SchemaRef<V[number], N>
                         : S extends DiscriminatedSumSchema<infer D, infer V>
-                          ? DiscriminantProductRef<V[number]["fields"], D, M, N>
+                          ? DiscriminantProductRef<V[number]["fields"], D, N>
                           : unknown
 
 // ---------------------------------------------------------------------------
@@ -320,7 +278,7 @@ export type SchemaRef<
  * documented in jj:tvpmzxvx), this re-expresses the product branch of
  * `SchemaRef` directly with `N["root"]` as the wrapped native. Cost is one
  * product-body instantiation — the same as a plain `Ref<Product, N>`.
- * Children remain `SchemaRef<F[K], "rwc", N>`, so nested structs naturally
+ * Children remain `SchemaRef<F[K], N>`, so nested structs naturally
  * resolve to `N["struct"]`.
  *
  * Non-product roots (rare) fall through to a plain `SchemaRef`.
@@ -339,45 +297,31 @@ export type DocRef<S extends Schema, N extends NativeMap = UnknownNativeMap> =
   S extends ProductSchema<infer F>
     ? Wrap<
         (() => { readonly [K in keyof F]: Plain<F[K]> }) & {
-          readonly [K in keyof F]: SchemaRef<F[K], "rwc", N>
+          readonly [K in keyof F]: SchemaRef<F[K], N>
         } & ProductRef<{ readonly [K in keyof F]: Plain<F[K]> }>,
-        "rwc",
         N["root"]
       >
-    : SchemaRef<S, "rwc", N>
+    : SchemaRef<S, N>
 
 // ---------------------------------------------------------------------------
 // Tier aliases — the user-facing ref types
 // ---------------------------------------------------------------------------
 
 /**
- * Read-only ref type. Alias for `Readable<S>`.
- *
- * Produced by `interpret(schema, ctx).with(readable).done()`.
- * Callable + navigable, no mutation methods, no `[TRANSACT]`, no `[CHANGEFEED]`.
+ * The read surface of a ref alone: `Readable<S>`. For code that only reads,
+ * such as a component taking a ref it never writes through. Callable and
+ * navigable; every `Ref<S>` is one.
  *
  * `Readable<S>` is a separate recursive type (not a `SchemaRef` mode) because
  * its structure is fundamentally different — no mutation interfaces are
- * intersected, and children are `Readable<Child>` (not `SchemaRef<Child, M, N>`).
+ * intersected, and children are `Readable<Child>` (not `SchemaRef<Child, N>`).
  */
 export type RRef<S extends Schema> = Readable<S>
 
 /**
- * Read-write ref type without changefeed observation.
- *
- * Produced by `interpret(schema, ctx).with(readable).with(writable).done()`.
- * Callable + navigable + writable + `HasTransact`, but no `[CHANGEFEED]`.
- */
-export type RWRef<
-  S extends Schema,
-  N extends NativeMap = UnknownNativeMap,
-> = SchemaRef<S, "rw", N>
-
-/**
- * Full-stack ref type: read + write + transact + changefeed. The common case.
- *
- * Produced by `interpret(schema, ctx).with(readable).with(writable).with(observation).done()`.
- * Every node is callable, navigable, writable, transactable, and observable.
+ * A document's ref: read + write + transact + changefeed. What `createDoc`
+ * and `exchange.get` return, at every node: callable, navigable, writable,
+ * transactable, and observable.
  *
  * ```ts
  * const s = Schema.struct({
@@ -403,4 +347,4 @@ export type RWRef<
 export type Ref<
   S extends Schema,
   N extends NativeMap = UnknownNativeMap,
-> = SchemaRef<S, "rwc", N>
+> = SchemaRef<S, N>

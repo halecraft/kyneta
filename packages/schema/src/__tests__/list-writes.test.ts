@@ -1,12 +1,9 @@
+// list-writes — the cursor-positioning primitive, and the writes a list
+// and a movable list share.
 import { describe, expect, it } from "vitest"
-import {
-  interpret,
-  plainContext,
-  readable,
-  Schema,
-  writable,
-} from "../index.js"
-import { at } from "../interpreters/sequence-helpers.js"
+import { Schema } from "../index.js"
+import { at } from "../ref/write.js"
+import { contextOver, untypedRefOver } from "./stack.js"
 
 // ===========================================================================
 // at() — the cursor-positioning primitive
@@ -34,8 +31,8 @@ describe("at: cursor-positioning primitive", () => {
 // ===========================================================================
 // Movable ↔ Sequence parity
 //
-// Movable delegates to the same installListWriteOps helper as sequence.
-// This test ensures the contract holds through the full interpreter stack.
+// A movable list and a sequence share their write members (`listMembers`,
+// `ref/write.ts`); this holds the two to one behaviour.
 // ===========================================================================
 
 describe("movable list has the same write surface as sequence", () => {
@@ -49,13 +46,8 @@ describe("movable list has the same write surface as sequence", () => {
 
   function createDoc(schema: any) {
     const store = { items: [{ name: "a" }] }
-    const ctx = plainContext(schema, store)
-    // Cast avoids TS2589 — the fluent builder produces deeply recursive
-    // types when S is widened to `any`. Same pattern as createRef().
-    const doc = (interpret as any)(schema, ctx)
-      .with(readable)
-      .with(writable)
-      .done()
+    const ctx = contextOver(schema, store)
+    const doc = untypedRefOver(schema, ctx)
     return { store, doc }
   }
 
@@ -95,12 +87,8 @@ describe("set kind has a value-addressed write surface", () => {
 
   function createSetDoc(initial: string[]) {
     const store = { tags: initial }
-    const ctx = plainContext(setSchema, store)
-    // Cast avoids TS2589 — same pattern as above and createRef().
-    const doc = (interpret as any)(setSchema, ctx)
-      .with(readable)
-      .with(writable)
-      .done()
+    const ctx = contextOver(setSchema, store)
+    const doc = untypedRefOver(setSchema, ctx)
     return { store, doc }
   }
 

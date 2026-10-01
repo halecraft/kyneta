@@ -23,9 +23,10 @@ import {
   subscribe,
   subscribeNode,
 } from "../basic/index.js"
-import { __getListenerCountAtPath } from "../interpreters/with-changefeed.js"
+import type { WritableContext } from "../interpreters/writable.js"
 import { TRANSACT } from "../interpreters/writable.js"
 import { RawPath } from "../path.js"
+import { __getListenerCountAtPath } from "../ref/observe.js"
 
 const Doc = Schema.struct({
   top: Schema.number(),
@@ -41,8 +42,8 @@ const topPath = RawPath.empty.field("top")
 const treePath = RawPath.empty.field("tree")
 const nodePath = (id: string) => treePath.node(id)
 
-/** The context the changefeed layer wired itself onto. */
-const contextOf = (doc: unknown) => (doc as any)[TRANSACT] as object
+/** The document's writable context, which holds its subscriber trie. */
+const contextOf = (doc: unknown) => (doc as any)[TRANSACT] as WritableContext
 
 // ===========================================================================
 // Registration follows subscriptions

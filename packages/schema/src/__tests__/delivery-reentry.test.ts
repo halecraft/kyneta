@@ -1,4 +1,4 @@
-// with-changefeed-reentry — same-doc and cross-doc re-entry semantics
+// delivery-reentry — same-doc and cross-doc re-entry semantics
 // post-1.6.0. Pre-1.6.0 the per-context `isFlushing` guard threw
 // "Mutation during notification delivery is not supported." This suite
 // verifies the new drain-to-quiescence semantics:
@@ -12,36 +12,24 @@
 import { BudgetExhaustedError, createLease } from "@kyneta/machine"
 import { describe, expect, it } from "vitest"
 import { subscribe } from "../facade/observe.js"
-import {
-  batch,
-  createRef,
-  interpret,
-  observation,
-  plainContext,
-  readable,
-  Schema,
-  writable,
-} from "../index.js"
+import { batch, createRef, Schema } from "../index.js"
 import {
   ALWAYS_AUTHOR,
   createPlainClock,
   createPlainSubstrate,
   EMPTY_HISTORY,
 } from "../substrates/plain.js"
+import { contextOver, refOver } from "./stack.js"
 
 function buildPlainDoc<S extends ReturnType<typeof Schema.struct>>(
   schema: S,
   initial: Record<string, unknown>,
 ) {
-  const ctx = plainContext(schema, { ...initial })
-  return interpret(schema, ctx)
-    .with(readable)
-    .with(writable)
-    .with(observation)
-    .done() as any
+  const ctx = contextOver(schema, { ...initial })
+  return refOver(schema, ctx) as any
 }
 
-describe("with-changefeed: same-doc re-entry", () => {
+describe("delivery: same-doc re-entry", () => {
   it("subscribe callback that calls batch(doc) does not throw; mutation lands", () => {
     const schema = Schema.struct({
       x: Schema.number(),
@@ -165,7 +153,7 @@ describe("with-changefeed: same-doc re-entry", () => {
   })
 })
 
-describe("with-changefeed: cross-doc cascade with shared lease", () => {
+describe("delivery: cross-doc cascade with shared lease", () => {
   it("A→B→A→B... bounded by shared lease budget", () => {
     const sharedLease = createLease({ budget: 8 })
 
@@ -260,7 +248,7 @@ describe("with-changefeed: cross-doc cascade with shared lease", () => {
   })
 })
 
-describe("with-changefeed: a queued changeset's paths", () => {
+describe("delivery: a queued changeset's paths", () => {
   it("say where its ops wrote, though a later batch moved the item before delivery", () => {
     const schema = Schema.struct({
       flag: Schema.number(),

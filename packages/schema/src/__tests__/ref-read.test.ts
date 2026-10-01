@@ -1,18 +1,9 @@
 import { describe, expect, it } from "vitest"
-import {
-  dispatchSum,
-  interpret,
-  KIND,
-  plainInterpreter,
-  plainReader,
-  Schema,
-} from "../index.js"
-import type { Interpreter } from "../interpret.js"
-import type { RefContext } from "../interpreter-types.js"
-import type { HasCall, HasNavigation, HasRead } from "../interpreters/bottom.js"
-import { bottomInterpreter, CALL } from "../interpreters/bottom.js"
-import { withNavigation } from "../interpreters/with-navigation.js"
-import { withReadable } from "../interpreters/with-readable.js"
+import { dispatchSum, KIND, Schema } from "../index.js"
+import { TRANSACT } from "../interpreters/writable.js"
+import { CALL } from "../ref/read.js"
+import type { Schema as SchemaNode } from "../schema.js"
+import { docOver, untypedDocOver } from "./stack.js"
 
 // ===========================================================================
 // Shared fixtures
@@ -37,14 +28,9 @@ const annotatedDocSchema = Schema.struct({
   ),
 })
 
-const readableInterp = withReadable(withNavigation(bottomInterpreter))
-
-function createDoc(
-  schema: Parameters<typeof interpret>[0],
-  store: Record<string, unknown>,
-) {
-  const ctx: RefContext = { reader: plainReader({ current: store }) }
-  const doc = interpret(schema, readableInterp, ctx) as any
+function createDoc(schema: SchemaNode, store: Record<string, unknown>) {
+  const doc = untypedDocOver(schema, store) as any
+  const ctx = doc[TRANSACT]
   return { doc, store, ctx }
 }
 
@@ -52,7 +38,7 @@ function createDoc(
 // Scalar reading
 // ===========================================================================
 
-describe("withReadable: scalar", () => {
+describe("reading: scalar", () => {
   it("ref() returns the current store value", () => {
     const { doc } = createDoc(Schema.struct({ name: Schema.string() }), {
       name: "Alice",
@@ -73,12 +59,12 @@ describe("withReadable: scalar", () => {
   })
 
   it("[CALL] slot is present and functional", () => {
-    const schema = Schema.string()
-    const ctx: RefContext = { reader: plainReader({ current: "hello" as any }) }
-    const result = interpret(schema, readableInterp, ctx) as any
-    expect(CALL in result).toBe(true)
-    expect(result[CALL]()).toBe("hello")
-    expect(result()).toBe("hello")
+    const { doc } = createDoc(Schema.struct({ s: Schema.string() }), {
+      s: "hello",
+    })
+    expect(CALL in doc.s).toBe(true)
+    expect(doc.s[CALL]()).toBe("hello")
+    expect(doc.s()).toBe("hello")
   })
 
   it("toPrimitive with 'string' hint returns String(value)", () => {
@@ -106,7 +92,7 @@ describe("withReadable: scalar", () => {
 // Product navigation
 // ===========================================================================
 
-describe("withReadable: product", () => {
+describe("reading: product", () => {
   it("product ref() returns deep plain snapshot", () => {
     const { doc } = createDoc(structuralDocSchema, {
       settings: { darkMode: false, fontSize: 14 },
@@ -136,30 +122,18 @@ describe("withReadable: product", () => {
     expect(Object.keys(doc)).toEqual(["settings", "metadata"])
   })
 
-  it("NO referential identity — each access forces the thunk", () => {
-    const { doc } = createDoc(structuralDocSchema, {
-      settings: { darkMode: false, fontSize: 14 },
-      metadata: {},
-    })
-    // This is the key difference from readableInterpreter + withCaching:
-    // without caching, every access produces a NEW child ref.
-    expect(doc.settings).not.toBe(doc.settings)
-  })
-
   it("product field named 'name' shadows Function.prototype.name", () => {
     const schema = Schema.struct({ name: Schema.string() })
-    const ctx: RefContext = {
-      reader: plainReader({ current: { name: "test" } }),
-    }
-    const ref = interpret(schema, readableInterp, ctx) as any
+    const ref = docOver(schema, { name: "test" }) as any
+    const _ctx = ref[TRANSACT]
     expect(typeof ref.name).toBe("function")
     expect(ref.name()).toBe("test")
   })
 
   it("product field named 'length' shadows Function.prototype.length", () => {
     const schema = Schema.struct({ length: Schema.number() })
-    const ctx: RefContext = { reader: plainReader({ current: { length: 42 } }) }
-    const ref = interpret(schema, readableInterp, ctx) as any
+    const ref = docOver(schema, { length: 42 }) as any
+    const _ctx = ref[TRANSACT]
     expect(typeof ref.length).toBe("function")
     expect(ref.length()).toBe(42)
   })
@@ -169,7 +143,7 @@ describe("withReadable: product", () => {
 // Sequence navigation
 // ===========================================================================
 
-describe("withReadable: sequence", () => {
+describe("reading: sequence", () => {
   const schema = Schema.struct({
     messages: Schema.list(
       Schema.struct({
@@ -202,11 +176,6 @@ describe("withReadable: sequence", () => {
   it(".at(i) returns undefined for negative index", () => {
     const { doc } = createSeqDoc()
     expect(doc.messages.at(-1)).toBeUndefined()
-  })
-
-  it("NO referential identity — .at(i) returns fresh refs", () => {
-    const { doc } = createSeqDoc()
-    expect(doc.messages.at(0)).not.toBe(doc.messages.at(0))
   })
 
   it(".length reflects the store array length", () => {
@@ -267,7 +236,7 @@ describe("withReadable: sequence", () => {
 // Map navigation
 // ===========================================================================
 
-describe("withReadable: map", () => {
+describe("reading: map", () => {
   const schema = Schema.struct({
     metadata: Schema.record(Schema.number()),
   })
@@ -286,11 +255,6 @@ describe("withReadable: map", () => {
   it(".at(key) returns undefined for missing key", () => {
     const { doc } = createMapDoc()
     expect(doc.metadata.at("nonexistent")).toBeUndefined()
-  })
-
-  it("NO referential identity — .at(key) returns fresh refs", () => {
-    const { doc } = createMapDoc()
-    expect(doc.metadata.at("version")).not.toBe(doc.metadata.at("version"))
   })
 
   it("ref() returns the plain record snapshot", () => {
@@ -386,19 +350,12 @@ describe("withReadable: map", () => {
 // Annotated nodes
 // ===========================================================================
 
-describe("withReadable: annotated", () => {
+describe("reading: annotated", () => {
   it("text ref returns current string when called", () => {
     const { doc } = createDoc(Schema.struct({ title: Schema.text() }), {
       title: "Hello",
     })
     expect(doc.title()).toBe("Hello")
-  })
-
-  it("text ref returns empty string when store value is null", () => {
-    const { doc } = createDoc(Schema.struct({ title: Schema.text() }), {
-      title: null,
-    })
-    expect(doc.title()).toBe("")
   })
 
   it("text ref toPrimitive produces string", () => {
@@ -414,13 +371,6 @@ describe("withReadable: annotated", () => {
       count: 42,
     })
     expect(doc.count()).toBe(42)
-  })
-
-  it("counter ref returns 0 when store value is not a number", () => {
-    const { doc } = createDoc(Schema.struct({ count: Schema.counter() }), {
-      count: "oops",
-    })
-    expect(doc.count()).toBe(0)
   })
 
   it("counter ref toPrimitive is hint-aware", () => {
@@ -465,7 +415,7 @@ describe("withReadable: annotated", () => {
 // Sum dispatch
 // ===========================================================================
 
-describe("withReadable: discriminated sum", () => {
+describe("reading: discriminated sum", () => {
   const schema = Schema.struct({
     item: Schema.discriminatedUnion("type", [
       Schema.struct({ type: Schema.string("text"), body: Schema.string() }),
@@ -492,7 +442,7 @@ describe("withReadable: discriminated sum", () => {
   })
 })
 
-describe("withReadable: hybrid discriminant", () => {
+describe("reading: hybrid discriminant", () => {
   const schema = Schema.struct({
     item: Schema.discriminatedUnion("type", [
       Schema.struct({ type: Schema.string("text"), body: Schema.string() }),
@@ -566,7 +516,7 @@ describe("withReadable: hybrid discriminant", () => {
   })
 })
 
-describe("withReadable: nullable (positional sum)", () => {
+describe("reading: nullable (positional sum)", () => {
   const schema = Schema.struct({
     bio: Schema.string().nullable(),
   })
@@ -586,7 +536,7 @@ describe("withReadable: nullable (positional sum)", () => {
 // Full document tree
 // ===========================================================================
 
-describe("withReadable: full doc tree", () => {
+describe("reading: full doc tree", () => {
   it("produces a complete navigable tree from an annotated doc schema", () => {
     const { doc } = createDoc(annotatedDocSchema, {
       title: "Hello",
@@ -760,48 +710,5 @@ describe("dispatchSum", () => {
     }
     const result = dispatchSum({}, schema, { byKey: k => k })
     expect(result).toBeUndefined()
-  })
-})
-
-// ===========================================================================
-// Type-level tests
-// ===========================================================================
-
-describe("type-level: withReadable", () => {
-  it("withReadable(withNavigation(bottomInterpreter)) produces HasRead", () => {
-    const readable = withReadable(withNavigation(bottomInterpreter))
-    const _check: Interpreter<RefContext, HasCall & HasNavigation & HasRead> =
-      readable
-    void _check
-  })
-
-  it("result satisfies HasRead", () => {
-    const readable = withReadable(withNavigation(bottomInterpreter))
-    const ctx: RefContext = { reader: plainReader({ current: "test" as any }) }
-    const result = interpret(Schema.string(), readable, ctx)
-    const _check: HasRead = result
-    void _check
-  })
-
-  it("result also satisfies HasNavigation and HasCall", () => {
-    const readable = withReadable(withNavigation(bottomInterpreter))
-    const ctx: RefContext = { reader: plainReader({ current: "test" as any }) }
-    const result = interpret(Schema.string(), readable, ctx)
-    const _checkNav: HasNavigation = result
-    const _checkCall: HasCall = result
-    void _checkNav
-    void _checkCall
-  })
-
-  it("withReadable(bottomInterpreter) is a compile error (requires HasNavigation)", () => {
-    // @ts-expect-error — bottomInterpreter produces HasCall, withReadable requires HasNavigation
-    const _bad = withReadable(bottomInterpreter)
-    void _bad
-  })
-
-  it("withReadable(plainInterpreter) is a type error (plain has unknown, not HasCall)", () => {
-    // @ts-expect-error — plainInterpreter is Interpreter<unknown, unknown>, not HasCall
-    const _bad = withReadable(plainInterpreter)
-    void _bad
   })
 })

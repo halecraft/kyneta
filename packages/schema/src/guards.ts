@@ -11,9 +11,8 @@
  * should add `&& !Array.isArray(value)` themselves.
  *
  * Use this for store reads, validation, and anywhere "is this a plain
- * JS object?" is the correct semantic. For code that needs to attach
- * properties to a result (which may be a function object), use
- * `isPropertyHost` instead.
+ * JS object?" is the correct semantic. A ref is a function, so this is
+ * false for one: use `isPropertyHost` for a value that may be a ref.
  */
 export function isNonNullObject(
   value: unknown,
@@ -35,12 +34,8 @@ export function isPlainObject(
 }
 
 /**
- * Returns `true` when `value` can host properties — i.e. it is a
- * non-null object OR a function.
- *
- * Use this instead of `isNonNullObject` in code that attaches properties
- * to interpreter results (e.g. `enrich`, `withChangefeed`), because
- * callable refs are function objects that can carry properties.
+ * Returns `true` when `value` can host properties: a non-null object or a
+ * function. A ref is a function, so `isNonNullObject` is false for one.
  *
  * Does NOT return `true` for primitives (string, number, boolean, etc.),
  * `null`, or `undefined`.

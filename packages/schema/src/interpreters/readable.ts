@@ -2,11 +2,8 @@
 //
 // This module contains only **type-level** definitions:
 //   - ReadableSequenceRef, ReadableMapRef, Readable<S>
-//   - RefContext re-export
 //
-// The runtime implementation has been factored into composable transformers:
-//   withReadable (src/interpreters/with-readable.ts) — reading + navigation
-//   withCaching  (src/interpreters/with-caching.ts)  — identity-preserving caching
+// The read members themselves live on each ref's prototype (`../ref/read.ts`).
 
 import type { Plain, PlainFlatTreeNode } from "../interpreter-types.js"
 import type {
@@ -43,9 +40,6 @@ type ReadableDiscriminantProductRef<
   readonly [K in keyof F]: K extends D ? Plain<F[K]> : Readable<F[K]>
 }
 
-// Re-export RefContext for consumers
-export type { RefContext } from "../interpreter-types.js"
-
 // ---------------------------------------------------------------------------
 // Readable<S> — type-level interpretation for readable refs
 // ---------------------------------------------------------------------------
@@ -62,7 +56,7 @@ export interface ReadableSequenceRef<T = unknown, V = unknown>
   extends NavigableSequenceRef<T> {
   (): readonly V[]
   /** Read the plain value at index. Returns undefined for out-of-bounds. */
-  get: (index: number) => V | undefined
+  get(this: ReadableSequenceRef<T, V>, index: number): V | undefined
 }
 
 /**
@@ -80,19 +74,19 @@ export interface ReadableMapRef<T = unknown, V = unknown>
   /** Callable: returns a frozen deep snapshot of the entire map. */
   (): Readonly<Record<string, V>>
   /** Read the plain value at key. Returns undefined if key is not in the store. Equivalent to `.at(key)?.()`. */
-  get(key: string): V | undefined
+  get(this: ReadableMapRef<T, V>, key: string): V | undefined
 }
 
 /**
- * Recursive read-layer projection of a tree node. `data` is a live
- * `Readable<I>` ref (not a plain value) so `.roots[i].data.label()`
- * keeps working through structural changes.
+ * Recursive projection of a tree node. `data` is the node's ref `T` (not a
+ * plain value), so `.roots[i].data.label()` keeps working through structural
+ * changes.
  */
-export interface ReadableTreeNode<I extends Schema> {
+export interface ReadableTreeNode<T> {
   readonly id: string
   readonly parent: string | null
-  readonly data: Readable<I>
-  readonly children: readonly ReadableTreeNode<I>[]
+  readonly data: T
+  readonly children: readonly ReadableTreeNode<T>[]
 }
 
 /**
@@ -102,15 +96,19 @@ export interface ReadableTreeNode<I extends Schema> {
  * for keyed lookup. `WritableTreeRef` extends this with `.create`,
  * `.delete`, `.move`.
  */
-export interface ReadableTreeRef<I extends Schema> {
+export interface ReadableTreeRef<I extends Schema, T = Readable<I>> {
   /** Deep-plain snapshot of the entire forest (flat shape, matches `Plain<S>`). */
   (): readonly PlainFlatTreeNode<I>[]
   /** Recursive projection roots (sorted by `index` per parent). */
-  readonly roots: readonly ReadableTreeNode<I>[]
-  /** Lookup by stable id. Returns undefined for unknown/deleted ids. */
-  node(id: string): ReadableTreeNode<I> | undefined
+  readonly roots: readonly ReadableTreeNode<T>[]
+  /** The node's ref, by stable id; `undefined` for an unknown or deleted id. */
+  node(this: ReadableTreeRef<I, T>, id: string): T | undefined
+  /** Whether a node of this id is in the tree. */
+  has(this: ReadableTreeRef<I, T>, id: string): boolean
+  /** Every node's id, in topology order. */
+  ids(this: ReadableTreeRef<I, T>): string[]
   /** Depth-first iteration (parent-then-children). */
-  [Symbol.iterator](): IterableIterator<ReadableTreeNode<I>>
+  [Symbol.iterator](): IterableIterator<ReadableTreeNode<T>>
   /** Total node count. */
   readonly size: number
 }
@@ -132,7 +130,7 @@ export interface ReadableSetRef<V = unknown> {
   /** Callable: returns a frozen deep snapshot of the set as an array. */
   (): readonly V[]
   /** Structural-equality membership query (uses `samePlainValue`). */
-  has(value: V): boolean
+  has(this: ReadableSetRef<V>, value: V): boolean
   /** Member count. */
   readonly size: number
   /** Iterates plain values in stored order. */
@@ -142,8 +140,8 @@ export interface ReadableSetRef<V = unknown> {
 /**
  * Computes the readable ref type for a given schema type.
  *
- * This is the type-level counterpart to `readableInterpreter`. Every
- * node is callable (`ref()` returns `Plain<S>`). Structural nodes have
+ * The type of the read members on a ref's prototype (`ref/read.ts`,
+ * `ref/navigate.ts`). Every node is callable (`ref()` returns `Plain<S>`). Structural nodes have
  * navigation. Leaf nodes have `[Symbol.toPrimitive]`.
  *
  * ```ts

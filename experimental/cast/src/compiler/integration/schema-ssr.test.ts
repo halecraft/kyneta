@@ -11,15 +11,11 @@
 
 import { CHANGEFEED, hasChangefeed } from "@kyneta/changefeed"
 import {
-  interpret,
+  createDoc as createSchemaDoc,
   isIncrementChange,
-  observation,
-  plainContext,
-  readable,
+  json,
   Schema,
   batch as schemaChange,
-  writable,
-  Zero,
 } from "@kyneta/schema"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 
@@ -61,14 +57,7 @@ const todoSchema = Schema.struct({
 })
 
 function createDoc(initial?: Record<string, unknown>) {
-  const defaults = Zero.structural(todoSchema) as Record<string, unknown>
-  const store = { ...defaults } as Record<string, unknown>
-  const ctx = plainContext(todoSchema, store)
-  const doc = interpret(todoSchema, ctx)
-    .with(readable)
-    .with(writable)
-    .with(observation)
-    .done()
+  const doc = createSchemaDoc(json.bind(todoSchema))
   // Apply initial values via batch() — real operations, not seed
   if (initial) {
     schemaChange(doc, (d: any) => {
@@ -83,7 +72,7 @@ function createDoc(initial?: Record<string, unknown>) {
       }
     }
   }
-  return { doc, store, ctx }
+  return { doc }
 }
 
 // ---------------------------------------------------------------------------
