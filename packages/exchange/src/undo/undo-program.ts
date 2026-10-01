@@ -9,7 +9,17 @@
 import type { Program } from "@kyneta/machine"
 import type { CommitOptions, Edit } from "@kyneta/schema"
 import { continuesStep } from "@kyneta/schema"
-import type { Direction, Note, Part, Request, Step } from "./schema.js"
+import type { Direction, Note, Part, Step } from "./schema.js"
+
+/** An undo or redo asked for. */
+export interface Request {
+  readonly direction: Direction
+  readonly options: CommitOptions
+  /** The documents a step must write to be taken; every document when
+   *  undefined. */
+  readonly docs: readonly string[] | undefined
+  readonly token: number
+}
 
 /** How a commit reached the stack. */
 export type Via = "gesture" | "typing" | "follow"
@@ -53,12 +63,7 @@ export type UndoInput =
   | { readonly type: "gesture-opened" }
   | { readonly type: "gesture-closed" }
   | { readonly type: "gap-elapsed"; readonly at: number }
-  | {
-      readonly type: "requested"
-      readonly direction: Direction
-      readonly options: CommitOptions
-      readonly token: number
-    }
+  | { readonly type: "requested"; readonly request: Request }
   | { readonly type: "loaded"; readonly pending: Note | undefined }
   | { readonly type: "began"; readonly step: Step | undefined }
   | { readonly type: "noted" }
@@ -71,8 +76,13 @@ export type UndoEffect =
   | { readonly type: "push"; readonly parts: readonly Part[] }
   /** Wake the program with `gap-elapsed` after `ms`. */
   | { readonly type: "set-timer"; readonly ms: number }
-  /** Read the top step of `direction`'s list and open its documents. */
-  | { readonly type: "begin"; readonly direction: Direction }
+  /** Read the newest step of `direction`'s list that writes any of `docs`
+   *  (any step, when undefined), and open its documents. */
+  | {
+      readonly type: "begin"
+      readonly direction: Direction
+      readonly docs: readonly string[] | undefined
+    }
   /** Write the note for `step`, and wait until it is stored. */
   | {
       readonly type: "note"
@@ -137,7 +147,7 @@ function next(model: UndoModel): Result {
       queue: rest,
       busy: { phase: "beginning", request, step: undefined },
     },
-    { type: "begin", direction: request.direction },
+    { type: "begin", direction: request.direction, docs: request.docs },
   ]
 }
 
@@ -163,9 +173,12 @@ export const undoProgram = (
           ]
         }
         const { open } = model
+        // `Edit.path` is a path inside one document: the same path in
+        // another document is another text.
         if (
           open !== undefined &&
           open.via === msg.via &&
+          open.parts.at(-1)?.docId === msg.part.docId &&
           open.edit !== undefined &&
           msg.edit !== undefined &&
           continuesStep(open.edit, msg.edit, model.gap)
@@ -210,17 +223,7 @@ export const undoProgram = (
 
       case "requested":
         return then(close(model), m =>
-          next({
-            ...m,
-            queue: [
-              ...m.queue,
-              {
-                direction: msg.direction,
-                options: msg.options,
-                token: msg.token,
-              },
-            ],
-          }),
+          next({ ...m, queue: [...m.queue, msg.request] }),
         )
 
       case "loaded":
@@ -271,14 +274,15 @@ export const undoProgram = (
         const busy = model.busy
         if (busy === undefined || busy.phase !== "reverting") return [model]
         // Nothing of the step still stood: it is gone from the stack, and
-        // the one below it is tried, silently.
+        // the next one writing the same documents is tried, silently.
         if (!msg.applied) {
+          const { direction, docs } = busy.request
           return written(
             {
               ...model,
               busy: { ...busy, phase: "beginning", step: undefined },
             },
-            { type: "begin", direction: busy.request.direction },
+            { type: "begin", direction, docs },
           )
         }
         return then(

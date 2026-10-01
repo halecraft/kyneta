@@ -6,7 +6,7 @@
 // other, and the one-writer rule of serialized documents is what keeps two
 // runtimes from popping the same step.
 
-import type { CommitOptions, ReplicaType, SyncMode } from "@kyneta/schema"
+import type { ReplicaType, SyncMode } from "@kyneta/schema"
 import { json, Schema } from "@kyneta/schema"
 
 /** One document's record in a step. */
@@ -36,12 +36,6 @@ export interface Note {
   readonly direction: Direction
   /** docId → the substrate's position, as base64. */
   readonly positions: Readonly<Record<string, string>>
-}
-
-export interface Request {
-  readonly direction: Direction
-  readonly options: CommitOptions
-  readonly token: number
 }
 
 const StepSchema = Schema.struct.json({

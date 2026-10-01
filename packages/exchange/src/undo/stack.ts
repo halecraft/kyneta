@@ -65,11 +65,17 @@ export interface UndoStackParams {
   readonly key: string
   /** The documents this stack undoes. Its own undo document never is. */
   readonly scope: (docId: DocId) => boolean
-  /** How many steps to keep. */
+  /** How many steps each of the undo and redo lists keeps. */
   readonly depth?: number
   /** The typing pause that closes a step, in milliseconds. */
   readonly gap?: number
   readonly now?: () => number
+}
+
+export interface UndoOptions extends CommitOptions {
+  /** Take the newest step that writes any of these documents, even if
+   *  steps above it write others. Any step when omitted. */
+  readonly docs?: readonly DocId[]
 }
 
 export interface UndoStack {
@@ -82,14 +88,17 @@ export interface UndoStack {
   /** Direct writes on this document made outside a gesture, grouped by the
    *  typing policy, as an editor binding makes them. */
   follow(docId: DocId): () => void
-  /** Undo the top step still standing. False when there is none. A part
-   *  stands only if its document is held here: an undo never creates one. */
-  undo(options?: CommitOptions): Promise<boolean>
-  /** Redo the top undone step still standing. */
-  redo(options?: CommitOptions): Promise<boolean>
-  /** The undo document: `doc.stacks.at(key)` holds the stack, and whether
-   *  its lists are empty is whether there is anything to undo or redo. */
-  readonly doc: ReturnType<typeof openUndoDoc>
+  /** Undo the newest step still standing that writes any of
+   *  `options.docs`. False when there is none. A part stands only if its
+   *  document is held here: an undo never creates one. */
+  undo(options?: UndoOptions): Promise<boolean>
+  /** Redo the newest undone step still standing that writes any of
+   *  `options.docs`. */
+  redo(options?: UndoOptions): Promise<boolean>
+  /** The step `undo` or `redo` with these `docs` tries first. Whether it
+   *  still stands is known only when it is tried. A read of the undo
+   *  document, so a reactive thunk that calls it is tracked. */
+  top(direction: Direction, docs?: readonly DocId[]): Step | undefined
   dispose(): void
 }
 
@@ -104,19 +113,61 @@ export interface StoredStack {
 // Pure transitions of a stored stack
 // ---------------------------------------------------------------------------
 
-/** `step` pushed onto `undo`, `redo` cleared, `undo` kept to `depth`. */
+function listOf(stack: StoredStack, direction: Direction): readonly Step[] {
+  return direction === "undo" ? stack.undo : stack.redo
+}
+
+/** Whether `step` writes any document in `docs`. Every step does when
+ *  `docs` is undefined. */
+function touches(step: Step, docs: readonly string[] | undefined): boolean {
+  return docs === undefined || step.parts.some(p => docs.includes(p.docId))
+}
+
+/** The newest step in `steps` that writes any document in `docs`. */
+export function topStep(
+  steps: readonly Step[],
+  docs: readonly string[] | undefined,
+): Step | undefined {
+  return steps.findLast(s => touches(s, docs))
+}
+
+/** Each list kept to its newest `depth` steps. A push keeps the redo steps
+ *  on other documents, so the two lists together can exceed `depth`. */
+export function bounded(stack: StoredStack, depth: number): StoredStack {
+  return {
+    ...stack,
+    undo: stack.undo.slice(-depth),
+    redo: stack.redo.slice(-depth),
+  }
+}
+
+/**
+ * `step` pushed onto `undo`, and every redo step that writes a document
+ * `step` writes cleared. A redo step on other documents commutes with
+ * `step` and stays, so the steps on any one document behave as that
+ * document's own stack.
+ */
 export function pushStep(
   stack: StoredStack,
   step: Step,
   depth: number,
 ): StoredStack {
-  return { ...stack, undo: [...stack.undo, step].slice(-depth), redo: [] }
+  const docs = step.parts.map(p => p.docId)
+  return bounded(
+    {
+      ...stack,
+      undo: [...stack.undo, step],
+      redo: stack.redo.filter(r => !touches(r, docs)),
+    },
+    depth,
+  )
 }
 
 /**
  * `step` moved from `from`'s list, as `redo` onto the other list (dropped
- * when nothing of it applied), every step left rewritten by `rewrite`, and
- * the note cleared. `redo` is already current: its revert made it so.
+ * when nothing of it applied), every step left rewritten by `rewrite`, the
+ * note cleared, and each list kept to `depth`. `redo` is already current:
+ * its revert made it so.
  */
 export function moveStep(
   stack: StoredStack,
@@ -124,16 +175,21 @@ export function moveStep(
   step: Step,
   redo: Step | undefined,
   rewrite: (part: Part) => Part,
+  depth: number,
 ): StoredStack {
   const each = (steps: readonly Step[]) =>
     steps.map(s => ({ ...s, parts: s.parts.map(rewrite) }))
-  const source = from === "undo" ? stack.undo : stack.redo
-  const target = from === "undo" ? stack.redo : stack.undo
-  const left = each(source.filter(s => s.id !== step.id))
-  const right = [...each(target), ...(redo === undefined ? [] : [redo])]
-  return from === "undo"
-    ? { undo: left, redo: right, pending: null }
-    : { undo: right, redo: left, pending: null }
+  const to: Direction = from === "undo" ? "redo" : "undo"
+  const left = each(listOf(stack, from).filter(s => s.id !== step.id))
+  const right = [
+    ...each(listOf(stack, to)),
+    ...(redo === undefined ? [] : [redo]),
+  ]
+  const moved =
+    from === "undo"
+      ? { undo: left, redo: right, pending: null }
+      : { undo: right, redo: left, pending: null }
+  return bounded(moved, depth)
 }
 
 /**
@@ -170,10 +226,6 @@ export function stackOps(
 // The shell
 // ---------------------------------------------------------------------------
 
-function openUndoDoc(exchange: Exchange, docId: DocId) {
-  return exchange.get(docId, UndoDoc)
-}
-
 export async function createUndoStack(
   params: UndoStackParams,
 ): Promise<UndoStack> {
@@ -181,7 +233,7 @@ export async function createUndoStack(
   const depth = params.depth ?? 100
   const now = params.now ?? Date.now
   const program = undoProgram(params.gap ?? TYPING_GAP)
-  const doc = openUndoDoc(exchange, params.docId)
+  const doc = exchange.get(params.docId, UndoDoc)
   await whenHydrated(doc)
 
   const stackRef = () => {
@@ -197,6 +249,8 @@ export async function createUndoStack(
       pending: value.pending as unknown as Note | null,
     }
   }
+  const top = (direction: Direction, docs?: readonly DocId[]) =>
+    topStep(listOf(read(), direction), docs)
   const at = RawPath.empty.field("stacks").entry(key)
   /** Write the stack's move from what it holds to `next`, in one batch. */
   const write = (next: StoredStack) => {
@@ -434,8 +488,14 @@ export async function createUndoStack(
         ? { id: step.id, parts: [...reverted.redo] }
         : undefined
     write(
-      moveStep(read(), direction, step, redo, part =>
-        remaps.reduce((p, { by, remap }) => rewrite(p, by, remap), part),
+      moveStep(
+        read(),
+        direction,
+        step,
+        redo,
+        part =>
+          remaps.reduce((p, { by, remap }) => rewrite(p, by, remap), part),
+        depth,
       ),
     )
     return redo !== undefined
@@ -462,9 +522,7 @@ export async function createUndoStack(
         }, effect.ms)
         return
       case "begin": {
-        const stack = read()
-        const list = effect.direction === "undo" ? stack.undo : stack.redo
-        const step = list.at(-1)
+        const step = top(effect.direction, effect.docs)
         if (step === undefined) {
           dispatch({ type: "began", step: undefined })
           return
@@ -539,8 +597,7 @@ export async function createUndoStack(
    */
   async function recover(note: Note): Promise<void> {
     const stack = read()
-    const list = note.direction === "undo" ? stack.undo : stack.redo
-    const step = list.find(s => s.id === note.step)
+    const step = listOf(stack, note.direction).find(s => s.id === note.step)
     if (step === undefined) {
       write({ ...stack, pending: null })
       return
@@ -558,15 +615,18 @@ export async function createUndoStack(
 
   dispatch({ type: "loaded", pending: read().pending ?? undefined })
 
-  const request = (direction: Direction, options: CommitOptions) =>
+  const request = (direction: Direction, { docs, ...options }: UndoOptions) =>
     new Promise<boolean>(resolve => {
       const token = nextToken++
       resolvers.set(token, resolve)
-      dispatch({ type: "requested", direction, options, token })
+      dispatch({
+        type: "requested",
+        request: { direction, options, docs, token },
+      })
     })
 
   return {
-    doc,
+    top,
 
     gesture<T>(fn: () => T): T {
       scan()

@@ -303,6 +303,22 @@ Give `useText` an undo stack (`createUndoStack` from `@kyneta/exchange`) and Cmd
 <textarea ref={useText(card.text, { undo: stack })} />
 ```
 
+With one stack for many cards, give each card's editor a target that undoes only that card. `useText` binds again when `undo` changes identity, so memoize it:
+
+<!-- Not compiled: a fragment from inside a component. -->
+<!-- ts-docs-verifier:ignore -->
+```tsx
+const undo = useMemo(
+  () => ({
+    typing: stack.typing,
+    undo: (options?: CommitOptions) => stack.undo({ ...options, docs: [cardId] }),
+    redo: (options?: CommitOptions) => stack.redo({ ...options, docs: [cardId] }),
+  }),
+  [stack, cardId],
+)
+<textarea ref={useText(card.text, { undo })} />
+```
+
 ### Re-exports
 
 `@kyneta/react` re-exports a curated subset so most app code only needs one import:

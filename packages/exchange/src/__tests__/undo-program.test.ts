@@ -2,7 +2,7 @@
 
 import type { Edit } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
-import type { Part } from "../undo/schema.js"
+import type { Direction, Part } from "../undo/schema.js"
 import {
   COMPACT_EVERY,
   type UndoEffect,
@@ -46,6 +46,15 @@ function run(
   }
   return { model, effects }
 }
+
+const request = (
+  direction: Direction,
+  token: number,
+  docs?: readonly string[],
+): UndoInput => ({
+  type: "requested",
+  request: { direction, options: {}, docs, token },
+})
 
 const pushes = (effects: readonly UndoEffect[]) =>
   effects.flatMap(e => (e.type === "push" ? [e.parts.map(p => p.record)] : []))
@@ -103,6 +112,26 @@ describe("grouping", () => {
     expect(model.open).toBeUndefined()
   })
 
+  it("typing never joins a step in another document", () => {
+    const { effects } = run([
+      {
+        type: "commit",
+        via: "typing",
+        part: part("a", "1"),
+        edit: edit(0, 0, "h"),
+      },
+      // The same path, where the last edit ended: in another document.
+      {
+        type: "commit",
+        via: "typing",
+        part: part("b", "2"),
+        edit: edit(100, 1, "i"),
+      },
+      { type: "gap-elapsed", at: 1100 },
+    ])
+    expect(pushes(effects)).toEqual([["1"], ["2"]])
+  })
+
   it("a request writes the open step first", () => {
     const { effects } = run([
       {
@@ -111,7 +140,7 @@ describe("grouping", () => {
         part: part("a", "1"),
         edit: edit(0, 0, "h"),
       },
-      { type: "requested", direction: "undo", options: {}, token: 1 },
+      request("undo", 1),
     ])
     const kinds = effects.map(e => e.type).filter(t => t !== "set-timer")
     expect(kinds).toEqual(["push", "begin"])
@@ -124,7 +153,7 @@ describe("an undo", () => {
   it("notes, waits for the note, reverts, resolves", () => {
     const { effects, model } = run([
       { type: "loaded", pending: undefined },
-      { type: "requested", direction: "undo", options: {}, token: 7 },
+      request("undo", 7),
       { type: "began", step },
       { type: "noted" },
       { type: "reverted", applied: true },
@@ -141,7 +170,7 @@ describe("an undo", () => {
 
   it("skips a step nothing of which still stands, silently", () => {
     const { effects } = run([
-      { type: "requested", direction: "undo", options: {}, token: 1 },
+      request("undo", 1),
       { type: "began", step },
       { type: "noted" },
       { type: "reverted", applied: false },
@@ -154,19 +183,31 @@ describe("an undo", () => {
     ])
   })
 
+  it("takes the documents asked for, and keeps them when a step is skipped", () => {
+    const begins = (effects: readonly UndoEffect[]) =>
+      effects.filter(e => e.type === "begin")
+    const { effects } = run([
+      request("undo", 1, ["x"]),
+      { type: "began", step },
+      { type: "noted" },
+      { type: "reverted", applied: false },
+    ])
+    expect(begins(effects)).toEqual([
+      { type: "begin", direction: "undo", docs: ["x"] },
+      { type: "begin", direction: "undo", docs: ["x"] },
+    ])
+  })
+
   it("resolves false on an empty stack", () => {
     const { effects } = run([
-      { type: "requested", direction: "redo", options: {}, token: 3 },
+      request("redo", 3),
       { type: "began", step: undefined },
     ])
     expect(effects.at(-1)).toEqual({ type: "resolve", token: 3, done: false })
   })
 
   it("runs requests one at a time", () => {
-    const { effects } = run([
-      { type: "requested", direction: "undo", options: {}, token: 1 },
-      { type: "requested", direction: "undo", options: {}, token: 2 },
-    ])
+    const { effects } = run([request("undo", 1), request("undo", 2)])
     expect(effects.filter(e => e.type === "begin")).toHaveLength(1)
   })
 
@@ -174,7 +215,7 @@ describe("an undo", () => {
     const note = { step: "s", direction: "undo" as const, positions: {} }
     const { effects } = run([
       { type: "loaded", pending: note },
-      { type: "requested", direction: "undo", options: {}, token: 1 },
+      request("undo", 1),
       { type: "recovered" },
     ])
     expect(effects.map(e => e.type)).toEqual(["recover", "begin"])

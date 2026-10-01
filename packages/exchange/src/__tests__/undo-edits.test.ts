@@ -9,6 +9,7 @@ import {
   pushStep,
   type StoredStack,
   stackOps,
+  topStep,
 } from "../undo/stack.js"
 
 const part = (docId: string, record: string): Part => ({
@@ -33,19 +34,35 @@ function written(stack: StoredStack, after: StoredStack): StoredStack {
 }
 
 describe("pushStep", () => {
-  it("pushes, clears redo and trims to depth", () => {
+  it("pushes, and clears the redo steps that write a document it writes", () => {
     const stack: StoredStack = {
-      undo: [step("a"), step("b")],
-      redo: [step("r")],
+      undo: [step("a", part("x", "1"))],
+      redo: [
+        step("rx", part("x", "2")),
+        step("ry", part("y", "3")),
+        // Across documents: cleared by a push on either.
+        step("rxz", part("x", "4"), part("z", "5")),
+      ],
       pending: null,
     }
-    const after = pushStep(stack, step("c"), 2)
+    const after = pushStep(stack, step("b", part("x", "6")), 10)
     expect(after).toEqual({
-      undo: [step("b"), step("c")],
-      redo: [],
+      undo: [step("a", part("x", "1")), step("b", part("x", "6"))],
+      redo: [step("ry", part("y", "3"))],
       pending: null,
     })
     expect(written(stack, after)).toEqual(after)
+  })
+
+  it("trims each list to depth", () => {
+    const stack: StoredStack = {
+      undo: [step("a", part("x", "1")), step("b", part("x", "2"))],
+      redo: [step("r1", part("y", "3")), step("r2", part("y", "4"))],
+      pending: null,
+    }
+    const after = pushStep(stack, step("c", part("x", "5")), 1)
+    expect(after.undo.map(s => s.id)).toEqual(["c"])
+    expect(after.redo.map(s => s.id)).toEqual(["r2"])
   })
 
   it("writes only the new step, not the stack", () => {
@@ -81,6 +98,7 @@ describe("moveStep", () => {
       step("top"),
       step("top", part("z", "3")),
       rewrite,
+      10,
     )
     expect(after).toEqual({
       undo: [step("a", part("x", "1'")), step("b", part("y", "2"))],
@@ -95,10 +113,69 @@ describe("moveStep", () => {
 
   it("drops a step nothing of which applied", () => {
     const stack: StoredStack = { undo: [step("top")], redo: [], pending: null }
-    expect(moveStep(stack, "undo", step("top"), undefined, p => p)).toEqual({
-      undo: [],
+    expect(moveStep(stack, "undo", step("top"), undefined, p => p, 10)).toEqual(
+      {
+        undo: [],
+        redo: [],
+        pending: null,
+      },
+    )
+  })
+})
+
+describe("moving a step under the top", () => {
+  it("removes only that step", () => {
+    const stack: StoredStack = {
+      undo: [step("sx", part("x", "1")), step("sy", part("y", "2"))],
       redo: [],
       pending: null,
-    })
+    }
+    const after = moveStep(
+      stack,
+      "undo",
+      step("sx", part("x", "1")),
+      step("sx", part("x", "1'")),
+      p => p,
+      10,
+    )
+    expect(after.undo).toEqual([step("sy", part("y", "2"))])
+    expect(written(stack, after)).toEqual(after)
+    const [undoOp] = stackOps(RawPath.empty, stack, after)
+    expect(JSON.stringify(undoOp)).not.toContain('"sy"')
+  })
+
+  it("keeps the list it moves onto to depth", () => {
+    const stack: StoredStack = {
+      undo: [step("a", part("x", "1"))],
+      redo: [step("r", part("y", "2"))],
+      pending: null,
+    }
+    const after = moveStep(
+      stack,
+      "redo",
+      step("r", part("y", "2")),
+      step("r", part("y", "2'")),
+      p => p,
+      1,
+    )
+    expect(after.undo).toEqual([step("r", part("y", "2'"))])
+  })
+})
+
+describe("topStep", () => {
+  const steps = [
+    step("x", part("x", "1")),
+    step("xy", part("x", "2"), part("y", "3")),
+    step("z", part("z", "4")),
+  ]
+
+  it("takes the newest step that writes a document asked for", () => {
+    expect(topStep(steps, ["x"])?.id).toBe("xy")
+    expect(topStep(steps, ["y", "z"])?.id).toBe("z")
+  })
+
+  it("takes the newest step when no documents are named, and none for none", () => {
+    expect(topStep(steps, undefined)?.id).toBe("z")
+    expect(topStep(steps, [])).toBeUndefined()
   })
 })

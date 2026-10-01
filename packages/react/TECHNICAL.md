@@ -426,7 +426,7 @@ interface UndoTarget {                         // an UndoStack from @kyneta/exch
 - **`"prevent"`** — swallow undo and redo. The browser's own undo works on the element's value, which the document moves under it.
 - **`"browser"`** — let the browser undo, for a text nobody else edits.
 
-`UndoTarget` is structural and declared in the adapter, which stays free of `@kyneta/exchange`.
+`UndoTarget` is structural and declared in the adapter, which stays free of `@kyneta/exchange`. An `UndoStack` is one (`text-adapter.test.ts` checks it); a target that undoes one document wraps the stack and passes `docs` to its `undo` and `redo`.
 
 ### What `useText` is NOT
 

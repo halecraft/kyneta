@@ -335,5 +335,9 @@ export type {
   Step,
 } from "./undo/schema.js"
 export { UndoDoc, UndoSchema } from "./undo/schema.js"
-export type { UndoStack, UndoStackParams } from "./undo/stack.js"
+export type {
+  UndoOptions,
+  UndoStack,
+  UndoStackParams,
+} from "./undo/stack.js"
 export { createUndoStack } from "./undo/stack.js"

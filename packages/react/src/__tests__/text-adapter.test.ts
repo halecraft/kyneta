@@ -1,10 +1,12 @@
 import { CHANGEFEED, type HasChangefeed } from "@kyneta/changefeed"
+import type { UndoStack } from "@kyneta/exchange"
 import { batch, createDoc, Schema } from "@kyneta/schema/basic"
-import { describe, expect, it, vi } from "vitest"
+import { describe, expect, expectTypeOf, it, vi } from "vitest"
 import {
   attach,
   attachWhenLoaded,
   transformSelection,
+  type UndoTarget,
 } from "../text-adapter.js"
 
 // ===========================================================================
@@ -396,6 +398,10 @@ describe("attach", () => {
   })
 
   describe("undo to a target", () => {
+    it("an undo stack is a target", () => {
+      expectTypeOf<UndoStack>().toExtend<UndoTarget>()
+    })
+
     /** A target that records its calls, and on undo deletes what
      *  `restore` names, as the stack would, with the caller's token. */
     function fakeTarget(doc: ReturnType<typeof createTestDoc>) {
