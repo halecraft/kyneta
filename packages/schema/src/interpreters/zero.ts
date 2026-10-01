@@ -8,16 +8,15 @@
 // initial content with UI rendering defaults and produces state invisible to
 // the sync protocol. Initial content is applied via batch() after substrate
 // construction. Initialization writes no zeros; a value a write carries is
-// completed with them before it is stored (`completeValue` in `complete.ts`).
+// completed with them before it is stored (`completeValue` in `../complete.ts`).
 
 import type {
   FlatTreeNode,
   Interpreter,
   Path,
   SumVariants,
-} from "./interpret.js"
-import { interpret } from "./interpret.js"
-import { INTERPRETER } from "./interpreter-types.js"
+} from "../interpret.js"
+import { interpret } from "../interpret.js"
 import type {
   DiscriminatedSumSchema,
   ProductSchema,
@@ -26,7 +25,7 @@ import type {
   Schema,
   SumSchema,
   TreeSchema,
-} from "./schema.js"
+} from "../schema.js"
 
 // ---------------------------------------------------------------------------
 // Scalar defaults
@@ -67,8 +66,6 @@ export function scalarDefault(kind: ScalarKind): unknown {
 // ---------------------------------------------------------------------------
 
 export const zeroInterpreter: Interpreter<void, unknown> = {
-  [INTERPRETER]: true,
-
   scalar(_ctx: undefined, _path: Path, schema: ScalarSchema): unknown {
     if (schema.constraint !== undefined && schema.constraint.length > 0) {
       return schema.constraint[0]

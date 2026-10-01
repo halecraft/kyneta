@@ -6,9 +6,10 @@
 // reaches the state by calling the ref with a key only this module has
 // (`[STATE]`), so the state is no property of the ref either.
 
+import type { Feed } from "@kyneta/changefeed"
 import type { RecursiveChangefeedProtocol } from "../changefeed.js"
-import type { WritableContext } from "../interpreters/writable.js"
 import type { AddressedPath } from "../path.js"
+import type { WritableContext } from "../writable-context.js"
 
 /**
  * Asks a ref for its state: `ref[STATE]` is a getter on every ref's
@@ -20,12 +21,6 @@ export const STATE: unique symbol = Symbol("kyneta:ref-state")
 /** A ref as the construction sees it: a callable carrying its state. */
 export type RefFunction = ((...args: unknown[]) => unknown) & {
   readonly [STATE]: RefState
-}
-
-/** A callable carrying a `[CHANGEFEED]` for a boolean: `[DELETED]` and
- *  `[POPULATED]`. */
-export type FeedCarrier = (() => boolean) & {
-  readonly [key: symbol]: unknown
 }
 
 /**
@@ -55,8 +50,8 @@ export interface RefState {
 /** The slots a ref fills on first use: most refs never fill any. */
 export interface LazySlots {
   changefeed: RecursiveChangefeedProtocol<unknown> | undefined
-  populated: FeedCarrier | undefined
-  deleted: FeedCarrier | undefined
+  populated: Feed<boolean> | undefined
+  deleted: Feed<boolean> | undefined
   /** A text's or rich text's position capability. */
   position: unknown
   /** The id a tracking dependency on this ref is keyed by. */

@@ -12,17 +12,16 @@
 // holds; a write waiting on the store is not a source, and a document can be
 // settled with writes still unconfirmed.
 
-import { CHANGEFEED, type HasChangefeed } from "@kyneta/changefeed"
+import { CHANGEFEED, type Feed } from "@kyneta/changefeed"
 import { createDocumentMap } from "./document-key.js"
-import { makeFeed, makeSettleTerm, type SettleTerm } from "./settle.js"
+import { signalFeed } from "./settle.js"
 import type { WriterRefusedError } from "./store/seats.js"
 
 /** A document's refusal, readable and observable. */
-export type WriteRefusalFeed = (() => WriterRefusedError | undefined) &
-  HasChangefeed<WriterRefusedError | undefined>
+export type WriteRefusalFeed = Feed<WriterRefusedError | undefined>
 
 const persistence = createDocumentMap<{
-  readonly term: SettleTerm
+  readonly term: Feed<boolean>
   readonly readError: () => unknown | undefined
 }>()
 
@@ -34,7 +33,7 @@ const persistence = createDocumentMap<{
  */
 export function registerPersistenceTerm(
   ref: object,
-  term: SettleTerm,
+  term: Feed<boolean>,
   readError: () => unknown | undefined,
 ): void {
   persistence.set(ref, { term, readError })
@@ -52,10 +51,10 @@ export function persisted(ref: object): boolean {
 }
 
 /** Observable form of {@link persisted}. A callable, so never put it in an `if`. */
-export function persistedFeed(ref: object): SettleTerm {
+export function persistedFeed(ref: object): Feed<boolean> {
   return (
     persistence.get(ref)?.term ??
-    makeSettleTerm(
+    signalFeed(
       () => true,
       () => () => {},
     )
@@ -147,7 +146,7 @@ export function writeRefusalFeed(ref: object): WriteRefusalFeed {
   return refusals.get(ref) ?? NEVER_REFUSED
 }
 
-const NEVER_REFUSED: WriteRefusalFeed = makeFeed<
+const NEVER_REFUSED: WriteRefusalFeed = signalFeed<
   WriterRefusedError | undefined
 >(
   () => undefined,

@@ -60,9 +60,9 @@ import { planInterpretation } from "./interpret.js"
 import type { ObsSink } from "./observe.js"
 import { CREATE, type Intent, Runtime, type RuntimeParams } from "./runtime.js"
 import {
-  makeSettleTerm,
   registerPeerResolver,
   registerSettleTerm,
+  signalFeed,
 } from "./settle.js"
 import { registerSync } from "./sync.js"
 import { derivePeerSettled, Synchronizer } from "./synchronizer.js"
@@ -557,7 +557,7 @@ export class Exchange {
     registerPeerResolver(ref, authority => this.#peerSettled(docId, authority))
     registerSettleTerm(
       ref,
-      makeSettleTerm(
+      signalFeed(
         () => this.#peerSettled(docId),
         onChange =>
           this.#synchronizer.onPeerSyncChange(changed => {

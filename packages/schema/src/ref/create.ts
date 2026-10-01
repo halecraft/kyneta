@@ -16,7 +16,6 @@
 // one finalization (72 bytes of registration) serve both.
 
 import { dispatchSum } from "../interpret.js"
-import type { WritableContext } from "../interpreters/writable.js"
 import type { AddressedPath, Coordinate } from "../path.js"
 import {
   type DiscriminatedSumSchema,
@@ -25,6 +24,7 @@ import {
   type Schema as SchemaNode,
   type SumSchema,
 } from "../schema.js"
+import type { WritableContext } from "../writable-context.js"
 import { type RefPosition, templateFor } from "./prototype.js"
 import { valueAt } from "./read.js"
 import {

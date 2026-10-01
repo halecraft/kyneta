@@ -4,7 +4,7 @@
 > **Role**: Thin React bindings over `@kyneta/schema` + `@kyneta/exchange`. Bridges the `[CHANGEFEED]` reactive protocol to React's rendering cycle via `useSyncExternalStore`, and provides a framework-agnostic text-adapter for binding native `<input>` / `<textarea>` elements to collaborative `TextRef`s.
 > **Depends on**: `@kyneta/schema` (peer), `@kyneta/changefeed` (peer), `@kyneta/exchange` (peer), `@kyneta/reactive` (peer), `react` (>=18, peer)
 > **Depended on by**: Application code that renders Kyneta documents in React.
-> **Canonical symbols**: `ExchangeProvider`, `useExchange`, `useDocument`, `useTracked`, `useSelector`, `useValue`, `useChangefeed`, `useSyncState`, `useDocReady`, `useDocStatus`, `useInitialize`, `useText`, `useWriteRefusal`, `ExchangeProviderProps`, `UseTextOptions`, `CallableRef`, `ExternalStore`, `createSyncStore`, `attach`, `transformSelection`, `TextRefLike`, `AttachOptions` (and `diffText`, re-exported from `@kyneta/schema`)
+> **Canonical symbols**: `ExchangeProvider`, `useExchange`, `useDocument`, `useTracked`, `useSelector`, `useValue`, `useChangefeed`, `useSyncState`, `useDocReady`, `useDocStatus`, `useInitialize`, `useText`, `useWriteRefusal`, `ExchangeProviderProps`, `UseTextOptions`, `ExternalStore`, `createSyncStore`, `attach`, `transformSelection`, `TextRefLike`, `AttachOptions` (and `diffText`, re-exported from `@kyneta/schema`)
 > **Key invariant(s)**:
 > 1. The package is an **adapter**, not a renderer. Hooks are thin: the reactive core lives in `@kyneta/reactive`, `@kyneta/schema` and `@kyneta/changefeed`, and each hook bridges it to `useSyncExternalStore`. Zero React imports in `store.ts` or `text-adapter.ts`.
 > 2. **The identity rule.** A hook's value changes identity only when a tracked read changed or the thunk's identity changed. Downstream `React.memo` and `useMemo` stay stable across every render that changed nothing.
@@ -31,7 +31,6 @@ Consumed by application code. Not imported by any other Kyneta package.
 | Term | Means | Not to be confused with |
 |------|-------|-------------------------|
 | `ExternalStore<T>` | `{ subscribe(onStoreChange): unsubscribe, getSnapshot(): T }` — the contract `useSyncExternalStore` consumes. | A state container, a Zustand store — this is the React built-in contract |
-| `CallableRef` | Structural type: a callable `(...args) => any` that also carries `[CHANGEFEED]`. Every `Ref<S>` from the standard interpreter stack satisfies it. | A React `ref`, a DOM ref |
 | `createSyncStore(syncRef)` | `SyncRef → ExternalStore<PeerSyncState[]>`. One `onPeerSyncChange` subscription; the snapshot is cached because `peerStates` allocates a fresh array per read. | `useChangefeed` — a changefeed needs no store factory |
 | `ExchangeProvider` | React context provider that publishes an `Exchange` to descendants. | A DI container |
 | `useExchange()` | Reads the `Exchange` from context. Throws if no provider is in the tree. | `useContext` on some generic `ExchangeContext` — this is the curated hook |
@@ -270,12 +269,12 @@ Not reactive on its own — the returned `Ref<S>` is a handle, not a value. Pass
 Source: `packages/react/src/use-value.ts`.
 
 ```ts
-useValue<R extends CallableRef | null | undefined>(ref: R): UseValueResult<R>
+useValue<R extends Feed<unknown> | null | undefined>(ref: R): UseValueResult<R>
 ```
 
 `UseValueResult<R>` unifies three cases via conditional types:
 
-- `R extends CallableRef` → `ReturnType<R>` (the `Plain<S>`).
+- `R extends Feed<unknown>` (`@kyneta/changefeed`: a callable carrying `[CHANGEFEED]`, which every ref is) → `ReturnType<R>` (the `Plain<S>`).
 - `R extends null` → `null`.
 - `R extends undefined` → `undefined`.
 
@@ -532,7 +531,6 @@ This is a convenience, not a hard coupling — direct imports from the upstream 
 | Type | File | Role |
 |------|------|------|
 | `ExternalStore<T>` | `src/store.ts` | `{ subscribe, getSnapshot }` — the `useSyncExternalStore` contract. |
-| `CallableRef` | `src/store.ts` | Callable + `[CHANGEFEED]` structural type. |
 | `useTracked` | `src/use-tracked.ts` | `(thunk) → T` — auto-tracked reactive read over `@kyneta/reactive`. |
 | `useSelector` | `src/use-selector.ts` | `(ref, select) → T` — `useTracked` over `() => select(ref)`, memoized on its arguments. |
 | `useChangefeed` | `src/use-changefeed.ts` | `(feed) → T` — `useSyncExternalStore` over `feed.current`. |
@@ -558,7 +556,7 @@ This is a convenience, not a hard coupling — direct imports from the upstream 
 | File | Role |
 |------|------|
 | `src/index.ts` | Public barrel + curated re-exports from upstream packages. |
-| `src/store.ts` | `createSyncStore`, `CallableRef`, `ExternalStore`. Zero React imports. |
+| `src/store.ts` | `createSyncStore`, `ExternalStore`. Zero React imports. |
 | `src/use-tracked.ts` | `useTracked` — `useSyncExternalStore` over a `@kyneta/reactive` computation, through the refresh gate. |
 | `src/use-selector.ts` | `useSelector` — `useTracked` over a thunk memoized on `(ref, select)`. |
 | `src/use-changefeed.ts` | `useChangefeed` — `useSyncExternalStore` over a feed's `current`, subscribed as widely as `current` reads. |

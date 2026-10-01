@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { Schema } from "../index.js"
-import { TRANSACT } from "../interpreters/writable.js"
+import { TRANSACT } from "../ref/write.js"
 import { contextOver, docOver, refOver } from "./stack.js"
 
 // ===========================================================================

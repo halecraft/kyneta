@@ -1,21 +1,10 @@
-// interpreter-types — shared type definitions used across interpreters.
+// plain-types — the type of a schema's plain value (`Plain<S>`), and the
+// plain flat-tree node.
 //
-// These are pure type-level definitions with no runtime code. `Plain<S>`, the
-// schema-to-plain-JS-type mapping, lives here so the readable, writable and
-// validate types can all use it without importing each other.
+// Types only. Refs (`ref/readable.ts`), the folds (`interpreters/`) and the
+// change vocabulary all use `Plain<S>`, so it lives apart from each of them.
 
 import type { RichTextDelta } from "./change.js"
-
-// ---------------------------------------------------------------------------
-// INTERPRETER — runtime marker for Interpreter instances
-// ---------------------------------------------------------------------------
-
-/**
- * Unique symbol used to identify Interpreter instances at runtime.
- * Uses `Symbol.for` so that multiple copies of this module (e.g. in
- * different bundle chunks) share the same symbol identity.
- */
-export const INTERPRETER: unique symbol = Symbol.for("kyneta:interpreter")
 
 // ---------------------------------------------------------------------------
 // PlainFlatTreeNode — Plain-form flat-forest node (matches the shadow)
@@ -26,8 +15,8 @@ export const INTERPRETER: unique symbol = Symbol.for("kyneta:interpreter")
  *
  * `Plain<TreeSchema<I>>` is the canonical flat-array snapshot, matching
  * `LoroTree.toArray()`, `stepTree`, and `TreeChange`. The recursive
- * `ForestNode<Plain<I>>` projection lives in the read layer only — it's
- * not the canonical Plain shape.
+ * projection a tree ref's `.roots` returns is not the canonical Plain
+ * shape.
  */
 export interface PlainFlatTreeNode<I extends Schema> {
   readonly id: string

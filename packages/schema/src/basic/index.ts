@@ -14,15 +14,17 @@ export { describe } from "../describe.js"
 export { applyChanges, batch } from "../facade/batch.js"
 // --- Observation protocol (substrate-agnostic, re-exported for convenience) ---
 export { subscribe, subscribeNode } from "../facade/observe.js"
-export type { Plain } from "../interpreter-types.js"
 // --- Validation ---
 export {
   SchemaValidationError,
   tryValidate,
   validate,
 } from "../interpreters/validate.js"
+// --- Zero (default values) ---
+export { Zero } from "../interpreters/zero.js"
+export type { Plain } from "../plain-types.js"
 // --- Types ---
-export type { DocRef, Ref, RRef } from "../ref.js"
+export type { DocRef, Ref, RRef } from "../ref/schema-ref.js"
 export type {
   CounterSchema,
   MapSchema,
@@ -38,8 +40,6 @@ export type {
 // --- Schema definition ---
 export { Schema } from "../schema.js"
 export type { CommitOptions, SubstratePayload } from "../substrate.js"
-// --- Zero (default values) ---
-export { Zero } from "../zero.js"
 
 // --- Generic sync: exportEntirety (re-exported from @kyneta/schema) ---
 
@@ -53,7 +53,7 @@ import type { Op } from "../changefeed.js"
 import { createRef } from "../create-doc.js"
 import type { PlainNativeMap } from "../native.js"
 import { hasSubstrate, SUBSTRATE } from "../native.js"
-import type { DocRef } from "../ref.js"
+import type { DocRef } from "../ref/schema-ref.js"
 import type { ProductSchema } from "../schema.js"
 import type { SubstratePayload } from "../substrate.js"
 import {

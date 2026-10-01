@@ -13,9 +13,10 @@ import {
 import { own, replaceChange, sequenceChange } from "../change.js"
 import { __countKeptRefs, __countTrieNodes } from "../coordinate-trie.js"
 import { deleted, deletedFeed } from "../index.js"
-import { TRANSACT, type WritableContext } from "../interpreters/writable.js"
 import { RawPath } from "../path.js"
+import { TRANSACT } from "../ref/write.js"
 import { withReadScope } from "../tracking.js"
+import type { WritableContext } from "../writable-context.js"
 
 const Doc = Schema.struct({
   rows: Schema.record(Schema.struct({ n: Schema.number() })),
@@ -147,9 +148,7 @@ describe("what else keeps a coordinate", () => {
   it("a deletion listener keeps its coordinate, and hears the deletion", async () => {
     const doc = fixture()
     let heard = 0
-    const feed = deletedFeed(doc.rows.at("row-6"))
-    if (feed === undefined) throw new Error("an entry has a deletion feed")
-    feed[CHANGEFEED].subscribe(() => {
+    deletedFeed(doc.rows.at("row-6"))[CHANGEFEED].subscribe(() => {
       heard++
     })
     await collect()

@@ -3,7 +3,7 @@
 // Reads the write timestamps the `ephemeral` substrate keeps in its
 // `StateTree`.
 
-import { hasTransact, PATH, TRANSACT } from "../interpreters/writable.js"
+import { hasTransact, PATH, TRANSACT } from "../ref/write.js"
 import { BACKING_DOC } from "../substrate.js"
 import type { StateTree } from "../substrates/state-tree.js"
 import { newestTimestamp, stateTreeAt } from "../substrates/state-tree.js"

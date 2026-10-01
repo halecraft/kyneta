@@ -5,9 +5,10 @@ import { applyChanges, batch, createDoc, Schema } from "../basic/index.js"
 import { own, replaceChange, sequenceChange } from "../change.js"
 import { __countTrieNodes } from "../coordinate-trie.js"
 import { populated, populatedFeed } from "../index.js"
-import type { SubscriberNode } from "../interpreters/subscriber-trie.js"
-import { TRANSACT, type WritableContext } from "../interpreters/writable.js"
 import { RawPath } from "../path.js"
+import { TRANSACT } from "../ref/write.js"
+import type { SubscriberNode } from "../subscriber-trie.js"
+import type { WritableContext } from "../writable-context.js"
 import { untypedDocOver } from "./stack.js"
 
 const Doc = Schema.struct({

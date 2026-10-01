@@ -24,7 +24,6 @@ import { deepClonePlain } from "../clone.js"
 import { findOpaqueBoundary } from "../fold-path.js"
 import { digestToHex } from "../hash.js"
 import type { Path } from "../interpret.js"
-import type { WritableContext } from "../interpreters/writable.js"
 import { invert } from "../inverse.js"
 import { RawPath } from "../path.js"
 import {
@@ -57,6 +56,7 @@ import type {
   Version,
 } from "../substrate.js"
 import { BACKING_DOC } from "../substrate.js"
+import type { WritableContext } from "../writable-context.js"
 import { buildWritableContext } from "../writable-context.js"
 import { createLocalUpdateSignal } from "./local-update-signal.js"
 import { DEFAULT_LINEAGE } from "./plain.js"

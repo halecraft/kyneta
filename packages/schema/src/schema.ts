@@ -451,7 +451,7 @@ export interface RichTextSchema<Laws extends string = "positional-ot"> {
  *
  * Every `PlainSchema` value is also a `Schema` value (structural subtype),
  * so plain schemas work with `interpret()`, `describe()`, `validate()`,
- * `Zero.structural()`, `Plain<S>`, and `Writable<S>` without casts.
+ * `Zero.structural()`, `Plain<S>` and `Ref<S>` without casts.
  */
 export type PlainSchema =
   | ScalarSchema

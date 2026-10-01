@@ -6,9 +6,8 @@
 // what the fold already knows.
 
 import type { Interpreter, Path } from "../interpret.js"
-import { INTERPRETER } from "../interpreter-types.js"
 import type { Schema as SchemaNode } from "../schema.js"
-import { Zero } from "../zero.js"
+import { Zero } from "./zero.js"
 
 /**
  * `interp`, with every node whose schema declares `decayMs` read as its
@@ -36,7 +35,6 @@ export function withDecay<Ctx>(
   }
 
   return {
-    [INTERPRETER]: true,
     scalar: (ctx, path, schema) =>
       expired(path, schema)
         ? Zero.structural(schema)

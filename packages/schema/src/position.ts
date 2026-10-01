@@ -16,6 +16,7 @@
 
 import type { Instruction } from "./change.js"
 import { transformIndex } from "./change.js"
+import { isPropertyHost } from "./guards.js"
 
 // ---------------------------------------------------------------------------
 // Side — boundary bias
@@ -141,12 +142,7 @@ export interface HasPosition {
  * implements `HasPosition` and supports position creation/decoding.
  */
 export function hasPosition(value: unknown): value is HasPosition {
-  return (
-    value !== null &&
-    value !== undefined &&
-    (typeof value === "object" || typeof value === "function") &&
-    POSITION in (value as object)
-  )
+  return isPropertyHost(value) && POSITION in value
 }
 
 // ---------------------------------------------------------------------------

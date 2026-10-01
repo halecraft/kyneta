@@ -7,8 +7,8 @@
 // subscription belongs to its coordinate, not to the ref: it keeps hearing
 // changes after the ref it was made through is collected.
 
-import type { HasChangefeed } from "@kyneta/changefeed"
-import { CHANGEFEED } from "@kyneta/changefeed"
+import type { Feed } from "@kyneta/changefeed"
+import { CHANGEFEED, createFeed } from "@kyneta/changefeed"
 import type { ChangeBase } from "../change.js"
 import type {
   Changeset,
@@ -16,80 +16,74 @@ import type {
   RecursiveChangefeedProtocol,
 } from "../changefeed.js"
 import { liftToOps } from "../delivery.js"
+import { isPropertyHost } from "../guards.js"
 import type { Path } from "../path.js"
 import { RawPath } from "../path.js"
 import { CALL, getter } from "./read.js"
-import { type FeedCarrier, lazySlots, stateOf } from "./state.js"
+import { lazySlots, stateOf } from "./state.js"
 import { reportFeed } from "./track.js"
 
-export const POPULATED: unique symbol = Symbol.for("kyneta:populated")
+// ---------------------------------------------------------------------------
+// Flags — a boolean a ref holds under a symbol
+// ---------------------------------------------------------------------------
 
 /**
- * A ref that tracks whether a change has reached its coordinate. The slot
- * holds a callable returning the boolean, which carries its own
- * `[CHANGEFEED]` so the transition can be subscribed to.
- *
- * Keyed by a symbol, never by the string `"populated"`: a ref exposes its
- * schema's fields as properties, so a string key could collide with one.
+ * A ref flag: a boolean the ref holds under `K`, as a feed. Keyed by a
+ * symbol, never a string: a ref exposes its schema's fields as properties,
+ * so a string key could collide with one.
  */
-export interface HasPopulated {
-  readonly [POPULATED]: (() => boolean) & HasChangefeed<boolean>
-}
+export type HasFlag<K extends symbol> = { readonly [key in K]: Feed<boolean> }
 
-/** Whether `value` tracks population. */
-export function hasPopulated(value: unknown): value is HasPopulated {
-  return (
-    value !== null &&
-    value !== undefined &&
-    (typeof value === "object" || typeof value === "function") &&
-    POPULATED in (value as object)
-  )
-}
-
-/**
- * Whether a change has reached the ref's coordinate: an op landed at or below
- * it, or an op above it rewrote a part of the tree containing it. Monotonic:
- * once true, never false. False for a value that does not track population.
- */
-export function populated(ref: unknown): boolean {
-  if (!hasPopulated(ref)) return false
-  return ref[POPULATED]() === true
+/** What `flag` gives each flag: its guard, its value and its feed. */
+export interface Flag<K extends symbol> {
+  /** Whether `value` is a ref that holds the flag. */
+  has(value: unknown): value is HasFlag<K>
+  /** The flag's boolean; `false` for anything that does not hold it. */
+  value(ref: unknown): boolean
+  /**
+   * The flag's feed. `null` and `undefined` pass through unchanged, as they
+   * do through `useValue`, so a ref that may be absent composes. Any other
+   * value without the flag throws.
+   */
+  feed<R>(ref: R): R extends null | undefined ? R : Feed<boolean>
 }
 
 /**
- * The observable carrier behind `populated(ref)`: a callable returning the
- * boolean, with a `[CHANGEFEED]` that fires once, when the coordinate is
- * first populated. Always truthy when present, so call it rather than test
- * it. Throws for a value that does not track population.
+ * The guard, value and feed of the flag under `slot`. `feed` is named
+ * `name` in its error, which says the ref it requires (`requires`).
  */
-export function populatedFeed(
-  ref: unknown,
-): (() => boolean) & HasChangefeed<boolean> {
-  if (!hasPopulated(ref)) {
-    throw new Error(
-      "populatedFeed() requires a ref that tracks population (a document ref or one below it)",
-    )
+export function flag<K extends symbol>(
+  slot: K,
+  name: string,
+  requires: string,
+): Flag<K> {
+  const has = (value: unknown): value is HasFlag<K> =>
+    isPropertyHost(value) && slot in value
+  return {
+    has,
+    value: ref => has(ref) && ref[slot]() === true,
+    feed<R>(ref: R): R extends null | undefined ? R : Feed<boolean> {
+      type Out = R extends null | undefined ? R : Feed<boolean>
+      if (ref === null || ref === undefined) return ref as Out
+      if (!has(ref)) throw new Error(`${name}() requires ${requires}`)
+      return ref[slot] as Out
+    },
   }
-  return ref[POPULATED]
 }
 
 /**
- * A callable returning `current()`, carrying a `[CHANGEFEED]` whose
- * subscribers hear each change of it: `[DELETED]` and `[POPULATED]` are both
- * one. `tracked` makes a call report a dependency on the carrier.
+ * A flag's feed: `current()` read through a `[CHANGEFEED]` whose subscribers
+ * hear each change of it, deep subscribers at the empty relative path.
+ * `tracked` makes a call report a dependency on the feed.
  */
-export function feedCarrier(
+export function flagFeed(
   current: () => boolean,
   subscribe: (
     callback: (changeset: Changeset<ChangeBase>) => void,
   ) => () => void,
   tracked: boolean,
-): FeedCarrier {
-  const carrier = (): boolean => {
-    if (tracked) reportFeed(carrier)
-    return current()
-  }
-  const changefeed: RecursiveChangefeedProtocol<boolean, ChangeBase> = {
+): Feed<boolean> {
+  const protocol: RecursiveChangefeedProtocol<boolean, ChangeBase> = {
     get current(): boolean {
       return current()
     },
@@ -100,14 +94,46 @@ export function feedCarrier(
       )
     },
   }
-  Object.defineProperty(carrier, CHANGEFEED, {
-    value: changefeed,
-    enumerable: false,
-    configurable: false,
-    writable: false,
-  })
-  return carrier as FeedCarrier
+  const feed: Feed<boolean> = createFeed(() => {
+    if (tracked) reportFeed(feed)
+    return current()
+  }, protocol)
+  return feed
 }
+
+// ---------------------------------------------------------------------------
+// Population
+// ---------------------------------------------------------------------------
+
+export const POPULATED: unique symbol = Symbol.for("kyneta:populated")
+
+/** A ref that tracks whether a change has reached its coordinate: every
+ *  ref of a document. */
+export type HasPopulated = HasFlag<typeof POPULATED>
+
+const population = flag(
+  POPULATED,
+  "populatedFeed",
+  "a ref that tracks population (a document ref or one below it)",
+)
+
+/** Whether `value` tracks population. */
+export const hasPopulated = population.has
+
+/**
+ * Whether a change has reached the ref's coordinate: an op landed at or below
+ * it, or an op above it rewrote a part of the tree containing it. Monotonic:
+ * once true, never false. False for a value that does not track population.
+ */
+export const populated = population.value
+
+/**
+ * The feed behind `populated(ref)`: a callable returning the boolean, with a
+ * `[CHANGEFEED]` that fires once, when the coordinate is first populated.
+ * Always truthy when present, so call it rather than test it. `null` and
+ * `undefined` pass through; any other value that is not a ref throws.
+ */
+export const populatedFeed = population.feed
 
 /** `[CHANGEFEED]` and `[POPULATED]`, for a ref of any kind. */
 export function observeMembers(): PropertyDescriptorMap {
@@ -131,14 +157,14 @@ export function observeMembers(): PropertyDescriptorMap {
       }
       return slots.changefeed
     }),
-    [POPULATED]: getter(function (this: unknown): FeedCarrier {
+    [POPULATED]: getter(function (this: unknown): Feed<boolean> {
       const state = stateOf(this, "[POPULATED]")
       const slots = lazySlots(state)
       if (slots.populated !== undefined) return slots.populated
       const { subscribers } = state.ctx
       const path = state.path
       const origin = { changes: [], origin: "populated" } as const
-      slots.populated = feedCarrier(
+      slots.populated = flagFeed(
         () => subscribers.isPopulated(path),
         callback => {
           // Already populated: fire once, after the caller has its teardown.

@@ -884,8 +884,9 @@ case therefore needs no carve-out anywhere: it falls out of the algebra.
 A term is a `[CHANGEFEED]` carrier, not a bespoke interface — the universality
 rule in `packages/changefeed/TECHNICAL.md` ("every reactive surface in Kyneta
 goes through this one symbol"), and the same insight `jj:mltppspx` recorded as
-"The Universality of CHANGEFEED". A term is therefore the same shape as
-`populatedFeed(ref)`, and composes with `useChangefeed`, `@kyneta/reactive`,
+"The Universality of CHANGEFEED". A term is a `Feed<boolean>`
+(`@kyneta/changefeed`), the same shape as `populatedFeed(ref)`, built by
+`signalFeed` (`src/settle.ts`), and composes with `useChangefeed`, `@kyneta/reactive`,
 and `@kyneta/index` with no new plumbing. That is why the React binding is a
 one-line adapter rather than a store core.
 
@@ -924,12 +925,9 @@ The short name is the plain value; the `*Feed` suffix is the observable
 carrier. Reading is routine and gets the short name; subscribing is the
 specialist move and pays the suffix.
 
-The shipped `populated` / `populated` and `deleted` / `deleted` pairs are
-named the other way round. That is a known error, corrected in 3.0
-(`next.md` §10); `populatedFeed` / `deletedFeed` ship now as aliases so the
-carrier side is already uniform. The hazard the old order creates is concrete:
-a carrier is a callable, so `if (populated(ref))` is **always truthy** —
-silently the opposite of the truth for an empty document.
+The hazard the rule guards against is concrete: a carrier is a callable,
+so `if (populatedFeed(ref))` is **always truthy**, silently the opposite of
+the truth for an empty document. Call the feed, or use the short name.
 
 ### The limits of the claim
 

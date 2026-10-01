@@ -16,7 +16,7 @@ Two things are open to you:
   substrate.
 - **`interpret(schema, interpreter, ctx)`** folds a schema with your own
   `Interpreter`: one case per kind, children as thunks a case may force or
-  not. Materializing, zeroing, validating and describing are interpreters.
+  not. Materializing, zeroing and validating are interpreters.
 
 Refs themselves are one fixed construction. A ref is its state (its context,
 its path, its parent, and a few slots filled on first use), bound to a
@@ -66,5 +66,5 @@ bun run example/advanced/main.ts
 | Symbol | Module | Purpose |
 |---|---|---|
 | `CALL` (`kyneta:call`) | `ref/read.ts` | What calling a ref does: `ref()` is `ref[CALL]()` |
-| `TRANSACT` (`kyneta:transact`) | `interpreters/writable.ts` | Context discovery: a ref's `WritableContext` |
+| `TRANSACT` (`kyneta:transact`) | `ref/write.ts` | Context discovery: a ref's `WritableContext` |
 | `CHANGEFEED` (`kyneta:changefeed`) | `@kyneta/changefeed` | Observation: every ref's feed, made on first access |

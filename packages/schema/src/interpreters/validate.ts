@@ -15,8 +15,7 @@ import { validateForest } from "../forest.js"
 import { isNonNullObject, isPlainObject, samePlainValue } from "../guards.js"
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
 import { interpret } from "../interpret.js"
-import type { Plain } from "../interpreter-types.js"
-import { INTERPRETER } from "../interpreter-types.js"
+import type { Plain } from "../plain-types.js"
 import { plainReader } from "../reader.js"
 import {
   type CounterSchema,
@@ -82,8 +81,8 @@ function describeActual(value: unknown): string {
 /**
  * Context for the validate interpreter.
  *
- * - `root` — the root value being validated (same role as `ctx` in
- *   `plainInterpreter`)
+ * - `root` — the root value being validated: each case reads its value at
+ *   its path in `root`
  * - `errors` — mutable accumulator for validation failures
  * - `reader` — a `plainReader` over `root`, used by the catamorphism's
  *   `tree` case to enumerate flat-forest topology. Optional — the
@@ -144,8 +143,6 @@ function scalarExpected(kind: string): string {
  * `ctx.errors`.
  */
 export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
-  [INTERPRETER]: true,
-
   scalar(ctx: ValidateContext, path: Path, schema: ScalarSchema): unknown {
     const value = path.read(ctx.root)
 

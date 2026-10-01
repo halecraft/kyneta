@@ -19,10 +19,11 @@ import type {
   ChangeBase,
   ChangefeedProtocol,
   Changeset,
-  HasChangefeed,
+  Feed,
 } from "@kyneta/changefeed"
 import {
   CHANGEFEED,
+  createFeed,
   createWatcherTable,
   type WatcherTable,
 } from "@kyneta/changefeed"
@@ -47,12 +48,11 @@ import { diffDeps } from "./diff.js"
 /**
  * A reactive computation. Callable (`r()` returns the current value, pulled
  * fresh if dirty), carries a monotonic `version` (advances iff a dependency
- * fired), and is itself a `HasChangefeed` (so other reactives and React's
+ * fired), and is itself a `Feed` (so other reactives and React's
  * `useSyncExternalStore` can observe it). Reading `r()` inside a tracking
  * scope reports a dependency on `r`.
  */
-export interface Reactive<T> extends HasChangefeed<T> {
-  (): T
+export interface Reactive<T> extends Feed<T> {
   /** Monotonic — advances exactly when a recompute occurs (a dependency fired). */
   readonly version: number
   /** The current value, recomputed on read if dirty. */
@@ -236,14 +236,6 @@ export function reactive<T>(thunk: () => T): Reactive<T> {
     subscribePrimitive(dep, () => markDirty(node)),
   )
 
-  const r = ((): T => {
-    if (currentScope()) {
-      reportRead({ key: node.depKey, aspect: "value", ref: r as HasChangefeed })
-    }
-    if (node.dirty && !node.disposed) recompute(node)
-    return node.value
-  }) as Reactive<T>
-
   const protocol: ChangefeedProtocol<T> = {
     get current(): T {
       if (node.dirty && !node.disposed) recompute(node)
@@ -261,36 +253,41 @@ export function reactive<T>(thunk: () => T): Reactive<T> {
     },
   }
 
-  Object.defineProperty(r, CHANGEFEED, { value: protocol, enumerable: false })
-  Object.defineProperty(r, "version", {
-    get: () => node.version,
-    enumerable: false,
-  })
-  Object.defineProperty(r, "current", {
-    get: () => protocol.current,
-    enumerable: false,
-  })
-  Object.defineProperty(r, "disposed", {
-    get: () => node.disposed,
-    enumerable: false,
-  })
-  r.subscribe = (cb: () => void): (() => void) =>
-    protocol.subscribe(cb as (cs: Changeset) => void)
-  r.refresh = (thunk: () => T): T => {
-    if (node.disposed) return node.value
-    if (thunk !== node.thunk || node.dirty) {
-      node.thunk = thunk
-      trackNode(node)
+  const feed: Feed<T> = createFeed((): T => {
+    if (currentScope()) {
+      reportRead({ key: node.depKey, aspect: "value", ref: feed })
     }
-    return node.value
-  }
-  r.dispose = (): void => {
-    if (node.disposed) return
-    node.disposed = true
-    node.subs.clear()
-    pending.delete(node)
-    node.listeners.clear()
-  }
+    return protocol.current
+  }, protocol)
+
+  const r = Object.defineProperties(feed, {
+    version: { get: () => node.version },
+    current: { get: () => protocol.current },
+    disposed: { get: () => node.disposed },
+    subscribe: {
+      value: (cb: () => void): (() => void) =>
+        protocol.subscribe(cb as (cs: Changeset) => void),
+    },
+    refresh: {
+      value: (thunk: () => T): T => {
+        if (node.disposed) return node.value
+        if (thunk !== node.thunk || node.dirty) {
+          node.thunk = thunk
+          trackNode(node)
+        }
+        return node.value
+      },
+    },
+    dispose: {
+      value: (): void => {
+        if (node.disposed) return
+        node.disposed = true
+        node.subs.clear()
+        pending.delete(node)
+        node.listeners.clear()
+      },
+    },
+  }) as Reactive<T>
 
   // Initial computation — establishes value + subscriptions; version stays 0.
   trackNode(node)
@@ -324,7 +321,7 @@ let nextTrackId = 1
  *
  * @param source - A callable `HasChangefeed` (its `()` returns the value).
  */
-export function track<T>(source: (() => T) & HasChangefeed<T>): T {
+export function track<T>(source: Feed<T>): T {
   if (currentScope() && !hasRecursiveChangefeed(source)) {
     let key = trackKeys.get(source)
     if (key === undefined) {

@@ -11,6 +11,7 @@
 // SUBSTRATE is an internal symbol property on root refs only, carrying the
 // Substrate instance for sync functions (version, exportEntirety, etc.).
 
+import { isPropertyHost } from "./guards.js"
 import type { PlainState } from "./reader.js"
 import type { Substrate, Version } from "./substrate.js"
 
@@ -62,12 +63,7 @@ export interface HasSubstrate<V extends Version = Version> {
 export function hasSubstrate<V extends Version = Version>(
   value: unknown,
 ): value is HasSubstrate<V> {
-  return (
-    value !== null &&
-    value !== undefined &&
-    (typeof value === "object" || typeof value === "function") &&
-    SUBSTRATE in (value as object)
-  )
+  return isPropertyHost(value) && SUBSTRATE in value
 }
 
 // ---------------------------------------------------------------------------

@@ -2,7 +2,7 @@ import { hasChangefeed } from "@kyneta/changefeed"
 import { describe, expect, it } from "vitest"
 import type { Readable } from "../index.js"
 import { Schema } from "../index.js"
-import { TRANSACT } from "../interpreters/writable.js"
+import { TRANSACT } from "../ref/write.js"
 import { docOver } from "./stack.js"
 
 // ===========================================================================

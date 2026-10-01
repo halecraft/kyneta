@@ -17,6 +17,7 @@ import { mapPayload } from "./change.js"
 import { landingSchema } from "./coordinate-exists.js"
 import { isPlainObject } from "./guards.js"
 import { dispatchSum } from "./interpret.js"
+import { Zero } from "./interpreters/zero.js"
 import type { Path } from "./path.js"
 import type { Reader } from "./reader.js"
 import {
@@ -27,7 +28,6 @@ import {
   type Schema as SchemaNode,
   type SumSchema,
 } from "./schema.js"
-import { Zero } from "./zero.js"
 
 /**
  * `value` shaped by `schema`: absent declared fields as `Zero.structural`,

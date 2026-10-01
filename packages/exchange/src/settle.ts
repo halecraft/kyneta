@@ -29,12 +29,8 @@
 // composes with `useChangefeed`, `@kyneta/reactive`, and `@kyneta/index`
 // without any new plumbing.
 
-import type {
-  ChangefeedProtocol,
-  Changeset,
-  HasChangefeed,
-} from "@kyneta/changefeed"
-import { CHANGEFEED } from "@kyneta/changefeed"
+import type { Changeset, Feed } from "@kyneta/changefeed"
+import { CHANGEFEED, createFeed } from "@kyneta/changefeed"
 import { createDocumentMap } from "./document-key.js"
 import type { Authority } from "./governance.js"
 
@@ -43,52 +39,27 @@ import type { Authority } from "./governance.js"
 // ---------------------------------------------------------------------------
 
 /**
- * One layer's answer to "has my truth source reported for this document?".
- *
- * Call it for the current boolean; subscribe via `[CHANGEFEED]` to be told
- * when it changes. Terms are monotonic in practice — a source that has
- * reported does not un-report — but nothing here depends on that.
- */
-export type SettleTerm = (() => boolean) & HasChangefeed<boolean>
-
-/**
- * Build a `SettleTerm` from a reader and a subscribe function.
- *
- * Follows `feedCarrier` in `@kyneta/schema`'s `ref/observe.ts`: a plain
- * function with the protocol attached under `[CHANGEFEED]` as a
- * non-enumerable property, as `populatedFeed` and `deletedFeed` return.
+ * A feed whose subscribers hear only that it moved: `subscribe` calls back
+ * with no change, and each subscriber receives an empty changeset. A settle
+ * term is one over a boolean: one layer's answer to "has my truth source
+ * reported for this document?". Terms are monotonic in practice (a source
+ * that has reported does not un-report), but nothing here depends on that.
  *
  * @internal
  */
-export function makeFeed<T>(
+export function signalFeed<T>(
   read: () => T,
   subscribe: (onChange: () => void) => () => void,
-): (() => T) & HasChangefeed<T> {
-  const protocol: ChangefeedProtocol<T, never> = {
+): Feed<T> {
+  return createFeed(read, {
     get current(): T {
       return read()
     },
     subscribe(callback: (changeset: Changeset<never>) => void): () => void {
-      // The payload carries no changes — a settle term is a bare boolean, and
-      // subscribers only care that it moved.
       return subscribe(() => callback({ changes: [] }))
     },
-  }
-  const feed = (() => read()) as (() => T) & HasChangefeed<T>
-  Object.defineProperty(feed, CHANGEFEED, {
-    value: protocol,
-    enumerable: false,
-    configurable: false,
-    writable: false,
   })
-  return feed
 }
-
-/** A boolean feed — the shape every settle term takes. @internal */
-export const makeSettleTerm: (
-  read: () => boolean,
-  subscribe: (onChange: () => void) => () => void,
-) => SettleTerm = makeFeed
 
 // ---------------------------------------------------------------------------
 // The registry
@@ -98,7 +69,7 @@ export const makeSettleTerm: (
  * Terms attached to a document. A `DocumentMap`, like every per-document
  * registry in this package, so any ref within the document finds them.
  */
-const settleTerms = createDocumentMap<SettleTerm[]>()
+const settleTerms = createDocumentMap<Feed<boolean>[]>()
 
 /**
  * Attach a settle term to a document.
@@ -106,7 +77,7 @@ const settleTerms = createDocumentMap<SettleTerm[]>()
  * @internal Called by `Runtime` (the storage term) and `Exchange` (the peer
  * term) as a document is created. Applications never call this.
  */
-export function registerSettleTerm(ref: object, term: SettleTerm): void {
+export function registerSettleTerm(ref: object, term: Feed<boolean>): void {
   const existing = settleTerms.get(ref)
   if (existing) existing.push(term)
   else settleTerms.set(ref, [term])
@@ -118,7 +89,7 @@ export function registerSettleTerm(ref: object, term: SettleTerm): void {
  *
  * @internal
  */
-export function termsFor(ref: object): readonly SettleTerm[] {
+export function termsFor(ref: object): readonly Feed<boolean>[] {
   return settleTerms.get(ref) ?? []
 }
 
@@ -158,7 +129,7 @@ export function settled(ref: object): boolean {
  * which an authoritative peer has no reason to do.
  */
 const storage = createDocumentMap<{
-  readonly term: SettleTerm
+  readonly term: Feed<boolean>
   /** The load error, if the load failed. */
   readonly readError: () => unknown | undefined
 }>()
@@ -176,7 +147,7 @@ const storage = createDocumentMap<{
  */
 export function registerHydrationTerm(
   ref: object,
-  term: SettleTerm,
+  term: Feed<boolean>,
   readError: () => unknown | undefined,
 ): void {
   storage.set(ref, { term, readError })
@@ -238,10 +209,10 @@ export function hydrated(ref: object): boolean {
 }
 
 /** Observable form of {@link hydrated}. A callable, so never put it in an `if`. */
-export function hydratedFeed(ref: object): SettleTerm {
+export function hydratedFeed(ref: object): Feed<boolean> {
   return (
     storage.get(ref)?.term ??
-    makeSettleTerm(
+    signalFeed(
       () => true,
       () => () => {},
     )
@@ -255,11 +226,11 @@ export function hydratedFeed(ref: object): SettleTerm {
  * Being a carrier, this is a *callable* — and therefore always truthy. Never
  * write `if (settledFeed(ref))`; call it, or use {@link settled}.
  */
-export function settledFeed(ref: object): SettleTerm {
+export function settledFeed(ref: object): Feed<boolean> {
   // Read `termsFor` on every access rather than capturing it: a term can be
   // registered after this feed is created (the Exchange's peer term is added
   // after the Runtime's storage term), and a captured array would miss it.
-  return makeSettleTerm(
+  return signalFeed(
     () => settled(ref),
     onChange => {
       const disposers = termsFor(ref).map(term =>

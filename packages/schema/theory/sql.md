@@ -15,15 +15,15 @@ objects. A SQLite substrate breaks this model in several ways worth
 thinking through carefully.
 
 **Option A: SQLite as a durable mirror of the in-memory model.** The
-`StoreReader` reads from an in-memory cache (same as plain substrate),
-and `prepare`/`onFlush` write-through to SQLite. This is basically
+`Reader` reads from an in-memory cache (same as plain substrate),
+and `prepare`/`afterBatch` write-through to SQLite. This is basically
 `PlainSubstrate` with persistence bolted on. Useful but not
 interesting — you could do it in 50 lines by wrapping
-`createPlainSubstrate` with a flush hook.
+`createPlainSubstrate` with an `afterBatch` hook.
 
-**Option B: SQLite as the source of truth.** The `StoreReader` issues
+**Option B: SQLite as the source of truth.** The `Reader` issues
 actual SQL queries on every read. `prepare` executes SQL statements.
-`onFlush` commits the transaction and captures the changeset. This is
+`afterBatch` commits the transaction and captures the changeset. This is
 the hard version, and the one worth building, because it proves the
 abstraction works when the backing store has fundamentally different
 access patterns.
@@ -92,21 +92,21 @@ schema algebra forbids the constructs that cause those problems.
 
 ---
 
-## 3. The StoreReader
+## 3. The Reader
 
-The interpreter stack reads from the store exclusively through this
-interface:
+Every ref reads σ exclusively through this interface:
 
-```packages/schema/src/store.ts#L35-40
-export interface StoreReader {
+```packages/schema/src/reader.ts
+export interface Reader {
   read(path: Path): unknown
   arrayLength(path: Path): number
   keys(path: Path): string[]
   hasKey(path: Path, key: string): boolean
+  forestTopology(path: Path): readonly FlatTreeNodeTopology[]
 }
 ```
 
-All four methods are synchronous. This is not a soft assumption — the
+Every method is synchronous. This is not a soft assumption — the
 ref construction (`src/ref/*`: navigation, reading, writing and
 observation) depends on synchronous reads. This
 rules out async-only SQL libraries and mandates `better-sqlite3` (which
@@ -114,12 +114,12 @@ is synchronous by design).
 
 ### The N+1 problem
 
-When iterating a list of 100 posts, the interpreter calls:
+When iterating a list of 100 posts, the refs call:
 - `arrayLength([{key: "posts"}])` → 1 query
 - For each post i: `read([...path, {index: i}, {key: "title"}])` → 100 queries
 - For each post i: `read([...path, {index: i}, {key: "body"}])` → 100 queries
 
-That's 201 queries. This is structural — baked into the `StoreReader`
+That's 201 queries. This is structural — baked into the `Reader`
 interface, which was designed for O(1) in-memory access.
 
 ### Mitigation strategies
@@ -129,21 +129,21 @@ Great for sparse access (read one field of a large document). SQLite
 prepared statements are sub-microsecond for simple lookups.
 
 **Prefetching reader** — on first access to a table, load all rows
-into a `Map`. Subsequent reads are memory lookups. Invalidate on flush.
+into a `Map`. Subsequent reads are memory lookups. Invalidate at the end of each batch.
 
 **Hybrid** — scalars and small products: lazy. Lists: prefetch the
 whole list on first `.length` or `.at()` access. Probably the sweet
 spot.
 
-The `StoreReader` interface doesn't care which strategy is used. The
-interpreter stack is oblivious.
+The `Reader` interface doesn't care which strategy is used. The
+refs are oblivious.
 
 ### Honest assessment
 
-The `StoreReader` interface is fundamentally a **navigator**
+The `Reader` interface is fundamentally a **navigator**
 (step-by-step path traversal), not a **query planner** (declarative
 data needs). SQL is powerful precisely because it separates "what you
-want" from "how to get it." The `StoreReader` throws away that
+want" from "how to get it." The `Reader` throws away that
 separation by forcing point-access patterns. This is a real limitation
 — the SQL substrate can never expose SQL's set-oriented query power
 through the `Ref<S>` API. The user always thinks in document terms; the
@@ -213,12 +213,12 @@ CREATE TABLE _changelog (
 );
 ```
 
-On each flush: extract changeset from session → append to `_changelog`
+At the end of each batch (`afterBatch`): extract changeset from session → append to `_changelog`
 → bump version counter → start new session.
 
 `exportSince(v)` returns concatenated changesets from `_changelog WHERE
 version > ?`. `exportEntirety()` returns JSON-serialized full state (or
-the raw `.db` file). `importDelta()` applies a binary changeset via
+the raw `.db` file). `merge()` applies a binary changeset via
 `db.applyChangeset()`.
 
 This maps directly to `PlainVersion` (monotonic integer, total order).
@@ -252,9 +252,9 @@ inherent to indexed-sequence-in-SQL.
 Mitigation: gap-based indexing (use floating-point `_idx` values with
 gaps, only re-index when gaps are exhausted).
 
-### Reverse: Session Changeset → Op[] (`flush` path)
+### Reverse: Session Changeset → Op[] (`afterBatch` path)
 
-This is the genuinely novel direction. On flush, the session changeset
+This is the genuinely novel direction. At the end of a batch, the session changeset
 contains row-level diffs. The schema provides the mapping back to typed
 ops:
 
@@ -303,24 +303,26 @@ care where the mutation originated.
 ## 6. The Changefeed Bridge
 
 The `prepare()` method executes SQL directly. The session records
-everything. On `onFlush()`:
+everything. At the end of each batch, `afterBatch()`:
 
 1. Extract changeset from session
 2. Convert entire changeset → `Op[]` via schema-driven reverse mapping
-3. Deliver all ops through changefeed (with re-entrancy guard)
+3. For changes no ref authored, announce the ops (`ctx.announce`), which
+   delivers them; an authored batch's ops were prepared through `prepare`
+   and are delivered by the writable context
 4. Append changeset to `_changelog`
 5. Bump version
 6. Start new session
 
 This means `prepare()` doesn't need to track what it did — the session
-IS the op buffer. The flush cycle reads the session's changeset and
+IS the op buffer. `afterBatch()` reads the session's changeset and
 derives ops via the reverse mapping.
 
-For `importDelta()` (receiving a changeset from another peer): apply
+For `merge()` (receiving a changeset from another peer): apply
 the changeset to the database, then the session captures the resulting
-row changes, and the next flush delivers them through the changefeed.
-A `pendingImportOrigin` stash (same pattern as Loro/Yjs substrates)
-carries the origin tag for subscriber filtering.
+row changes, and the substrate announces them (`ctx.announce`). `merge`'s
+options carry the origin tag for subscriber filtering, as on the Loro and
+Yjs substrates.
 
 ---
 
@@ -330,10 +332,9 @@ carries the origin tag for subscriber filtering.
 
 The schema → SQL mapping is a total, injective catamorphism. Every
 schema node has a lossless SQL representation. The `Substrate` interface
-(`prepare`, `onFlush`, `version`, `exportEntirety`, `exportSince`,
-`importDelta`) maps cleanly to SQLite primitives. Cross-substrate
-interop works via the synchronizer's Strategy 2 fallback (reconstruct →
-replay as `ReplaceChange` ops).
+(`prepare`, `afterBatch`, `version`, `exportEntirety`, `exportSince`,
+`merge`) maps cleanly to SQLite primitives. Cross-substrate interop
+means speaking another substrate's payloads (§10).
 
 ### Where the abstraction strains
 
@@ -364,7 +365,7 @@ replay as `ReplaceChange` ops).
 
 The SQL substrate is not an ORM. It's a **server-side persistence
 substrate** that makes document data queryable while participating in
-the exchange protocol. It is inherently `strategy: "sequential"` —
+the exchange protocol. It is inherently the serialized writer model (`SYNC_AUTHORITATIVE`) —
 total order, server authority, no concurrent versions. It is not a
 collaborative substrate.
 
@@ -446,8 +447,8 @@ not supported.
 
 **Implementation note:** this requires the same schema → DDL
 catamorphism and change → SQL translation as the full substrate, but
-skips `StoreReader`, versioning, `exportEntirety`, `exportSince`,
-`importDelta`. Roughly half the implementation work.
+skips `Reader`, versioning, `exportEntirety`, `exportSince`,
+`merge`. Roughly half the implementation work.
 
 ### 8c. SQL-Native Substrate (Full Substrate + Out-of-Band Writes)
 
@@ -462,7 +463,7 @@ SqliteSubstrate (source of truth)
       ├── prepare(path, change) → executes SQL
       ├── raw SQL writes → also captured by session
       │
-      ├── onFlush() → session changeset → reverse map → Op[]
+      ├── afterBatch() → session changeset → reverse map → Op[]
       │                → changefeed fires
       │                → changeset appended to _changelog
       │
@@ -483,10 +484,10 @@ SqliteSubstrate (source of truth)
 │  │          SQLite database           │                 │
 │  │   _root: (title TEXT, ...)         │◀─ prepare()     │
 │  │   posts: (_idx, title, body, ...)  │◀─ raw SQL       │
-│  │   _changelog: (version, changeset)│◀─ importDelta() │
+│  │   _changelog: (version, changeset)│◀─ merge() │
 │  └───────────────────────────────────┘                 │
 │         │                                               │
-│         │ on flush: changeset → reverse map → Op[]      │
+│         │ afterBatch: changeset → reverse map → Op[]      │
 │         ▼                                               │
 │  ┌──────────────┐                                      │
 │  │  Changefeed   │─ subscribers see ALL mutations       │
@@ -499,7 +500,7 @@ reactivity, sync, AND queryable persistence. External processes (admin
 tools, batch jobs, migrations) can write raw SQL and their changes
 propagate to connected clients via the changefeed.
 
-**Limitation:** no CRDT merge semantics. `strategy: "sequential"` only.
+**Limitation:** no CRDT merge semantics. the serialized writer model (`SYNC_AUTHORITATIVE`) only.
 The SequenceChange cursor-to-index translation and the reverse mapping
 (changeset → Op[]) are the hardest implementation pieces.
 
@@ -527,7 +528,7 @@ The SequenceChange cursor-to-index translation and the reverse mapping
 
 Options 2 and 3 share the same core implementation work: schema → DDL
 catamorphism + change → SQL forward mapping. Option 3 additionally
-requires the reverse mapping (changeset → Op[]) and the `StoreReader`.
+requires the reverse mapping (changeset → Op[]) and the `Reader`.
 
 ---
 
@@ -617,18 +618,18 @@ through the session extension.
 └─────────────────────┘          └──────────────────────┘
 ```
 
-The server is the authoritative peer with `strategy: "sequential"`.
-The client uses `bindPlain(BlogSchema)`. The server uses
+The server is the authoritative peer with the serialized writer model (`SYNC_AUTHORITATIVE`).
+The client uses `json.bind(BlogSchema)`. The server uses
 `bindSql(BlogSchema, { path: "./blog.db" })`. The exchange doesn't
 care — different `BoundSchema` for the same document ID, interoperable
 via `SubstratePayload`.
 
-Cross-substrate interop works today via the synchronizer's Strategy 2
-fallback: reconstruct temp substrate from snapshot → read state as JSON
-→ replay as `ReplaceChange` ops. A SQL substrate that exports
-`{ encoding: "json", data: JSON.stringify(allTablesAsNestedObject) }`
-interoperates with `PlainSubstrate` out of the box, with zero changes
-to the exchange.
+Interop with a `json` client means speaking the plain substrate's
+payloads: an entirety is the document as JSON at a log position, and a
+delta is the serialized op batches since a version (`substrates/plain.ts`,
+`substrates/op-codec.ts`). A SQL substrate that produces and consumes
+those interoperates with `json` documents with no change to the
+exchange.
 
 **Build this first.** Zero browser hacks. Clear value proposition:
 your server's database IS the document the client is editing.
@@ -718,7 +719,7 @@ blog.db.exec("UPDATE posts SET published = 1 WHERE title LIKE '%release%'")
 
 ```/dev/null/client-usage.ts#L1-7
 // Client: plain substrate, same schema, different binding
-const BlogDoc = bindPlain(BlogSchema)
+const BlogDoc = json.bind(BlogSchema)
 const blog = client.get("blog", BlogDoc)
 await whenSettled(blog)
 
@@ -786,9 +787,9 @@ returns a projection attachable to any ref via `ref[CHANGEFEED]
 .subscribeTree()`. This is useful on its own — read-only queryable
 SQL alongside any substrate.
 
-### Phase 4: SqliteStoreReader
+### Phase 4: SqliteReader
 
-Implement the four `StoreReader` methods against a live SQLite database.
+Implement the `Reader` methods against a live SQLite database.
 Start with the hybrid strategy (lazy scalars, prefetching lists).
 
 ### Phase 5: Reverse Mapping (Changeset → Op[])
@@ -800,9 +801,9 @@ algorithmic piece.
 
 ### Phase 6: SqliteSubstrate
 
-Wire together: StoreReader + forward mapping (prepare) + session
-management (onFlush) + reverse mapping (changefeed bridge) + changeset
-log (versioning) + export/import. Use `strategy: "sequential"`.
+Wire together: Reader + forward mapping (prepare) + session
+management (afterBatch) + reverse mapping (changefeed bridge) + changeset
+log (versioning) + export/import. Use the serialized writer model (`SYNC_AUTHORITATIVE`).
 
 ### Phase 7: `bindSql` + Exchange Integration
 
@@ -831,8 +832,8 @@ and delivered through the changefeed.
 3. **Can changesets be meaningfully applied across databases?**
    Changesets use primary keys for row identity. If two databases have
    different `_idx` assignments, applying a changeset produces
-   nonsense. This constrains `importDelta` to databases that share
-   row identity — guaranteed for `strategy: "sequential"` (one
+   nonsense. This constrains `merge` to databases that share
+   row identity — guaranteed for the serialized writer model (`SYNC_AUTHORITATIVE`) (one
    authority, replicas apply its changesets), breaks for concurrent
    writers.
 
@@ -849,5 +850,5 @@ and delivered through the changefeed.
    SQL, session-based CDC) is not SQLite-specific. Postgres has logical
    replication / `wal2json` for CDC, `LISTEN/NOTIFY` for change events.
    A Postgres substrate is architecturally similar but would use async
-   I/O (requiring an async `StoreReader` variant or a connection-pool
+   I/O (requiring an async `Reader` variant or a connection-pool
    prefetch strategy).

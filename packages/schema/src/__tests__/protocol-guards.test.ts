@@ -19,7 +19,6 @@
 
 import { describe, expect, expectTypeOf, it } from "vitest"
 import { batch, createDoc } from "../basic/index.js"
-import { hasTransact, TRANSACT } from "../interpreters/writable.js"
 import {
   type HasMigrationChain,
   hasMigrationChain,
@@ -28,6 +27,7 @@ import {
 import { type HasSubstrate, hasSubstrate, SUBSTRATE } from "../native.js"
 import { DELETED, type HasDeleted, hasDeleted } from "../ref/address.js"
 import { type HasPopulated, hasPopulated, POPULATED } from "../ref/observe.js"
+import { hasTransact, TRANSACT } from "../ref/write.js"
 import { Schema } from "../schema.js"
 import { BACKING_DOC, type HasBackingDoc, hasBackingDoc } from "../substrate.js"
 

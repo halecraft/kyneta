@@ -14,8 +14,9 @@ import {
   Schema,
   version,
 } from "../index.js"
-import type { SubscriberNode } from "../interpreters/subscriber-trie.js"
-import { TRANSACT, type WritableContext } from "../interpreters/writable.js"
+import { TRANSACT } from "../ref/write.js"
+import type { SubscriberNode } from "../subscriber-trie.js"
+import type { WritableContext } from "../writable-context.js"
 
 const Rows = Schema.struct({
   rows: Schema.record(Schema.struct({ n: Schema.number() })),

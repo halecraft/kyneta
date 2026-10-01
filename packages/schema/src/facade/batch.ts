@@ -17,9 +17,11 @@
 
 import { mapPayload, own } from "../change.js"
 import type { Op } from "../changefeed.js"
-import type { HasRemove, WritableContext } from "../interpreters/writable.js"
-import { hasTransact, REMOVE, TRANSACT } from "../interpreters/writable.js"
+import type { HasRemove } from "../ref/address.js"
+import { REMOVE } from "../ref/address.js"
+import { hasTransact, TRANSACT } from "../ref/write.js"
 import type { CommitOptions } from "../substrate.js"
+import type { WritableContext } from "../writable-context.js"
 
 // ---------------------------------------------------------------------------
 // batch — imperative mutation → Op[]

@@ -52,9 +52,12 @@ interface HasChangefeed<S = unknown, A extends ChangeBase = ChangeBase> {
   readonly [CHANGEFEED]: ChangefeedProtocol<S, A>
 }
 
+// A function that reads a value and carries its [CHANGEFEED].
+type Feed<S, C extends ChangeBase = ChangeBase> = (() => S) & HasChangefeed<S, C>
+
 // A Changefeed that is also callable — feed() returns feed.current.
 type CallableChangefeed<S, C extends ChangeBase = ChangeBase> =
-  Changefeed<S, C> & (() => S)
+  Changefeed<S, C> & Feed<S, C>
 ```
 
 ### Functions
@@ -93,6 +96,22 @@ const [feed, emit] = createChangefeed(snapshot.get)
 items.set("a", 1)
 snapshot.invalidate()
 emit({ changes: [{ type: "set", key: "a" }] })
+```
+
+#### `createFeed<S, C>(read: () => S, protocol: ChangefeedProtocol<S, C>): Feed<S, C>`
+
+A function that calls `read`, carrying `protocol` under `[CHANGEFEED]`. The shape of a value you read by calling and observe through the protocol, such as `populatedFeed(ref)` in `@kyneta/schema`.
+
+```ts
+import { createFeed } from "@kyneta/changefeed"
+
+const ready = createFeed(() => loaded, {
+  get current() { return loaded },
+  subscribe: callback => onLoad(() => callback({ changes: [] })),
+})
+
+ready()             // read
+hasChangefeed(ready) // true
 ```
 
 #### `createCallable<S, C>(feed: Changefeed<S, C>): CallableChangefeed<S, C>`
@@ -142,7 +161,7 @@ Creates a protocol object that never emits changes — useful for static data so
 | `ChangefeedProtocol<S, C>` | `RecursiveChangefeedProtocol<S, C>` (adds `subscribeDescendants`) |
 | `Changefeed<S, C>` | `HasRecursiveChangefeed<S, C>` |
 | `hasChangefeed()` | `hasRecursiveChangefeed()`, `getOrCreateChangefeed()` |
-| `createChangefeed()`, `createCallable()` | `expandProductMapChanges()` (a struct's map event as field writes, for CRDT bridges) |
+| `createChangefeed()`, `createFeed()`, `createCallable()` | `expandProductMapChanges()` (a struct's map event as field writes, for CRDT bridges) |
 
 Consumers import the contract from `@kyneta/changefeed` directly — schema does **not** re-export contract symbols. The import path tells the truth about the dependency.
 

@@ -9,14 +9,11 @@
 import type { BatchMetadata } from "@kyneta/changefeed"
 import type { ChangeBase } from "./change.js"
 import type { Changeset, Op } from "./changefeed.js"
-import type {
-  SubscriberNode,
-  SubscriberTrie,
-} from "./interpreters/subscriber-trie.js"
-import type { TraceEntry } from "./interpreters/writable.js"
 import { RawPath } from "./path.js"
+import type { SubscriberNode, SubscriberTrie } from "./subscriber-trie.js"
 import type { BatchOptions } from "./substrate.js"
 import { planSubtreeEffect, projectChange } from "./subtree-effect.js"
+import type { TraceEntry } from "./writable-context.js"
 
 // ---------------------------------------------------------------------------
 // Notification plan — Functional Core (pure, table-testable)

@@ -37,10 +37,11 @@
 
 import type { ChangeBase } from "./change.js"
 import type { Op } from "./changefeed.js"
+import { isPropertyHost } from "./guards.js"
 import type { Path } from "./interpret.js"
-import type { WritableContext } from "./interpreters/writable.js"
 import type { Reader } from "./reader.js"
 import type { Schema as SchemaNode } from "./schema.js"
+import type { WritableContext } from "./writable-context.js"
 
 // ---------------------------------------------------------------------------
 // BACKING_DOC — universal accessor for the backing state of any replica
@@ -94,12 +95,7 @@ export interface HasBackingDoc<D = unknown> {
 export function hasBackingDoc<D = unknown>(
   value: unknown,
 ): value is HasBackingDoc<D> {
-  return (
-    value !== null &&
-    value !== undefined &&
-    (typeof value === "object" || typeof value === "function") &&
-    BACKING_DOC in (value as object)
-  )
+  return isPropertyHost(value) && BACKING_DOC in value
 }
 
 // ---------------------------------------------------------------------------
@@ -209,12 +205,7 @@ export interface HasDevtoolsHistory {
 export function hasDevtoolsHistory(
   value: unknown,
 ): value is HasDevtoolsHistory {
-  return (
-    value !== null &&
-    value !== undefined &&
-    (typeof value === "object" || typeof value === "function") &&
-    DEVTOOLS_HISTORY in (value as object)
-  )
+  return isPropertyHost(value) && DEVTOOLS_HISTORY in value
 }
 
 export { computeSchemaHash, HASH_ALGORITHM_VERSION } from "./hash.js"

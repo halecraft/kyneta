@@ -79,7 +79,7 @@ Five orthogonal sub-systems:
 |-----------|-------------|------|
 | Grammar | `src/schema.ts` | The recursive `Schema` type and its constructors. |
 | Binding | `src/bind.ts` | `BoundSchema`, `BindingTarget`, `createBindingTarget`, `json`, `ephemeral`, `bind()`, law enforcement. |
-| Interpretation | `src/interpret.ts`, `src/interpreters/*`, `src/ref/*`, `src/ref.ts` | The catamorphism (`interpret`) and its interpreters; the ref construction. |
+| Interpretation | `src/interpret.ts`, `src/interpreters/*`, `src/ref/*` | The catamorphism (`interpret`) and the folds over it (`interpreters/`); the ref construction and the ref types (`ref/`). |
 | Substrate | `src/substrate.ts`, `src/substrates/*` | The state / replication interface. |
 | Migration | `src/migration.ts`, `src/hash.ts` | Identity derivation and schema evolution. |
 
@@ -890,7 +890,7 @@ Notably, the boundary rule needed no separate implementation once the walkers we
 
 ## Interpreters and refs
 
-Source: `src/interpret.ts` (the catamorphism), `src/ref/*` (refs), `src/create-doc.ts` (`createRef`), `src/ref.ts` (the ref types).
+Source: `src/interpret.ts` (the catamorphism), `src/interpreters/*` (the folds), `src/ref/*` (refs, and their types: `schema-ref.ts`, `readable.ts`, `writable.ts`, `navigable.ts`), `src/create-doc.ts` (`createRef`).
 
 ### `interpret` — the catamorphism
 
@@ -917,7 +917,7 @@ interface Interpreter<Ctx, A> {
 }
 ```
 
-`interpret(schema, interpreter, ctx, path?)` walks the schema tree, invoking the interpreter at each node. The child thunks (`() => A`, `(i) => A`, `(k) => A`) preserve laziness: a case may force a child or not. Materializing, zeroing, validating and describing are interpreters (`createInterpreter` builds one from a default and the cases that differ). Refs are not: they are one fixed construction.
+`interpret(schema, interpreter, ctx, path?)` walks the schema tree, invoking the interpreter at each node. The child thunks (`() => A`, `(i) => A`, `(k) => A`) preserve laziness: a case may force a child or not. Materializing, zeroing and validating are interpreters, the folds in `src/interpreters/` (`createInterpreter` builds one from a default and the cases that differ, and `withDecay` decorates one). Refs are not: they are one fixed construction. Neither is `describe`, which walks the schema directly.
 
 ### Refs: one construction
 
@@ -1153,7 +1153,7 @@ Not used by the exchange. Not automatic on `bind`. Opt-in at boundaries where un
 
 ## Zero / defaults
 
-Source: `packages/schema/src/zero.ts`.
+Source: `packages/schema/src/interpreters/zero.ts`.
 
 `Zero(schema)` computes a default `Plain<S>` value for any schema. Defaults:
 
@@ -1182,7 +1182,7 @@ Completion recurses by schema kind, not storage class: a sum's variant and a `.j
 
 Source: `packages/schema/src/describe.ts`.
 
-`describe(schema)` returns a human-readable ASCII tree of the schema structure. Used in tests, logs, and documentation. Not used at runtime by any interpreter.
+`describe(schema)` returns a human-readable ASCII tree of the schema structure. Used in tests, logs, and documentation. It walks the schema directly, not through `interpret`.
 
 ---
 
@@ -1231,7 +1231,7 @@ These are the primitives `step`, delivery and `Position` build on.
 
 ## The write path
 
-Source: `packages/schema/src/facade/batch.ts`, `src/step.ts`, `src/inverse.ts`, `src/writable-context.ts`, `src/delivery.ts`, `src/interpreters/writable.ts`.
+Source: `packages/schema/src/facade/batch.ts`, `src/step.ts`, `src/inverse.ts`, `src/writable-context.ts`, `src/delivery.ts`.
 
 `batch(doc, fn)` is the atomic mutation facade. `ctx.runBatch` returns the authored ops its frame captured, so `batch` is one line:
 
@@ -1278,7 +1278,7 @@ Substrate.runBatch is invoked at most once per outermost `batch(doc, fn)`. Re-en
 
 ### The batch lifecycle: capture, seal, release
 
-Source: `src/interpreters/writable.ts` (`buildWritableContext`, `TraceEntry`, `SealedBatch`), `src/interpreters/frame-stack.ts`.
+Source: `src/writable-context.ts` (`buildWritableContext`, `WritableContext`, `TraceEntry`, `SealedBatch`), `src/frame-stack.ts`.
 
 **Changesets are delivered in seal order, each after every native commit that was open when it was sealed.** The writable context owns the whole lifecycle, because it is the one place that sees both which ops belong to which batch and when a native commit is open:
 
@@ -1404,7 +1404,7 @@ Sometimes changes arrive as data (from the network, from undo history, from test
 
 Source: `src/facade/batch.ts`.
 
-A container's child ref carries `[REMOVE]()` (a symbol method — see `Removable<T> = T & HasRemove` in `src/ref.ts`), symbol-keyed for collision safety: a child can be any schema kind, including a struct with a user field literally named `remove`, so a plain `.remove()` method would shadow it. `remove(ref)` is the free-function facade over that symbol — the same collision-safe symbol-protocol + free-function-facade pattern as `unwrap` (`[NATIVE]`), `changefeed` (`[CHANGEFEED]`), and `batch` (`[TRANSACT]`). Prefer `remove(ref)` at call sites; reach for `ref[REMOVE]()` only when you already hold the symbol. Like any single mutation, a lone `remove()` auto-commits (no `batch()` needed). It throws on a dead ref, and its `HasRemove` parameter type rejects non-removable refs (product fields, top-level docs) at compile time.
+A container's child ref carries `[REMOVE]()` (a symbol method — see `Removable<T> = T & HasRemove` in `src/ref/schema-ref.ts`), symbol-keyed for collision safety: a child can be any schema kind, including a struct with a user field literally named `remove`, so a plain `.remove()` method would shadow it. `remove(ref)` is the free-function facade over that symbol — the same collision-safe symbol-protocol + free-function-facade pattern as `unwrap` (`[NATIVE]`), `changefeed` (`[CHANGEFEED]`), and `batch` (`[TRANSACT]`). Prefer `remove(ref)` at call sites; reach for `ref[REMOVE]()` only when you already hold the symbol. Like any single mutation, a lone `remove()` auto-commits (no `batch()` needed). It throws on a dead ref, and its `HasRemove` parameter type rejects non-removable refs (product fields, top-level docs) at compile time.
 
 ### What the write path is NOT
 
@@ -1467,7 +1467,7 @@ To derive "pure pre-mutation state," consume the `Changeset` semantically; do no
 
 ## Batch metadata
 
-Source: `src/substrate.ts`, `src/interpreters/writable.ts`, `src/delivery.ts`.
+Source: `src/substrate.ts`, `src/writable-context.ts`, `src/delivery.ts`.
 
 Every batch declares how it reached the changefeed, in a **required** `ingress`. Nothing defaults: a call site that forgets to say it is a compile error rather than a silent claim of local authorship.
 
@@ -1578,7 +1578,7 @@ interface Revertible<R> {
 
 ## Tree-observable changefeeds
 
-Source: `packages/schema/src/changefeed.ts`, `src/ref/observe.ts`, `src/delivery.ts`, `src/interpreters/subscriber-trie.ts`.
+Source: `packages/schema/src/changefeed.ts`, `src/ref/observe.ts`, `src/delivery.ts`, `src/subscriber-trie.ts`.
 
 Every schema-issued changefeed implements `RecursiveChangefeedProtocol` — the schema-specific extension of `@kyneta/changefeed`'s universal `ChangefeedProtocol`. It adds `subscribeDescendants`, which delivers own-path + every descendant in one `Changeset<Op>` where each `Op = { path, change }` carries the relative path from the subscription point.
 
@@ -1609,7 +1609,7 @@ Two functions form the notification engine:
 1. `planDelivery(entries, trie)` → `DeliveryPlan` — the Functional Core. Walks a sealed batch's entries **once**, in dispatch order, and answers both channels. The plan is keyed by subscriber-trie node.
 2. `deliverNotifications(plan, options)` → the Imperative Shell. Builds changesets and calls functions. All the deciding already happened.
 
-**Subscribers live in a trie** (`SubscriberTrie`, `src/interpreters/subscriber-trie.ts`), one per context (`ctx.subscribers`), keyed by segment identity (a list item's id, a field's or entry's key): each node holds its coordinate's own-path and deep subscribers, its population state, and a count of the callbacks at or below it, so walks skip what nobody watches. A path key would do for a lookup, but not for enumerating a subtree, and it conflates two coordinates whose joined keys collide (`field("a\0b")` and `field("a").field("b")`); the trie keeps them apart. It is not the `CoordinateTrie`: a subscription lasts as long as its subscriber, not its coordinate, and a subscriber at a list item or tree node must hear the change that kills it, while `settle` unlinks those coordinates before delivery.
+**Subscribers live in a trie** (`SubscriberTrie`, `src/subscriber-trie.ts`), one per context (`ctx.subscribers`), keyed by segment identity (a list item's id, a field's or entry's key): each node holds its coordinate's own-path and deep subscribers, its population state, and a count of the callbacks at or below it, so walks skip what nobody watches. A path key would do for a lookup, but not for enumerating a subtree, and it conflates two coordinates whose joined keys collide (`field("a\0b")` and `field("a").field("b")`); the trie keeps them apart. It is not the `CoordinateTrie`: a subscription lasts as long as its subscriber, not its coordinate, and a subscriber at a list item or tree node must hear the change that kills it, while `settle` unlinks those coordinates before delivery.
 
 **The two channels group differently, and the reason is structural.** A node's own path is a single key, so own-path changes can only come from one place. A node's *subtree* spans many paths, so a deep subscriber's changeset gathers ops from all of them. That gathering is the whole point: **one `batch()` reaches each subscriber as one `Changeset`.**
 
@@ -1642,7 +1642,7 @@ Ordering *across changed paths* used to be first-touch order and was never contr
 
 #### Replay is where the fan-out is largest
 
-The local-`batch()` framing hides the high-traffic case. An announcement bypasses `ctx.runBatch` but is sealed and delivered **once** for its whole payload (`announce`, `src/interpreters/writable.ts`), so one incoming sync merge is one flush over every op in it. An `offer` touching fifty paths once delivered **fifty** changesets to every doc-root subscriber; it delivers one. The factor is the number of distinct paths in a merge payload, which is unbounded in practice, and `@kyneta/exchange`, `@kyneta/react` and `@kyneta/devtools` all sit on that path.
+The local-`batch()` framing hides the high-traffic case. An announcement bypasses `ctx.runBatch` but is sealed and delivered **once** for its whole payload (`announce`, `src/writable-context.ts`), so one incoming sync merge is one flush over every op in it. An `offer` touching fifty paths once delivered **fifty** changesets to every doc-root subscriber; it delivers one. The factor is the number of distinct paths in a merge payload, which is unbounded in practice, and `@kyneta/exchange`, `@kyneta/react` and `@kyneta/devtools` all sit on that path.
 
 Ordering has two halves here, and only one is universal. The engine preserves the relative order of the ops it is handed — that holds on every substrate and both entry points. That those ops arrive in *write* order is true only of a local batch: a merge carries a CRDT diff, so the event bridge reconstructs ops by enumerating what changed rather than replaying a write log. `deliveryConformance` pins the universal half for both drivers and the dispatch-order half for local writes. It runs against all four substrates: plain and ephemeral in this package, Loro and Yjs in theirs.
 
@@ -1678,6 +1678,12 @@ A list item's subscribers follow it across inserts and reorders because the subs
 ### Population
 
 `populated(ref)` says whether a change has reached the ref's coordinate: an op landed at or below it, or an op above it rewrote a part of the tree containing it. It never reverts, so a held dead ref keeps answering true. The subscriber trie holds the marks: a node's `populated`, and what a change there rewrote below it (`rewroteAll`, or `rewroteKeys`).
+
+**Two flags, one protocol.** `[POPULATED]` and `[DELETED]` are each a boolean a ref holds under a symbol, as a `Feed<boolean>` (`@kyneta/changefeed`): a function that reads it and carries its own `[CHANGEFEED]`. One definition, `flag(slot, name, requires)` (`src/ref/observe.ts`), gives each its guard (`hasPopulated`, `hasDeleted`), its value (`populated`, `deleted`) and its feed (`populatedFeed`, `deletedFeed`), so the two cannot drift:
+
+- the value is `false` for anything that is not a ref holding the flag;
+- the feed passes `null` and `undefined` through unchanged, as `useValue` does, so `useValue(deletedFeed(list.at(i)))` works for an index out of range, and its type gives a definite ref a definite feed;
+- the feed throws, naming itself, for any other value without the flag. Every ref holds `[POPULATED]`; every ref but the root holds `[DELETED]`.
 
 **A mark creates only what it adds.** `markPopulated(path, effect)` (step 6 of [the prepare pipeline](#the-prepare-pipeline)) returns before creating a node when the mark is implied: an ancestor rewrote all below it, or rewrote the key toward `path`, or the node is populated already and `effect` adds nothing. After a document's first whole-document adopt, every later mark is implied, so ops leave no nodes behind.
 
@@ -2206,7 +2212,7 @@ Selection of the most-used types. Full list in the **Canonical symbols** line at
 | `EphemeralLaws` | `src/bind.ts` | `"lww" \| "lww-per-key" \| "lww-tag-replaced"` — the LWW-family law set. |
 | `Interpret`, `Replicate`, `Defer`, `Reject` | `src/bind.ts` | Resolve-outcome variants. |
 | `Interpreter<Ctx, A>` | `src/interpret.ts` | The F-algebra `interpret` folds a schema with. |
-| `Ref<S>`, `RRef<S>`, `DocRef<S>` | `src/ref.ts` | A ref; its read surface alone; a document's root ref. |
+| `Ref<S>`, `RRef<S>`, `DocRef<S>` | `src/ref/schema-ref.ts` | A ref; its read surface alone; a document's root ref. |
 | `RefState`, `RefTemplate`, `RefPosition` | `src/ref/state.ts`, `src/ref/prototype.ts` | What one ref holds; what every ref of a schema node and position shares; where a ref sits. Package-internal. |
 | `Substrate<V>`, `Replica<V>`, `SubstrateFactory<V>`, `ReplicaFactory<V>` | `src/substrate.ts` | Interfaces. |
 | `SubstratePayload` | `src/substrate.ts` | Opaque transfer shape. |
@@ -2216,7 +2222,7 @@ Selection of the most-used types. Full list in the **Canonical symbols** line at
 | `Change`, `ChangeBase`, `TextChange`, `SequenceChange`, `MapChange`, `TreeChange`, `ReplaceChange`, `IncrementChange`, `RichTextChange` | `src/change.ts` | Change vocabulary. |
 | `RichTextSchema`, `MarkConfig` | `src/schema.ts` | Rich text schema kind + mark configuration. |
 | `RichTextDelta` | `src/change.ts` | Delta representation for rich text content. |
-| `RichTextRef` | `src/ref.ts` | Ref specialization for `richtext` schema kind. |
+| `RichTextRef` | `src/ref/writable.ts` | The write surface of a `richtext` ref. |
 | `Op` | `src/changefeed.ts` | `{ path, change }` — composed-feed notification. |
 | `RecursiveChangefeedProtocol<S>`, `HasRecursiveChangefeed<S>` | `src/changefeed.ts` | Tree-observation surface carried by every schema-issued ref. |
 | `Position`, `Side`, `HasPosition`, `PositionCapable`, `PlainPosition` | `src/position.ts` | Position algebra. |
@@ -2302,23 +2308,22 @@ The worked example is `__countKeptRefs` (`src/coordinate-trie.ts`), a backdoor f
 | `src/clone.ts` | `deepClonePlain`, `freezeTree`, `thaw`, `isDeeplyFrozen` — the copy and freeze primitives, and the frozen invariant. |
 | `src/plain-access.ts` | `childOf`, `withChild` — one way to step from a plain container to its child, the flat forest included. |
 | `src/interpret.ts` | `interpret`, `Interpreter`, `createInterpreter`, `dispatchSum`. |
-| `src/interpreters/writable.ts` | The writable context's types: `WritableContext`, `TraceEntry`, `SealedBatch`; `TRANSACT`, `PATH`, `REMOVE`; the write surfaces by kind. |
-| `src/writable-context.ts` | `buildWritableContext`: the batch lifecycle, `prepare` (locate, complete, advance, apply, settle, mark), delivery, and the context's two tries. |
-| `src/interpreters/frame-stack.ts` | What an authored batch did, frame by frame: `openFrame`, `record`, `closeFrame`, `abortFrame`. Pure. |
+| `src/writable-context.ts` | `buildWritableContext` and the context's types (`WritableContext`, `TraceEntry`, `SealedBatch`): the batch lifecycle, `prepare` (locate, complete, advance, apply, settle, mark), delivery, and the context's two tries. |
+| `src/frame-stack.ts` | What an authored batch did, frame by frame: `openFrame`, `record`, `closeFrame`, `abortFrame`. Pure. |
 | `src/delivery.ts` | `planDelivery` (pure), `deliverNotifications`, `changesetMetadata`, `liftToOps`. Internal: not exported. |
-| `src/interpreters/subscriber-trie.ts` | `SubscriberTrie` — a context's subscribers and population state, one node per coordinate, with the up and down walks delivery and population need. |
+| `src/subscriber-trie.ts` | `SubscriberTrie` — a context's subscribers and population state, one node per coordinate, with the up and down walks delivery and population need. |
 | `src/interpreters/validate.ts` | Validation interpreter. |
-| `src/interpreters/plain.ts` | Plain-state interpreter (reader + canonical shape). |
-| `src/interpreters/navigable.ts`, `readable.ts` | ~100 each | Type-interface modules. |
-| `src/ref.ts` | `Ref<S>`, `RRef<S>`, `DocRef<S>`, `SchemaRef`, `Wrap`. |
+| `src/ref/schema-ref.ts` | `Ref<S>`, `RRef<S>`, `DocRef<S>`, `SchemaRef`, `Wrap`: the type of a ref, built from the surfaces below. |
+| `src/ref/readable.ts`, `navigable.ts`, `writable.ts` | The read, navigation and write surfaces of each kind, and `Readable<S>`. Types only. |
+| `src/plain-types.ts` | `Plain<S>`, the type of a schema's plain value, and `PlainFlatTreeNode`. Types only. |
 | `src/ref/state.ts` | `RefState`, `bindState`, `refBase`, `stateOf`: what a ref holds, and how a member reaches it. |
 | `src/ref/prototype.ts` | `templateFor`, `RefPosition`: the prototype, bound function and own properties shared per schema node and position. |
 | `src/ref/create.ts` | `createRootRef`, `createRefAt`, `canonicalChild`, sum proxies, and the finalization that prunes. |
 | `src/ref/read.ts` | `CALL`, `readAt`, `readChildAt`, `valueAt`, the read members. |
 | `src/ref/navigate.ts` | Field getters, `LENGTH`, the navigation members. |
-| `src/ref/write.ts` | The write members, `[TRANSACT]`, `[PATH]`. |
-| `src/ref/observe.ts` | `[CHANGEFEED]`, `[POPULATED]`, `populated`, `populatedFeed`, `feedCarrier`. |
-| `src/ref/address.ts` | `[DELETED]`, `[REMOVE]`, `deleted`, `deletedFeed`; `advance` and `settle`. |
+| `src/ref/write.ts` | The write members; `TRANSACT`, `PATH` and `hasTransact`; `at`. |
+| `src/ref/observe.ts` | `[CHANGEFEED]`, `[POPULATED]`, `populated`, `populatedFeed`; `flag`, the protocol both flags follow, and `flagFeed`. |
+| `src/ref/address.ts` | `[DELETED]` and `[REMOVE]` (`DELETED`, `deleted`, `deletedFeed`, `REMOVE`, `hasRemove`); `advance` and `settle`. |
 | `src/ref/track.ts` | `report`, `reportFeed`: the dependency reports. |
 | `src/position.ts` | `Position`, `Side`, `POSITION`, `HasPosition`, `PlainPosition`, `decodePlainPosition`. |
 | `src/tree-position.ts` | Tree-position algebra: `nodeSize`, `contentSize`, `isLeaf`, `resolveTreePosition`, `flattenTreePosition`, `ResolvedTreePosition`. Pure functions over `Reader` + `Schema` for flat↔tree position mapping (ProseMirror convention). |
@@ -2334,7 +2339,7 @@ The worked example is `__countKeptRefs` (`src/coordinate-trie.ts`), a backdoor f
 | `src/path.ts` | Paths, raw segments, and addresses, each its coordinate (`Coordinate`); `AddressedPath`, a parent and one segment. |
 | `src/create-doc.ts` | `createDoc`, `createDocAs`, `createRef`. |
 | `src/describe.ts` | ASCII schema tree printer. |
-| `src/zero.ts` | `Zero`, `scalarDefault`. |
+| `src/interpreters/zero.ts` | `Zero`, `zeroInterpreter`, `scalarDefault`. |
 | `src/interpreters/materialize.ts` | Generic CRDT→PlainState materialization: `MaterializeResolver` interface, `createMaterializeInterpreter`, `plainResolution`, `plainValueResolver`. |
 | `src/guards.ts` | `isNonNullObject`, `isPropertyHost`. |
 | `src/base64.ts` | Platform-agnostic base64. |

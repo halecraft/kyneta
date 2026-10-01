@@ -2,10 +2,10 @@
 // type narrowing, and the two public wrappers (validate / tryValidate).
 
 import { describe, expect, expectTypeOf, it } from "vitest"
+import { createDoc } from "../basic/index.js"
 import type { SchemaNode, ValidateContext } from "../index.js"
 import {
   interpret,
-  plainInterpreter,
   Schema,
   SchemaValidationError,
   tryValidate,
@@ -1012,14 +1012,11 @@ describe("validate: discriminated sum round-trip", () => {
   })
 
   it("doc() → validate round-trips for discriminated sums", () => {
-    const store = {
-      name: "test",
-      content: { type: "image", url: "pic.png" },
-    }
-    const result = interpret(schemaWithSum, plainInterpreter, store)
-    // plainInterpreter now includes the discriminant field in its output
-    expect((result as any).content.type).toBe("image")
-    expect((result as any).content.url).toBe("pic.png")
+    const doc: any = createDoc(schemaWithSum)
+    doc.set({ name: "test", content: { type: "image", url: "pic.png" } })
+    const result = doc()
+    expect(result.content.type).toBe("image")
+    expect(result.content.url).toBe("pic.png")
     // validate accepts the output — the round-trip closes
     const validated = validate(schemaWithSum, result)
     expect(validated).toEqual(result)

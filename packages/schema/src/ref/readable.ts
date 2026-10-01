@@ -1,11 +1,10 @@
-// Readable type definitions — type-level interpretation for readable refs.
+// readable — the types of a ref's reads: the read surface of each kind, and
+// `Readable<S>`, a ref's read surface alone (`RRef<S>`).
 //
-// This module contains only **type-level** definitions:
-//   - ReadableSequenceRef, ReadableMapRef, Readable<S>
-//
-// The read members themselves live on each ref's prototype (`../ref/read.ts`).
+// Types only. The read and navigation members themselves live on each ref's
+// prototype (`read.ts`, `navigate.ts`).
 
-import type { Plain, PlainFlatTreeNode } from "../interpreter-types.js"
+import type { Plain, PlainFlatTreeNode } from "../plain-types.js"
 import type {
   CounterSchema,
   DiscriminatedSumSchema,

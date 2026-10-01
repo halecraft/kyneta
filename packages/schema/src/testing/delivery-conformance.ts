@@ -48,7 +48,7 @@ import { batch } from "../facade/batch.js"
 import { subscribe, subscribeNode } from "../facade/observe.js"
 import { hasSubstrate, SUBSTRATE } from "../native.js"
 import { RawPath } from "../path.js"
-import type { Ref } from "../ref.js"
+import type { Ref } from "../ref/schema-ref.js"
 import { Schema } from "../schema.js"
 import type { Substrate, SubstratePayload, Version } from "../substrate.js"
 

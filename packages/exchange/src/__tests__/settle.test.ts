@@ -13,10 +13,10 @@ import { docStatus } from "../doc-status.js"
 import {
   hydrated,
   hydratedFeed,
-  makeSettleTerm,
   registerSettleTerm,
   settled,
   settledFeed,
+  signalFeed,
 } from "../settle.js"
 import { createInMemoryStore } from "../store/in-memory-store.js"
 import { sessionSeat } from "../store/seats.js"
@@ -35,7 +35,7 @@ const createExchange = exchangesPerTest()
 function controllableTerm() {
   let value = false
   const listeners = new Set<() => void>()
-  const term = makeSettleTerm(
+  const term = signalFeed(
     () => value,
     onChange => {
       listeners.add(onChange)

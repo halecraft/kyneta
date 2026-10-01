@@ -5,9 +5,9 @@
 
 // cachedSnapshot — one snapshot of mutable state, dropped on mutation
 export { cachedSnapshot } from "./cached-snapshot.js"
-// Callable — the createCallable combinator
-export type { CallableChangefeed } from "./callable.js"
-export { createCallable } from "./callable.js"
+// Callable — changefeeds you can call: Feed, and CallableChangefeed
+export type { CallableChangefeed, Feed } from "./callable.js"
+export { createCallable, createFeed } from "./callable.js"
 // ChangeBase — the universal base type for all changes
 export type { ChangeBase } from "./change.js"
 // Changefeed — symbol, types, type guards, factories, projector

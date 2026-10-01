@@ -15,6 +15,7 @@
 // No substrate changes. No wire changes. Pure schema-level algebra.
 
 import { extendSchemaPathKey } from "./fold-path.js"
+import { isPropertyHost } from "./guards.js"
 import { computeSchemaHash, fnv1aHex } from "./hash.js"
 import {
   KIND,
@@ -74,12 +75,7 @@ export interface HasMigrationChain {
  * Returns `true` if `value` carries a `[MIGRATION_CHAIN]` property.
  */
 export function hasMigrationChain(value: unknown): value is HasMigrationChain {
-  return (
-    value !== null &&
-    value !== undefined &&
-    (typeof value === "object" || typeof value === "function") &&
-    MIGRATION_CHAIN in (value as object)
-  )
+  return isPropertyHost(value) && MIGRATION_CHAIN in value
 }
 
 // ---------------------------------------------------------------------------

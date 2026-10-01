@@ -13,7 +13,6 @@
 // substrate's context and log head.
 
 import type { Op } from "../changefeed.js"
-import type { WritableContext } from "../interpreters/writable.js"
 import type {
   BatchOutcome,
   CommitOptions,
@@ -23,6 +22,7 @@ import type {
   Revertible,
   RevertibleCommit,
 } from "../substrate.js"
+import type { WritableContext } from "../writable-context.js"
 import { deserializeOps, type SerializedOp, serializeOps } from "./op-codec.js"
 
 /** One authored batch on a plain document, as undo keeps it. */

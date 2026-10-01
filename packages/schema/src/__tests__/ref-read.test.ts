@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { dispatchSum, KIND, Schema } from "../index.js"
-import { TRANSACT } from "../interpreters/writable.js"
 import { CALL } from "../ref/read.js"
+import { TRANSACT } from "../ref/write.js"
 import type { Schema as SchemaNode } from "../schema.js"
 import { docOver, untypedDocOver } from "./stack.js"
 

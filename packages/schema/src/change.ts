@@ -1013,7 +1013,7 @@ export function singleEdit(
 // applyTextInstructions — replay a text delta onto a live TextRef
 // ---------------------------------------------------------------------------
 
-import type { TextRef } from "./interpreters/writable.js"
+import type { TextRef } from "./ref/writable.js"
 
 /**
  * Replay a `TextInstruction[]` delta onto a live, mutable `TextRef`,

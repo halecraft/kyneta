@@ -5,7 +5,6 @@ import { own, replaceChange, trustAsOwned } from "../change.js"
 import {
   BACKING_DOC,
   batch,
-  type CounterRef,
   type CounterSchema,
   type ExtractLaws,
   KIND,
@@ -21,7 +20,6 @@ import {
   type PlainProductSchema,
   type PlainSchema,
   type PlainSequenceSchema,
-  type ProductRef,
   type ProductSchema,
   type Readable,
   type ReadableMapRef,
@@ -30,7 +28,6 @@ import {
   type RestrictLaws,
   type RRef,
   type ScalarPlain,
-  type ScalarRef,
   type ScalarSchema,
   Schema,
   type SchemaNode,
@@ -38,13 +35,10 @@ import {
   type SequenceSchema,
   subscribe,
   subscribeNode,
-  type TextRef,
   type TextSchema,
   TRANSACT,
   type TreeSchema,
   type Wrap,
-  type Writable,
-  type WritableMapRef,
 } from "../index.js"
 import type { DeepReadonly } from "./deep-readonly.js"
 import { contextOver, refOver } from "./stack.js"
@@ -263,7 +257,7 @@ describe("type-level: nested composition preserves types end-to-end", () => {
 })
 
 // ---------------------------------------------------------------------------
-// Writable<S> — the type-level catamorphism
+// ScalarPlain — scalar kinds to TypeScript types
 // ---------------------------------------------------------------------------
 
 describe("type-level: ScalarPlain maps scalar kinds to TS types", () => {
@@ -293,134 +287,6 @@ describe("type-level: ScalarPlain maps scalar kinds to TS types", () => {
 
   it("ScalarPlain<'any'> = unknown", () => {
     expectTypeOf<ScalarPlain<"any">>().toEqualTypeOf<unknown>()
-  })
-})
-
-describe("type-level: Writable<S> for scalars", () => {
-  it("Writable<string()> = ScalarRef<string>", () => {
-    type Result = Writable<ReturnType<typeof Schema.string>>
-    expectTypeOf<Result>().toEqualTypeOf<ScalarRef<string>>()
-  })
-
-  it("Writable<number()> = ScalarRef<number>", () => {
-    type Result = Writable<ReturnType<typeof Schema.number>>
-    expectTypeOf<Result>().toEqualTypeOf<ScalarRef<number>>()
-  })
-
-  it("Writable<boolean()> = ScalarRef<boolean>", () => {
-    type Result = Writable<ReturnType<typeof Schema.boolean>>
-    expectTypeOf<Result>().toEqualTypeOf<ScalarRef<boolean>>()
-  })
-})
-
-describe("type-level: Writable<S> for products and structs", () => {
-  it("Writable<struct({...})> has typed fields and .set()", () => {
-    const s = Schema.struct({
-      name: Schema.string(),
-      active: Schema.boolean(),
-    })
-    type Result = Writable<typeof s>
-    expectTypeOf<Result>().toEqualTypeOf<
-      {
-        readonly name: ScalarRef<string>
-        readonly active: ScalarRef<boolean>
-      } & ProductRef<{ readonly name: string; readonly active: boolean }>
-    >()
-  })
-
-  it("Writable<ProductSchema<{ x: ScalarSchema<'number'> }>> has .set({ x: number })", () => {
-    type Result = Writable<ProductSchema<{ x: ScalarSchema<"number"> }>>
-    expectTypeOf<Result>().toHaveProperty("set")
-    expectTypeOf<Result["set"]>().toBeFunction()
-    expectTypeOf<Result["set"]>().toEqualTypeOf<
-      (value: { readonly x: number }) => void
-    >()
-  })
-})
-
-describe("type-level: Writable<S> for sequences", () => {
-  it("Writable<list(plain.string())> = SequenceRef (mutation-only, no type param)", () => {
-    const s = Schema.list(Schema.string())
-    type Result = Writable<typeof s>
-    expectTypeOf<Result>().toEqualTypeOf<SequenceRef>()
-  })
-
-  it("Writable<list(struct({...}))> = SequenceRef (mutation-only)", () => {
-    const s = Schema.list(
-      Schema.struct({
-        name: Schema.string(),
-        active: Schema.boolean(),
-      }),
-    )
-    type Result = Writable<typeof s>
-    expectTypeOf<Result>().toEqualTypeOf<SequenceRef>()
-  })
-})
-
-describe("type-level: Writable<S> for struct", () => {
-  it("Writable<struct({...})> maps the inner product", () => {
-    const s = Schema.struct({
-      title: Schema.string(),
-      settings: Schema.struct({
-        darkMode: Schema.boolean(),
-        fontSize: Schema.number(),
-      }),
-    })
-    type Result = Writable<typeof s>
-    expectTypeOf<Result>().toEqualTypeOf<
-      {
-        readonly title: ScalarRef<string>
-        readonly settings: {
-          readonly darkMode: ScalarRef<boolean>
-          readonly fontSize: ScalarRef<number>
-        } & ProductRef<DeepReadonly<{ darkMode: boolean; fontSize: number }>>
-      } & ProductRef<
-        DeepReadonly<{
-          title: string
-          settings: { darkMode: boolean; fontSize: number }
-        }>
-      >
-    >()
-  })
-})
-
-describe("type-level: Writable<S> end-to-end structural schema", () => {
-  it("a pure structural schema produces fully typed refs", () => {
-    const docSchema = Schema.struct({
-      title: Schema.string(),
-      count: Schema.number(),
-      messages: Schema.list(
-        Schema.struct({
-          author: Schema.string(),
-          body: Schema.string(),
-        }),
-      ),
-      settings: Schema.struct({
-        darkMode: Schema.boolean(),
-        fontSize: Schema.number(),
-      }),
-      metadata: Schema.record(Schema.any()),
-    })
-
-    type Doc = Writable<typeof docSchema>
-
-    // Top-level fields are correctly typed
-    expectTypeOf<Doc["title"]>().toEqualTypeOf<ScalarRef<string>>()
-    expectTypeOf<Doc["count"]>().toEqualTypeOf<ScalarRef<number>>()
-
-    // Nested sequence of structs — mutation-only (no type param)
-    expectTypeOf<Doc["messages"]>().toEqualTypeOf<SequenceRef>()
-
-    // Nested struct
-    expectTypeOf<Doc["settings"]>().toEqualTypeOf<
-      {
-        readonly darkMode: ScalarRef<boolean>
-        readonly fontSize: ScalarRef<number>
-      } & ProductRef<{ readonly darkMode: boolean; readonly fontSize: number }>
-    >()
-
-    // Record (dynamic keys) — Map-like mutation interface
-    expectTypeOf<Doc["metadata"]>().toEqualTypeOf<WritableMapRef<unknown>>()
   })
 })
 
@@ -630,70 +496,6 @@ describe("type-level: first-class type KIND preservation", () => {
   })
 })
 
-describe("type-level: Writable<S> for first-class types", () => {
-  it("Writable<text()> = TextRef", () => {
-    const s = Schema.text()
-    type Result = Writable<typeof s>
-    expectTypeOf<Result>().toEqualTypeOf<TextRef>()
-  })
-
-  it("Writable<counter()> = CounterRef", () => {
-    const s = Schema.counter()
-    type Result = Writable<typeof s>
-    expectTypeOf<Result>().toEqualTypeOf<CounterRef>()
-  })
-
-  it("Writable<struct with text and counter> maps first-class types", () => {
-    const s = Schema.struct({
-      title: Schema.text(),
-      count: Schema.counter(),
-    })
-    type Result = Writable<typeof s>
-    expectTypeOf<Result>().toEqualTypeOf<
-      {
-        readonly title: TextRef
-        readonly count: CounterRef
-      } & ProductRef<{ readonly title: string; readonly count: number }>
-    >()
-  })
-})
-
-describe("type-level: Writable<S> end-to-end schema with first-class types", () => {
-  it("a schema with first-class types produces fully typed refs", () => {
-    const loroDoc = Schema.struct({
-      title: Schema.text(),
-      count: Schema.counter(),
-      messages: Schema.list(
-        Schema.struct({
-          author: Schema.string(),
-          body: Schema.text(),
-        }),
-      ),
-      settings: Schema.struct({
-        darkMode: Schema.boolean(),
-        fontSize: Schema.number(),
-      }),
-      metadata: Schema.record(Schema.any()),
-    })
-
-    type Doc = Writable<typeof loroDoc>
-
-    expectTypeOf<Doc["title"]>().toEqualTypeOf<TextRef>()
-    expectTypeOf<Doc["count"]>().toEqualTypeOf<CounterRef>()
-
-    expectTypeOf<Doc["messages"]>().toEqualTypeOf<SequenceRef>()
-
-    expectTypeOf<Doc["settings"]>().toEqualTypeOf<
-      {
-        readonly darkMode: ScalarRef<boolean>
-        readonly fontSize: ScalarRef<number>
-      } & ProductRef<{ readonly darkMode: boolean; readonly fontSize: number }>
-    >()
-
-    expectTypeOf<Doc["metadata"]>().toEqualTypeOf<WritableMapRef<unknown>>()
-  })
-})
-
 describe("type-level: Plain<S> for first-class types", () => {
   it("Plain<text()> = string", () => {
     const s = Schema.text()
@@ -824,25 +626,6 @@ describe("type-level: Plain<S> for constrained scalars", () => {
         count: number
       }>
     >()
-  })
-})
-
-describe("type-level: Writable<S> for constrained scalars", () => {
-  it("Writable<string('a', 'b')> = ScalarRef<'a' | 'b'>", () => {
-    const s = Schema.string("a", "b")
-    type Result = Writable<typeof s>
-    expectTypeOf<Result>().toEqualTypeOf<ScalarRef<"a" | "b">>()
-  })
-
-  it("Writable<number(1, 2)> = ScalarRef<1 | 2>", () => {
-    const s = Schema.number(1, 2)
-    type Result = Writable<typeof s>
-    expectTypeOf<Result>().toEqualTypeOf<ScalarRef<1 | 2>>()
-  })
-
-  it("unconstrained Writable<string()> = ScalarRef<string> (unchanged)", () => {
-    type Result = Writable<ReturnType<typeof Schema.string>>
-    expectTypeOf<Result>().toEqualTypeOf<ScalarRef<string>>()
   })
 })
 
@@ -1529,38 +1312,6 @@ describe("type-level: RRef<S> for discriminated sums (hybrid discriminant)", () 
   })
 })
 
-describe("type-level: Writable<S> for sums", () => {
-  it("Writable<nullable(string)> has .set(string | null)", () => {
-    type Result = Writable<typeof _nullableStringSchema>
-    type SetParam = Result extends { set: (value: infer P) => void } ? P : never
-    expectTypeOf<SetParam>().toEqualTypeOf<string | null>()
-  })
-
-  it("Writable<DiscriminatedSumSchema> resolves (not unknown)", () => {
-    type Result = Writable<typeof _discUnionSchema>
-    expectTypeOf<Result>().not.toEqualTypeOf<unknown>()
-  })
-
-  it("Writable discriminant field is a raw string literal, not a ScalarRef", () => {
-    type Result = Writable<typeof _discUnionSchema>
-    type TypeField = Result extends { readonly type: infer T } ? T : never
-    expectTypeOf<TypeField>().toEqualTypeOf<"text" | "image">()
-  })
-
-  it("Writable non-discriminant fields are Plain (read-only)", () => {
-    type Result = Writable<typeof _discUnionSchema>
-    type TextVariant = Extract<Result, { readonly type: "text" }>
-    type BodyField = TextVariant extends { readonly body: infer B } ? B : never
-    expectTypeOf<BodyField>().toEqualTypeOf<string>()
-  })
-
-  it("Writable union has .set() for whole-value replacement", () => {
-    type Result = Writable<typeof _discUnionSchema>
-    type HasSet = Result extends { set: (value: infer P) => void } ? P : never
-    expectTypeOf<HasSet>().not.toEqualTypeOf<never>()
-  })
-})
-
 describe("type-level: general positional sums must NOT collapse (collapse boundary)", () => {
   it("Ref<union(string, number)> distributes — not a single collapsed ref", () => {
     const unionSchema = Schema.union(Schema.string(), Schema.number())
@@ -1571,17 +1322,6 @@ describe("type-level: general positional sums must NOT collapse (collapse bounda
     type SetParam = Result extends { set: (value: infer P) => void } ? P : never
     // Contravariant parameter intersection: string & number = never
     // This confirms distribution happened (NOT collapsed like nullable)
-    expectTypeOf<SetParam>().toEqualTypeOf<never>()
-  })
-
-  it("Writable<union(string, number)> resolves (not unknown) and distributes", () => {
-    const unionSchema = Schema.union(Schema.string(), Schema.number())
-    type Result = Writable<typeof unionSchema>
-    // Should NOT be unknown — was unknown before the fix
-    expectTypeOf<Result>().not.toEqualTypeOf<unknown>()
-    // Should distribute: ScalarRef<string> | ScalarRef<number>
-    type SetParam = Result extends { set: (value: infer P) => void } ? P : never
-    // Contravariant intersection confirms distribution
     expectTypeOf<SetParam>().toEqualTypeOf<never>()
   })
 })

@@ -9,10 +9,10 @@
 // reason returns the same value.
 //
 // Uses a single conditional return type to handle null/undefined passthrough:
-//   CallableRef → ReturnType<R>;  null → null;  undefined → undefined.
+//   Feed → ReturnType<R>;  null → null;  undefined → undefined.
 
+import type { Feed } from "@kyneta/changefeed"
 import { track } from "@kyneta/reactive"
-import type { CallableRef } from "./store.js"
 import { useSelector } from "./use-selector.js"
 
 /**
@@ -20,7 +20,7 @@ import { useSelector } from "./use-selector.js"
  * `ReactiveMap`, an index `Collection`) that don't report their own reads;
  * a schema ref reports itself when called. Nullish passes through untracked.
  */
-const readValue = (ref: CallableRef | null | undefined): unknown =>
+const readValue = (ref: Feed<unknown> | null | undefined): unknown =>
   ref == null ? ref : track(ref)
 
 /**
@@ -44,11 +44,11 @@ const readValue = (ref: CallableRef | null | undefined): unknown =>
  * @param ref - A callable ref with [CHANGEFEED], or null/undefined.
  * @returns The plain snapshot value, or null/undefined if input is nullish.
  */
-export function useValue<R extends CallableRef | null | undefined>(
+export function useValue<R extends Feed<unknown> | null | undefined>(
   ref: R,
-): R extends CallableRef ? ReturnType<R> : R {
-  return useSelector<CallableRef | null | undefined, unknown>(
+): R extends Feed<unknown> ? ReturnType<R> : R {
+  return useSelector<Feed<unknown> | null | undefined, unknown>(
     ref,
     readValue,
-  ) as R extends CallableRef ? ReturnType<R> : R
+  ) as R extends Feed<unknown> ? ReturnType<R> : R
 }

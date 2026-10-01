@@ -22,6 +22,7 @@ import {
 } from "./change.js"
 import type { Op } from "./changefeed.js"
 import { isNonNullObject, samePlainValue } from "./guards.js"
+import { Zero } from "./interpreters/zero.js"
 import { RawPath } from "./path.js"
 import {
   KIND,
@@ -29,7 +30,6 @@ import {
   type Schema as SchemaNode,
   storageClass,
 } from "./schema.js"
-import { Zero } from "./zero.js"
 
 /**
  * The ops a local writer would have produced to turn `before` into `after`

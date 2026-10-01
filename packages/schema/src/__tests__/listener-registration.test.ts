@@ -23,10 +23,10 @@ import {
   subscribe,
   subscribeNode,
 } from "../basic/index.js"
-import type { WritableContext } from "../interpreters/writable.js"
-import { TRANSACT } from "../interpreters/writable.js"
 import { RawPath } from "../path.js"
 import { __getListenerCountAtPath } from "../ref/observe.js"
+import { TRANSACT } from "../ref/write.js"
+import type { WritableContext } from "../writable-context.js"
 
 const Doc = Schema.struct({
   top: Schema.number(),

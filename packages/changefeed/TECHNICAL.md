@@ -4,7 +4,7 @@
 > **Role**: The universal reactive contract — a single symbol (`CHANGEFEED`) that any value can carry to expose its current state and a stream of future changes.
 > **Depends on**: *(none — zero runtime dependencies)*
 > **Depended on by**: `@kyneta/schema`, `@kyneta/index`, `@kyneta/exchange`, `@kyneta/react`, `@kyneta/loro-schema`, `@kyneta/yjs-schema`, `@kyneta/compiler`, `@kyneta/cast`
-> **Canonical symbols**: `CHANGEFEED`, `Changefeed<S, C>`, `ChangefeedProtocol<S, C>`, `Changeset<C>`, `HasChangefeed<S, C>`, `CallableChangefeed<S, C>`, `ReactiveMap<K, V, C>`, `ReactiveMapHandle<K, V, C>`, `ChangeBase`, `createChangefeed`, `createCallable`, `createReactiveMap`, `cachedSnapshot`, `changefeed`, `hasChangefeed`, `staticChangefeed`
+> **Canonical symbols**: `CHANGEFEED`, `Changefeed<S, C>`, `ChangefeedProtocol<S, C>`, `Changeset<C>`, `HasChangefeed<S, C>`, `Feed<S, C>`, `CallableChangefeed<S, C>`, `ReactiveMap<K, V, C>`, `ReactiveMapHandle<K, V, C>`, `ChangeBase`, `createChangefeed`, `createFeed`, `createCallable`, `createReactiveMap`, `cachedSnapshot`, `changefeed`, `hasChangefeed`, `staticChangefeed`
 > **Key invariant(s)**: Every reactive value in Kyneta exposes itself through exactly one symbol — `CHANGEFEED`. Accessing `value[CHANGEFEED]` yields `{ current, subscribe }`. Anything else is not a changefeed. `current` obeys the **identity rule**: it returns the same value until the state changes, and a new one once it has.
 
 A shared vocabulary that lets any object — a schema ref, a document, a live map, a function-object — say "here is my current value and here is how you watch it change." Every reactive surface in Kyneta goes through this one symbol.
@@ -36,7 +36,8 @@ Imported by schema, exchange, index, react, compiler, cast, and both CRDT substr
 | `ChangeBase` | `{ type: string }` — the open base protocol that every change type extends. | A specific change type like `TextChange` (those live in `@kyneta/schema`) |
 | `origin` | App-level batch provenance label (e.g. `"sync"`, `"undo"`, `"migration"`). Free vocabulary for app code. | `source` — `origin` is app-level, `source` is kyneta-managed identity |
 | `source` | Identity-typed echo-suppression token compared with `===`. Set by originating `batch()` caller. | `origin` — `source` cannot collide with app vocabulary |
-| `CallableChangefeed<S, C>` | A `Changefeed<S, C>` that is also callable — `feed()` returns `feed.current`. | A function that returns a changefeed |
+| `Feed<S, C>` | A function that reads a value and carries its `[CHANGEFEED]`. | A function that returns a changefeed |
+| `CallableChangefeed<S, C>` | A `Changefeed<S, C>` that is also a `Feed` — `feed()` returns `feed.current`. | A function that returns a changefeed |
 | `ReactiveMap<K, V, C>` | A `CallableChangefeed` over a `ReadonlyMap<K, V>`, with `.get`, `.has`, `.keys`, `.size`, iteration lifted to the top level. | A Signal, an Observable, or a MobX map |
 | `ReactiveMapHandle<K, V, C>` | The producer-side split of `ReactiveMap` — `set`, `delete`, `clear`, `emit`. | Any interface a consumer should hold |
 
@@ -186,8 +187,8 @@ export function hasChangefeed<S = unknown, A extends ChangeBase = ChangeBase>(
 Three details are load-bearing and easy to drop when reinventing it.
 
 **`typeof value === "function"` is not redundant.** Carriers are often
-callable — `populatedFeed(ref)` returns a function that also implements the
-protocol — and an object-only check rejects them.
+callable — a `Feed<S>`, such as `populatedFeed(ref)`, is a function that
+also carries the protocol — and an object-only check rejects them.
 
 **The type parameters are asserted, not checked.** The guard verifies the slot
 exists; naming `S` is the caller stating what it holds. That is deliberate, and
@@ -202,11 +203,11 @@ See "Where types are lost, and why" in `packages/schema/TECHNICAL.md`.
 
 ---
 
-## `CallableChangefeed` — the function-object variant
+## `Feed` and `CallableChangefeed` — changefeeds you can call
 
-`CallableChangefeed<S, C>` is the intersection `Changefeed<S, C> & (() => S)` (source: `packages/changefeed/src/callable.ts` → `CallableChangefeed`). Calling the feed returns its current value; the `.current` / `.subscribe` / `[CHANGEFEED]` surface is preserved as properties on the function-object.
+`Feed<S, C>` is the callable carrier: `(() => S) & HasChangefeed<S, C>`, a function that reads a value and carries its `[CHANGEFEED]` (source: `packages/changefeed/src/callable.ts`). `createFeed(read, protocol)` builds one: calling it calls `read`, and its `[CHANGEFEED]` is `protocol`, non-enumerable and fixed. It is the one shape for a value you read by calling and observe through the protocol: `@kyneta/schema`'s ref flags (`populatedFeed(ref)`, `deletedFeed(ref)`) and `@kyneta/exchange`'s settle terms and `docStatusFeed` are each a `Feed`.
 
-`createCallable(feed)` wraps an existing feed. The callable uses `Object.defineProperty` with non-enumerable getters so that `hasChangefeed(callable)` still returns `true` and `callable[CHANGEFEED]` delegates to the wrapped feed's protocol.
+`CallableChangefeed<S, C>` is `Changefeed<S, C> & Feed<S, C>`: a `Feed` with `.current` and `.subscribe` as properties too. `createCallable(feed)` wraps an existing changefeed: a `Feed` over its protocol, with `.current` and `.subscribe` delegating to it, so `hasChangefeed(callable)` is `true` and `callable[CHANGEFEED]` is the wrapped feed's protocol.
 
 ### What a `CallableChangefeed` is NOT
 
@@ -266,7 +267,8 @@ A `Map` cannot be frozen, so the snapshot's immutability rests on its `ReadonlyM
 | `HasChangefeed<S, C>` | `src/changefeed.ts` | Weakest form — any object that carries `[CHANGEFEED]`. |
 | `Changeset<C>` | `src/changefeed.ts` | `{ changes, origin? }` — batch delivery unit. |
 | `ChangeBase` | `src/change.ts` | `{ type: string }` — the open base protocol for changes. |
-| `CallableChangefeed<S, C>` | `src/callable.ts` | `Changefeed<S, C> & (() => S)` — callable function-object variant. |
+| `Feed<S, C>` | `src/callable.ts` | `(() => S) & HasChangefeed<S, C>` — the callable carrier; `createFeed(read, protocol)` builds one. |
+| `CallableChangefeed<S, C>` | `src/callable.ts` | `Changefeed<S, C> & Feed<S, C>` — a callable changefeed with `.current` and `.subscribe`. |
 | `ReactiveMap<K, V, C>` | `src/reactive-map.ts` | Callable changefeed over `ReadonlyMap<K, V>` with lifted accessors. |
 | `ReactiveMapHandle<K, V, C>` | `src/reactive-map.ts` | Producer-side: `set`, `delete`, `clear`, `emit`. |
 | `cachedSnapshot<T>(build)` | `src/cached-snapshot.ts` | One snapshot of mutable state, rebuilt on the first read after `invalidate()`. |
@@ -278,7 +280,7 @@ A `Map` cannot be frozen, so the snapshot's immutability rests on its `ReadonlyM
 | `src/index.ts` | Public exports. |
 | `src/changefeed.ts` | `CHANGEFEED` symbol, protocol/developer types, `createChangefeed`, `changefeed`, `hasChangefeed`, `staticChangefeed`. |
 | `src/change.ts` | `ChangeBase` — the open change protocol. |
-| `src/callable.ts` | `CallableChangefeed`, `createCallable`. |
+| `src/callable.ts` | `Feed`, `createFeed`, `CallableChangefeed`, `createCallable`. |
 | `src/reactive-map.ts` | `ReactiveMap`, `ReactiveMapHandle`, `createReactiveMap`. |
 | `src/cached-snapshot.ts` | `cachedSnapshot` — the producer's half of the identity rule. |
 | `src/__tests__/changefeed.test.ts` | Protocol tests: symbol identity, `createChangefeed`/`changefeed`/`staticChangefeed`, subscribe semantics. |

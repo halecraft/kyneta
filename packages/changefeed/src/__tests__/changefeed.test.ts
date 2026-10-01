@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { createCallable } from "../callable.js"
+import { createCallable, createFeed, type Feed } from "../callable.js"
 import type { ChangeBase } from "../change.js"
 import {
   CHANGEFEED,
@@ -244,6 +244,35 @@ describe("staticChangefeed", () => {
     expect(cb).not.toHaveBeenCalled()
     unsub()
     expect(cb).not.toHaveBeenCalled()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// createFeed
+// ---------------------------------------------------------------------------
+
+describe("createFeed", () => {
+  it("calls read, and carries the given protocol, fixed and non-enumerable", () => {
+    let value = 1
+    const [source] = createChangefeed(() => value)
+    const protocol = source[CHANGEFEED]
+    const feed = createFeed(() => value, protocol)
+
+    expect(feed()).toBe(1)
+    value = 2
+    expect(feed()).toBe(2)
+    expect(hasChangefeed(feed)).toBe(true)
+    expect(feed[CHANGEFEED]).toBe(protocol)
+    expect(Object.keys(feed)).toEqual([])
+    expect(Object.getOwnPropertyDescriptor(feed, CHANGEFEED)?.writable).toBe(
+      false,
+    )
+  })
+
+  it("a callable changefeed is a feed", () => {
+    const [source] = createChangefeed(() => 0)
+    const feed: Feed<number> = createCallable(source)
+    expect(feed()).toBe(0)
   })
 })
 

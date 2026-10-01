@@ -9,7 +9,7 @@ import {
   inFrame,
   openFrame,
   record,
-} from "../interpreters/frame-stack.js"
+} from "../frame-stack.js"
 import { RawPath } from "../path.js"
 
 /** Record a write to field `key`, whose inverse writes `undo:key`. */

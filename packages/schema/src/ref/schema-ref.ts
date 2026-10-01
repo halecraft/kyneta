@@ -3,8 +3,9 @@
 // SchemaRef<S, N> combines navigation, reading, writing, observation and
 // typed native container access into a single recursive conditional type. It
 // gives each schema node a precise type where `.at()` returns
-// `SchemaRef<Child, N>` (not separate `Readable<Child>` / `Writable<Child>`
-// with conflicting `.at()` types).
+// `SchemaRef<Child, N>`: the read surfaces (`readable.ts`) and the write
+// surfaces (`writable.ts`) are intersected per kind, with children typed as
+// `SchemaRef` again.
 //
 // The native map parameter `N extends NativeMap` is the type-level functor
 // that maps schema kinds to substrate-native container types. Each branch
@@ -34,29 +35,9 @@
 //   - `Wrap<T, Native>` intersects the cross-cutting concerns + HasNative<Native>
 
 import type { HasChangefeed } from "@kyneta/changefeed"
-import type { RichTextDelta } from "./change.js"
-import type { Plain } from "./interpreter-types.js"
-import type {
-  Readable,
-  ReadableMapRef,
-  ReadableSequenceRef,
-  ReadableSetRef,
-  ReadableTreeRef,
-} from "./interpreters/readable.js"
-import type {
-  CounterRef,
-  HasRemove,
-  HasTransact,
-  ProductRef,
-  RichTextRef,
-  ScalarRef,
-  SequenceRef,
-  TextRef,
-  WritableMapRef,
-  WritableSetRef,
-  WritableTreeRef,
-} from "./interpreters/writable.js"
-import type { HasNative, NativeMap, UnknownNativeMap } from "./native.js"
+import type { RichTextDelta } from "../change.js"
+import type { HasNative, NativeMap, UnknownNativeMap } from "../native.js"
+import type { Plain } from "../plain-types.js"
 import type {
   CounterSchema,
   DiscriminatedSumSchema,
@@ -71,7 +52,27 @@ import type {
   SetSchema,
   TextSchema,
   TreeSchema,
-} from "./schema.js"
+} from "../schema.js"
+import type { HasRemove } from "./address.js"
+import type {
+  Readable,
+  ReadableMapRef,
+  ReadableSequenceRef,
+  ReadableSetRef,
+  ReadableTreeRef,
+} from "./readable.js"
+import type {
+  CounterRef,
+  ProductRef,
+  RichTextRef,
+  ScalarRef,
+  SequenceRef,
+  TextRef,
+  WritableMapRef,
+  WritableSetRef,
+  WritableTreeRef,
+} from "./writable.js"
+import type { HasTransact } from "./write.js"
 
 // ---------------------------------------------------------------------------
 // Removable<T> — container-child ref wrapper

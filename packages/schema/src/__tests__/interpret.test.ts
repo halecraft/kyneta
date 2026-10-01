@@ -1,13 +1,32 @@
 import { describe, expect, it } from "vitest"
 import type { Interpreter, Path } from "../index.js"
-import {
-  createInterpreter,
-  INTERPRETER,
-  interpret,
-  KIND,
-  plainInterpreter,
-  Schema,
-} from "../index.js"
+import { createInterpreter, interpret, KIND, Schema } from "../index.js"
+
+/** A fold that reads a plain value: each leaf at its path in `store`, and
+ *  each composite rebuilt from its children, so the walk itself is tested. */
+const readPlain = (() => {
+  const items = (store: unknown, path: Path, item: (i: number) => unknown) => {
+    const value = path.read(store)
+    return Array.isArray(value) ? value.map((_, i) => item(i)) : undefined
+  }
+  return createInterpreter<unknown, unknown>(
+    (store, path) => path.read(store),
+    {
+      product: (_store, _path, _schema, fields) =>
+        Object.fromEntries(
+          Object.entries(fields).map(([key, field]) => [key, field()]),
+        ),
+      sequence: (store, path, _schema, item) => items(store, path, item),
+      movable: (store, path, _schema, item) => items(store, path, item),
+      map: (store, path, _schema, item) => {
+        const value = path.read(store)
+        return value !== null && typeof value === "object"
+          ? Object.fromEntries(Object.keys(value).map(key => [key, item(key)]))
+          : undefined
+      },
+    },
+  )
+})()
 
 // ===========================================================================
 // Base grammar tests — Schema only, no Loro annotations
@@ -69,7 +88,7 @@ describe("interpret: plain round-trip", () => {
     })
 
     const store = { title: "Hello", count: 42 }
-    const result = interpret(schema, plainInterpreter, store)
+    const result = interpret(schema, readPlain, store)
     expect(result).toEqual(store)
   })
 
@@ -104,7 +123,7 @@ describe("interpret: plain round-trip", () => {
       metadata: { createdAt: "2024-01-01", version: 2 },
     }
 
-    const result = interpret(schema, plainInterpreter, store)
+    const result = interpret(schema, readPlain, store)
     expect(result).toEqual(store)
   })
 
@@ -116,7 +135,7 @@ describe("interpret: plain round-trip", () => {
 
     // Sparse store — count is missing
     const store = { title: "Hello" }
-    const result = interpret(schema, plainInterpreter, store) as Record<
+    const result = interpret(schema, readPlain, store) as Record<
       string,
       unknown
     >
@@ -201,7 +220,6 @@ describe("interpret: path accumulation", () => {
     const paths: Array<{ kind: string; path: Path }> = []
 
     const pathTracker: Interpreter<void, unknown> = {
-      [INTERPRETER]: true,
       scalar(_ctx, path, schema) {
         paths.push({ kind: `scalar:${schema.scalarKind}`, path })
         return null
@@ -386,7 +404,7 @@ describe("interpret: first-class types plain round-trip", () => {
       ],
     }
 
-    const result = interpret(schema, plainInterpreter, store)
+    const result = interpret(schema, readPlain, store)
     expect(result).toEqual(store)
   })
 })

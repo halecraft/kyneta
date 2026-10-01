@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { own, replaceChange, Schema, sequenceChange } from "../index.js"
-import { TRANSACT } from "../interpreters/writable.js"
 import { RawPath } from "../path.js"
+import { TRANSACT } from "../ref/write.js"
 import type { Schema as SchemaNode } from "../schema.js"
 import {
   contextOver,

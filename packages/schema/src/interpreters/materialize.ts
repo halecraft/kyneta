@@ -37,7 +37,6 @@ import type { RichTextDelta } from "../change.js"
 import { isNonNullObject } from "../guards.js"
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
 import { dispatchSum } from "../interpret.js"
-import { INTERPRETER } from "../interpreter-types.js"
 import { type FlatTreeNodeTopology, forestTopologyOf } from "../reader.js"
 import type {
   CounterSchema,
@@ -52,7 +51,7 @@ import type {
   TextSchema,
   TreeSchema,
 } from "../schema.js"
-import { zeroInterpreter } from "../zero.js"
+import { zeroInterpreter } from "./zero.js"
 
 // ---------------------------------------------------------------------------
 // MaterializeResolver — backend-agnostic value resolution
@@ -194,8 +193,6 @@ export function createMaterializeInterpreter(
   resolver: MaterializeResolver,
 ): Interpreter<MaterializeContext, unknown> {
   return {
-    [INTERPRETER]: true,
-
     // 1. scalar — resolve value, falling back to zeroInterpreter for defaults
     scalar(
       _ctx: MaterializeContext,

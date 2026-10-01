@@ -16,10 +16,10 @@ import {
 } from "../change.js"
 import { type DeliveryPlan, planDelivery } from "../delivery.js"
 import type { Op } from "../index.js"
-import type { SubscriberNode } from "../interpreters/subscriber-trie.js"
-import { SubscriberTrie } from "../interpreters/subscriber-trie.js"
 import type { Path } from "../path.js"
 import { RawPath } from "../path.js"
+import type { SubscriberNode } from "../subscriber-trie.js"
+import { SubscriberTrie } from "../subscriber-trie.js"
 
 // ---------------------------------------------------------------------------
 // Helpers

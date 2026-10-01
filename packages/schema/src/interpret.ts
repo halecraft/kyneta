@@ -15,7 +15,6 @@
 // they are one fixed construction (`ref/create.ts`).
 
 import { isNonNullObject } from "./guards.js"
-import { INTERPRETER } from "./interpreter-types.js"
 import type { Path } from "./path.js"
 import { RawPath } from "./path.js"
 import {
@@ -96,8 +95,6 @@ export interface FlatTreeNode<A> {
  * and `node(id)` for per-id lookup, as a map's item closure is keyed.
  */
 export interface Interpreter<Ctx, A> {
-  readonly [INTERPRETER]: true
-
   scalar(ctx: Ctx, path: Path, schema: ScalarSchema): A
 
   product(
@@ -402,7 +399,6 @@ export function createInterpreter<Ctx, A>(
   overrides: Partial<Interpreter<Ctx, A>> = {},
 ): Interpreter<Ctx, A> {
   return {
-    [INTERPRETER]: true,
     scalar:
       overrides.scalar ?? ((ctx, path, schema) => fallback(ctx, path, schema)),
     product:

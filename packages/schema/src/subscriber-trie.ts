@@ -13,10 +13,10 @@
 // change kills must still hear that change, and the coordinate trie unlinks
 // such coordinates when `prepare` settles the change, before delivery.
 
-import type { ChangeBase } from "../change.js"
-import type { Changeset, Op } from "../changefeed.js"
-import type { Path, Segment } from "../path.js"
-import type { SubtreeEffect } from "../subtree-effect.js"
+import type { ChangeBase } from "./change.js"
+import type { Changeset, Op } from "./changefeed.js"
+import type { Path, Segment } from "./path.js"
+import type { SubtreeEffect } from "./subtree-effect.js"
 
 /** An own-path subscriber: the node's own changes, without paths. */
 export type OwnCallback = (changeset: Changeset<ChangeBase>) => void

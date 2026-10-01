@@ -1,10 +1,7 @@
 // SubscriberTrie — subscribers and population state, one node per coordinate.
 import { describe, expect, it } from "vitest"
-import {
-  type SubscriberNode,
-  SubscriberTrie,
-} from "../interpreters/subscriber-trie.js"
 import { RawPath } from "../path.js"
+import { type SubscriberNode, SubscriberTrie } from "../subscriber-trie.js"
 
 const outer = RawPath.empty.field("outer")
 const x = outer.field("x")

@@ -12,9 +12,10 @@
 
 import { cachedSnapshot } from "./cached-snapshot.js"
 import type { CallableChangefeed } from "./callable.js"
+import { createCallable } from "./callable.js"
 import type { ChangeBase } from "./change.js"
-import type { ChangefeedProtocol, Changeset } from "./changefeed.js"
-import { CHANGEFEED, createChangefeed } from "./changefeed.js"
+import type { Changeset } from "./changefeed.js"
+import { createChangefeed } from "./changefeed.js"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -110,51 +111,18 @@ export function createReactiveMap<K, V, C extends ChangeBase = ChangeBase>(): [
 
   const [feed, emit] = createChangefeed<ReadonlyMap<K, V>, C>(snapshot.get)
 
-  // Build the callable function-object.
-  // We construct it manually (rather than using createCallable) so we
-  // can attach the collection accessors in one pass.
-  const callable: any = () => snapshot.get()
-
-  // ── Changefeed protocol ──
-
-  Object.defineProperty(callable, CHANGEFEED, {
-    get(): ChangefeedProtocol<ReadonlyMap<K, V>, C> {
-      return feed[CHANGEFEED]
+  // The map's own accessors read the live map, so they see a `set` before the
+  // `emit` that announces it, as the snapshot does.
+  const reactiveMap = Object.defineProperties(createCallable(feed), {
+    get: { value: (key: K): V | undefined => map.get(key), enumerable: true },
+    has: { value: (key: K): boolean => map.has(key), enumerable: true },
+    keys: { value: (): IterableIterator<K> => map.keys(), enumerable: true },
+    size: { get: (): number => map.size, enumerable: true },
+    [Symbol.iterator]: {
+      value: (): IterableIterator<[K, V]> => map[Symbol.iterator](),
+      enumerable: true,
     },
-    enumerable: false,
-    configurable: false,
-  })
-
-  Object.defineProperty(callable, "current", {
-    get(): ReadonlyMap<K, V> {
-      return snapshot.get()
-    },
-    enumerable: true,
-    configurable: false,
-  })
-
-  callable.subscribe = (
-    callback: (changeset: Changeset<C>) => void,
-  ): (() => void) => {
-    return feed.subscribe(callback)
-  }
-
-  // ── Lifted collection accessors ──
-
-  callable.get = (key: K): V | undefined => map.get(key)
-  callable.has = (key: K): boolean => map.has(key)
-  callable.keys = (): IterableIterator<K> => map.keys()
-
-  Object.defineProperty(callable, "size", {
-    get(): number {
-      return map.size
-    },
-    enumerable: true,
-    configurable: false,
-  })
-
-  callable[Symbol.iterator] = (): IterableIterator<[K, V]> =>
-    map[Symbol.iterator]()
+  }) as ReactiveMap<K, V, C>
 
   // ── Handle (producer side) ──
 
@@ -175,5 +143,5 @@ export function createReactiveMap<K, V, C extends ChangeBase = ChangeBase>(): [
     emit,
   }
 
-  return [callable as ReactiveMap<K, V, C>, handle]
+  return [reactiveMap, handle]
 }

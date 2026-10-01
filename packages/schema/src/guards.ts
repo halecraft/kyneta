@@ -35,7 +35,9 @@ export function isPlainObject(
 
 /**
  * Returns `true` when `value` can host properties: a non-null object or a
- * function. A ref is a function, so `isNonNullObject` is false for one.
+ * function. A ref is a function, so `isNonNullObject` is false for one. Every
+ * protocol guard is this and the protocol's symbol (`hasTransact`,
+ * `hasPosition`, the ref flags' `has`).
  *
  * Does NOT return `true` for primitives (string, number, boolean, etc.),
  * `null`, or `undefined`.

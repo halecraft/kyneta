@@ -1,7 +1,8 @@
 // ref-surfaces — every member a ref's type declares is a member a real ref
 // carries.
 //
-// A ref's types (`Readable<S>`, `Writable<S>`, `Ref<S>`) are interfaces, and
+// A ref's types (`Readable<S>`, `Ref<S>` and the surfaces they are built
+// from) are interfaces, and
 // its members are defined on its prototype by name (`ref/read.ts`,
 // `navigate.ts`, `write.ts`). Nothing ties the two: declare `push` and define
 // `psuh` and the code compiles, and callers get a ref whose type says it has

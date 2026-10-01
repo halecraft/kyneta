@@ -12,10 +12,10 @@
 // are the walk from the head down to that start, and aborting it is moving
 // the head back. So no step copies the entries, however large the batch.
 
-import type { ChangeBase } from "../change.js"
-import type { Op } from "../changefeed.js"
-import type { Path } from "../interpret.js"
-import type { BatchOutcome } from "../substrate.js"
+import type { ChangeBase } from "./change.js"
+import type { Op } from "./changefeed.js"
+import type { Path } from "./interpret.js"
+import type { BatchOutcome } from "./substrate.js"
 
 /** One authored op, as the frame that made it keeps it. */
 export interface Recorded {

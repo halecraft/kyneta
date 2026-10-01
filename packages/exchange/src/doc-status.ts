@@ -19,11 +19,11 @@
 // absence of evidence is not evidence of absence until every source has been
 // consulted. Hence: populated is disjunctive, empty is conjunctive.
 
-import type { HasChangefeed } from "@kyneta/changefeed"
+import type { Feed } from "@kyneta/changefeed"
 import { CHANGEFEED } from "@kyneta/changefeed"
 import { populated, populatedFeed } from "@kyneta/schema"
 import type { Authority } from "./governance.js"
-import { makeFeed, settledFeed, settledWith } from "./settle.js"
+import { settledFeed, settledWith, signalFeed } from "./settle.js"
 
 // ---------------------------------------------------------------------------
 // The type
@@ -108,14 +108,14 @@ export function docStatus(
 export function docStatusFeed(
   node: object,
   opts?: { authority?: Authority },
-): (() => DocStatus) & HasChangefeed<DocStatus> {
+): Feed<DocStatus> {
   const content = populatedFeed(node)
   const settle = settledFeed(node)
 
   // Watches both inputs, because the status can move when either does: data
   // arriving flips it to "populated", and the last source reporting flips it
   // from "pending" to "empty".
-  return makeFeed<DocStatus>(
+  return signalFeed<DocStatus>(
     () => docStatus(node, opts),
     onChange => {
       const disposers = [

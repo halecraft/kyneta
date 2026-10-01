@@ -11,7 +11,7 @@ import {
   subscribeNode,
 } from "../basic/index.js"
 import { __countKeptRefs } from "../coordinate-trie.js"
-import { TRANSACT } from "../interpreters/writable.js"
+import { TRANSACT } from "../ref/write.js"
 import { withReadScope } from "../tracking.js"
 
 const TodoApp = Schema.struct({

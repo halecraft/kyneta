@@ -55,7 +55,7 @@ import { registerDocSyncMode } from "./doc-meta.js"
 import { planInterpretation } from "./interpret.js"
 import { registerPersistenceTerm, registerWriteRefusal } from "./persistence.js"
 import { gateOpen } from "./publish-gate.js"
-import { makeFeed, makeSettleTerm, registerHydrationTerm } from "./settle.js"
+import { registerHydrationTerm, signalFeed } from "./settle.js"
 import {
   type Seat,
   SeatLostError,
@@ -1470,7 +1470,7 @@ export class Runtime {
     registerDocSyncMode(ref, bound.syncMode)
     registerHydrationTerm(
       ref,
-      makeSettleTerm(
+      signalFeed(
         () => hydration.state === "loaded",
         onChange => {
           if (hydration.state !== "pending") return () => {}
@@ -1482,7 +1482,7 @@ export class Runtime {
     )
     registerPersistenceTerm(
       ref,
-      makeSettleTerm(
+      signalFeed(
         () => this.#persisted(entry),
         onChange => {
           publication.listeners.add(onChange)
@@ -1493,7 +1493,7 @@ export class Runtime {
     )
     registerWriteRefusal(
       ref,
-      makeFeed(
+      signalFeed(
         () => publication.refusal,
         onChange => {
           publication.refusalListeners.add(onChange)

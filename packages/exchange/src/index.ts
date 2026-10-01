@@ -236,7 +236,6 @@ export {
   writeRefusal,
   writeRefusalFeed,
 } from "./persistence.js"
-export type { SettleTerm } from "./settle.js"
 export {
   hydrated,
   hydratedFeed,

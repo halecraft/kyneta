@@ -4,8 +4,9 @@ import { describe, expect, it } from "vitest"
 import { batch, createDoc, Schema } from "../basic/index.js"
 import { __countKeptRefs, __countTrieNodes } from "../coordinate-trie.js"
 import { unwrap } from "../index.js"
-import { TRANSACT, type WritableContext } from "../interpreters/writable.js"
 import { RawPath } from "../path.js"
+import { TRANSACT } from "../ref/write.js"
+import type { WritableContext } from "../writable-context.js"
 
 const Doc = Schema.struct({
   title: Schema.string(),

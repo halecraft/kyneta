@@ -154,7 +154,7 @@ section(5, "Your Own Interpreter")
 log(`
     interpret(schema, interpreter, ctx) is the catamorphism over a schema:
     one case per kind, children as thunks the case may force or not.
-    Materializing, zeroing, validating and describing are all interpreters.
+    Materializing, zeroing and validating are all interpreters.
     Here is one that lists every leaf's path.
 `)
 

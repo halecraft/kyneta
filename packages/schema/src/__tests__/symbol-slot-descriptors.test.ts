@@ -20,7 +20,7 @@
 import { CHANGEFEED } from "@kyneta/changefeed"
 import { describe, expect, it } from "vitest"
 import { batch, createDoc, Schema } from "../basic/index.js"
-import { PATH, TRANSACT } from "../interpreters/writable.js"
+import { PATH, TRANSACT } from "../ref/write.js"
 
 const Doc = Schema.struct({
   title: Schema.string(),

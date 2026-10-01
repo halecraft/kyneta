@@ -7,7 +7,7 @@
 import { describe, expect, expectTypeOf, it } from "vitest"
 import type { SchemaNode } from "../index.js"
 import { Schema } from "../index.js"
-import type { Plain } from "../interpreter-types.js"
+import type { Plain } from "../plain-types.js"
 import type { DeepReadonly } from "./deep-readonly.js"
 import { contextOver, untypedRefOver } from "./stack.js"
 

@@ -9,7 +9,7 @@
 // the design hinges on those four layers agreeing.
 //
 // `PlainFlatTreeNode<I>` and `Plain<TreeSchema<I>>` live in
-// `interpreter-types.ts` to avoid an import cycle with `Plain`.
+// `plain-types.ts` to avoid an import cycle with `Plain`.
 
 import type { FlatTreeNode } from "./interpret.js"
 import type { FlatTreeNodeTopology } from "./reader.js"

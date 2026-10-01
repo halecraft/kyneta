@@ -17,7 +17,7 @@
 
 export type { ExchangeProviderProps } from "./exchange-context.js"
 export { ExchangeProvider, useExchange } from "./exchange-context.js"
-export type { CallableRef, ExternalStore } from "./store.js"
+export type { ExternalStore } from "./store.js"
 // The sync store (Functional Core — framework-agnostic, independently
 // testable): it wraps SyncRef.onPeerSyncChange, which is not a changefeed.
 export { createSyncStore } from "./store.js"

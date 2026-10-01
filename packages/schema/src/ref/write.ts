@@ -21,14 +21,45 @@ import {
 } from "../change.js"
 import { completeValue } from "../complete.js"
 import { subtreeIds } from "../forest.js"
-import { isPlainObject, samePlainValue } from "../guards.js"
+import { isPlainObject, isPropertyHost, samePlainValue } from "../guards.js"
 import type { FlatTreeNode } from "../interpret.js"
-import { PATH, TRANSACT } from "../interpreters/writable.js"
+import type { Path } from "../path.js"
 import { RawPath } from "../path.js"
 import { KIND, type Schema as SchemaNode } from "../schema.js"
 import { hasTreeNodeAllocation, TREE_NODE_ALLOCATE } from "../substrate.js"
+import type { WritableContext } from "../writable-context.js"
 import { getter, method } from "./read.js"
 import { stateOf } from "./state.js"
+
+// ---------------------------------------------------------------------------
+// TRANSACT symbol — composability hook for discovering a ref's context
+// ---------------------------------------------------------------------------
+
+/**
+ * Symbol that refs carry to expose their originating `WritableContext`.
+ * This enables `batch()` and other utilities to discover the context
+ * from any ref without a WeakMap or re-interpretation.
+ *
+ * Uses `Symbol.for` so multiple copies share the same identity.
+ */
+export const TRANSACT: unique symbol = Symbol.for("kyneta:transact")
+export const PATH: unique symbol = Symbol.for("kyneta:path")
+
+/**
+ * An object that carries a `[TRANSACT]` symbol referencing the
+ * `WritableContext` used during interpretation.
+ */
+export interface HasTransact {
+  readonly [TRANSACT]: WritableContext
+  readonly [PATH]: Path
+}
+
+/**
+ * Returns `true` if `value` has a `[TRANSACT]` symbol property.
+ */
+export function hasTransact(value: unknown): value is HasTransact {
+  return isPropertyHost(value) && TRANSACT in value
+}
 
 /**
  * Position a cursor at `index`, then apply `op`: the positional primitive

@@ -8,7 +8,7 @@
 // after: within what the change may have rewritten (`planSubtreeEffect`), a
 // coordinate lives exactly while it still exists (`planAddressFates`).
 
-import type { HasChangefeed } from "@kyneta/changefeed"
+import type { Feed } from "@kyneta/changefeed"
 import { planAddressFates } from "../address-fates.js"
 import type { ChangeBase } from "../change.js"
 import { isSequenceChange, mapChange, sequenceChange } from "../change.js"
@@ -18,15 +18,45 @@ import {
   liveSchemaAt,
 } from "../coordinate-exists.js"
 import type { CoordinateTrie } from "../coordinate-trie.js"
-import { REMOVE } from "../interpreters/writable.js"
+import { isPropertyHost } from "../guards.js"
 import { AddressBase, type AddressedPath, isAddress, setDead } from "../path.js"
 import type { Reader } from "../reader.js"
 import type { Schema as SchemaNode } from "../schema.js"
 import { planSubtreeEffect } from "../subtree-effect.js"
-import { feedCarrier } from "./observe.js"
+import { flag, flagFeed, type HasFlag } from "./observe.js"
 import type { RefPosition } from "./prototype.js"
 import { getter, method } from "./read.js"
-import { type FeedCarrier, lazySlots, stateOf } from "./state.js"
+import { lazySlots, stateOf } from "./state.js"
+
+// ---------------------------------------------------------------------------
+// REMOVE — structural self-removal from parent container
+// ---------------------------------------------------------------------------
+
+/**
+ * Symbol attached to refs that support structural removal from their
+ * parent container (sequence element, map entry, set member).
+ *
+ * Calling `ref[REMOVE]()` dispatches the appropriate delete change
+ * at the parent path. Top-level document refs and product field refs
+ * do NOT carry this symbol — only "addressable children" of containers.
+ *
+ * Uses `Symbol.for` so multiple copies share the same identity.
+ */
+export const REMOVE: unique symbol = Symbol.for("kyneta:remove")
+
+/**
+ * An object that carries a `[REMOVE]` method for self-removal.
+ */
+export interface HasRemove {
+  [REMOVE](): void
+}
+
+/**
+ * Returns `true` if `value` has a `[REMOVE]` symbol property.
+ */
+export function hasRemove(value: unknown): value is HasRemove {
+  return isPropertyHost(value) && REMOVE in value
+}
 
 /**
  * The symbol a ref's deletion state lives under: on every ref but the
@@ -35,30 +65,20 @@ import { type FeedCarrier, lazySlots, stateOf } from "./state.js"
 export const DELETED: unique symbol = Symbol.for("kyneta:deleted")
 
 /**
- * A ref that tracks whether its coordinate still exists.
- *
- * Every ref below a document's root carries this: a list item or map entry
- * can be removed, a field can leave with its sum's variant, and anything can
- * go with the container holding it. The slot holds a *carrier*: a function
- * returning the boolean, which also carries its own `[CHANGEFEED]` so the
- * transition can be subscribed to. Mirrors `HasPopulated` (`observe.ts`).
+ * A ref that tracks whether its coordinate still exists: every ref below a
+ * document's root. A list item or map entry can be removed, a field can leave
+ * with its sum's variant, and anything can go with the container holding it.
  */
-export interface HasDeleted {
-  readonly [DELETED]: (() => boolean) & HasChangefeed<boolean>
-}
+export type HasDeleted = HasFlag<typeof DELETED>
 
-/**
- * Returns `true` if `value` has a `[DELETED]` property, i.e. it tracks
- * deletion.
- */
-export function hasDeleted(value: unknown): value is HasDeleted {
-  return (
-    value !== null &&
-    value !== undefined &&
-    (typeof value === "object" || typeof value === "function") &&
-    DELETED in (value as object)
-  )
-}
+const deletion = flag(
+  DELETED,
+  "deletedFeed",
+  "a ref that tracks deletion (any ref below a document's root)",
+)
+
+/** Whether `value` tracks deletion. */
+export const hasDeleted = deletion.has
 
 /**
  * Returns true if the ref's coordinate no longer exists: its key, id or list
@@ -71,36 +91,17 @@ export function hasDeleted(value: unknown): value is HasDeleted {
  * The document root is the one ref that carries no deletion state, having no
  * parent to be removed from.
  */
-export function deleted(ref: unknown): boolean {
-  if (!hasDeleted(ref)) return false
-  return ref[DELETED]() === true
-}
+export const deleted = deletion.value
 
 /**
- * Returns a callable that implements the `[CHANGEFEED]` protocol for the
- * ref's deletion state. The callable returns a boolean (true if deleted).
- * You can subscribe to it via `subscribeNode(deletedFeed(ref), ...)`.
- * Throws if the ref does not track deletion.
- *
- * The `Feed` suffix marks this as the *observable carrier* rather than the
- * plain boolean — for a boolean, call `deleted(ref)`. Reading is the routine
- * case, so it gets the shorter name; subscribing is the specialist one, so it
- * pays the suffix. Mirrors `populatedFeed` in `observe.ts`.
- *
- * A carrier is a callable, which means it is **always truthy** when present.
- * Never write `if (deletedFeed(ref))` — call it, or use `deleted(ref)`.
+ * The feed behind `deleted(ref)`: a callable returning the boolean, with a
+ * `[CHANGEFEED]` that fires on each change of it, so
+ * `subscribeNode(deletedFeed(ref), …)` hears a removal and a revival. Always
+ * truthy when present, so call it rather than test it. `null` and
+ * `undefined` pass through, for `useValue(deletedFeed(list.at(i)))`; any
+ * other value that does not track deletion, the root included, throws.
  */
-export function deletedFeed(
-  ref: unknown,
-): ((() => boolean) & HasChangefeed<boolean>) | undefined {
-  if (ref === null || ref === undefined) return undefined
-  if (!hasDeleted(ref)) {
-    throw new Error(
-      "deletedFeed() requires a ref that tracks deletion (e.g. a sequence item or map entry)",
-    )
-  }
-  return ref[DELETED]
-}
+export const deletedFeed = deletion.feed
 
 // ---------------------------------------------------------------------------
 // Members by position
@@ -110,7 +111,7 @@ export function deletedFeed(
 export function addressMembers(position: RefPosition): PropertyDescriptorMap {
   const members: PropertyDescriptorMap = {}
   if (position === "root") return members
-  members[DELETED] = getter(function (this: unknown): FeedCarrier {
+  members[DELETED] = getter(function (this: unknown): Feed<boolean> {
     const state = stateOf(this, "[DELETED]")
     const slots = lazySlots(state)
     if (slots.deleted !== undefined) return slots.deleted
@@ -119,7 +120,7 @@ export function addressMembers(position: RefPosition): PropertyDescriptorMap {
       throw new Error("A ref's path ends in an address.")
     }
     const origin = { changes: [], origin: "deleted" } as const
-    slots.deleted = feedCarrier(
+    slots.deleted = flagFeed(
       () => address.dead,
       callback => {
         address.listeners ??= new Set()

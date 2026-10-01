@@ -26,7 +26,6 @@ import {
   createMaterializeInterpreter,
   plainValueResolver,
 } from "../interpreters/materialize.js"
-import type { WritableContext } from "../interpreters/writable.js"
 import { invert } from "../inverse.js"
 import { RawPath } from "../path.js"
 import {
@@ -63,6 +62,7 @@ import {
   versionVectorJoin,
   versionVectorMeet,
 } from "../version-vector.js"
+import type { WritableContext } from "../writable-context.js"
 import { buildWritableContext } from "../writable-context.js"
 import { createLocalUpdateSignal } from "./local-update-signal.js"
 import { deserializeOps, type SerializedOp, serializeOps } from "./op-codec.js"

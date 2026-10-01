@@ -6,7 +6,7 @@
 // locate, complete, advance, the substrate, settle, mark what was populated.
 // The delivery dispatcher plans and fires each sealed batch's notifications.
 
-import type { DispatcherHandle } from "@kyneta/machine"
+import type { DispatcherHandle, Lease } from "@kyneta/machine"
 import { createDispatcher } from "@kyneta/machine"
 import type { ChangeBase } from "./change.js"
 import type { Op } from "./changefeed.js"
@@ -21,18 +21,15 @@ import {
   inFrame,
   openFrame,
   record,
-} from "./interpreters/frame-stack.js"
-import { SubscriberTrie } from "./interpreters/subscriber-trie.js"
-import type {
-  SealedBatch,
-  TraceEntry,
-  WritableContext,
-} from "./interpreters/writable.js"
+} from "./frame-stack.js"
 import type { Path } from "./path.js"
 import type { PositionCapable } from "./position.js"
+import type { Reader } from "./reader.js"
 import { advance, settle } from "./ref/address.js"
 import type { RichTextSchema, Schema, TextSchema } from "./schema.js"
+import { SubscriberTrie } from "./subscriber-trie.js"
 import type {
+  AnnounceOptions,
   BatchOptions,
   BatchOutcome,
   CommitOptions,
@@ -41,6 +38,116 @@ import type {
 } from "./substrate.js"
 import { TREE_NODE_ALLOCATE } from "./substrate.js"
 import { planSubtreeEffect } from "./subtree-effect.js"
+
+// ---------------------------------------------------------------------------
+// WritableContext — what every ref of a document shares
+// ---------------------------------------------------------------------------
+
+/**
+ * One prepared op: `op` frozen as it was made, and `at` the live path it was
+ * prepared at, which delivery walks by identity. `op.path` is `at.toRaw()`,
+ * so the two have the same length.
+ */
+export interface TraceEntry {
+  readonly op: Op
+  readonly at: Path
+}
+
+/** A finished batch: its options and every op it prepared, in order. */
+export interface SealedBatch {
+  readonly options: BatchOptions
+  readonly entries: readonly TraceEntry[]
+}
+
+/**
+ * The context every ref of a document shares: how to read σ, the write
+ * primitives, and the document's coordinate and subscriber tries. Built by
+ * `buildWritableContext`.
+ *
+ * **The batch lifecycle.** Every op belongs to a batch: an authored block
+ * opened by `runBatch`, or an announcement. The context captures each
+ * batch's ops in its own trace, seals the batch when it ends, and delivers
+ * sealed batches in seal order. An authored block is sealed inside the
+ * substrate's native bracket and delivered after the native commit, so a
+ * batch sealed while a native commit is open waits for it.
+ *
+ * **The `dispatch` combinator.** A ref's writes (`scalar.set`,
+ * `sequence.push`, etc.) call `ctx.dispatch(path, change)` rather than
+ * `ctx.prepare` directly. `dispatch` is depth-aware:
+ *
+ * - Outside any frame: opens an implicit single-op `runBatch`
+ *   (auto-commit) — subscribers see a degenerate Changeset of one change.
+ * - Inside a frame: forwards to `prepare`. The outer frame owns the
+ *   seal, so writes in a `batch()` block collapse into one Changeset.
+ */
+export interface WritableContext {
+  /** Reads σ. */
+  readonly reader: Reader
+  /** The substrate-native container at a schema position (a `LoroText`, a
+   *  `Y.Map`), or `undefined` where there is none: what `[NATIVE]` reads. */
+  readonly nativeResolver?: (schema: Schema, path: Path) => unknown
+  /** The position capability of a text at a schema position: what
+   *  `[POSITION]` reads. */
+  readonly positionResolver?: (
+    schema: TextSchema | RichTextSchema,
+    path: Path,
+  ) => PositionCapable
+  /** The document's root schema: what an authored change is completed
+   *  against, and what addressing derives a coordinate's schema from. */
+  readonly schema: Schema
+  /** The context's coordinates: one node per coordinate a ref was made
+   *  for, or that something still needs. */
+  readonly trie: CoordinateTrie
+  /** The context's subscribers and population state. */
+  readonly subscribers: SubscriberTrie
+  /**
+   * Take one op into the batch being captured; `options.ingress` says how it
+   * arrived. Throws outside `runBatch` or `announce`.
+   *
+   * A fixed pipeline, in this order: locate the path in the trie, complete
+   * an authored change against the schema it lands at (`completeAt`),
+   * advance a list's item addresses through a sequence change, apply the
+   * change to the substrate (for `author` and `compensate`) and add the op to
+   * the batch's trace (and an authored one, with its inverse, to its frame),
+   * settle the coordinates the change may have rewritten, and mark what it
+   * populated.
+   */
+  readonly prepare: (
+    path: Path,
+    change: ChangeBase,
+    options: PrepareOptions,
+  ) => void
+  /**
+   * Run an authored block in its own frame and return the authored ops that
+   * survived in it (what `batch()` returns): an inner frame that threw and
+   * was caught is not among them.
+   *
+   * The outermost frame is one native commit: it runs inside
+   * `substrate.runBatch`, calls `substrate.afterBatch(outcome)` and seals before the
+   * commit, and is delivered after it. If `work` throws, the frame's recorded
+   * inverses are applied LIFO (`ingress: "compensate"`), and at the outermost
+   * frame the batch is sealed with `aborted: true` before the error is
+   * rethrown. Inner frames only contribute ops to the outermost one.
+   */
+  readonly runBatch: (work: () => void, options: CommitOptions) => Op[]
+  /**
+   * Report ops the substrate has already applied, with σ already in
+   * agreement with λ. The ops never reach `substrate.prepare` or
+   * `afterBatch`; subscribers receive them with `replay: !options.local`. An
+   * empty list announces nothing.
+   */
+  readonly announce: (ops: readonly Op[], options: AnnounceOptions) => void
+  /** Depth-aware combinator: outside any frame opens an implicit
+   *  single-op `runBatch` (auto-commit); inside a frame just calls
+   *  `prepare`. Helper methods on refs route through this so multi-helper
+   *  blocks collapse into one Changeset. */
+  readonly dispatch: (path: Path, change: ChangeBase) => void
+  /** Shared cascade budget, attached by `createRef({ lease })`. It must be
+   *  attached before the context's first write: the delivery dispatcher is
+   *  created on first use and keeps the lease it finds then. Without one,
+   *  the dispatcher creates a private lease. */
+  lease?: Lease
+}
 
 const ABORTED: BatchOutcome = { ops: [], inverses: [], aborted: true }
 const AUTHOR: PrepareOptions = { ingress: "author" }

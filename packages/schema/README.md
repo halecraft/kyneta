@@ -198,7 +198,9 @@ subscribeNode(populatedFeed(doc.title), () => { /* data arrived */ })
 
 These are free functions, not properties on the ref. Refs expose your schema's fields as properties, so framework metadata is stored under a `Symbol` (`[POPULATED]`) instead — otherwise a schema with an `populated` field would collide with it. The same applies to `deleted(ref)` / `deletedFeed(ref)`.
 
-> **`*Feed` is the carrier; the short name is the value.** `populatedFeed(ref)` returns a *callable*, so it is always truthy — `if (populatedFeed(ref))` reports the opposite of the truth for an empty document. Use `populated(ref)` when you want a boolean. The older spellings `populated(ref)` / `deleted(ref)` are deprecated aliases of the `*Feed` functions; in 3.0 those short names become the booleans.
+> **`*Feed` is the carrier; the short name is the value.** `populatedFeed(ref)` returns a *callable*, so it is always truthy — `if (populatedFeed(ref))` reports the opposite of the truth for an empty document. Use `populated(ref)` when you want a boolean.
+
+A feed of `null` or `undefined` is that value, so `useValue(deletedFeed(doc.todos.at(i)))` (`@kyneta/react`) works when the index is out of range. Any other value that is not a ref throws.
 
 > **For documents in a Runtime or Exchange**, `docStatus(doc)` from
 > `@kyneta/exchange` answers this properly — it waits for stored data and
@@ -249,8 +251,8 @@ bun run example/advanced/main.ts
 
 Under the hood:
 
-- the schema is a recursive functor (`Scalar | Product | Sequence | Map | Sum | Annotated`)
-- `interpret()` is a catamorphism, and materializing, zeroing, validating and describing are F-algebras over it
+- the schema is a recursive functor: five structural kinds (`Scalar | Product | Sequence | Map | Sum`) and six CRDT kinds
+- `interpret()` is a catamorphism, and materializing, zeroing and validating are F-algebras over it
 - a ref is its state, with what it does built once per schema node
 - `subscribe` is a coalgebra (Moore machine)
 - the `step(state, change) → state` functions are pure

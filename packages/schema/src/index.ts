@@ -179,9 +179,6 @@ export {
   rawField,
   rawIndex,
 } from "./interpret.js"
-// Shared interpreter types (canonical location)
-export type { Plain, PlainFlatTreeNode } from "./interpreter-types.js"
-export { INTERPRETER } from "./interpreter-types.js"
 // Materialize interpreter — generic CRDT→PlainState materialization
 export type {
   MaterializeContext,
@@ -193,21 +190,6 @@ export {
   plainResolution,
   plainValueResolver,
 } from "./interpreters/materialize.js"
-// Navigable type interfaces — navigation-only collection refs
-export type {
-  NavigableMapRef,
-  NavigableSequenceRef,
-} from "./interpreters/navigable.js"
-export { plainInterpreter } from "./interpreters/plain.js"
-// Readable types — type-level interpretation for readable refs
-export type {
-  Readable,
-  ReadableMapRef,
-  ReadableSequenceRef,
-  ReadableSetRef,
-  ReadableTreeNode,
-  ReadableTreeRef,
-} from "./interpreters/readable.js"
 export type { ValidateContext } from "./interpreters/validate.js"
 // Validate interpreter — schema-driven validation with collecting errors
 export {
@@ -216,28 +198,8 @@ export {
   validate,
   validateInterpreter,
 } from "./interpreters/validate.js"
-export type {
-  CounterRef,
-  HasRemove,
-  HasTransact,
-  ProductRef,
-  RichTextRef,
-  ScalarRef,
-  SealedBatch,
-  SequenceRef,
-  TextRef,
-  Writable,
-  WritableContext,
-  WritableMapRef,
-  WritableSetRef,
-  WritableTreeRef,
-} from "./interpreters/writable.js"
-export {
-  hasRemove,
-  hasTransact,
-  REMOVE,
-  TRANSACT,
-} from "./interpreters/writable.js"
+// Zero — default values derived from the schema grammar
+export { scalarDefault, Zero, zeroInterpreter } from "./interpreters/zero.js"
 // Inverse — reverse arrows for the change groupoid (abort and undo)
 export {
   invert,
@@ -323,6 +285,8 @@ export {
   nextAddressId,
   resetAddressIdCounter,
 } from "./path.js"
+// Plain values — the type of a schema's plain value
+export type { Plain, PlainFlatTreeNode } from "./plain-types.js"
 // Position algebra — substrate-agnostic cursor stability
 export type {
   HasPosition,
@@ -345,7 +309,6 @@ export type {
 // Reader — reading σ, and advancing it by a change
 export { applyChange, freezePayload, plainReader } from "./reader.js"
 export { rebaseChange } from "./rebase.js"
-// Built-in interpreters
 // Reconcile — σ brought up to date from λ where a change touched it
 export type { ReconcileTarget, Touched } from "./reconcile-shadow.js"
 export {
@@ -353,16 +316,25 @@ export {
   reconcileShadow,
   touchedBy,
 } from "./reconcile-shadow.js"
-// Refs — one construction per schema node (`ref/`): the deletion and
-// population protocols, the read symbol, and each kind's surface by concern
+// Refs — one construction per schema node (`ref/`): the deletion, removal and
+// population protocols, the read symbol, and the ref types by kind
 export {
   DELETED,
   deleted,
   deletedFeed,
   type HasDeleted,
+  type HasRemove,
   hasDeleted,
+  hasRemove,
+  REMOVE,
 } from "./ref/address.js"
+// Navigable type interfaces — navigation-only collection refs
+export type {
+  NavigableMapRef,
+  NavigableSequenceRef,
+} from "./ref/navigable.js"
 export {
+  type HasFlag,
   type HasPopulated,
   hasPopulated,
   POPULATED,
@@ -370,8 +342,15 @@ export {
   populatedFeed,
 } from "./ref/observe.js"
 export { CALL } from "./ref/read.js"
-// Positional algebra — cursor-positioning kernel
-export { at } from "./ref/write.js"
+// The read surface of a ref, by kind (`Readable<S>`)
+export type {
+  Readable,
+  ReadableMapRef,
+  ReadableSequenceRef,
+  ReadableSetRef,
+  ReadableTreeNode,
+  ReadableTreeRef,
+} from "./ref/readable.js"
 // Ref types — a document's refs, typed by schema
 export type {
   DocRef,
@@ -380,7 +359,21 @@ export type {
   RRef,
   SchemaRef,
   Wrap,
-} from "./ref.js"
+} from "./ref/schema-ref.js"
+// The write surface of a ref, by kind
+export type {
+  CounterRef,
+  ProductRef,
+  RichTextRef,
+  ScalarRef,
+  SequenceRef,
+  TextRef,
+  WritableMapRef,
+  WritableSetRef,
+  WritableTreeRef,
+} from "./ref/writable.js"
+// `at`, the cursor-positioning primitive; `TRANSACT`, a ref's context
+export { at, type HasTransact, hasTransact, TRANSACT } from "./ref/write.js"
 export type { ValueRestore } from "./restore.js"
 export { planValueRestores } from "./restore.js"
 export type { PartReverted, StepReverted } from "./revert-step.js"
@@ -572,7 +565,9 @@ export {
   versionVectorMeet,
 } from "./version-vector.js"
 // The writable context every ref of a document shares
-export type { SubstrateCapabilities } from "./writable-context.js"
+export type {
+  SealedBatch,
+  SubstrateCapabilities,
+  WritableContext,
+} from "./writable-context.js"
 export { buildWritableContext } from "./writable-context.js"
-// Zero — default values derived from the schema grammar
-export { scalarDefault, Zero, zeroInterpreter } from "./zero.js"

@@ -10,8 +10,8 @@ import {
   replaceChange,
   Schema,
 } from "../index.js"
-import { PATH } from "../interpreters/writable.js"
 import { AddressedPath } from "../path.js"
+import { PATH } from "../ref/write.js"
 import { contextOver, refOver } from "./stack.js"
 
 // ===========================================================================

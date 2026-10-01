@@ -15,7 +15,7 @@ import type { BoundSchema } from "./bind.js"
 import type { NativeMap } from "./native.js"
 import { SUBSTRATE } from "./native.js"
 import { createRootRef } from "./ref/create.js"
-import type { DocRef } from "./ref.js"
+import type { DocRef } from "./ref/schema-ref.js"
 import type { Schema as SchemaType } from "./schema.js"
 import type { Substrate, SubstratePayload, Version } from "./substrate.js"
 

@@ -1,6 +1,8 @@
-// Navigable type interfaces — navigation-only collection refs.
+// navigable — the types of a ref's navigation, for the collections that
+// navigate by index or key.
 //
-// These interfaces capture the pure structural addressing surface
+// Types only: the members live on each ref's prototype (`navigate.ts`). These
+// interfaces capture the pure structural addressing surface
 // (coalgebra: A → F(A)) without any reading or mutation concerns.
 //
 // The hierarchy:

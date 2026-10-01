@@ -5,10 +5,9 @@
 // and a write may change it or, once frozen, replace its root. `refOver`
 // makes the document's root ref over a context.
 
-import type { WritableContext } from "../interpreters/writable.js"
 import type { PlainState } from "../reader.js"
 import { createRootRef } from "../ref/create.js"
-import type { Ref } from "../ref.js"
+import type { Ref } from "../ref/schema-ref.js"
 import type { Schema } from "../schema.js"
 import {
   ALWAYS_AUTHOR,
@@ -16,6 +15,7 @@ import {
   createPlainSubstrate,
   EMPTY_HISTORY,
 } from "../substrates/plain.js"
+import type { WritableContext } from "../writable-context.js"
 
 /** A writable context over a plain substrate whose σ is `store`. */
 export function contextOver(
