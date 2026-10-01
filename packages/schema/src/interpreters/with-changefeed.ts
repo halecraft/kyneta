@@ -208,8 +208,9 @@ export interface DeliveryPlan {
  * ancestor chain, where deep subscribers receive it rebased to their relative
  * path, and down through the rewritten scope, where every subscriber receives
  * `projectChange(change, relative)`, the change as seen from where it sits.
- * The read cache invalidates by the same walk, so a subscriber hears a batch
- * exactly when its read gets a new identity in it.
+ * A write gives new objects in σ to the same scope, P, its ancestors and what
+ * it rewrote, and to nothing else, so a subscriber hears a batch exactly when
+ * its read gets a new identity in it.
  *
  * The single pass is not just an optimisation. The deep channel needs ops in
  * *dispatch* order, and any grouping step destroys that: if an ancestor write

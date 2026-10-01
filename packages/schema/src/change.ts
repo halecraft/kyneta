@@ -18,7 +18,7 @@
 export type { ChangeBase } from "@kyneta/changefeed"
 
 import type { ChangeBase } from "@kyneta/changefeed"
-import { deepClonePlain } from "./clone.js"
+import { deepClonePlain, isDeeplyFrozen } from "./clone.js"
 
 // ---------------------------------------------------------------------------
 // Text actions — cursor-based retain/insert/delete over characters
@@ -306,7 +306,7 @@ const MARKS: PayloadSlot = { at: "marks" }
  * returned as is.
  *
  * The one definition of "the values a change carries", so the edges that
- * touch them (`completeChange`, `ownedForStore`) cannot disagree about which
+ * touch them (`completeChange`, `freezePayload`) cannot disagree about which
  * they are. Set-op `remove`
  * members and map `delete` keys name values rather than carry them, and are
  * left alone.
@@ -397,8 +397,9 @@ declare const OWNED: unique symbol
  * A change holds its payload by reference and hands it to subscribers. If that
  * payload is still the object the caller passed in, then the caller can rewrite
  * what a subscriber sees, long after the write — no second write, no changeset,
- * nothing in the log. The document itself is safe (the store takes its own copy
- * at the boundary; see `ownedForStore` in `reader.ts`), but the op is not.
+ * nothing in the log. And the store freezes the payload in place to share it
+ * with the op (`freezePayload` in `reader.ts`), so the caller's own object
+ * would be frozen out from under them.
  *
  * Requiring `Owned<T>` here makes that a compile error rather than a silent
  * default. Every construction site has to say which it is: `own(value)` to copy,
@@ -411,9 +412,8 @@ declare const OWNED: unique symbol
  *
  * Every constructor whose change carries caller values takes them `Owned`:
  * `replaceChange`, `sequenceChange`, `mapChange`, `mapClearChange`,
- * `setOpChange` and `richTextChange`. The store makes its own copy of each
- * once the change is completed (`ownedForStore` in `reader.ts`), so neither
- * the op nor the document shares a value with the caller.
+ * `setOpChange` and `richTextChange`, so neither the op nor the document
+ * shares a mutable value with the caller.
  *
  * Deliberately *shallow*: one conditional and an intersection. A
  * `DeepReadonly<T>` would express more but recurses through the payload, and
@@ -427,13 +427,16 @@ export type Owned<T> = unknown extends T
     : T
 
 /**
- * Copy a caller-supplied value so the change can keep it.
+ * A caller-supplied value the change can keep: the value itself when it is
+ * deeply frozen (`isDeeplyFrozen`), since nobody can change it, and a copy
+ * otherwise.
  *
- * The normal choice. Costs a `structuredClone` for objects and nothing for
- * primitives.
+ * The normal choice. A read handed back to a write is frozen, and is shared
+ * rather than copied; anything else costs a `structuredClone`. A byte array
+ * cannot be frozen, so a value holding one is always copied.
  */
 export function own<T>(value: T): Owned<T> {
-  return deepClonePlain(value) as Owned<T>
+  return (isDeeplyFrozen(value) ? value : deepClonePlain(value)) as Owned<T>
 }
 
 /**

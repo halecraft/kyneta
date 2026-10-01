@@ -53,11 +53,11 @@ function described(before: unknown, after: unknown) {
 
 /** `before` with the ops applied, on a copy. */
 function applied(before: Record<string, unknown>, after: unknown) {
-  const state = deepClonePlain(before)
+  const state = { current: deepClonePlain(before) }
   for (const op of diffOps(Doc, before, after)) {
     applyChange(state, op.path, op.change)
   }
-  return state
+  return state.current
 }
 
 function expectLaw(

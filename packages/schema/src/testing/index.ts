@@ -8,6 +8,7 @@ export {
   deliveryConformance,
   type RemoteWrite,
 } from "./delivery-conformance.js"
+export { frozenInvariantViolations } from "./frozen-invariant.js"
 export {
   type PositionTestEnv,
   positionConformance,

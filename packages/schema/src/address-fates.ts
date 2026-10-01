@@ -37,8 +37,7 @@ export interface ScopeRoot {
 }
 
 export interface AddressFates {
-  /** Field and map-entry coordinates that no longer exist: kept, dead, their
-   *  read cleared. */
+  /** Field and map-entry coordinates that no longer exist: kept, dead. */
   readonly die: readonly AddressedPath[]
   /** List items and tree nodes that no longer exist: unlinked with
    *  everything below them. */
@@ -46,7 +45,7 @@ export interface AddressFates {
   /** Dead field and map-entry coordinates that exist again. */
   readonly revive: readonly AddressedPath[]
   /** Live coordinates whose schema changed kind: their kind-specific state
-   *  (list table, read) is stale, and everything below them died. */
+   *  (list table) is stale, and everything below them died. */
   readonly rekind: readonly AddressedPath[]
   /** Each live coordinate's schema, derived from its parent's. */
   readonly schemas: ReadonlyMap<AddressedPath, SchemaNode>

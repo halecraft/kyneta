@@ -2,9 +2,9 @@
 //
 // A ref is a pointer to a coordinate, and every piece of per-coordinate state
 // hangs off one node here: its address and the schema it was interpreted
-// with (`withAddressing`), and its memoized carrier and cached read
-// (`withCaching`). A coordinate's state lives and dies with its node, so no
-// layer has to keep a parallel table in step with another.
+// with (`withAddressing`), and its memoized carrier (`withCaching`). A
+// coordinate's state lives and dies with its node, so no layer has to keep a
+// parallel table in step with another.
 //
 // Children are keyed by segment identity (`Segment.identity`), so the trie
 // enumerates a subtree exactly: a key that joins segments with a separator
@@ -13,7 +13,7 @@
 // Every lookup descends from the root, matching each segment's address by
 // identity, and nothing outside the trie holds a node. So a node that has
 // been unlinked is unreachable: a stale path finds nothing rather than a
-// stale address, carrier or read.
+// stale address or carrier.
 
 import {
   type Address,
@@ -80,15 +80,12 @@ export interface CoordinateNode {
   // withCaching
   /** The memoized carrier for a list item, map entry or tree node. */
   ref?: unknown
-  /** The cached frozen read. */
-  read?: object
 }
 
 class TrieNode implements CoordinateNode {
   schema?: SchemaNode
   sequenceTable?: SequenceAddressTable
   ref?: unknown
-  read?: object
   readonly children = new Map<string, TrieNode>()
 
   constructor(readonly address?: Address) {}
@@ -286,6 +283,5 @@ function collect(
 /** Mark every address in `node`'s subtree dead, parents first. */
 function killSubtree(node: TrieNode): void {
   if (node.address !== undefined) setDead(node.address, true)
-  node.read = undefined
   for (const child of node.children.values()) killSubtree(child)
 }

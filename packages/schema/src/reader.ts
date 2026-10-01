@@ -1,15 +1,15 @@
-// reader — shared utilities for reading, writing, and applying changes
-// to a plain state object.
+// reader — reading σ, and advancing it by a change.
 //
-// These are backend-agnostic helpers used by multiple interpreters
-// (writable, plain, validate, changefeed). Extracted from writable.ts
-// to eliminate cross-module coupling.
+// σ is a plain state object held in a `StateCell`. Every substrate reads it
+// through `plainReader` and advances it through `applyChange`, which copies
+// the nodes a read froze before changing them, so a read never changes.
 
 import type { ChangeBase } from "./change.js"
 import { mapPayload } from "./change.js"
-import { deepClonePlain } from "./clone.js"
+import { freezeTree, thaw } from "./clone.js"
 import { isNonNullObject } from "./guards.js"
 import type { Path } from "./path.js"
+import { childOf, withChild } from "./plain-access.js"
 import { stepInPlace } from "./step.js"
 
 // ---------------------------------------------------------------------------
@@ -35,11 +35,15 @@ export interface FlatTreeNodeTopology {
 // ---------------------------------------------------------------------------
 
 /**
- * A plain JS object used as the backing state for the plain substrate.
- * The writable interpreter reads from and writes to this object,
- * proving no CRDT runtime is needed.
+ * σ, the document as a plain JS object. Every substrate keeps one, and every
+ * read of a writable stack is served from it.
  */
 export type PlainState = Record<string, unknown>
+
+/** σ's root. A write that copies a frozen root replaces `current`. */
+export interface StateCell {
+  current: PlainState
+}
 
 // ---------------------------------------------------------------------------
 // Reader — abstract read interface for interpreter state access
@@ -72,22 +76,20 @@ export interface Reader {
 }
 
 /**
- * Wraps a plain JS object in a Reader.
+ * A Reader over the state in `cell`. Each read starts at `cell.current`, so
+ * the reader sees every write `applyChange` makes, including one that
+ * replaced a frozen root.
  *
- * **Liveness invariant:** The returned reader is a *live view* — mutations
- * to the state via `applyChange` are immediately visible through the
- * reader. The reader and the mutator share the same backing object.
- *
- * Other substrates (e.g. Loro) provide their own Reader that reads
- * from a different backing structure (the Loro container tree).
+ * Other substrates may provide their own Reader over a different backing
+ * structure.
  */
-export function plainReader(state: Record<string, unknown>): Reader {
+export function plainReader(cell: StateCell): Reader {
   return {
-    read: path => path.read(state),
-    arrayLength: path => readArrayLength(state, path),
-    keys: path => readKeys(state, path),
-    hasKey: (path, key) => readHasKey(state, path, key),
-    forestTopology: path => readForestTopology(state, path),
+    read: path => path.read(cell.current),
+    arrayLength: path => readArrayLength(cell.current, path),
+    keys: path => readKeys(cell.current, path),
+    hasKey: (path, key) => readHasKey(cell.current, path, key),
+    forestTopology: path => readForestTopology(cell.current, path),
   }
 }
 
@@ -148,82 +150,7 @@ function readKeys(state: unknown, path: Path): string[] {
  */
 function readHasKey(state: unknown, path: Path, key: string): boolean {
   const obj = path.read(state)
-  return isNonNullObject(obj) && key in obj
-}
-
-/**
- * Writes a value into a nested plain object at the given Path.
- * Creates intermediate objects as needed. `seg.resolve()` throws on a
- * dead address — writes to deleted refs should fail.
- */
-export function writeByPath(
-  state: PlainState,
-  path: Path,
-  value: unknown,
-): void {
-  if (path.length === 0) return
-  const segments = path.segments
-  let current: Record<string | number, unknown> = state
-  for (let i = 0; i < segments.length - 1; i++) {
-    const seg = segments[i]
-    const k = seg.resolve()
-    // Symmetric to `AbstractPath.read`: `entry` traversal over the flat-
-    // forest shadow looks up by id and steps into the node's `.data` so
-    // writes target the per-node data, not array-by-index.
-    if (
-      seg.role === "entry" &&
-      Array.isArray(current) &&
-      isFlatForestArray(current)
-    ) {
-      const node = (current as Array<{ id: string; data: unknown }>).find(
-        n => n != null && n.id === k,
-      )
-      if (!node) return
-      if (
-        node.data === null ||
-        node.data === undefined ||
-        typeof node.data !== "object"
-      ) {
-        node.data = {}
-      }
-      current = node.data as Record<string | number, unknown>
-      continue
-    }
-    if (!isNonNullObject(current[k])) {
-      current[k] = {}
-    }
-    current = current[k] as Record<string | number, unknown>
-  }
-  // Terminal segment — same flat-forest discrimination as the loop above.
-  const last = segments[segments.length - 1]
-  const lastKey = last.resolve()
-  if (
-    last.role === "entry" &&
-    Array.isArray(current) &&
-    isFlatForestArray(current)
-  ) {
-    const node = (current as Array<{ id: string; data: unknown }>).find(
-      n => n != null && n.id === lastKey,
-    )
-    if (node) node.data = value
-    return
-  }
-  current[lastKey] = value
-}
-
-/**
- * Mirrors `isFlatForestArray` in `path.ts`. Duplicated to avoid pulling
- * the reader module into `path.ts`'s dependency graph.
- */
-function isFlatForestArray(arr: readonly unknown[]): boolean {
-  if (arr.length === 0) return false
-  const first = arr[0]
-  return (
-    typeof first === "object" &&
-    first !== null &&
-    typeof (first as { id?: unknown }).id === "string" &&
-    "data" in (first as object)
-  )
+  return isNonNullObject(obj) && Object.hasOwn(obj, key)
 }
 
 // ---------------------------------------------------------------------------
@@ -231,99 +158,62 @@ function isFlatForestArray(arr: readonly unknown[]): boolean {
 // ---------------------------------------------------------------------------
 
 /**
- * Replace the contents of `target` with the contents of `source`,
- * preserving `target`'s object identity: every reader closes over the
- * document's root object, so a fresh root is copied onto it. Keys absent
- * from `source` are deleted from `target`.
+ * The change with its payload frozen in place, ready for the store to share.
  *
- * Shallow: `target` takes `source`'s values by reference, so `source` must
- * be a value nothing else holds.
+ * Precondition: the store owns the payload, so nobody else can change it.
+ * Every path to the store does: the write helpers copy what a caller passes
+ * (`own` in `change.ts`), wire payloads are decoded fresh, `diffOps` copies
+ * what it carries, undo builds its own, and `applyChanges` takes ownership of
+ * the ops it is handed.
+ *
+ * The op a subscriber receives and σ then share each value the change
+ * carries (`mapPayload` says which). Neither can change it: the op because it
+ * is frozen, σ because a write copies a frozen node before changing it
+ * (`applyChange`).
+ *
+ * Takes a completed change (`completeChange` in `complete.ts`), so σ and the
+ * op hold the completed value.
  */
-function syncShadow(target: PlainState, source: PlainState): void {
-  for (const key of Object.keys(source)) {
-    target[key] = source[key]
-  }
-  for (const key of Object.keys(target)) {
-    if (!(key in source)) {
-      delete target[key]
-    }
-  }
+export function freezePayload(change: ChangeBase): ChangeBase {
+  return mapPayload(change, freezeTree)
 }
 
 /**
- * The change to hand the store: either the same object, or one whose payload
- * is a private copy.
+ * Advance σ at `path` by `change`.
  *
- * Takes a completed change (`completeChange` in `complete.ts`): the writable
- * context completes an authored change before the substrate sees it, and the
- * plain substrate completes what it merges. The copy is of the completed
- * value, the one the op carries.
+ * Copy-on-write: a frozen node is shared with readers, so the walk from the
+ * root thaws each container on the path (`thaw`, a one-level copy of a frozen
+ * node) and links the copy into its parent, which is unfrozen by then. A
+ * frozen root's copy becomes `cell.current`. The target is thawed too, then
+ * advanced in place (`stepInPlace`). A node nobody has read is unfrozen and
+ * changes in place, at O(|change|); a node a reader froze is copied one level,
+ * and only on the spine to the target.
  *
- * Every value a change carries (`mapPayload` in `change.ts` says which: a
- * `replace` value, inserted items, map `set` values, added set members,
- * rich-text marks) arrives holding whatever the caller passed in, and the
- * store writes it in by reference. Two things then share one object — the op
- * a subscriber will receive, and the subtree inside the store. A later write
- * into that subtree mutates the op, so the op ends up reporting a value the
- * batch never wrote. Copying here severs that.
- *
- * Replayed changes are copied too. It is tempting to skip them — they were
- * built by the sending peer, so there is no local caller to protect — but that
- * confuses the two edges. Having no caller means no `own()` is needed at
- * construction; it says nothing about the store, which takes the payload and
- * later mutates it. A merge's changesets reach subscribers like any other, so
- * an uncopied replay payload is a live view of the store handed to whoever
- * subscribed. The cost is near zero in practice: a merge is announced at the
- * store's grain (field and key writes, `expandProductMapChanges` and
- * `diffOps`), whose payloads are overwhelmingly scalars, and a scalar
- * short-circuits in ~1ns.
- *
- * No batch is exempt. `projection` batches once were, on the grounds that a
- * decay tick's payload was the substrate's own shadow passed to wake
- * subscribers and never read, so copying a whole presence document per tick
- * was waste. A tick now announces the ops that turn σ into its re-projection
- * (`diffOps`) and carries their values, which subscribers do read — the
- * exemption became exactly the alias this function exists to sever, and the
- * waste it avoided is bounded by the diff rather than by the document.
- *
- * Deliberately a transform rather than a `shouldCopy()` predicate. Four
- * substrates call this; a predicate would let a caller ask the question and
- * then forget to act on the answer, or copy the wrong thing. Handing back the
- * change to store cannot be used incorrectly.
- *
- * The caller's half of this is enforced separately, at compile time — see
- * `Owned` in `change.ts`.
- */
-export function ownedForStore(change: ChangeBase): ChangeBase {
-  // Primitives cannot alias, and `deepClonePlain` returns them as they are, so
-  // a change carrying only primitives comes back unchanged.
-  return mapPayload(change, deepClonePlain)
-}
-
-/**
- * Advance σ at `path` by `change`, in the document the caller owns.
- *
- * Uses `stepInPlace` rather than `step`: a substrate's document is its own,
- * its reader is a live view of it, and the inverse for undo is taken from σ
- * before this call — so advancing a container's contents means the same thing
- * as replacing the container, and costs O(|change|) instead of O(|σ|).
- * `stepInPlace` returns something other than `current` exactly when σ's
- * carrier is a value rather than a container, and only then is a write-back
- * needed.
+ * A missing intermediate container is created. A dead segment throws: a write
+ * to a deleted ref fails.
  */
 export function applyChange(
-  state: PlainState,
+  cell: StateCell,
   path: Path,
   change: ChangeBase,
 ): void {
-  const current = path.length === 0 ? state : path.read(state)
-  const next = stepInPlace(current, change)
-  if (next === current) return
-  if (path.length === 0) {
-    // The root object's identity is the document's — every reader closes
-    // over it — so a fresh σ is copied onto it rather than replacing it.
-    if (isNonNullObject(next)) syncShadow(state, next)
+  const segments = path.segments
+  for (const segment of segments) segment.resolve()
+  const last = segments[segments.length - 1]
+  if (last === undefined) {
+    const next = stepInPlace(thaw(cell.current), change)
+    if (isNonNullObject(next)) cell.current = next
     return
   }
-  writeByPath(state, path, next)
+  let parent: object = thaw(cell.current)
+  cell.current = parent as PlainState
+  for (const segment of segments.slice(0, -1)) {
+    const child = childOf(parent, segment)
+    const container = isNonNullObject(child) ? thaw(child) : {}
+    if (container !== child && !withChild(parent, segment, container)) return
+    parent = container
+  }
+  const target = childOf(parent, last)
+  const next = stepInPlace(thaw(target), change)
+  if (next !== target) withChild(parent, last, next)
 }

@@ -102,7 +102,12 @@ export {
   hasRecursiveChangefeed,
 } from "./changefeed.js"
 // Clone — the shared deep-copy primitive (leaf module, no imports)
-export { deepClonePlain, frozenClone } from "./clone.js"
+export {
+  deepClonePlain,
+  freezeTree,
+  frozenClone,
+  isDeeplyFrozen,
+} from "./clone.js"
 export type {
   CoordinateNode,
   SequenceAddressTable,
@@ -443,14 +448,10 @@ export type {
   FlatTreeNodeTopology,
   PlainState,
   Reader,
+  StateCell,
 } from "./reader.js"
-// Reader — shared utilities for reading/writing plain state objects
-export {
-  applyChange,
-  ownedForStore,
-  plainReader,
-  writeByPath,
-} from "./reader.js"
+// Reader — reading σ, and advancing it by a change
+export { applyChange, freezePayload, plainReader } from "./reader.js"
 export { rebaseChange } from "./rebase.js"
 // Built-in interpreters
 // Reconcile — σ brought up to date from λ where a change touched it
@@ -650,7 +651,6 @@ export {
   currentScope,
   dependencyKey,
   reportRead,
-  withoutTracking,
   withReadScope,
 } from "./tracking.js"
 export type { Edit } from "./typing.js"

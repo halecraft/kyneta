@@ -4,26 +4,20 @@
 // carriers (i.e. withNavigation(bottomInterpreter) or anything above
 // it) and:
 //
-// 1. Fills the [CALL] slot, with frozen values that share nothing with σ:
-//    - Leaf nodes (scalar, text, counter, set, richtext): the value at the
-//      path, an object value copied and frozen (`frozenClone`)
-//    - Composite nodes (product, sequence, map, tree): fold child values
-//      through the carrier's navigation surface, and freeze the container
-//      the fold builds. Each child value is already frozen by its own read.
-// 2. Adds .get() convenience methods:
-//    - Sequence: .get(i) returns plain value (equivalent to .at(i)?.())
-//    - Map: .get(key) returns plain value (equivalent to .at(key)?.())
-// 3. Adds [Symbol.toPrimitive] for scalar/text/counter
+// 1. Fills every kind's [CALL] slot with `readAt`: σ's own value at the path,
+//    frozen in place, on a writable stack, and a completed, frozen copy on a
+//    read-only one. A composite's read is its σ value whole; it never
+//    navigates to its children, so it builds no refs.
+// 2. Adds .get() convenience methods, which read one child's value from the
+//    parent's, again without building a ref:
+//    - Sequence: .get(i)
+//    - Map: .get(key)
+// 3. Adds [Symbol.toPrimitive] for scalar/text/counter/richtext
 //
 // Navigation (product field getters, .at(), .length, .keys(), etc.) is
 // NOT provided here — that's withNavigation's job. withReadable assumes
 // navigation is already in place and builds on top of it.
-//
-// Caching is NOT provided here — that's withCaching's job, which memoizes
-// these reads. Without it `ref.title !== ref.title` (each access forces the
-// thunk) and `ref() !== ref()`.
 
-import { frozenClone } from "../clone.js"
 import type {
   FlatTreeNode,
   Interpreter,
@@ -38,6 +32,7 @@ import type {
   ProductSchema,
   RichTextSchema,
   ScalarSchema,
+  Schema as SchemaNode,
   SequenceSchema,
   SetSchema,
   SumSchema,
@@ -47,6 +42,7 @@ import type {
 import type { HasNavigation, HasRead } from "./bottom.js"
 import { CALL, markRead } from "./bottom.js"
 import { installKeyedReadable } from "./keyed-helpers.js"
+import { readAt, valueAt } from "./read-at.js"
 import { installSequenceReadable } from "./sequence-helpers.js"
 import { installSetReadable } from "./set-helpers.js"
 import { installTreeReadable } from "./tree-helpers.js"
@@ -67,14 +63,10 @@ import { installTreeReadable } from "./tree-helpers.js"
  * `.keys()` etc. must already be installed by `withNavigation`. This
  * transformer adds only reading concerns on top.
  *
- * **No caching.** Product field access forces the thunk on every access.
- * Sequence/map `.at()` calls the item closure fresh each time. Use
- * `withCaching` to add identity-preserving memoization.
- *
  * ```ts
  * const nav = withNavigation(bottomInterpreter)
  * const readable = withReadable(nav)
- * const ctx: RefContext = { store: { title: "Hello" } }
+ * const ctx: RefContext = { reader: plainReader({ current: { title: "Hello" } }) }
  * const doc = interpret(schema, readable, ctx)
  * doc.title()  // "Hello"
  * ```
@@ -82,9 +74,17 @@ import { installTreeReadable } from "./tree-helpers.js"
 export function withReadable<A extends HasNavigation>(
   base: Interpreter<RefContext, A>,
 ): Interpreter<RefContext, A & HasRead> {
+  /** `carrier` with `[CALL]` reading the value at `path`. */
+  const readable = <C extends object>(
+    carrier: C,
+    ctx: RefContext,
+    path: Path,
+    schema: SchemaNode,
+  ): C & { [CALL]: () => unknown } =>
+    Object.assign(carrier, { [CALL]: () => readAt(ctx, path, schema) })
+
   return {
     [INTERPRETER]: true,
-    // --- Scalar ---------------------------------------------------------------
     // ---------------------------------------------------------------------
     // Each case takes the carrier the layer below produced, adds members, and
     // returns it. `Object.assign` is what types that: its signature is
@@ -99,16 +99,22 @@ export function withReadable<A extends HasNavigation>(
     // structural can produce it, so claiming it is precisely what an assertion
     // is for. Everything before that line is now checked.
     // ---------------------------------------------------------------------
+
+    // --- Scalar ---------------------------------------------------------------
     scalar(ctx: RefContext, path: Path, schema: ScalarSchema): A & HasRead {
-      const result = Object.assign(base.scalar(ctx, path, schema), {
-        [CALL]: () => frozenClone(ctx.reader.read(path)),
+      const carrier = readable(
+        base.scalar(ctx, path, schema),
+        ctx,
+        path,
+        schema,
+      )
+      const result = Object.assign(carrier, {
         // Hint-aware toPrimitive for template literal coercion
         [Symbol.toPrimitive]: (hint: string) => {
-          const v = ctx.reader.read(path)
+          const v = valueAt(ctx, path)
           return hint === "string" ? String(v) : v
         },
       })
-
       markRead(result)
       return result
     },
@@ -120,28 +126,13 @@ export function withReadable<A extends HasNavigation>(
       schema: ProductSchema,
       fields: Readonly<Record<string, () => A & HasRead>>,
     ): A & HasRead {
-      // Downcast thunks for the base interpreter
       const baseFields = fields as Readonly<Record<string, () => A>>
-      const carrier = base.product(ctx, path, schema, baseFields)
-      // The product's fields are read back by name, and those names come from
-      // the schema rather than the type — so this view is genuinely untyped,
-      // and says only that much.
-      const byFieldName = carrier as Record<string, unknown>
-
-      const result = Object.assign(carrier, {
-        // Fill CALL slot — fold child values through the carrier's navigation
-        // surface (property getters), which goes through withCaching's
-        // memoized getters when present, and freeze the result.
-        [CALL]: () => {
-          const snapshot: Record<string, unknown> = {}
-          for (const key of Object.keys(fields)) {
-            const child = byFieldName[key]
-            snapshot[key] = typeof child === "function" ? child() : child
-          }
-          return Object.freeze(snapshot)
-        },
-      })
-
+      const result = readable(
+        base.product(ctx, path, schema, baseFields),
+        ctx,
+        path,
+        schema,
+      )
       markRead(result)
       return result
     },
@@ -154,8 +145,13 @@ export function withReadable<A extends HasNavigation>(
       item: (index: number) => A & HasRead,
     ): A & HasRead {
       const baseItem = item as (index: number) => A
-      const result = base.sequence(ctx, path, schema, baseItem)
-      installSequenceReadable(result, ctx, path)
+      const result = readable(
+        base.sequence(ctx, path, schema, baseItem),
+        ctx,
+        path,
+        schema,
+      )
+      installSequenceReadable(result, ctx, path, schema.item)
       markRead(result)
       return result
     },
@@ -168,8 +164,13 @@ export function withReadable<A extends HasNavigation>(
       item: (key: string) => A & HasRead,
     ): A & HasRead {
       const baseItem = item as (key: string) => A
-      const result = base.map(ctx, path, schema, baseItem)
-      installKeyedReadable(result, ctx, path)
+      const result = readable(
+        base.map(ctx, path, schema, baseItem),
+        ctx,
+        path,
+        schema,
+      )
+      installKeyedReadable(result, ctx, path, schema.item)
       markRead(result)
       return result
     },
@@ -187,31 +188,32 @@ export function withReadable<A extends HasNavigation>(
     },
 
     // --- Text ------------------------------------------------------------------
-    // Text: callable returning string, text-specific toPrimitive.
     text(ctx: RefContext, path: Path, schema: TextSchema): A & HasRead {
-      const read = (): string => {
-        const v = ctx.reader.read(path)
-        return typeof v === "string" ? v : String(v ?? "")
-      }
-      const result = Object.assign(base.text(ctx, path, schema), {
-        [CALL]: read,
-        [Symbol.toPrimitive]: (_hint: string) => read(),
+      const carrier = readable(base.text(ctx, path, schema), ctx, path, schema)
+      const result = Object.assign(carrier, {
+        [Symbol.toPrimitive]: (_hint: string): string => {
+          const v = valueAt(ctx, path)
+          return typeof v === "string" ? v : String(v ?? "")
+        },
       })
       markRead(result)
       return result
     },
 
     // --- Counter ---------------------------------------------------------------
-    // Counter: callable returning number, hint-aware toPrimitive.
     counter(ctx: RefContext, path: Path, schema: CounterSchema): A & HasRead {
-      const read = (): number => {
-        const v = ctx.reader.read(path)
-        return typeof v === "number" ? v : 0
-      }
-      const result = Object.assign(base.counter(ctx, path, schema), {
-        [CALL]: read,
-        [Symbol.toPrimitive]: (hint: string) =>
-          hint === "string" ? String(read()) : read(),
+      const carrier = readable(
+        base.counter(ctx, path, schema),
+        ctx,
+        path,
+        schema,
+      )
+      const result = Object.assign(carrier, {
+        [Symbol.toPrimitive]: (hint: string) => {
+          const v = valueAt(ctx, path)
+          const n = typeof v === "number" ? v : 0
+          return hint === "string" ? String(n) : n
+        },
       })
       markRead(result)
       return result
@@ -228,15 +230,20 @@ export function withReadable<A extends HasNavigation>(
       item: (key: string) => A & HasRead,
     ): A & HasRead {
       const baseItem = item as (key: string) => A
-      const result = base.set(ctx, path, schema, baseItem)
-      installSetReadable(result, ctx, path)
+      const result = readable(
+        base.set(ctx, path, schema, baseItem),
+        ctx,
+        path,
+        schema,
+      )
+      installSetReadable(result)
       markRead(result)
       return result
     },
 
     // --- Tree ------------------------------------------------------------------
-    // Wire the recursive read surface (`ReadableTreeRef`): `.roots`,
-    // `.node(id)`, callable snapshot `()`, depth-first iteration.
+    // `()` is the flat forest σ holds. `.roots` and iteration nest it, with
+    // each node's `data` a ref.
     tree(
       ctx: RefContext,
       path: Path,
@@ -246,7 +253,12 @@ export function withReadable<A extends HasNavigation>(
     ): A & HasRead {
       const baseNodes = nodes as unknown as () => readonly FlatTreeNode<A>[]
       const baseNode = node as unknown as (id: string) => A
-      const result = base.tree(ctx, path, schema, baseNodes, baseNode)
+      const result = readable(
+        base.tree(ctx, path, schema, baseNodes, baseNode),
+        ctx,
+        path,
+        schema,
+      )
       installTreeReadable(result, ctx, path, node)
       markRead(result)
       return result
@@ -260,19 +272,28 @@ export function withReadable<A extends HasNavigation>(
       item: (index: number) => A & HasRead,
     ): A & HasRead {
       const baseItem = item as (index: number) => A
-      const result = base.movable(ctx, path, schema, baseItem)
-      installSequenceReadable(result, ctx, path)
+      const result = readable(
+        base.movable(ctx, path, schema, baseItem),
+        ctx,
+        path,
+        schema,
+      )
+      installSequenceReadable(result, ctx, path, schema.item)
       markRead(result)
       return result
     },
 
     // --- RichText --------------------------------------------------------------
-    // RichText: callable returning string, text-specific toPrimitive.
     richtext(ctx: RefContext, path: Path, schema: RichTextSchema): A & HasRead {
-      const result = Object.assign(base.richtext(ctx, path, schema), {
-        [CALL]: () => frozenClone(ctx.reader.read(path)),
+      const carrier = readable(
+        base.richtext(ctx, path, schema),
+        ctx,
+        path,
+        schema,
+      )
+      const result = Object.assign(carrier, {
         [Symbol.toPrimitive]: (_hint: string) => {
-          const v = ctx.reader.read(path)
+          const v = valueAt(ctx, path)
           if (Array.isArray(v)) {
             return (v as Array<{ text: string }>).map(s => s.text).join("")
           }

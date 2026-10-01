@@ -343,7 +343,7 @@ See [TECHNICAL.md](./TECHNICAL.md) for details on value identity, type recovery,
 
 ### Prefer `useSelector` over `useValue(doc)` for large documents
 
-`useValue(doc)` materializes the **entire document** — every field, every list item, every text node — into a plain JS snapshot, and re-renders on **every** change anywhere in it. Reads are cached, so a change rebuilds only the path to what changed and shares the rest; but for a document with a growing `turns` array, a `messages` log, or any unbounded collection, the first read still copies all of it, and every keystroke anywhere still re-renders the component.
+`useValue(doc)` materializes the **entire document** — every field, every list item, every text node — into a plain JS snapshot, and re-renders on **every** change anywhere in it. A read is the store's own frozen value, so it copies nothing, and a change gives new objects only to the path to what changed and shares the rest; but for a document with a growing `turns` array, a `messages` log, or any unbounded collection, every keystroke anywhere still re-renders the component.
 
 Kyneta refs are **live**: you can traverse the schema and read individual nodes without building a snapshot of their parents. `doc.activeStudentTurnId()` reads one scalar. `doc.turns.at(0)?.role()` reads one field of one item. The ref never builds a full snapshot unless you call `()` on the root.
 

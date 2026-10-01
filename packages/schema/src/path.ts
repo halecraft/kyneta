@@ -18,24 +18,7 @@
 // descendants via field()/item().
 
 import type { CoordinateTrie } from "./coordinate-trie.js"
-
-/**
- * Recognize the `stepTree` shadow shape (`{id, parent, index, data}[]`)
- * structurally, so `path.node(id)` can step into a node's data without
- * a schema lookup. The role-`"entry"` guard at the call site keeps this
- * heuristic from misfiring on user data that happens to have `id`/`data`
- * keys but isn't a `Schema.tree` shadow.
- */
-function isFlatForestArray(arr: readonly unknown[]): boolean {
-  if (arr.length === 0) return false
-  const first = arr[0]
-  return (
-    typeof first === "object" &&
-    first !== null &&
-    typeof (first as { id?: unknown }).id === "string" &&
-    "data" in (first as object)
-  )
-}
+import { childOf } from "./plain-access.js"
 
 // ---------------------------------------------------------------------------
 // Segment — the minimal contract for a path segment
@@ -67,7 +50,7 @@ export interface Segment {
    * asserting liveness. For dead addresses, throws a descriptive error.
    *
    * Use `resolve()` only where a dead segment is a genuine bug that must
-   * fail loudly — writing through a path (`writeByPath`) or live ref
+   * fail loudly — writing through a path (`applyChange`) or live ref
    * navigation. For coordinate-only reads (serialization, `format()`,
    * identity `key`, schema/position walks, `read()`), use `coord()` — a
    * since-deleted key is still a valid coordinate, and diagnostics must
@@ -90,6 +73,12 @@ export interface Segment {
    * not, and the coordinate as a string for everything else.
    */
   readonly identity: string
+
+  /**
+   * Whether the coordinate this segment names is gone. Only an `Address`
+   * can die; a raw segment names a coordinate, not a live one.
+   */
+  readonly dead?: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -459,30 +448,7 @@ export abstract class AbstractPath implements Path {
 
   read(store: unknown): unknown {
     let current = store
-    for (const seg of this.segments) {
-      if (current == null) return undefined
-      // `coord()`, not `resolve()`: a since-deleted key reads as the absent
-      // value (undefined via the `current[key]` miss), not a throw — a deleted
-      // key is absent, not a bug. Writes still guard (see `writeByPath`). jj:mlurlzqt
-      const key = seg.coord()
-      // Flat-forest navigation: when traversing an `entry` segment
-      // over an array of `{id, parent, index, data}` nodes (the canonical
-      // shadow shape produced by `stepTree`), look the node up by id and
-      // step into its `.data`. This makes `path.node(id)` reads work over
-      // the flat shadow without requiring schema-aware readers.
-      if (
-        seg.role === "entry" &&
-        Array.isArray(current) &&
-        isFlatForestArray(current)
-      ) {
-        const node = (
-          current as ReadonlyArray<{ id: string; data: unknown }>
-        ).find(n => n != null && n.id === key)
-        current = node === undefined ? undefined : node.data
-        continue
-      }
-      current = (current as Record<string | number, unknown>)[key]
-    }
+    for (const seg of this.segments) current = childOf(current, seg)
     return current
   }
 
@@ -677,9 +643,12 @@ export class AddressedPath extends AbstractPath {
 /**
  * Resolve a path to an `AddressedPath` in the given trie.
  *
- * - If the path is already addressed, return it as-is (idempotent).
- * - If raw, walk the segments from the root, taking (or creating) each
- *   coordinate's address from the trie. Returns an `AddressedPath` whose
+ * - If the path is already addressed in this trie, return it as-is
+ *   (idempotent).
+ * - Otherwise walk its coordinates from the root, taking (or creating) each
+ *   coordinate's address from the trie. A path addressed in another
+ *   document's trie is walked too: its addresses say nothing about which
+ *   coordinates are alive here. Returns an `AddressedPath` whose
  *   `.key` matches the keys used by changefeed listeners and the trie.
  *
  * This is the single point where raw→addressed translation happens. The
@@ -692,12 +661,10 @@ export function resolveToAddressed(
   path: Path,
   trie: CoordinateTrie,
 ): AddressedPath {
-  if (path.isAddressed) return path as AddressedPath
+  if (path instanceof AddressedPath && path.trie === trie) return path
 
   let current = new AddressedPath([], trie)
   for (const seg of path.segments) {
-    // `coord()` for consistency; input is always raw here (addressed returns
-    // early), so this is a pure coordinate read either way.
     if (seg.role === "field") {
       current = current.field(seg.coord() as string)
     } else if (seg.role === "entry") {

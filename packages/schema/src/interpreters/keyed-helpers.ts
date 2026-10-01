@@ -9,7 +9,10 @@ import { mapChange, mapClearChange, own } from "../change.js"
 import { coordinatePath } from "../coordinate-trie.js"
 import type { Path } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
-import { CALL, type NavigableCarrier } from "./bottom.js"
+import { rawEntry } from "../path.js"
+import type { Schema as SchemaNode } from "../schema.js"
+import type { NavigableCarrier } from "./bottom.js"
+import { readChildAt } from "./read-at.js"
 import type { WritableContext } from "./writable.js"
 
 /** Install a record's mutation methods onto a ref: `set`, `delete`, `clear`. */
@@ -59,50 +62,25 @@ export function installKeyedWriteOps<T extends object>(
 // Readable, navigation, addressing, caching helpers for map/set
 // ---------------------------------------------------------------------------
 
-/** Install the CALL slot (record snapshot) and `.get(key)` onto a keyed ref. */
+/** `.get(key)` on a keyed ref. */
 export interface KeyedReadable {
-  readonly [CALL]: () => Readonly<Record<string, unknown>>
   readonly get: (key: string) => unknown
 }
 
+/**
+ * Install `.get(key)`: the entry's value, read from the record's value
+ * (`readChildAt`), so it builds no ref and freezes only that entry. A missing
+ * key is `undefined`.
+ */
 export function installKeyedReadable<T extends object>(
   result: T,
   ctx: RefContext,
   path: Path,
+  item: SchemaNode,
 ): asserts result is T & KeyedReadable {
-  // `.at` was installed by `installKeyedNavigation`, one layer further in.
-  // That surface is not visible in `T`: layers describe each other with
-  // phantom brands (`HasNavigation`) rather than structurally, so the type
-  // cannot carry it across the boundary. Naming the one member being relied on
-  // states the dependency instead of hiding it.
-  const navigable = result as NavigableCarrier<string>
-
-  // Snapshot goes through result.at(key) — not the raw item closure —
-  // to respect caching/addressing identity. Each entry's value is frozen by
-  // its own read; the record is frozen here.
-  Object.defineProperty(result, CALL, {
-    value: (): Readonly<Record<string, unknown>> => {
-      const keys = ctx.reader.keys(path)
-      const snapshot: Record<string, unknown> = {}
-      for (const key of keys) {
-        const child: unknown = navigable.at(key)
-        snapshot[key] =
-          typeof child === "function" ? (child as () => unknown)() : child
-      }
-      return Object.freeze(snapshot)
-    },
-    enumerable: true,
-    configurable: true,
-    writable: true,
-  })
-
   Object.defineProperty(result, "get", {
-    value: (key: string): unknown => {
-      const child = navigable.at(key)
-      return typeof child === "function"
-        ? (child as () => unknown)()
-        : undefined
-    },
+    value: (key: string): unknown =>
+      readChildAt(ctx, path, rawEntry(key), item),
     enumerable: false,
     configurable: true,
   })
@@ -127,7 +105,7 @@ export function installKeyedNavigation<T extends object>(
 ): asserts result is T & KeyedNavigation {
   // Read back through the carrier rather than calling `item` directly, so
   // `entries`/`values` respect whatever caching or addressing a later layer
-  // installs over `.at`. Same cross-layer situation as `installKeyedReadable`.
+  // installs over `.at`.
   const navigable = result as NavigableCarrier<string>
   Object.defineProperty(result, "at", {
     value: (key: string): unknown => {

@@ -12,7 +12,7 @@
 
 import type { FlatTreeNode } from "../forest.js"
 import { validateForest } from "../forest.js"
-import { isPlainObject, samePlainValue } from "../guards.js"
+import { isNonNullObject, isPlainObject, samePlainValue } from "../guards.js"
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
 import { interpret } from "../interpret.js"
 import type { Plain } from "../interpreter-types.js"
@@ -85,7 +85,7 @@ function describeActual(value: unknown): string {
  * - `root` — the root value being validated (same role as `ctx` in
  *   `plainInterpreter`)
  * - `errors` — mutable accumulator for validation failures
- * - `reader` — `plainReader(root)` view used by the catamorphism's
+ * - `reader` — a `plainReader` over `root`, used by the catamorphism's
  *   `tree` case to enumerate flat-forest topology. Optional — the
  *   `validate` entry point always supplies it.
  */
@@ -526,6 +526,12 @@ function innerSchemaExpected(schema: Schema): string {
 // Public API: validate / tryValidate
 // ---------------------------------------------------------------------------
 
+/** A fresh context validating `value`, whose reader reads `value` itself. */
+function validateContext(value: unknown): ValidateContext {
+  const root = isNonNullObject(value) ? value : {}
+  return { root: value, errors: [], reader: plainReader({ current: root }) }
+}
+
 /**
  * Validates a plain value against a schema and narrows the type.
  *
@@ -541,16 +547,7 @@ export function validate<S extends Schema>(
   schema: S,
   value: unknown,
 ): Plain<S> {
-  const ctx: ValidateContext = {
-    root: value,
-    errors: [],
-    reader: plainReader(
-      (typeof value === "object" && value !== null ? value : {}) as Record<
-        string,
-        unknown
-      >,
-    ),
-  }
+  const ctx = validateContext(value)
   const result = interpret(schema, validateInterpreter, ctx)
 
   if (ctx.errors.length > 0) {
@@ -582,16 +579,7 @@ export function tryValidate<S extends Schema>(
 ):
   | { ok: true; value: Plain<S> }
   | { ok: false; errors: SchemaValidationError[] } {
-  const ctx: ValidateContext = {
-    root: value,
-    errors: [],
-    reader: plainReader(
-      (typeof value === "object" && value !== null ? value : {}) as Record<
-        string,
-        unknown
-      >,
-    ),
-  }
+  const ctx = validateContext(value)
   const result = interpret(schema, validateInterpreter, ctx)
 
   if (ctx.errors.length > 0) {

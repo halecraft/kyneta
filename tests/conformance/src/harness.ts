@@ -1,6 +1,7 @@
 import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import { Exchange } from "@kyneta/exchange"
-import { batch } from "@kyneta/schema"
+import { batch, RawPath, TRANSACT } from "@kyneta/schema"
+import { frozenInvariantViolations } from "@kyneta/schema/testing"
 import { afterEach, describe, expect, it } from "vitest"
 import type { SubstrateProfile } from "./profiles.js"
 
@@ -22,6 +23,9 @@ async function drain(rounds = 60): Promise<void> {
 }
 
 const read = (doc: Doc) => ({ a: doc.a() as string, b: doc.b() as string })
+
+/** σ, the state a document's reads are served from. */
+const sigma = (doc: Doc): unknown => doc[TRANSACT].reader.read(RawPath.empty)
 
 /**
  * Assert a `Shape` value is one whole variant, not a mixture of two.
@@ -347,6 +351,67 @@ export function runSubstrateConformance(profile: SubstrateProfile): void {
 
       expect(JSON.stringify(docA())).toBe(JSON.stringify(docB()))
       expect(Object.keys(docA.rows().k)).toEqual(["n", "s", "inner"])
+    })
+
+    it("after a read, a write gives new reads to its path alone, on the writer and on a peer", async () => {
+      // A read is σ's own value, frozen; a write copies the frozen nodes on
+      // its path and nothing else, and a remote change is reconciled only
+      // where it landed. So every subtree the write did not touch keeps its
+      // read, on both sides.
+      const bound = profile.bind()
+      const [docA, docB] = connectedPair(bound)
+      batch(docA, (d: Doc) => {
+        d.a.set("a")
+        d.peers.set("p", 1)
+        d.rows.set("k", { n: 1, s: "k", inner: { x: 1 } })
+        d.rows.set("j", { n: 2, s: "j", inner: { x: 2 } })
+      })
+      await drain()
+
+      const before = [docA(), docB()]
+      batch(docA, (d: Doc) => d.rows.at("k").inner.x.set(9))
+      await drain()
+      const after = [docA(), docB()]
+
+      after.forEach((next, i) => {
+        const prev = before[i]
+        expect(next).not.toBe(prev)
+        expect(next.rows).not.toBe(prev.rows)
+        expect(next.rows.k).not.toBe(prev.rows.k)
+        expect(next.rows.k.inner).toEqual({ x: 9 })
+        expect(next.rows.j).toBe(prev.rows.j)
+        expect(next.peers).toBe(prev.peers)
+        expect(prev.rows.k.inner).toEqual({ x: 1 })
+      })
+    })
+
+    it("the frozen invariant holds in σ after reads, writes and merges on both peers", async () => {
+      // Everything entering σ is owned or new, so no unfrozen node ever sits
+      // below a frozen one, whichever way a change arrived.
+      const bound = profile.bind()
+      const [docA, docB] = connectedPair(bound)
+      batch(docA, (d: Doc) => {
+        d.rows.set("k", { n: 1, s: "k", inner: { x: 1 } })
+        d.shape.set({ kind: "circle", radius: 1 })
+      })
+      await drain()
+      docA()
+      docB()
+      batch(docA, (d: Doc) => {
+        d.rows.at("k").inner.x.set(2)
+        d.rows.set("j", docA.rows.get("k"))
+      })
+      await drain()
+      docB()
+      batch(docB, (d: Doc) => {
+        d.rows.at("j").inner.set({ x: 3 })
+        d.peers.set("q", 1)
+      })
+      await drain()
+
+      expect(frozenInvariantViolations(sigma(docA))).toEqual([])
+      expect(frozenInvariantViolations(sigma(docB))).toEqual([])
+      expect(docA()).toEqual(docB())
     })
 
     it("a removed record key stays removed after merging a peer that still has it", async () => {

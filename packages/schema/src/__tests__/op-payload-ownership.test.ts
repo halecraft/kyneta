@@ -1,24 +1,17 @@
 // op-payload-ownership — an op's payload is a snapshot, never a view.
 //
 // Every value a change carries (a `replace` value, inserted items, map `set`
-// values, added set members, rich-text marks) arrives holding whatever the
-// caller passed, and the store writes it in by reference. Without a copy at
-// the store boundary, two things share one object: the op a subscriber
-// receives, and the subtree inside the store. A later write into that subtree
-// then mutates the op, so the op reports a value the batch never wrote.
+// values, added set members, rich-text marks) is shared by the op a
+// subscriber receives and the subtree inside the store. `freezePayload`
+// freezes it in place at the store's edge, so neither can change it: a later
+// write into that subtree copies the frozen node first.
 //
-// `ownedForStore` severs that at the store's edge. The caller's half — a caller
-// mutating the object it handed to a write — is enforced separately, by the
-// `Owned` brand on the change constructors.
+// That needs the store to own the payload. The `Owned` brand on the change
+// constructors keeps a caller from mutating the object it handed to a write,
+// and `applyChanges` owns the ops it is handed.
 
 import { describe, expect, it } from "vitest"
-import type {
-  MapChange,
-  ReplaceChange,
-  RichTextChange,
-  SequenceChange,
-  SetChange,
-} from "../change.js"
+import type { MapChange, SetChange } from "../change.js"
 import {
   mapChange,
   own,
@@ -29,6 +22,7 @@ import {
   textChange,
   trustAsOwned,
 } from "../change.js"
+import { isDeeplyFrozen } from "../clone.js"
 // Everything from one entrypoint: binding compares schema identity, and
 // `../basic/index.js` is a separate module instance whose schemas this
 // entrypoint's binder does not recognise.
@@ -45,7 +39,7 @@ import {
   subscribe,
 } from "../index.js"
 import { RawPath } from "../path.js"
-import { ownedForStore } from "../reader.js"
+import { freezePayload } from "../reader.js"
 
 const Doc = Schema.struct({
   settings: Schema.struct({ dark: Schema.boolean(), font: Schema.number() }),
@@ -75,15 +69,21 @@ describe("an op's payload is stable from capture to delivery", () => {
     expect(captured?.value).toEqual({ dark: false, font: 1 })
   })
 
-  it("a subscriber mutating an op cannot corrupt the document", () => {
+  it("mutating a delivered payload throws, and the document is unchanged", () => {
     const doc: any = createDoc(json.bind(Doc))
+    let thrown: unknown
     subscribe(doc, (cs: any) => {
       const change = settingsOp(cs.changes)
-      if (change?.value) change.value.dark = true
+      try {
+        if (change?.value) change.value.dark = true
+      } catch (error) {
+        thrown = error
+      }
     })
 
     batch(doc, (d: any) => d.settings.set({ dark: false, font: 2 }))
 
+    expect(thrown).toBeInstanceOf(TypeError)
     expect(doc.settings().dark).toBe(false)
   })
 
@@ -131,93 +131,60 @@ describe("an op's payload is stable from capture to delivery", () => {
 })
 
 // ---------------------------------------------------------------------------
-// ownedForStore — pure, no substrate required
+// freezePayload — pure, no substrate required
 // ---------------------------------------------------------------------------
 
-describe("ownedForStore", () => {
-  const value = { a: 1 }
-
-  it("copies a local replace payload", () => {
-    const change = replaceChange(own(value))
-    const out = ownedForStore(change) as typeof change
-    expect(out.value).toEqual(value)
-    expect(out.value).not.toBe(value)
-  })
-
-  it("copies a replayed payload too", () => {
-    // No local caller built it, so no `own()` is needed at construction — but
-    // the store still takes it and later mutates it, and a merge's changesets
-    // reach subscribers like any other.
-    const change = replaceChange(own(value))
-    expect(ownedForStore(change)).not.toBe(change)
-  })
-
-  it("exempts nothing \u2014 a decay tick's payload is copied like any other", () => {
-    // The exemption `projection` used to carry was justified by a payload that
-    // was the whole shadow and that nobody read. A tick now announces the ops
-    // its re-projection moved and carries their values, which subscribers do
-    // read, so the exemption had become the alias this function severs.
-    const change = replaceChange(own(value))
-    expect(ownedForStore(change)).not.toBe(change)
+describe("freezePayload", () => {
+  it("freezes a payload in place and keeps the change", () => {
+    const change = replaceChange(own({ outer: { inner: [1, 2, 3] } }))
+    expect(freezePayload(change)).toBe(change)
+    expect(isDeeplyFrozen(change.value)).toBe(true)
   })
 
   it("leaves changes that carry no objects alone", () => {
     const scalar = replaceChange(42)
-    expect(ownedForStore(scalar)).toBe(scalar)
+    expect(freezePayload(scalar)).toBe(scalar)
     const text = textChange([{ insert: "x" }])
-    expect(ownedForStore(text)).toBe(text)
+    expect(freezePayload(text)).toBe(text)
     const items = sequenceChange([{ insert: [1, "a"] }])
-    expect(ownedForStore(items)).toBe(items)
+    expect(freezePayload(items)).toBe(items)
   })
 
-  it("copies every kind of carried value", () => {
-    const item = { n: 1 }
-    const inserted = ownedForStore(
-      sequenceChange([{ retain: 1 }, { insert: [trustAsOwned(item)] }]),
-    ) as SequenceChange
+  it("freezes every kind of carried value", () => {
+    const inserted = sequenceChange([
+      { retain: 1 },
+      { insert: [trustAsOwned({ n: 1 })] },
+    ])
+    freezePayload(inserted)
     const insert = inserted.instructions[1]
-    const insertedItem = insert && "insert" in insert ? insert.insert[0] : null
-    expect(insertedItem).toEqual(item)
-    expect(insertedItem).not.toBe(item)
+    expect(
+      isDeeplyFrozen(insert && "insert" in insert ? insert.insert[0] : null),
+    ).toBe(true)
 
-    const set = ownedForStore(mapChange(trustAsOwned({ k: item }))) as MapChange
-    expect(set.set?.k).toEqual(item)
-    expect(set.set?.k).not.toBe(item)
+    const set = mapChange(trustAsOwned({ k: { n: 1 } }))
+    freezePayload(set)
+    expect(isDeeplyFrozen(set.set?.k)).toBe(true)
 
-    const added = ownedForStore(setOpChange([trustAsOwned(item)])) as SetChange
-    expect(added.add?.[0]).toEqual(item)
-    expect(added.add?.[0]).not.toBe(item)
+    const added = setOpChange([trustAsOwned({ n: 1 })])
+    freezePayload(added)
+    expect(isDeeplyFrozen(added.add?.[0])).toBe(true)
 
-    const marks = { link: { href: "x" } }
-    const marked = ownedForStore(
-      richTextChange([{ format: 1, marks: trustAsOwned(marks) }]),
-    ) as RichTextChange
+    const marked = richTextChange([
+      { format: 1, marks: trustAsOwned({ link: { href: "x" } }) },
+    ])
+    freezePayload(marked)
     const format = marked.instructions[0]
-    const formatMarks = format && "marks" in format ? format.marks : null
-    expect(formatMarks).toEqual(marks)
-    expect(formatMarks).not.toBe(marks)
+    expect(
+      isDeeplyFrozen(format && "marks" in format ? format.marks : null),
+    ).toBe(true)
   })
 
-  it("does not deep-freeze or otherwise alter the payload's contents", () => {
-    const nested = { outer: { inner: [1, 2, 3] } }
-    const out = ownedForStore(replaceChange(own(nested))) as ReplaceChange<
-      typeof nested
-    >
-    expect(out.value).toEqual(nested)
-    expect(out.value.outer).not.toBe(nested.outer)
-  })
-})
-
-// ---------------------------------------------------------------------------
-// Genesis and triggers must not pay for this
-// ---------------------------------------------------------------------------
-
-describe("paths that deliberately hand the store an unshared value", () => {
-  it("root-path replaces are still copied for local writes", () => {
-    const change = replaceChange(own({ tick: 1 }))
-    expect(ownedForStore(change)).not.toBe(change)
-    expect(ownedForStore(change)).toEqual(change)
-    void RawPath.empty
+  it("leaves a byte array unfrozen, since none can be frozen", () => {
+    const bytes = new Uint8Array([1])
+    const change = replaceChange(trustAsOwned({ bytes }))
+    freezePayload(change)
+    expect(Object.isFrozen(change.value)).toBe(true)
+    expect(change.value.bytes).toBe(bytes)
   })
 })
 
@@ -227,9 +194,10 @@ describe("paths that deliberately hand the store an unshared value", () => {
 
 describe("inverse capture owns its own snapshot", () => {
   // The substrates read pre-state without copying it, because every `invert`
-  // deep-clones what it retains. These two pin that, one level down from where
-  // the copy used to be: if `invertReplace` or `invertMap` stopped cloning, the
-  // recorded inverse would hold a live view of the store and abort would
+  // owns what it retains (`own`): a value a read froze is shared, since no
+  // write can change it, and anything else is copied. These two pin that: if
+  // `invertReplace` or `invertMap` held an unfrozen value uncopied, the
+  // recorded inverse would be a live view of the store and abort would
   // restore the value the batch just wrote.
   it("a ROOT write compensates to pre-state", () => {
     const doc: any = createDoc(json.bind(Doc))
@@ -292,10 +260,63 @@ describe("Owned", () => {
     expect(trustAsOwned(value)).toBe(value)
   })
 
+  it("own() shares a deeply frozen value, which nobody can change", () => {
+    const value = Object.freeze({ a: Object.freeze([1]) })
+    expect(own(value)).toBe(value)
+  })
+
+  it("own() copies a shallow-frozen value, and one holding bytes", () => {
+    const shallow = Object.freeze({ a: [1] })
+    expect(own(shallow)).not.toBe(shallow)
+    const bytes = Object.freeze({ b: new Uint8Array([1]) })
+    const owned = own(bytes)
+    expect(owned).not.toBe(bytes)
+    expect(owned.b).not.toBe(bytes.b)
+    expect([...owned.b]).toEqual([1])
+  })
+
+  it("a read handed back to a write is shared, not copied", () => {
+    const doc: any = createDoc(json.bind(Doc))
+    const ops: Op[] = []
+    subscribe(doc, (cs: any) => ops.push(...cs.changes))
+    const settings = doc.settings()
+    doc.settings.set(settings)
+    expect(settingsOp(ops)?.value).toBe(settings)
+    expect(doc.settings()).toBe(settings)
+  })
+
   it("leaves primitives alone — nothing can hold a reference to one", () => {
     expect(own(42)).toBe(42)
     expect(own("x")).toBe("x")
     expect(own(null)).toBe(null)
+  })
+})
+
+describe("applyChanges owns the ops it is handed", () => {
+  it("leaves the caller's payloads unfrozen, and a later mutation does not reach σ", () => {
+    const doc: any = createDoc(json.bind(Doc))
+    const value = { dark: true, font: 4 }
+    const ops: Op[] = [
+      {
+        path: RawPath.empty.field("settings"),
+        change: replaceChange(trustAsOwned(value)),
+      },
+    ]
+    applyChanges(doc, ops)
+    expect(Object.isFrozen(value)).toBe(false)
+    value.font = 99
+    expect(doc.settings()).toEqual({ dark: true, font: 4 })
+  })
+
+  it("shares a payload that is already deeply frozen", () => {
+    const source: any = createDoc(json.bind(Doc))
+    const held: Op[] = []
+    subscribe(source, (cs: any) => held.push(...cs.changes))
+    source.settings.set({ dark: true, font: 5 })
+
+    const target: any = createDoc(json.bind(Doc))
+    applyChanges(target, held)
+    expect(target.settings()).toBe(settingsOp(held)?.value)
   })
 })
 
@@ -380,6 +401,19 @@ describe("every write copies the values it is handed", () => {
     const dataOp = ops.find(op => op.change.type === "map")
     expect(carried(dataOp)).toEqual("a")
     expect((dataOp?.change as MapChange | undefined)?.set?.tags).toEqual(["x"])
+  })
+
+  it("set clear names the members it removed", () => {
+    const { doc, ops } = kindsDoc()
+    doc.members.add({ n: 1 })
+    doc.members.add({ n: 2 })
+    doc.members.clear()
+
+    expect(doc.members()).toEqual([])
+    expect((ops[2]?.change as SetChange | undefined)?.remove).toEqual([
+      { n: 1 },
+      { n: 2 },
+    ])
   })
 
   it("rich-text mark", () => {

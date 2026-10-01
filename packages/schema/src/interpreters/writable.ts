@@ -232,13 +232,6 @@ export interface WritableContext extends RefContext {
   /** Register a layer's `prepare` stage, once per context: a second call
    *  with the same `layer` is ignored. */
   readonly addPrepareStage: (layer: symbol, stage: PrepareStage) => void
-  /**
-   * Whether a `prepare` call is in progress. Between its stages, σ and each
-   * layer's per-coordinate state can disagree — a stage that already ran
-   * has settled, one still to run has not — so anything a stage's callbacks
-   * cause to be read must be computed from σ, not served from a cache.
-   */
-  readonly preparing: boolean
   /** Deliver one sealed batch. The base does nothing; the changefeed layer
    *  wraps it. Called in seal order by the context's delivery dispatcher. */
   deliver: (batch: SealedBatch) => void
@@ -282,10 +275,7 @@ export interface WritableContext extends RefContext {
 export function hasPreparePipeline(
   ctx: RefContext,
 ): ctx is RefContext &
-  Pick<
-    WritableContext,
-    "addPrepareStage" | "deliver" | "preparing" | "schema"
-  > {
+  Pick<WritableContext, "addPrepareStage" | "deliver" | "schema"> {
   return (
     "addPrepareStage" in ctx &&
     typeof ctx.addPrepareStage === "function" &&
@@ -412,9 +402,6 @@ export function buildWritableContext(
     delivery().dispatch({ type: "deliver", batch })
   }
 
-  // How many `prepare` calls are in progress (`ctx.preparing`).
-  let preparing = 0
-
   // Each layer's stage, keyed by the layer so registering twice is a no-op.
   // Stages within a phase commute, so the Map's insertion order carries no
   // meaning.
@@ -428,7 +415,7 @@ export function buildWritableContext(
 
   // Resolve once, for every caller. A raw path from `announce` or
   // `applyChanges` becomes the addressed path whose `key` the listeners,
-  // address tables and caches are keyed by. Idempotent for addressed paths.
+  // address tables and carriers are keyed by. Idempotent for addressed paths.
   // `rootPath` is read per call: `withAddressing` installs it on the context
   // after the context is built.
   const resolve = (path: Path): Path => {
@@ -457,37 +444,32 @@ export function buildWritableContext(
       options.ingress === "author"
         ? completeAt(schema, substrate.reader, path, incoming)
         : incoming
-    preparing++
-    try {
-      for (const stage of stages.values()) {
-        stage.before?.(path, change, options)
-      }
-      switch (options.ingress) {
-        case "author": {
-          const outer = forwardChange
-          forwardChange = change
-          try {
-            substrate.prepare(path, change, recordInverse)
-          } finally {
-            forwardChange = outer
-          }
-          break
+    for (const stage of stages.values()) {
+      stage.before?.(path, change, options)
+    }
+    switch (options.ingress) {
+      case "author": {
+        const outer = forwardChange
+        forwardChange = change
+        try {
+          substrate.prepare(path, change, recordInverse)
+        } finally {
+          forwardChange = outer
         }
-        case "compensate":
-          substrate.prepare(path, change, null)
-          break
-        case "announce":
-          break
+        break
       }
-      trace.push({
-        op: { path, change },
-        authored: options.ingress === "author",
-      })
-      for (const stage of stages.values()) {
-        stage.after?.(path, change, options)
-      }
-    } finally {
-      preparing--
+      case "compensate":
+        substrate.prepare(path, change, null)
+        break
+      case "announce":
+        break
+    }
+    trace.push({
+      op: { path, change },
+      authored: options.ingress === "author",
+    })
+    for (const stage of stages.values()) {
+      stage.after?.(path, change, options)
     }
   }
 
@@ -620,9 +602,6 @@ export function buildWritableContext(
     schema,
     prepare,
     addPrepareStage,
-    get preparing() {
-      return preparing > 0
-    },
     deliver,
     runBatch,
     announce,
@@ -949,8 +928,8 @@ export function withWritable<A extends object>(
           // `own` copies the caller's object so the op keeps a value rather than a
           // view. Without it, a caller reusing the object it passed would rewrite what
           // subscribers see, with no write recorded and no changeset emitted. `prepare`
-          // completes the value, and the store copies the completed value at
-          // `ownedForStore`.
+          // completes the value, and the store freezes the completed value and
+          // shares it with the op (`freezePayload`).
           const change = replaceChange(own(value))
           ctx.dispatch(path, change)
         },
@@ -975,8 +954,8 @@ export function withWritable<A extends object>(
         // `own` copies the caller's object so the op keeps a value rather than a
         // view. Without it, a caller reusing the object it passed would rewrite what
         // subscribers see, with no write recorded and no changeset emitted. `prepare`
-        // completes the value, and the store copies the completed value at
-        // `ownedForStore`.
+        // completes the value, and the store freezes the completed value and
+        // shares it with the op (`freezePayload`).
         const change = replaceChange(own(value))
         ctx.dispatch(path, change)
       })

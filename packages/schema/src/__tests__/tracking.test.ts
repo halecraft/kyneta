@@ -1,7 +1,7 @@
 // tracking.test.ts — pure tests for the read-tracking context (no interpreter).
 //
 // Exercises the functional core of jj:vtpxvkyk: scope capture, dedup,
-// nesting, the no-scope guard, and suppression. Uses synthetic Dependency
+// nesting and the no-scope guard. Uses synthetic Dependency
 // records — the interpreter-side instrumentation (withTracking) is tested
 // separately against real refs.
 
@@ -11,7 +11,6 @@ import {
   currentScope,
   dependencyKey,
   reportRead,
-  withoutTracking,
   withReadScope,
 } from "../tracking.js"
 
@@ -95,31 +94,5 @@ describe("nesting", () => {
       dependencyKey("outer/before", "value"),
       dependencyKey("outer/after", "value"),
     ])
-  })
-})
-
-describe("withoutTracking (suppression)", () => {
-  it("suppresses reads while active, then resumes", () => {
-    const { deps } = withReadScope(() => {
-      reportRead(dep("tracked/before"))
-      withoutTracking(() => {
-        reportRead(dep("suppressed"))
-      })
-      reportRead(dep("tracked/after"))
-    })
-    expect(deps.map(d => d.key)).toEqual([
-      dependencyKey("tracked/before", "value"),
-      dependencyKey("tracked/after", "value"),
-    ])
-  })
-
-  it("currentScope() reports false while suppressed", () => {
-    withReadScope(() => {
-      expect(currentScope()).toBe(true)
-      withoutTracking(() => {
-        expect(currentScope()).toBe(false)
-      })
-      expect(currentScope()).toBe(true)
-    })
   })
 })

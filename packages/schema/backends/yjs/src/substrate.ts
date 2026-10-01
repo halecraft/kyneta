@@ -46,7 +46,6 @@ import type {
   CommitOptions,
   MergeOptions,
   Path,
-  PlainState,
   PositionCapable,
   ProductSchema,
   Reader,
@@ -56,6 +55,7 @@ import type {
   SchemaBinding,
   Schema as SchemaNode,
   Side,
+  StateCell,
   Substrate,
   SubstrateFactory,
   SubstratePayload,
@@ -75,10 +75,10 @@ import {
   deriveSchemaBinding,
   fieldAbsPath,
   findOpaqueBoundary,
+  freezePayload,
   hasBackingDoc,
   invert,
   KIND,
-  ownedForStore,
   plainReader,
   planAdvance,
   planReconcile,
@@ -210,7 +210,9 @@ export function createYjsSubstrate(
   // The shadow — a plain JS object materialized from the Y.Doc.
   // `prepare` steps it for local writes; the event bridge re-materializes it
   // for everything else.
-  const shadow: PlainState = materializeYjsShadow(doc, schema, binding)
+  const shadow: StateCell = {
+    current: materializeYjsShadow(doc, schema, binding),
+  }
   // What the event bridge re-materializes σ's touched parts through.
   const resolver = createYjsResolver(rootMap, schema, binding)
   const materializer = createMaterializeInterpreter(resolver)
@@ -268,7 +270,7 @@ export function createYjsSubstrate(
       binding,
     )
     const boundaryPath = path.slice(0, prefixLength + 1)
-    const value = boundaryPath.read(shadow)
+    const value = boundaryPath.read(shadow.current)
     const key = boundaryKey(path, prefixLength)
 
     // The target can be either a Y.Map (struct field, record entry,
@@ -335,12 +337,10 @@ export function createYjsSubstrate(
     ): void {
       // Capture σ at the target path before applyChange mutates the shadow.
       if (recordInverse) {
-        // Read, don't copy. `invert` snapshots whatever it retains — see
-        // `invertReplace`, `invertMap`, `invertSequence` and the rich-text
-        // marks in `inverse.ts`, each of which deep-clones the pre-state it
-        // captures. Copying here as well protected nothing and cost a deep
-        // clone of the written subtree on every local write.
-        recordInverse(path, invert(path.read(shadow), change))
+        // Read, don't copy. `invert` owns whatever it retains (`own`): a
+        // value a read froze is shared, since no write can change it, and
+        // anything else is copied.
+        recordInverse(path, invert(path.read(shadow.current), change))
         revertible.preparing(path, change)
       }
 
@@ -348,7 +348,7 @@ export function createYjsSubstrate(
       // inside the ambient Y.transact opened by runBatch, which wraps
       // the batch's prepare-loop and flush. The writable context completed
       // the change, so σ and λ take the same value.
-      applyChange(shadow, path, ownedForStore(change))
+      applyChange(shadow, path, freezePayload(change))
 
       // JSON-boundary write: stage a full-value write at the
       // boundary segment of the parent container. Coalesces with

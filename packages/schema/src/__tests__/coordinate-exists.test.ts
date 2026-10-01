@@ -23,7 +23,7 @@ const state = {
   record: { k: 1 },
   tree: [{ id: "n1", parent: null, index: 0, data: { label: "x" } }],
 }
-const reader = plainReader(state)
+const reader = plainReader({ current: state })
 const at = (key: string) => RawPath.empty.field(key)
 
 describe("coordinateExists", () => {

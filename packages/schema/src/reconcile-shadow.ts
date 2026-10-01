@@ -24,7 +24,7 @@ import {
   materializeContextFromResolver,
 } from "./interpreters/materialize.js"
 import type { Path } from "./path.js"
-import { applyChange, ownedForStore, type PlainState } from "./reader.js"
+import { applyChange, freezePayload, type StateCell } from "./reader.js"
 import { KIND, type Schema as SchemaNode } from "./schema.js"
 import { planSubtreeEffect, type SubtreeEffect } from "./subtree-effect.js"
 
@@ -247,12 +247,12 @@ function group(candidates: readonly Candidate[]): readonly ReconcileTarget[] {
  * part's ops with `diffOps` against σ, then applies them. A keyed target
  * reads only the named keys λ holds (`resolveHasKey`).
  *
- * `diffOps`'s payloads are copies of λ's values, and σ takes its own copy
- * through `ownedForStore`, so σ, λ and the returned ops share nothing: the
- * ops may be announced.
+ * `diffOps`'s payloads are copies of λ's values, so λ shares nothing with σ
+ * or the ops. σ and the returned ops share those copies, frozen
+ * (`freezePayload`), so the ops may be announced.
  */
 export function reconcileShadow(
-  shadow: PlainState,
+  shadow: StateCell,
   targets: readonly ReconcileTarget[],
   resolver: MaterializeResolver,
   interpreter: Interpreter<MaterializeContext, unknown>,
@@ -277,7 +277,7 @@ export function reconcileShadow(
   const ops = targets.flatMap((target, i) =>
     diffOps(
       target.schema,
-      target.path.read(shadow),
+      target.path.read(shadow.current),
       nexts[i],
       target.path,
       target.keys,
@@ -285,7 +285,7 @@ export function reconcileShadow(
   )
 
   for (const op of ops) {
-    applyChange(shadow, op.path, ownedForStore(op.change))
+    applyChange(shadow, op.path, freezePayload(op.change))
   }
   return ops
 }

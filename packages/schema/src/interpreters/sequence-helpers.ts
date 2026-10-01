@@ -36,7 +36,10 @@ import { own, richTextChange, sequenceChange, textChange } from "../change.js"
 import { coordinatePath } from "../coordinate-trie.js"
 import type { Path } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
-import { CALL, type Mutable, type NavigableCarrier } from "./bottom.js"
+import { rawIndex } from "../path.js"
+import type { Schema as SchemaNode } from "../schema.js"
+import type { Mutable, NavigableCarrier } from "./bottom.js"
+import { readChildAt } from "./read-at.js"
 import type { WritableContext } from "./writable.js"
 
 // ---------------------------------------------------------------------------
@@ -247,52 +250,28 @@ export function installListWriteOps<T extends object>(
 }
 
 // ---------------------------------------------------------------------------
-// installSequenceReadable — CALL slot (array snapshot) + .get(i)
+// installSequenceReadable — .get(i)
 // ---------------------------------------------------------------------------
 
-/** Install the CALL slot (array snapshot) and `.get(i)` onto a sequence ref. */
+/** `.get(i)` on a sequence ref. */
 export interface SequenceReadable {
-  readonly [CALL]: () => readonly unknown[]
   readonly get: (index: number) => unknown
 }
 
+/**
+ * Install `.get(i)`: the item's value, read from the list's value
+ * (`readChildAt`), so it builds no ref and freezes only that item. An index
+ * out of range is `undefined`.
+ */
 export function installSequenceReadable<T extends object>(
   result: T,
   ctx: RefContext,
   path: Path,
+  item: SchemaNode,
 ): asserts result is T & SequenceReadable {
-  // `.at` comes from `installSequenceNavigation`, one layer further in. Layers
-  // describe each other with phantom brands rather than structurally, so it is
-  // not visible in `T` — named here rather than hidden behind `any`.
-  const navigable = result as NavigableCarrier<number>
-
-  // Snapshot goes through result.at(i) — not the raw item closure —
-  // to respect caching/addressing identity. Each item's value is frozen by
-  // its own read; the array is frozen here.
-  Object.defineProperty(result, CALL, {
-    value: (): readonly unknown[] => {
-      const len = ctx.reader.arrayLength(path)
-      const snapshot: unknown[] = []
-      for (let i = 0; i < len; i++) {
-        const child: unknown = navigable.at(i)
-        snapshot.push(
-          typeof child === "function" ? (child as () => unknown)() : child,
-        )
-      }
-      return Object.freeze(snapshot)
-    },
-    enumerable: true,
-    configurable: true,
-    writable: true,
-  })
-
   Object.defineProperty(result, "get", {
-    value: (index: number): unknown => {
-      const child = navigable.at(index)
-      return typeof child === "function"
-        ? (child as () => unknown)()
-        : undefined
-    },
+    value: (index: number): unknown =>
+      readChildAt(ctx, path, rawIndex(index), item),
     enumerable: false,
     configurable: true,
   })

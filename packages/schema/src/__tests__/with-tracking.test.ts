@@ -3,7 +3,15 @@
 // and the load-bearing stable-key-invariance property.
 
 import { describe, expect, it } from "vitest"
-import { batch, createDoc, Schema } from "../basic/index.js"
+import {
+  batch,
+  createDoc,
+  Schema,
+  subscribe,
+  subscribeNode,
+} from "../basic/index.js"
+import { __countKeptRefs } from "../coordinate-trie.js"
+import { TRANSACT } from "../interpreters/writable.js"
 import { withReadScope } from "../tracking.js"
 
 const TodoApp = Schema.struct({
@@ -31,7 +39,7 @@ describe("withTracking — aspect inference", () => {
     expect(deps.map(d => d.aspect)).toEqual(["value"])
   })
 
-  it("composite () reports a single deep dep (fold suppressed)", () => {
+  it("composite () reports a single deep dep", () => {
     const doc = createDoc(TodoApp)
     seed(doc, 3)
     const { value, deps } = withReadScope(() => (doc as any).todos())
@@ -270,5 +278,122 @@ describe("withTracking — stable key invariance (cursor-stable identity)", () =
     expect(k0).toBeDefined()
     expect(k1).toBeDefined()
     expect(k0).not.toBe(k1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// .get — precise inside a scope, ref-free outside one
+// ---------------------------------------------------------------------------
+
+describe("withTracking — .get", () => {
+  const Rows = Schema.struct({
+    rec: Schema.record(Schema.struct({ n: Schema.number() })),
+    list: Schema.list(Schema.struct({ n: Schema.number() })),
+  })
+
+  function rowsDoc() {
+    const doc: any = createDoc(Rows)
+    batch(doc, (d: any) => {
+      d.rec.set("k", { n: 1 })
+      d.rec.set("j", { n: 2 })
+      d.list.push({ n: 1 }, { n: 2 })
+    })
+    return doc
+  }
+
+  /**
+   * How many times a computation re-runs after `write`, subscribed to the
+   * deps it read as the reactive runtime subscribes to them: `deep` to the
+   * subtree, `value` and `structure` to the node itself.
+   */
+  function reruns(read: () => unknown, write: () => void): number {
+    const { deps } = withReadScope(read)
+    let count = 0
+    const stops = deps.map(dep =>
+      dep.aspect === "deep"
+        ? subscribe(dep.ref as any, () => count++)
+        : subscribeNode(dep.ref as any, () => count++),
+    )
+    write()
+    for (const stop of stops) stop()
+    return count
+  }
+
+  it("a record's .get(k) reports structure on the record and deep on the entry", () => {
+    const doc = rowsDoc()
+    const { value, deps } = withReadScope(() => doc.rec.get("k"))
+    expect(value).toEqual({ n: 1 })
+    expect(deps.map(d => [d.ref, d.aspect])).toEqual([
+      [doc.rec, "structure"],
+      [doc.rec.at("k"), "deep"],
+    ])
+  })
+
+  it("re-runs on a write into its entry, and not on a write into another", () => {
+    const doc = rowsDoc()
+    expect(
+      reruns(
+        () => doc.rec.get("k"),
+        () => doc.rec.at("k").n.set(5),
+      ),
+    ).toBeGreaterThan(0)
+    expect(
+      reruns(
+        () => doc.rec.get("k"),
+        () => doc.rec.at("j").n.set(5),
+      ),
+    ).toBe(0)
+  })
+
+  it("re-runs on adding or deleting a key", () => {
+    const doc = rowsDoc()
+    expect(
+      reruns(
+        () => doc.rec.get("k"),
+        () => doc.rec.set("x", { n: 3 }),
+      ),
+    ).toBeGreaterThan(0)
+    expect(
+      reruns(
+        () => doc.rec.get("k"),
+        () => doc.rec.delete("j"),
+      ),
+    ).toBeGreaterThan(0)
+  })
+
+  it("a sequence's .get(i) is as precise", () => {
+    const doc = rowsDoc()
+    expect(
+      reruns(
+        () => doc.list.get(0),
+        () => doc.list.at(0).n.set(5),
+      ),
+    ).toBeGreaterThan(0)
+    expect(
+      reruns(
+        () => doc.list.get(0),
+        () => doc.list.at(1).n.set(5),
+      ),
+    ).toBe(0)
+    expect(
+      reruns(
+        () => doc.list.get(0),
+        () => doc.list.push({ n: 3 }),
+      ),
+    ).toBeGreaterThan(0)
+  })
+
+  it("a missing key reads undefined, and still reports structure", () => {
+    const doc = rowsDoc()
+    const { value, deps } = withReadScope(() => doc.rec.get("missing"))
+    expect(value).toBeUndefined()
+    expect(deps.map(d => d.aspect)).toEqual(["structure"])
+  })
+
+  it("outside a scope, .get keeps no refs", () => {
+    const doc = rowsDoc()
+    expect(doc.rec.get("k")).toEqual({ n: 1 })
+    expect(doc.list.get(1)).toEqual({ n: 2 })
+    expect(__countKeptRefs(doc[TRANSACT])).toBe(0)
   })
 })

@@ -36,9 +36,9 @@ import {
 } from "../position.js"
 import {
   applyChange,
-  ownedForStore,
-  type PlainState,
+  freezePayload,
   plainReader,
+  type StateCell,
 } from "../reader.js"
 import {
   planReconcile,
@@ -402,13 +402,13 @@ export function createStateSubstrate(
     },
   )
 
-  // The PlainState shadow that the reader consumes. `prepare` writes it for
+  // σ, the shadow the reader consumes. `prepare` writes it for
   // local writes; `announceReprojection` writes it for merges and decay.
   //
   // A copy, because a projection shares register values with the tree.
-  const shadow: PlainState = deepClonePlain(
-    projectStateTree(currentTree, schema, Date.now()),
-  )
+  const shadow: StateCell = {
+    current: deepClonePlain(projectStateTree(currentTree, schema, Date.now())),
+  }
   const reader = plainReader(shadow)
 
   let cachedCtx: WritableContext | undefined
@@ -463,17 +463,15 @@ export function createStateSubstrate(
       recordInverse: RecordInverseFn | null,
     ): void {
       if (recordInverse) {
-        // Read, don't copy. `invert` snapshots whatever it retains — see
-        // `invertReplace`, `invertMap`, `invertSequence` and the rich-text
-        // marks in `inverse.ts`, each of which deep-clones the pre-state it
-        // captures. Copying here as well protected nothing and cost a deep
-        // clone of the written subtree on every local write.
-        recordInverse(path, invert(path.read(shadow), change))
+        // Read, don't copy. `invert` owns whatever it retains (`own`): a
+        // value a read froze is shared, since no write can change it, and
+        // anything else is copied.
+        recordInverse(path, invert(path.read(shadow.current), change))
       }
 
       // The writable context completed the change, so σ and the tree take
       // the same complete value, with no key the schema does not declare.
-      applyChange(shadow, path, ownedForStore(change))
+      applyChange(shadow, path, freezePayload(change))
 
       // Then, we apply the change to the StateTree so that ONLY the mutated
       // fields get their timestamps bumped. Merges and decay never reach
@@ -511,7 +509,7 @@ export function createStateSubstrate(
         registerPath ?? path,
         registerPath === null
           ? change
-          : replaceChange(own(registerPath.read(shadow))),
+          : replaceChange(own(registerPath.read(shadow.current))),
         core.nextStamp(Date.now()),
         schema,
       )
@@ -549,7 +547,7 @@ export function createStateSubstrate(
             _schema: unknown,
             path: { segments: readonly unknown[] },
           ) => {
-            return path.segments.length === 0 ? shadow : undefined
+            return path.segments.length === 0 ? shadow.current : undefined
           },
         })
         Object.defineProperty(cachedCtx, BACKING_DOC, {

@@ -25,7 +25,7 @@ import { KIND, Schema } from "../schema.js"
 
 function setup(state: unknown) {
   return {
-    reader: plainReader(state as Record<string, unknown>),
+    reader: plainReader({ current: state as Record<string, unknown> }),
     root: RawPath.empty,
   }
 }
@@ -460,7 +460,7 @@ describe("live reader reflects mutations", () => {
       title: "Doc",
       items: [{ name: "A" }],
     }
-    const reader = plainReader(state)
+    const reader = plainReader({ current: state })
 
     // Round-trip pre-mutation
     const cs1 = contentSize(reader, schema, RawPath.empty)

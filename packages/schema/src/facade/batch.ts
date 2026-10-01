@@ -9,12 +9,13 @@
 //
 // - `applyChanges(ref, ops, options?)` → `Op[]`
 //   Declarative: apply a list of changes inside one `runBatch`, triggering
-//   the full prepare pipeline (cache invalidation + store mutation +
+//   the full prepare pipeline (address fates + store mutation +
 //   notification accumulation) and flush (batched Changeset delivery).
 //
 // Both discover the `WritableContext` via `[TRANSACT]` — symbol
 // discovery, error guard, delegation.
 
+import { mapPayload, own } from "../change.js"
 import type { Op } from "../changefeed.js"
 import type { HasRemove, WritableContext } from "../interpreters/writable.js"
 import { hasTransact, REMOVE, TRANSACT } from "../interpreters/writable.js"
@@ -97,7 +98,7 @@ export function batch<D extends object>(
 
 /**
  * Apply a list of changes to a ref's store, triggering the full
- * prepare pipeline (cache invalidation → store mutation → notification
+ * prepare pipeline (address fates → store mutation → notification
  * accumulation) followed by a single flush (batched Changeset delivery
  * to subscribers).
  *
@@ -113,9 +114,12 @@ export function batch<D extends object>(
  *
  * Opens one `ctx.runBatch` around the list. That wrapper owns the depth-0
  * flush, so the whole list delivers as one Changeset per affected
- * subscriber; nested inside a `batch()` block, it joins the outer one. The prepare
- * pipeline handles cache invalidation (via `withCaching`) and
- * notification accumulation (via `withChangefeed`) automatically.
+ * subscriber; nested inside a `batch()` block, it joins the outer one.
+ *
+ * The ops stay the caller's. The store freezes what it takes in place and
+ * shares it, so each payload is owned on the way in (`own`): one already
+ * deeply frozen, such as a payload a subscriber received, is shared, and
+ * anything else is copied. The caller's objects are never frozen.
  *
  * @param ref - Any ref with a `[TRANSACT]` symbol (from `withWritable`).
  * @param ops - The changes to apply. May be empty (no-op).
@@ -144,7 +148,12 @@ export function applyChanges(
   // frame owns the flush, so the whole list delivers as one Changeset.
   ctx.runBatch(
     () => {
-      for (const { path, change } of ops) ctx.dispatch(path, change)
+      for (const { path, change } of ops) {
+        ctx.dispatch(
+          path,
+          mapPayload(change, value => own(value)),
+        )
+      }
     },
     { origin: options?.origin, source: options?.source },
   )

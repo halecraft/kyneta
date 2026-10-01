@@ -17,13 +17,13 @@ import {
   isTextChange,
   type Op,
   type Path,
-  type PlainState,
   pathSchema,
   type Revertible,
   type RevertibleCommit,
   type RichTextSpan,
   type SchemaBinding,
   type Schema as SchemaNode,
+  type StateCell,
   type WritableContext,
 } from "@kyneta/schema"
 import * as Y from "yjs"
@@ -85,7 +85,7 @@ export interface YjsRevertibleHost {
   readonly rootMap: Y.Map<any>
   readonly schema: SchemaNode
   readonly binding: SchemaBinding | undefined
-  readonly shadow: PlainState
+  readonly shadow: StateCell
   context(): WritableContext
 }
 
@@ -226,7 +226,7 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
         }
         return
       }
-      const pre = path.read(host.shadow)
+      const pre = path.read(host.shadow.current)
       if (isRichTextChange(change)) {
         const stable = stabilize(tree, path)
         const key = JSON.stringify(stable)
@@ -316,7 +316,7 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
           kindAt(tree, path) !== "richtext"
             ? null
             : (draft.texts.get(JSON.stringify(stable)) ??
-              ((path.read(host.shadow) ?? []) as RichTextSpan[]))
+              ((path.read(host.shadow.current) ?? []) as RichTextSpan[]))
         const { deleted, inserted } = textChanges(
           doc,
           target,
@@ -352,7 +352,13 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
         }
       }
       for (const op of ops) {
-        capture(draft, op.path, op.change, op.path.read(host.shadow), "after")
+        capture(
+          draft,
+          op.path,
+          op.change,
+          op.path.read(host.shadow.current),
+          "after",
+        )
       }
     },
 
@@ -464,7 +470,7 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
       if (path === null) return null
       if (!containers.has(path.key)) {
         const kind = kindAt(tree, path)
-        const current = path.read(host.shadow)
+        const current = path.read(host.shadow.current)
         const length =
           kind === "text"
             ? String(current ?? "").length
@@ -559,8 +565,8 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
   function readSlot(path: Path): Slot {
     const segments = path.segments
     const last = segments.at(-1)
-    if (last === undefined) return { value: path.read(host.shadow) }
-    const parent = path.slice(0, segments.length - 1).read(host.shadow)
+    if (last === undefined) return { value: path.read(host.shadow.current) }
+    const parent = path.slice(0, segments.length - 1).read(host.shadow.current)
     const key = last.resolve()
     if (parent === null || typeof parent !== "object") return null
     return Object.hasOwn(parent as object, key as string)

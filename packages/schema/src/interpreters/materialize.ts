@@ -29,7 +29,7 @@
 // constraint handling), and a sum's variant to `dispatchSum`, so neither
 // rule has a second implementation here.
 //
-// The closure-based design parallels `plainReader(state)` — the resolver
+// The closure-based design parallels `plainReader(cell)` — the resolver
 // closes over backend state, eliminating Ctx threading. The interpreter's
 // Ctx is `void` because all state access is captured in the resolver.
 

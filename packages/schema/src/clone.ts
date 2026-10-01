@@ -1,37 +1,30 @@
-// clone — the deep-copy primitives, kept in a module with no imports.
+// clone — copying and freezing plain values, kept in a module with no imports.
 //
-// A leaf module by design. Several subsystems need to snapshot a plain value
-// on its way into somewhere that outlives the write, or out to a reader, and
-// they sit at different levels of the stack — the change vocabulary, the store
-// boundary, the inverse algebra, the ephemeral substrate's register barrier,
-// the read layer. Putting the primitive
-// where none of them import each other keeps any of them free to reach for it
-// without creating an import cycle.
+// A leaf module by design. The change vocabulary, the store, the inverse
+// algebra, the ephemeral substrate and the read layer all copy or freeze plain
+// values, and they sit at different levels of the stack. Putting the
+// primitives where none of them import each other keeps any of them free to
+// reach for them without creating an import cycle.
+//
+// **The frozen invariant.** A frozen node's descendants are all frozen, or are
+// `ArrayBuffer` views (`bytes`). No typed array can be frozen. A view is safe
+// to leave unfrozen in σ because no write mutates one in place: a `bytes`
+// scalar is replaced whole.
+//
+// The invariant holds because every value entering σ is new (a materializer's
+// output, decoded wire data, `diffOps`'s copies) or owned (`own` in
+// `change.ts` copies anything not already deeply frozen). A shallow-frozen
+// object that slipped in would be skipped by `freezeTree` and leave mutable
+// children behind a frozen parent.
+//
+// **The `bytes` hazard.** A read's byte array is σ's own. Mutating it changes
+// σ without a write, so copy it first.
 
 /**
- * Deep-clone a plain-JSON value.
- *
- * The name describes the mechanism (a `structuredClone` of a plain value),
- * not any one caller's intent, because several subsystems rely on it:
- *
- * - **Change construction** (`own` in `change.ts`) copies a caller-supplied
- *   value so the op that carries it cannot be rewritten by whoever passed it.
- * - **The store boundary** (`ownedForStore` in `reader.ts`) copies a
- *   completed payload before it enters the store, so a later write into that
- *   subtree cannot rewrite an op a subscriber is still holding.
- * - **Inverse construction** snapshots the pre-state it captures, so the
- *   recorded inverse is a value rather than a view.
- * - **The `ephemeral` substrate** uses it as an aliasing barrier when a whole
- *   register value (a sum variant or `.json()` blob) crosses the
- *   StateTree↔shadow boundary, so the two never share a mutable object.
- * - **Reads** (`frozenClone`, below) copy a leaf's object value out of σ
- *   before freezing it, so a read never exposes, or freezes, the store.
- *
- * Primitives are returned as-is (clone is a no-op for `undefined`, `null`,
- * `boolean`, `number`, `string`, `bigint`, `symbol`). Objects and arrays
- * go through `structuredClone`. Plain JSON values round-trip faithfully
- * under `structuredClone`; the schema grammar is what guarantees the values
- * reaching here are plain.
+ * Deep-clone a plain-JSON value: a `structuredClone` of an object, and a
+ * primitive as it is. Plain JSON values, byte arrays included, round-trip
+ * faithfully; the schema grammar is what guarantees the values reaching here
+ * are plain.
  */
 export function deepClonePlain<T>(value: T): T {
   if (value === null || value === undefined) return value
@@ -42,17 +35,86 @@ export function deepClonePlain<T>(value: T): T {
 
 /**
  * Copy a plain-JSON value and freeze every object in the copy, in one pass.
+ * A byte array is copied and left unfrozen, since no typed array can be
+ * frozen. Primitives are returned as they are.
  *
- * What a read returns for a leaf whose value is an object (set members, a
- * rich-text delta, a `.json()` value): a snapshot nobody can mutate, taken
- * from σ without freezing σ itself. Primitives are returned as-is.
+ * What a read on a read-only stack returns: the value there may be the
+ * caller's own data, which a read must not freeze.
  */
 export function frozenClone<T>(value: T): T {
   if (value === null || typeof value !== "object") return value
+  if (ArrayBuffer.isView(value)) return copyView(value) as T
   if (Array.isArray(value)) {
     return Object.freeze(value.map(item => frozenClone(item))) as T
   }
   const copy: Record<string, unknown> = {}
   for (const [key, item] of Object.entries(value)) copy[key] = frozenClone(item)
   return Object.freeze(copy) as T
+}
+
+function copyView(view: ArrayBufferView): ArrayBufferView {
+  if (view instanceof DataView) {
+    const start = view.byteOffset
+    return new DataView(view.buffer.slice(start, start + view.byteLength))
+  }
+  // Every typed array has `slice`, which copies.
+  return (view as Uint8Array).slice()
+}
+
+/**
+ * Freeze every unfrozen node under `value`, children before parents, and
+ * return `value`. Stops at a node already frozen, since the frozen invariant
+ * says everything below it is, so the walk costs only what is not yet frozen.
+ * A byte array is left as it is.
+ */
+export function freezeTree<T>(value: T): T {
+  if (typeof value !== "object" || value === null) return value
+  if (Object.isFrozen(value) || ArrayBuffer.isView(value)) return value
+  // Indexed loops: this walks every child of a wide record a read froze and a
+  // write then copied, and an iterator per node is measurable there.
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) freezeTree(value[i])
+  } else {
+    const record = value as Record<string, unknown>
+    const keys = Object.keys(record)
+    for (let i = 0; i < keys.length; i++) freezeTree(record[keys[i] as string])
+  }
+  return Object.freeze(value)
+}
+
+/**
+ * A one-level copy of `node` if it is frozen, and `node` itself otherwise:
+ * what a write changes in place of a node a read froze (`applyChange`). The
+ * copy's children are shared, and stay frozen.
+ */
+export function thaw<T>(node: T): T {
+  if (typeof node !== "object" || node === null || !Object.isFrozen(node)) {
+    return node
+  }
+  if (Array.isArray(node)) return node.slice() as T
+  // A key loop rather than a spread: it copies a wide record about twice as
+  // fast, and a write after a whole-record read copies the record.
+  const record = node as Record<string, unknown>
+  const copy: Record<string, unknown> = {}
+  const keys = Object.keys(record)
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i] as string
+    copy[key] = record[key]
+  }
+  return copy as T
+}
+
+/**
+ * Whether `value` is frozen all the way down. Stops at the first node that is
+ * not. A byte array answers `false`, so whoever asks before sharing a value
+ * (`own`) copies bytes, and σ never holds a caller's array.
+ */
+export function isDeeplyFrozen(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return true
+  if (ArrayBuffer.isView(value) || !Object.isFrozen(value)) return false
+  if (Array.isArray(value)) return value.every(isDeeplyFrozen)
+  for (const key of Object.keys(value)) {
+    if (!isDeeplyFrozen((value as Record<string, unknown>)[key])) return false
+  }
+  return true
 }

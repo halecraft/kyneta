@@ -277,14 +277,12 @@ function settle(
   for (const at of fates.die) {
     const node = trie.node(at)
     if (node?.address !== undefined) setDead(node.address, true)
-    if (node !== undefined) node.read = undefined
   }
   for (const at of fates.drop) trie.drop(at)
   for (const at of fates.rekind) {
     const node = trie.node(at)
     if (node === undefined) continue
     trie.clearSequence(at)
-    node.read = undefined
   }
   for (const [at, schema] of fates.schemas) {
     const node = trie.node(at)

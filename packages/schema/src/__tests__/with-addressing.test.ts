@@ -255,7 +255,7 @@ describe("withAddressing: composition", () => {
     // Build a stack WITHOUT withAddressing (and so without withCaching,
     // which needs it)
     const interp = withReadable(withNavigation(bottomInterpreter))
-    const ctx: RefContext = { reader: plainReader(store) }
+    const ctx: RefContext = { reader: plainReader({ current: store }) }
     const doc = interpret(schema, interp, ctx) as any
 
     expect(doc.x()).toBe(42)

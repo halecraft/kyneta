@@ -3,8 +3,8 @@
 //
 // Pure. A state-based merge (the ephemeral substrate's join, a decay sweep, a
 // plain substrate's reset) has no ops of its own: it moves σ from one state
-// to another. Subscribers, addresses and cached reads all key off ops, and
-// whatever lies below an op is taken as rewritten. So the announcement has to
+// to another. Subscribers and addresses key off ops, and whatever lies below
+// an op is taken as rewritten. So the announcement has to
 // be as fine as the store, one op per field, record key, list window or
 // register that moved, or everything below a coarse op would rebuild and
 // notify whether or not it moved. `reconcileShadow` calls it once per part of

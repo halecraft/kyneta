@@ -10,7 +10,7 @@
 // `create`, `fromEntirety` and promotion from a headless replica all keep it.
 //
 // The core reads state through a `materialize` callback: the substrate passes
-// `() => doc`, and the headless replica replays base + log on demand.
+// `() => cell.current`, and the headless replica replays base + log on demand.
 //
 // Context: jj:wmyomqzw (Phase 0), jj:wqoqzzpp (Phase 2), jj:umtmlpvn (version strategy extraction)
 // Context: jj:oyouvrss (Phase 1 — append-log replica, init ops, batched wire format)
@@ -19,7 +19,7 @@ import { randomHex } from "@kyneta/random"
 import type { ChangeBase } from "../change.js"
 import { replaceChange, trustAsOwned } from "../change.js"
 import type { Op } from "../changefeed.js"
-import { deepClonePlain } from "../clone.js"
+import { freezeTree } from "../clone.js"
 import { completeAt, completeValue } from "../complete.js"
 import type { Path } from "../interpret.js"
 import {
@@ -38,9 +38,10 @@ import {
 } from "../position.js"
 import {
   applyChange,
-  ownedForStore,
+  freezePayload,
   type PlainState,
   plainReader,
+  type StateCell,
 } from "../reader.js"
 import { planReconcile, reconcileShadow } from "../reconcile-shadow.js"
 import type { Schema as SchemaNode } from "../schema.js"
@@ -298,11 +299,12 @@ const STILL_LOADING =
 /**
  * Creates a `Substrate<PlainVersion>` over a plain JS object document.
  *
- * `prepare` mutates `doc` eagerly, so the core's `materialize` is `() => doc`.
- * `history` must describe `doc`: its log replayed onto the trimmed base
- * produces `doc`. `schema` is `doc`'s: a reset announces what it moved by
- * diffing the two states under it. `plainSubstrateFactory` is the
- * schema-aware entry point.
+ * σ starts as `doc`, which the substrate takes as its own: a write may change
+ * it in place, and a read freezes it. `prepare` advances σ eagerly, so the
+ * core's `materialize` is σ itself. `history` must describe `doc`: its log
+ * replayed onto the trimmed base produces `doc`. `schema` is `doc`'s: a reset
+ * announces what it moved by diffing the two states under it.
+ * `plainSubstrateFactory` is the schema-aware entry point.
  *
  * `authoring` gives the reason authored writes are refused, if any: while the
  * document's own history is still loading (a plain merge does not commute with
@@ -318,8 +320,9 @@ export function createPlainSubstrate(
   history: PlainHistory,
   authoring: Authoring,
 ): Substrate<PlainVersion> {
-  const reader = plainReader(doc)
-  const core = createPlainCore(() => doc, clock, history)
+  const cell: StateCell = { current: doc }
+  const reader = plainReader(cell)
+  const core = createPlainCore(() => cell.current, clock, history)
 
   // Ops of the authored batch in progress: filled by `prepare`, logged by
   // `afterBatch`.
@@ -344,7 +347,7 @@ export function createPlainSubstrate(
       // since a sum's variant can depend on the ops before it.
       const completed = batch.map(op => {
         const change = completeAt(schema, reader, op.path, op.change)
-        applyChange(doc, op.path, ownedForStore(change))
+        applyChange(cell, op.path, freezePayload(change))
         return change === op.change ? op : { path: op.path, change }
       })
       substrate.context().announce(completed, {
@@ -360,7 +363,7 @@ export function createPlainSubstrate(
       // hears it, and a list item that stayed keeps its address.
       const resolver = plainValueResolver(state)
       const ops = reconcileShadow(
-        doc,
+        cell,
         planReconcile(schema, [{ path: RawPath.empty, effect: "all" }]),
         resolver,
         createMaterializeInterpreter(resolver),
@@ -381,7 +384,9 @@ export function createPlainSubstrate(
   })
 
   const substrate = {
-    [BACKING_DOC]: doc,
+    get [BACKING_DOC](): PlainState {
+      return cell.current
+    },
 
     reader: reader,
 
@@ -393,16 +398,14 @@ export function createPlainSubstrate(
       const refusal = authoring()
       if (refusal !== null) throw new Error(refusal)
       if (recordInverse) {
-        // Read, don't copy. `invert` snapshots whatever it retains — see
-        // `invertReplace`, `invertMap`, `invertSequence` and the rich-text
-        // marks in `inverse.ts`, each of which deep-clones the pre-state it
-        // captures. Copying here as well protected nothing and cost a deep
-        // clone of the written subtree on every local write.
-        recordInverse(path, invert(path.read(doc), change))
+        // Read, don't copy. `invert` owns whatever it retains (`own`): a
+        // value a read froze is shared, since no write can change it, and
+        // anything else is copied.
+        recordInverse(path, invert(path.read(cell.current), change))
       }
       // The writable context completed the change, so σ and the log take the
-      // same value.
-      applyChange(doc, path, ownedForStore(change))
+      // same value, frozen and shared.
+      applyChange(cell, path, freezePayload(change))
       // Freeze to an immutable RawPath before the op enters the log. The live
       // AddressedPath aliases memoized registry Address objects that a later
       // delete tombstones and a later insert re-indexes, in place — logging it
@@ -442,7 +445,7 @@ export function createPlainSubstrate(
             _schema: unknown,
             path: { segments: readonly unknown[] },
           ) => {
-            return path.segments.length === 0 ? doc : undefined
+            return path.segments.length === 0 ? cell.current : undefined
           },
           positionResolver: (
             _schema: unknown,
@@ -476,7 +479,7 @@ export function createPlainSubstrate(
     },
 
     advance(to: Version): void {
-      // `doc` already holds every logged op, so trimming moves only the base
+      // σ already holds every logged op, so trimming moves only the base
       // offset; there is nothing to project.
       core.advance(asPlainVersion(to), () => {})
     },
@@ -515,8 +518,8 @@ export function createPlainSubstrate(
  * The replication core of a plain replica or substrate: the op log, the base
  * offset, and export. It knows nothing of schemas or the changefeed.
  *
- * `materialize` returns the current state: `() => doc` for a substrate, a
- * base + log replay for a headless replica.
+ * `materialize` returns the current state: σ for a substrate, a base + log
+ * replay for a headless replica.
  */
 function createPlainCore(
   materialize: () => PlainState,
@@ -695,26 +698,34 @@ const replicaHistories = new WeakMap<
  * or writing document fields.
  */
 export function createPlainReplica(clock: PlainClock): Replica<PlainVersion> {
-  // The base incorporates every op trimmed by `advance`.
-  const base: PlainState = {}
+  // The base incorporates every op trimmed by `advance`. It is always frozen,
+  // so a replay onto it copies what it writes and leaves the base as it was.
+  const base: StateCell = { current: Object.freeze({}) }
 
   let cached: { readonly revision: number; readonly state: PlainState } | null =
     null
 
+  /** Replay `batches` onto `cell`, which copies only the frozen nodes the
+   *  writes reach. The log owns its payloads: they were decoded on arrival. */
+  function replay(cell: StateCell, batches: readonly (readonly Op[])[]): void {
+    for (const batch of batches) {
+      for (const op of batch) {
+        applyChange(cell, op.path, freezePayload(op.change))
+      }
+    }
+  }
+
   /**
-   * Replay base + log. `applyChange` steps containers in place, so the replay
-   * runs on a deep copy of the base, and each logged payload is copied before
-   * it is applied: the base and the log both outlive this state.
+   * Replay the log onto the base, frozen. The replay leaves new, unfrozen
+   * nodes wherever it wrote, and a substrate upgraded from this state changes
+   * unfrozen nodes in place, so the state is frozen before anyone sees it.
    */
   function materialize(): PlainState {
     const revision = core.revision()
     if (cached !== null && cached.revision === revision) return cached.state
-    const state = deepClonePlain(base)
-    for (const batch of core.log) {
-      for (const op of batch) {
-        applyChange(state, op.path, ownedForStore(op.change))
-      }
-    }
+    const cell: StateCell = { current: base.current }
+    replay(cell, core.log)
+    const state = freezeTree(cell.current)
     cached = { revision, state }
     return state
   }
@@ -722,12 +733,12 @@ export function createPlainReplica(clock: PlainClock): Replica<PlainVersion> {
   const core = createPlainCore(materialize, clock, EMPTY_HISTORY)
 
   // Appended batches need nothing: the log is the state, replayed on demand.
-  // An adopted document becomes the base.
+  // An adopted document becomes the base, frozen in place: it was decoded
+  // from a payload, so the replica owns it.
   const baseEffects: PlainEffects = {
     append() {},
     adopt(state) {
-      for (const key of Object.keys(base)) delete base[key]
-      Object.assign(base, deepClonePlain(state))
+      base.current = freezeTree(state)
     },
   }
 
@@ -745,14 +756,11 @@ export function createPlainReplica(clock: PlainClock): Replica<PlainVersion> {
     },
 
     advance(to: Version): void {
-      // Trimmed batches leave the log, so the base may take their payloads
-      // without copying.
+      // `to` may trim only part of the log, so the base takes the trimmed
+      // batches rather than the materialized state, and is frozen again.
       core.advance(asPlainVersion(to), batches => {
-        for (const batch of batches) {
-          for (const op of batch) {
-            applyChange(base, op.path, op.change)
-          }
-        }
+        replay(base, batches)
+        freezeTree(base.current)
       })
     },
 
@@ -789,7 +797,9 @@ export function createPlainReplica(clock: PlainClock): Replica<PlainVersion> {
 
 /**
  * Shorthand: wraps a plain document in a substrate and returns its
- * WritableContext.
+ * WritableContext. The substrate takes `doc` as its own: a read freezes it in
+ * place, and a write may change it or, once frozen, replace it, so read the
+ * document through a ref rather than through `doc`.
  *
  * Useful in tests where you don't need the substrate reference:
  *
@@ -1012,12 +1022,9 @@ function buildUpgrade(
     )
   }
 
-  // The replica keeps its materialized state cached, and the substrate
-  // steps containers in place, so the substrate completes a copy.
-  const doc = completeValue(
-    schema,
-    deepClonePlain(replica[BACKING_DOC]),
-  ) as PlainState
+  // The replica's state is frozen, so the substrate shares it: a write copies
+  // a frozen node before changing it. Completion rebuilds only what it fills.
+  const doc = completeValue(schema, replica[BACKING_DOC]) as PlainState
   return createPlainSubstrate(
     doc,
     schema,

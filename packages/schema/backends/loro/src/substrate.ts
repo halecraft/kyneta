@@ -52,6 +52,7 @@ import {
   deriveSchemaBinding,
   fieldAbsPath,
   findOpaqueBoundary,
+  freezePayload,
   hasBackingDoc,
   invert,
   isJsonBoundary,
@@ -65,9 +66,7 @@ import {
   type MapChange,
   type MarkConfig,
   type MergeOptions,
-  ownedForStore,
   type Path,
-  type PlainState,
   type PositionCapable,
   type ProductSchema,
   plainReader,
@@ -81,6 +80,7 @@ import {
   type SchemaBinding,
   type Schema as SchemaNode,
   type Side,
+  type StateCell,
   type Substrate,
   type SubstrateFactory,
   type SubstratePayload,
@@ -259,10 +259,12 @@ export function createLoroSubstrate(
   // Lazy-built WritableContext (same pattern as PlainSubstrate).
   let cachedCtx: WritableContext | undefined
 
-  // The shadow — a plain JS object materialized from the LoroDoc.
-  // The plainReader is a live view over this object. `prepare` steps it for
-  // local writes; the event bridge re-materializes it for everything else.
-  const shadow: PlainState = materializeLoroShadow(doc, schema, binding)
+  // The shadow: a plain JS object materialized from the LoroDoc, in a cell
+  // the reader reads through. `prepare` steps it for local writes; the event
+  // bridge reconciles it for everything else.
+  const shadow: StateCell = {
+    current: materializeLoroShadow(doc, schema, binding),
+  }
   // What the event bridge re-materializes σ's touched parts through.
   const resolver = createLoroResolver(doc, schema, binding)
   const materializer = createMaterializeInterpreter(resolver)
@@ -345,7 +347,7 @@ export function createLoroSubstrate(
       binding,
     )
     const boundaryPath = path.slice(0, prefixLength + 1)
-    const value = boundaryPath.read(shadow)
+    const value = boundaryPath.read(shadow.current)
     const key = boundaryKey(path, prefixLength)
 
     if (isLoroContainer(parentResolved)) {
@@ -423,18 +425,16 @@ export function createLoroSubstrate(
       // later applies it as a compensation, σ and λ both revert (naturality
       // of Π over invert).
       if (recordInverse) {
-        // Read, don't copy. `invert` snapshots whatever it retains — see
-        // `invertReplace`, `invertMap`, `invertSequence` and the rich-text
-        // marks in `inverse.ts`, each of which deep-clones the pre-state it
-        // captures. Copying here as well protected nothing and cost a deep
-        // clone of the written subtree on every local write.
-        recordInverse(path, invert(path.read(shadow), change))
+        // Read, don't copy. `invert` owns whatever it retains (`own`): a
+        // value a read froze is shared, since no write can change it, and
+        // anything else is copied.
+        recordInverse(path, invert(path.read(shadow.current), change))
       }
 
       // Local write — σ advances eagerly so reads are immediately
       // consistent regardless of where λ is in the bracket. The writable
       // context completed the change, so σ and λ take the same value.
-      applyChange(shadow, path, ownedForStore(change))
+      applyChange(shadow, path, freezePayload(change))
 
       // JSON-boundary write: every write targeting a path that
       // crosses a struct.json/list.json/record.json boundary is

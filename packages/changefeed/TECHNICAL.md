@@ -86,7 +86,7 @@ Two types sit behind the symbol:
 
 Both halves matter. A `current` that allocates on every read tells a consumer something changed when nothing did (`useSyncExternalStore` then loops); a `current` that hands out one live, mutable object tells it nothing changed when something did (it never re-renders).
 
-`createChangefeed(getCurrent)` returns whatever `getCurrent` returns, so the rule is the producer's to keep. A producer over mutable state keeps one snapshot with `cachedSnapshot(build)`: `get()` builds it on first read and returns the same value after, and `invalidate()` — called wherever the state mutates — drops it. Schema refs keep the rule through their cached reads (`@kyneta/schema` TECHNICAL.md §"Read identity").
+`createChangefeed(getCurrent)` returns whatever `getCurrent` returns, so the rule is the producer's to keep. A producer over mutable state keeps one snapshot with `cachedSnapshot(build)`: `get()` builds it on first read and returns the same value after, and `invalidate()` — called wherever the state mutates — drops it. Schema refs keep the rule by construction: a read is σ's own frozen value, which changes identity exactly when a write copies it (`@kyneta/schema` TECHNICAL.md §"Read identity").
 - **Not signal-graph reactivity.** There is no dependency tracking, no auto-wiring between computations. A consumer that derives a value from a changefeed must subscribe explicitly and re-compute explicitly.
 - **Not framework-bound.** `subscribe` returns a plain unsubscribe function. React's `useSyncExternalStore` consumes it, but so does a CLI test that just pushes into an array.
 

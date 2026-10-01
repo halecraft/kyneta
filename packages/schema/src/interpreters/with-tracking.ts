@@ -19,16 +19,19 @@
 //
 // Aspect inference (read-method × node-kind):
 //   leaf `()`            → value        (scalar/text/counter/richtext/set)
-//   composite `()`       → deep         (product/sequence/map/tree); fold suppressed
+//   composite `()`       → deep         (product/sequence/map/tree)
 //   container navigation → structure    (sequence/movable/map .at/.length/iter/.keys/.has/.size/.entries/.values)
+//   container `.get(k)`  → structure on the container, and the child's own
+//                          `value` or `deep`, through `.at(k)` and its `()`
 //
 // Completeness (soundness — no missed reads): every accessor that reads the
-// substrate is wrapped, OR delegates to one that is. Verified against the
-// helpers: sequence `.get`/iter/`[CALL]` route through `.at` + child `[CALL]`;
-// `.length` and the empty-iteration path read `reader.arrayLength` directly, so
-// `.at` + `.length` + `[Symbol.iterator]` are all wrapped. Map `.has`/`.keys`/
+// substrate is wrapped, OR delegates to one that is. A composite `()` reads
+// its σ value whole, never its children, so its one `deep` dep covers it.
+// Sequence `.length` and iteration read `reader.arrayLength` directly, so
+// `.at`, `.length` and `[Symbol.iterator]` are all wrapped. Map `.has`/`.keys`/
 // `.size`/`.entries`/`.values`/iter read `reader.keys`/`hasKey` directly, so all
-// are wrapped.
+// are wrapped. `.get` reads σ directly outside a scope; inside one it goes
+// through `.at` and the child's `()`, which build the child's ref and report.
 
 import type { HasChangefeed } from "@kyneta/changefeed"
 import type {
@@ -56,7 +59,6 @@ import {
   currentScope,
   dependencyKey,
   reportRead,
-  withoutTracking,
 } from "../tracking.js"
 import { CALL, type HasNavigation, type HasRead } from "./bottom.js"
 
@@ -109,17 +111,42 @@ function wrapLeafCall(result: object): void {
 
 /**
  * Wrap the `[CALL]` slot of a COMPOSITE carrier — calling reports a single
- * `deep` dep, then folds the snapshot with reads suppressed (the `deep` dep
- * subsumes the entire subtree, so per-descendant reports are redundant).
+ * `deep` dep, which covers the whole subtree the value holds.
  */
 function wrapCompositeCall(result: object): void {
   const carrier = result as Callable
   const orig = carrier[CALL]
   carrier[CALL] = (...args: unknown[]): unknown => {
-    if (!currentScope()) return orig.apply(result, args)
-    emit(result, "deep")
-    return withoutTracking(() => orig.apply(result, args))
+    if (currentScope()) emit(result, "deep")
+    return orig.apply(result, args)
   }
+}
+
+/** A container seen only through the members `wrapGet` reroutes. */
+type Gettable = {
+  get(key: string | number): unknown
+  at(key: string | number): unknown
+}
+
+/**
+ * Wrap a container's `.get(k)` so that, inside a scope, it reads through
+ * `.at(k)` and the child's `()`: the container reports `structure` and the
+ * child its own `value` or `deep`, so a write to one entry re-runs only the
+ * readers of that entry. It builds the child's ref, as navigating to it
+ * would. Outside a scope it reads σ directly and builds nothing.
+ */
+function wrapGet(result: object): void {
+  const carrier = result as Gettable
+  const orig = carrier.get
+  Object.defineProperty(result, "get", {
+    value: (key: string | number): unknown => {
+      if (!currentScope()) return orig(key)
+      const child = carrier.at(key)
+      return typeof child === "function" ? child() : undefined
+    },
+    enumerable: false,
+    configurable: true,
+  })
 }
 
 /** Wrap a method-valued accessor so calling it first reports `aspect`. */
@@ -231,6 +258,7 @@ export function withTracking<A extends HasNavigation & HasRead>(
     ): A {
       const result = base.sequence(ctx, path, schema, item)
       wrapCompositeCall(result)
+      wrapGet(result)
       wrapMethod(result, "at", "structure")
       wrapMethod(result, Symbol.iterator, "structure")
       wrapGetter(result, "length", "structure")
@@ -245,6 +273,7 @@ export function withTracking<A extends HasNavigation & HasRead>(
     ): A {
       const result = base.movable(ctx, path, schema, item)
       wrapCompositeCall(result)
+      wrapGet(result)
       wrapMethod(result, "at", "structure")
       wrapMethod(result, Symbol.iterator, "structure")
       wrapGetter(result, "length", "structure")
@@ -259,6 +288,7 @@ export function withTracking<A extends HasNavigation & HasRead>(
     ): A {
       const result = base.map(ctx, path, schema, item)
       wrapCompositeCall(result)
+      wrapGet(result)
       // All of these read the substrate directly (reader.keys / hasKey),
       // so each must report — they do not all route through `.at`.
       wrapMethod(result, "at", "structure")

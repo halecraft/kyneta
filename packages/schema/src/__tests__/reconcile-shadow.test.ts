@@ -1,6 +1,6 @@
 // reconcile-shadow — σ brought up to date from λ where a change touched it.
 import { describe, expect, it } from "vitest"
-import { deepClonePlain } from "../clone.js"
+import { deepClonePlain, isDeeplyFrozen } from "../clone.js"
 import {
   createMaterializeInterpreter,
   mapChange,
@@ -178,7 +178,7 @@ function reconcile(
 ) {
   const resolver = plainValueResolver(lambda)
   return reconcileShadow(
-    shadow,
+    { current: shadow },
     planReconcile(Rows, touched),
     resolver,
     createMaterializeInterpreter(resolver),
@@ -226,7 +226,7 @@ describe("reconcileShadow", () => {
     expect(shadow.rows.a).toBe(a)
   })
 
-  it("the ops it returns share nothing with σ", () => {
+  it("the ops it returns share their values with σ, frozen, and nothing with λ", () => {
     const shadow = shadowOf()
     const lambda = deepClonePlain(shadow) as {
       rows: Record<string, unknown>
@@ -234,8 +234,9 @@ describe("reconcileShadow", () => {
     lambda.rows.c = { body: "new", n: 3 }
     const [op] = reconcile(shadow, lambda, [touch(at("rows", ":c"), "all")])
     const set = (op?.change as { set?: Record<string, unknown> }).set
-    expect(set?.c).toEqual((shadow.rows as Record<string, unknown>).c)
-    expect(set?.c).not.toBe((shadow.rows as Record<string, unknown>).c)
+    expect(set?.c).toBe((shadow.rows as Record<string, unknown>).c)
+    expect(set?.c).not.toBe(lambda.rows.c)
+    expect(isDeeplyFrozen(set?.c)).toBe(true)
   })
 
   it("a root target re-materializes the document", () => {

@@ -280,17 +280,21 @@ export function makeCarrier(): HasCall {
 // Capability attachment helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * `[NATIVE]` asks the resolver on each access, so it names what backs the
+ * node now: a plain document's root is replaced when a write copies it.
+ */
 function attachNative(
   result: HasCall,
   ctx: Partial<RefContext> | undefined,
   schema: Schema,
   path: Path,
 ): void {
-  if (ctx?.nativeResolver) {
+  const resolve = ctx?.nativeResolver
+  if (resolve) {
     Object.defineProperty(result, NATIVE, {
-      value: ctx.nativeResolver(schema, path),
+      get: () => resolve(schema, path),
       enumerable: false,
-      writable: false,
       configurable: false,
     })
   }

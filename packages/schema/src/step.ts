@@ -559,8 +559,9 @@ export function step<S>(state: S, action: ChangeBase): S {
  * not match the σ found at the path — it is a new value the caller must write
  * back. Compare with `!==` to tell the two apart.
  *
- * Substrates own their document and hand out live readers (see the liveness
- * invariant on `plainReader`), and an inverse is recorded from σ *before* the
+ * The caller must own `state`: no reader may hold it. `applyChange` thaws
+ * first, copying one level of a node a read froze, so only a node nobody
+ * shares is advanced in place. An inverse is recorded from σ *before* the
  * write, so preserving container identity here is observationally equivalent
  * to replacing it.
  */

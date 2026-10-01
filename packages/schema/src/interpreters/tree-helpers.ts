@@ -19,7 +19,6 @@ import type { FlatTreeNode, Path } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
 import type { Schema as SchemaNode } from "../schema.js"
 import { hasTreeNodeAllocation, TREE_NODE_ALLOCATE } from "../substrate.js"
-import { CALL } from "./bottom.js"
 import type { WritableContext } from "./writable.js"
 
 // ---------------------------------------------------------------------------
@@ -83,22 +82,17 @@ export function installTreeNavigation<T extends object>(
 }
 
 // ---------------------------------------------------------------------------
-// installTreeReadable — `.roots` recursive projection, `()` snapshot,
-// depth-first iteration
+// installTreeReadable — `.roots` recursive projection, depth-first iteration
 // ---------------------------------------------------------------------------
 
 /**
- * Install `.roots`, callable snapshot `()`, and depth-first iteration.
- *
- * `.roots` builds a fresh recursive projection on every read; downstream
- * caching belongs in `with-caching` (the projection invalidates on any
- * tree-version bump). The snapshot matches `Plain<TreeSchema<I>>` so
- * `doc.tree()` and the wire format agree.
+ * Install `.roots` and depth-first iteration. Both nest the topology, with
+ * each node's `data` its ref, and build a fresh projection on every read.
+ * The tree's value, `()`, is the flat forest σ holds (`withReadable`).
  */
 export interface TreeReadable {
   readonly roots: readonly ForestNode<unknown>[]
   readonly [Symbol.iterator]: () => IterableIterator<ForestNode<unknown>>
-  readonly [CALL]: () => unknown
 }
 
 export function installTreeReadable<T extends object>(
@@ -144,33 +138,6 @@ export function installTreeReadable<T extends object>(
     },
     enumerable: false,
     configurable: true,
-  })
-
-  // `()` returns the flat-forest plain shape (`Plain<TreeSchema<I>>`),
-  // with each node's `data` forced to plain via its `[CALL]`, and every
-  // record and the array frozen. Each `data` is frozen by its own read.
-  Object.defineProperty(result, CALL, {
-    enumerable: true,
-    configurable: true,
-    writable: true,
-    value: (): unknown => {
-      const topology = ctx.reader.forestTopology(path)
-      const records = topology.map(t => {
-        const childRef = node(t.id)
-        const data =
-          childRef !== undefined &&
-          typeof (childRef as { [CALL]?: () => unknown })[CALL] === "function"
-            ? (childRef as { [CALL]: () => unknown })[CALL]()
-            : childRef
-        return Object.freeze({
-          id: t.id,
-          parent: t.parent,
-          index: t.index,
-          data,
-        })
-      })
-      return Object.freeze(records)
-    },
   })
 }
 

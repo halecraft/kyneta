@@ -21,6 +21,12 @@
 // completion, and an authored op is logged exactly as σ applied it, so the
 // comparison holds for a reason unrelated to any substrate behaviour.
 //
+// **The frozen invariant.** A read freezes σ in place, and a write copies the
+// frozen nodes on its path. The suite also runs the writes with σ frozen
+// before each, as a whole-document read would leave it, and checks that the
+// law still holds and that no unfrozen node sits below a frozen one: that
+// everything each write put into σ was owned or new.
+//
 // The env supplies the schema and the writes, and the suite supplies only the
 // law, because the admissible schema differs per substrate: `ephemeral` has no
 // representation for a sequence, set, text or counter, so a shared fixture
@@ -28,6 +34,8 @@
 // where those kinds are native.
 
 import { describe, expect, it } from "vitest"
+import { freezeTree } from "../clone.js"
+import { frozenInvariantViolations } from "./frozen-invariant.js"
 
 // ---------------------------------------------------------------------------
 // Factory interface
@@ -82,6 +90,16 @@ export function projectionConformance(
 
         expect(env.shadow()).toEqual(env.reproject())
       })
+    })
+
+    it("σ ≡ Π(λ), and the frozen invariant holds, when every write follows a read", () => {
+      const env = factory()
+      for (const write of env.writes) {
+        freezeTree(env.shadow())
+        write.apply()
+      }
+      expect(frozenInvariantViolations(env.shadow())).toEqual([])
+      expect(env.shadow()).toEqual(env.reproject())
     })
 
     it("has writes to check", () => {

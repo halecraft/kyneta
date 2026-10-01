@@ -5,6 +5,7 @@ import type {
   Path,
   RecordInverseFn,
   Ref,
+  StateCell,
   SubstratePayload,
   SubstratePrepare,
   WritableContext,
@@ -60,9 +61,6 @@ const cachelessInterpreter = withWritable(
 
 // Write-only stack: writable on bare carriers (ref() throws)
 const writeOnlyInterpreter = withWritable(bottomInterpreter)
-
-// Backward compat alias used by most tests
-const _writableInterpreter = fullInterpreter
 
 // ===========================================================================
 // Base grammar tests — Schema only, no annotations
@@ -750,7 +748,6 @@ describe("writable: write-only stack", () => {
       schema,
       prepare: (path, change) => dispatched.push({ path, change }),
       addPrepareStage: () => {},
-      preparing: false,
       deliver: () => {},
       runBatch: work => {
         work()
@@ -890,7 +887,7 @@ describe("writable: compensation loop", () => {
 
     // Create a mock substrate where prepare throws, and compensation also throws
     const mockSubstrate = {
-      reader: plainReader(store),
+      reader: plainReader({ current: store }),
       prepare: (
         path: Path,
         _change: ChangeBase,
@@ -926,7 +923,7 @@ describe("writable: compensation loop", () => {
     const compensationErrorStr = "Index out of bound"
 
     const mockSubstrate = {
-      reader: plainReader(store),
+      reader: plainReader({ current: store }),
       prepare: (
         path: Path,
         _change: ChangeBase,
@@ -960,7 +957,7 @@ describe("writable: announcements never reach the substrate", () => {
     const store = { title: "" }
     const calls = { prepare: 0, afterBatch: 0 }
     const stub = {
-      reader: plainReader(store),
+      reader: plainReader({ current: store }),
       prepare: () => {
         calls.prepare++
       },
@@ -1034,7 +1031,7 @@ function buildLifecycleDoc(options?: {
   failCompensation?: boolean
 }) {
   const schema = Schema.struct({ a: Schema.string(), b: Schema.string() })
-  const store: Record<string, unknown> = { a: "", b: "" }
+  const store: StateCell = { current: { a: "", b: "" } }
   const afterBatch = { calls: 0 }
   let ctx: WritableContext | undefined
   const stub: SubstratePrepare = {
@@ -1043,7 +1040,9 @@ function buildLifecycleDoc(options?: {
       if (recordInverse === null && options?.failCompensation) {
         throw new Error("compensation failed")
       }
-      if (recordInverse) recordInverse(path, invert(path.read(store), change))
+      if (recordInverse) {
+        recordInverse(path, invert(path.read(store.current), change))
+      }
       applyChange(store, path, change)
     },
     afterBatch: () => {
@@ -1233,11 +1232,10 @@ it("[TRANSACT] is present on write-only stack refs", () => {
   const store = { n: 0 }
   const dispatched: unknown[] = []
   const ctx: WritableContext = {
-    reader: plainReader(store),
+    reader: plainReader({ current: store }),
     schema,
     prepare: (path, change) => dispatched.push({ path, change }),
     addPrepareStage: () => {},
-    preparing: false,
     deliver: () => {},
     runBatch: work => {
       work()

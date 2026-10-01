@@ -12,35 +12,31 @@
 // This is intentionally narrower than `keyed-helpers.ts` (which serves
 // `map` with `.at(key)`, `.keys()`, `.entries()`, `.values()`, etc.).
 // Sets do NOT share keyed-helpers' navigation or per-key carriers: a set is
-// read, and cached, whole.
+// read whole.
 
 import { own, setOpChange } from "../change.js"
-import { frozenClone } from "../clone.js"
 import { samePlainValue } from "../guards.js"
 import type { Path } from "../interpret.js"
-import type { RefContext } from "../interpreter-types.js"
 import { CALL } from "./bottom.js"
 import type { WritableContext } from "./writable.js"
 
 // ---------------------------------------------------------------------------
-// installSetReadable — `()` call, `.has`, `.size`, `[Symbol.iterator]`
+// installSetReadable — `.has`, `.size`, `[Symbol.iterator]`
 // ---------------------------------------------------------------------------
 
 /**
- * Install the readable surface for a set ref:
+ * Install the readable surface for a set ref, over the members its `()`
+ * returns (`withReadable` fills `[CALL]`):
  *
- * - `[CALL]` returns the set's members as a frozen `Plain<I>[]`, copied out
- *   of σ.
- * - `.has(value)` runs `samePlainValue` over those members.
+ * - `.has(value)` runs `samePlainValue` over the members.
  * - `.size` returns the member count.
  * - `[Symbol.iterator]` iterates plain values (not refs).
  *
- * `.has`, `.size` and iteration read the members through the carrier's own
- * `[CALL]`, so they see the snapshot a caching layer keeps and never σ.
- * Membership is content-equal via `samePlainValue` (not identity).
+ * Each reads the members through whatever `[CALL]` the outermost layer left,
+ * so a tracking layer sees a read of the whole set. Membership is
+ * content-equal via `samePlainValue` (not identity).
  */
 export interface SetReadable {
-  readonly [CALL]: () => readonly unknown[]
   readonly has: (value: unknown) => boolean
   readonly size: number
   readonly [Symbol.iterator]: () => IterableIterator<unknown>
@@ -48,22 +44,11 @@ export interface SetReadable {
 
 export function installSetReadable<T extends object>(
   result: T,
-  ctx: RefContext,
-  path: Path,
 ): asserts result is T & SetReadable {
-  // The members through whatever `[CALL]` the outermost layer left.
-  const members = (): readonly unknown[] =>
-    (result as unknown as SetReadable)[CALL]()
-
-  Object.defineProperty(result, CALL, {
-    value: (): readonly unknown[] => {
-      const value = ctx.reader.read(path)
-      return Array.isArray(value) ? frozenClone(value) : Object.freeze([])
-    },
-    enumerable: true,
-    configurable: true,
-    writable: true,
-  })
+  const members = (): readonly unknown[] => {
+    const value = (result as { readonly [CALL]: () => unknown })[CALL]()
+    return Array.isArray(value) ? value : []
+  }
 
   Object.defineProperty(result, "has", {
     value: (value: unknown): boolean =>
@@ -145,7 +130,9 @@ export function installSetWriteOps<T extends object>(
     value: (): void => {
       const current = readMembers()
       if (current.length > 0) {
-        ctx.dispatch(path, setOpChange(undefined, current))
+        // A copy: the store compacts the members array in place, and the op
+        // must still name what it removed.
+        ctx.dispatch(path, setOpChange(undefined, [...current]))
       }
     },
     enumerable: false,

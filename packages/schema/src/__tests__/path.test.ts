@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest"
+import { replaceChange } from "../change.js"
 import { CoordinateTrie } from "../coordinate-trie.js"
 import {
   type Address,
@@ -8,7 +9,7 @@ import {
   RawPath,
   resetAddressIdCounter,
 } from "../path.js"
-import { writeByPath } from "../reader.js"
+import { applyChange } from "../reader.js"
 
 // ===========================================================================
 // RawPath
@@ -430,7 +431,7 @@ describe("Monoid laws", () => {
 // ===========================================================================
 
 // ===========================================================================
-// Dead address propagation through writeByPath
+// Dead address propagation through applyChange
 // ===========================================================================
 
 describe("dead address propagation", () => {
@@ -438,8 +439,8 @@ describe("dead address propagation", () => {
     resetAddressIdCounter()
   })
 
-  it("writeByPath throws when path contains a dead address", () => {
-    const store = { items: [{ name: "alice" }] } as Record<string, unknown>
+  it("applyChange throws when path contains a dead address", () => {
+    const store = { current: { items: [{ name: "alice" }] } }
     const trie = new CoordinateTrie()
     const root = new AddressedPath([], trie)
     const p = root.field("items").item(0).field("name")
@@ -448,7 +449,7 @@ describe("dead address propagation", () => {
     const addr = p.segments[1] as any as Address
     addr.dead = true
 
-    expect(() => writeByPath(store, p, "bob")).toThrow(
+    expect(() => applyChange(store, p, replaceChange("bob"))).toThrow(
       "Ref access on deleted list item",
     )
   })
