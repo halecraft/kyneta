@@ -52,13 +52,6 @@ function expectCoherentVariant(v: any): void {
  * coherence — must hold for every substrate. Capability-gated ones (compaction)
  * run only where the profile declares support. See `profiles.ts` for the matrix
  * these assertions enforce.
- *
- * One scenario currently FAILS on every profile, on purpose. It asserts that a
- * write inside a sum reaches the other peer, which is a guarantee the Exchange
- * does not presently keep. It is left red rather than skipped or pinned to the
- * broken value, because a suite that reports green while it knows a guarantee is
- * broken is how the last three sum bugs survived — every test passed the whole
- * time they were live. See `sum-interior-write-sync-issue.md`.
  */
 export function runSubstrateConformance(profile: SubstrateProfile): void {
   describe(`substrate conformance — ${profile.name}`, () => {
@@ -270,32 +263,13 @@ export function runSubstrateConformance(profile: SubstrateProfile): void {
     })
 
     it("a write inside a sum reaches the other peer", async () => {
-      // FAILING ON PURPOSE — this is a live bug, and the suite is supposed to
-      // say so. See `sum-interior-write-sync-issue.md`.
-      //
-      // A write inside a sum applies locally, bumps the substrate version, and
-      // fires the changefeed — but the Exchange never offers it. Peer A reads
-      // its own write back correctly; the other peer stays on the previous value
-      // however long the harness drains. Any later unrelated write carries it
-      // across, so the data is intact and it is the sync trigger that is missing.
-      //
-      // It reproduces identically on all five substrates including `json`, which
-      // rules out the substrates and places the fault above them. Diagnosis and
-      // fix are separate work at the Exchange layer.
-      //
-      // Deliberately NOT `it.fails`, and deliberately not pinned to the wrong
-      // value. Both of those report green, and a green suite is exactly how the
-      // three sum bugs before this one survived — every test passed the entire
-      // time they were live. A conformance suite that knows a guarantee is broken
-      // should fail; that is what makes the gap impossible to forget rather than
-      // merely recorded somewhere.
       const bound = profile.bind()
       const [docA, docB] = connectedPair(bound)
 
       batch(docA, (d: Doc) => d.optional.set({ from: 1, to: 7 }))
       await drain()
-      // The whole-value write syncs correctly — so the pair is genuinely
-      // connected, and it is specifically the interior write that is lost.
+      // The whole-value write syncs, so the pair is connected, and the
+      // interior write below is the one under test.
       expect(docB.optional()).toEqual({ from: 1, to: 7 })
 
       batch(docA, (d: Doc) => (d.optional as Doc).to.set(2))
@@ -340,6 +314,22 @@ export function runSubstrateConformance(profile: SubstrateProfile): void {
         // one peer's key is left. Which one is not the point; agreeing is.
         expect(Object.keys(docA.peers() as object)).toHaveLength(1)
       }
+    })
+
+    it("writer and receiver read one complete value for a partial entry with an undeclared key", async () => {
+      // An untyped write may omit declared fields and carry keys the schema
+      // does not declare. The store completes it before it lands: absent
+      // fields take their zeros and undeclared keys are dropped, so the writer
+      // and every receiver hold the same value whatever the substrate.
+      const bound = profile.bind()
+      const [docA, docB] = connectedPair(bound)
+
+      batch(docA, (d: Doc) => d.rows.set("k", { n: 1, extra: true }))
+      await drain()
+
+      const complete = { n: 1, s: "", inner: { x: 0 } }
+      expect(docA.rows()).toEqual({ k: complete })
+      expect(docB.rows()).toEqual({ k: complete })
     })
 
     it("a removed record key stays removed after merging a peer that still has it", async () => {

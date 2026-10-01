@@ -1290,9 +1290,10 @@ function writeReplacement(
  * Write a product's fields into an existing container, one by one.
  *
  * The one writer that mutates in place: it writes into the container already
- * there, at O(fields written). A field the value omits is left alone, since a
- * product's fields exist because the schema declares them, and an omission is
- * a partial value rather than a removal.
+ * there, at O(fields written). An authored value arrives complete, so every
+ * declared field is written. A field a value omits would be left alone, since
+ * a product's fields exist because the schema declares them, and an omission
+ * is a partial value rather than a removal.
  */
 export function writeProduct(
   target: Container,
@@ -1358,7 +1359,11 @@ function keySpaceOf(schema: SchemaNode): KeySpace {
   return space
 }
 
-/** The schema of a named child, which a write target must declare. */
+/**
+ * The schema of a named child, which a write target must declare. Completion
+ * drops an undeclared key from a value before it reaches the tree, so this
+ * throws only for a change whose path or keys the schema does not fit.
+ */
 function childSchemaFor(schema: SchemaNode, key: string): SchemaNode {
   const child = childSchemaForKey(schema, key)
   if (child === undefined) {
@@ -1549,7 +1554,7 @@ function applyMapChange(
   if (change.clear) {
     throw new Error("Only a record can be cleared, and only by its parent.")
   }
-  const { set, remove } = mapChangeEffects(change, [])
+  const { set, remove } = mapChangeEffects(change, () => [])
   const position = keySpaceOf(schema)
   for (const key of remove) {
     target[key] = writeDeletion(stamp, target[key])

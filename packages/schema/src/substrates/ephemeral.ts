@@ -464,7 +464,8 @@ export function createStateSubstrate(
         recordInverse(path, invert(path.read(shadow), change))
       }
 
-      // We apply the change directly to the shadow PlainState
+      // The writable context completed the change, so σ and the tree take
+      // the same complete value, with no key the schema does not declare.
       applyChange(shadow, path, ownedForStore(change))
 
       // Then, we apply the change to the StateTree so that ONLY the mutated
@@ -536,7 +537,7 @@ export function createStateSubstrate(
 
     context(): WritableContext {
       if (!cachedCtx) {
-        cachedCtx = buildWritableContext(substrate, {
+        cachedCtx = buildWritableContext(substrate, schema, {
           nativeResolver: (
             _schema: unknown,
             path: { segments: readonly unknown[] },

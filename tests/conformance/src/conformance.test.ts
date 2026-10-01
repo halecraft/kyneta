@@ -9,7 +9,7 @@
 // abstraction — a regression in any substrate's sync behavior fails here.
 //
 // Coverage is deliberately broader than scalars. `ConformanceSchema` carries a
-// discriminated union and a nullable struct, because sums are where the five
+// discriminated union and a nullable struct, because sums are where the four
 // substrates most recently diverged: three separate bugs, one per substrate,
 // were live at once and none of them failed a test. Sums reach the same
 // guarantee by four different mechanisms, which is exactly the situation a

@@ -4,11 +4,11 @@
 // any actions have been applied. Zero.structural(schema) derives
 // mechanical defaults by walking the unified schema grammar.
 //
-// Previous versions included Zero.overlay, Zero.for, and Zero.partial
-// for seed-based initialization. These were removed because seed data
-// conflates authoritative initial content with UI rendering defaults
-// and produces state invisible to the sync protocol. Initial content
-// should be applied via batch() after substrate construction.
+// There is no seed-based initialization: seed data conflates authoritative
+// initial content with UI rendering defaults and produces state invisible to
+// the sync protocol. Initial content is applied via batch() after substrate
+// construction. Initialization writes no zeros; a value a write carries is
+// completed with them before it is stored (`completeValue` in `complete.ts`).
 
 import type {
   FlatTreeNode,

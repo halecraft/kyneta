@@ -172,7 +172,7 @@ export function invertMap(
   change: MapChange,
 ): MapChange {
   const source = pre ?? {}
-  const { set, remove } = mapChangeEffects(change, Object.keys(source))
+  const { set, remove } = mapChangeEffects(change, () => Object.keys(source))
   const invertSet: Record<string, unknown> = {}
   const invertDelete: string[] = []
 

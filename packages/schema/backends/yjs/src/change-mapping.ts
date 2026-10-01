@@ -294,13 +294,10 @@ function applyMapChange(
     return { mapKey: containerKey(binding, childAbsPath, key), childAbsPath }
   }
 
-  // A clear removes the keys the map holds now: Yjs's own clear is
-  // observed-remove, and this keeps it so. Only a record can be cleared, so
-  // these are runtime keys, never identity-keyed field names.
-  const { set, remove } = mapChangeEffects(
-    change,
-    change.clear ? Array.from(resolved.keys()) : [],
-  )
+  // A clear removes the keys the map holds now, read only for a clear: Yjs's
+  // own clear is observed-remove, and this keeps it so. Only a record can be
+  // cleared, so these are runtime keys, never identity-keyed field names.
+  const { set, remove } = mapChangeEffects(change, () => resolved.keys())
 
   for (const key of remove) {
     resolved.delete(keyFor(key).mapKey)

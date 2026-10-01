@@ -256,6 +256,11 @@ export function syncShadow(target: PlainState, source: PlainState): void {
  * The change to hand the store: either the same object, or one whose payload
  * is a private copy.
  *
+ * Takes a completed change (`completeChange` in `complete.ts`): the writable
+ * context completes an authored change before the substrate sees it, and the
+ * plain substrate completes what it merges. The copy is of the completed
+ * value, the one the op carries.
+ *
  * Every value a change carries (`mapPayload` in `change.ts` says which: a
  * `replace` value, inserted items, map `set` values, added set members,
  * rich-text marks) arrives holding whatever the caller passed in, and the

@@ -260,16 +260,19 @@ export function mapClearChange(
  * every held key the change does not set. Every consumer that applies a map
  * change key by key reads it through here, so they cannot disagree about
  * either rule.
+ *
+ * `held` is called only for a clear, so a set or delete costs O(|change|)
+ * however many keys the map holds.
  */
 export function mapChangeEffects(
   change: MapChange,
-  held: Iterable<string>,
+  held: () => Iterable<string>,
 ): {
   readonly set: Readonly<Record<string, unknown>>
   readonly remove: readonly string[]
 } {
   const set = change.set ?? {}
-  const remove = new Set<string>(change.clear ? held : [])
+  const remove = new Set<string>(change.clear ? held() : [])
   for (const key of change.delete ?? []) remove.add(key)
   for (const key of Object.keys(set)) remove.delete(key)
   return { set, remove: [...remove] }
@@ -279,25 +282,43 @@ export function mapChangeEffects(
 // mapPayload — the values a change carries
 // ---------------------------------------------------------------------------
 
+/** Where a carried value lands, relative to the change's path. */
+export type PayloadSlot =
+  /** A `replace` value: at the path itself. */
+  | { readonly at: "self" }
+  /** A sequence `insert` item or a set-op `add` member: an item of the
+   *  collection at the path. */
+  | { readonly at: "item" }
+  /** A map `set` value: the child at `key`. */
+  | { readonly at: "key"; readonly key: string }
+  /** Rich-text `marks`, on an insert or a format. */
+  | { readonly at: "marks" }
+
+const SELF: PayloadSlot = { at: "self" }
+const ITEM: PayloadSlot = { at: "item" }
+const MARKS: PayloadSlot = { at: "marks" }
+
 /**
- * Apply `f` to every value `change` carries: a `replace` value, sequence
- * `insert` items, map `set` values, set-op `add` members, and rich-text
- * `marks` (on inserts and formats). Returns `change` itself when `f` returned
- * every value unchanged; any other change type is returned as is.
+ * Apply `f` to every value `change` carries, with the slot it lands in: a
+ * `replace` value, sequence `insert` items, map `set` values, set-op `add`
+ * members, and rich-text `marks` (on inserts and formats). Returns `change`
+ * itself when `f` returned every value unchanged; any other change type is
+ * returned as is.
  *
  * The one definition of "the values a change carries", so the edges that
- * copy them (`ownedForStore`, an announcer's copy of what it announces)
- * cannot disagree about which they are. Set-op `remove` members and map
- * `delete` keys name values rather than carry them, and are left alone.
+ * touch them (`completeChange`, `ownedForStore`) cannot disagree about which
+ * they are. Set-op `remove`
+ * members and map `delete` keys name values rather than carry them, and are
+ * left alone.
  */
 export function mapPayload(
   change: ChangeBase,
-  f: (value: unknown) => unknown,
+  f: (value: unknown, slot: PayloadSlot) => unknown,
 ): ChangeBase {
   switch (change.type) {
     case "replace": {
       const replace = change as ReplaceChange
-      const value = f(replace.value)
+      const value = f(replace.value, SELF)
       if (value === replace.value) return change
       const out: ReplaceChange = { ...replace, value }
       return out
@@ -306,7 +327,7 @@ export function mapPayload(
       const sequence = change as SequenceChange
       const instructions = mapEach(sequence.instructions, inst => {
         if (!("insert" in inst)) return inst
-        const insert = mapEach(inst.insert, f)
+        const insert = mapEach(inst.insert, item => f(item, ITEM))
         return insert === inst.insert ? inst : { insert }
       })
       if (instructions === sequence.instructions) return change
@@ -318,7 +339,7 @@ export function mapPayload(
       if (map.set === undefined) return change
       let set: Record<string, unknown> | undefined
       for (const [key, value] of Object.entries(map.set)) {
-        const mapped = f(value)
+        const mapped = f(value, { at: "key", key })
         if (mapped !== value) set ??= { ...map.set }
         if (set !== undefined) set[key] = mapped
       }
@@ -329,7 +350,7 @@ export function mapPayload(
     case "set-op": {
       const setOp = change as SetChange
       if (setOp.add === undefined) return change
-      const add = mapEach(setOp.add, f)
+      const add = mapEach(setOp.add, member => f(member, ITEM))
       if (add === setOp.add) return change
       const out: SetChange = { ...setOp, add }
       return out
@@ -338,7 +359,7 @@ export function mapPayload(
       const richText = change as RichTextChange
       const instructions = mapEach(richText.instructions, inst => {
         if (!("marks" in inst) || inst.marks === undefined) return inst
-        const marks = f(inst.marks) as MarkMap
+        const marks = f(inst.marks, MARKS) as MarkMap
         return marks === inst.marks ? inst : { ...inst, marks }
       })
       if (instructions === richText.instructions) return change
@@ -391,8 +412,8 @@ declare const OWNED: unique symbol
  * Every constructor whose change carries caller values takes them `Owned`:
  * `replaceChange`, `sequenceChange`, `mapChange`, `mapClearChange`,
  * `setOpChange` and `richTextChange`. The store makes its own copy of each
- * (`ownedForStore` in `reader.ts`), so neither the op nor the document shares
- * a value with the caller.
+ * once the change is completed (`ownedForStore` in `reader.ts`), so neither
+ * the op nor the document shares a value with the caller.
  *
  * Deliberately *shallow*: one conditional and an intersection. A
  * `DeepReadonly<T>` would express more but recurses through the payload, and

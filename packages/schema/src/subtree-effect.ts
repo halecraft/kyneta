@@ -55,7 +55,7 @@ export function planSubtreeEffect(change: ChangeBase): SubtreeEffect {
   if (isReplaceChange(change)) return "all"
   if (isMapChange(change)) {
     if (change.clear) return "all"
-    const { set, remove } = mapChangeEffects(change, [])
+    const { set, remove } = mapChangeEffects(change, () => [])
     const keys = [...Object.keys(set), ...remove]
     return keys.length === 0 ? "none" : { keys }
   }
@@ -97,7 +97,7 @@ export function projectChange(
   if (isReplaceChange(change)) return valueAt(change.value, relative)
   if (isMapChange(change)) {
     // A key in scope is written or removed; `mapChangeEffects` says which.
-    const { set } = mapChangeEffects(change, [])
+    const { set } = mapChangeEffects(change, () => [])
     const key = String(head.coord())
     return Object.hasOwn(set, key) ? valueAt(set[key], rest) : removed()
   }

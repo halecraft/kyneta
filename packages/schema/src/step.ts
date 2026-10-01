@@ -167,7 +167,7 @@ function mutateMap<T extends Record<string, unknown>>(
   action: MapChange,
 ): T {
   const record = target as Record<string, unknown>
-  const { set, remove } = mapChangeEffects(action, Object.keys(record))
+  const { set, remove } = mapChangeEffects(action, () => Object.keys(record))
 
   for (const key of remove) {
     delete record[key]

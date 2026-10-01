@@ -1,6 +1,7 @@
 // read-cache — a read keeps its identity until what it read changes.
 import { describe, expect, it } from "vitest"
 import { batch, createDoc, Schema } from "../basic/index.js"
+import { __countKeptRefs } from "../coordinate-trie.js"
 import { TRANSACT } from "../interpreters/writable.js"
 import { __countCachedReads } from "../read-cache.js"
 
@@ -51,6 +52,16 @@ describe("a read is stable", () => {
     expect(after.items[0]).toBe(before.items[0])
     expect(after.m).toBe(before.m)
     expect(after.items[1].tags).toBe(before.items[1].tags)
+  })
+})
+
+describe("a value read", () => {
+  // Reading a record's value builds its entries' carriers on the way, and the
+  // trie keeps each one, so a value read costs memory per entry.
+  it.fails("keeps no refs", () => {
+    const doc = fixture()
+    doc.m()
+    expect(__countKeptRefs(contextOf(doc))).toBe(0)
   })
 })
 

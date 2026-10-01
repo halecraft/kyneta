@@ -2,7 +2,8 @@
 // `ephemeral` substrate.
 //
 // The Loro and Yjs backends run the same suite from their own packages.
-// `plain` does not participate: σ is the document there, so Π is the identity.
+// `plain` does not participate: σ is the document there, and an authored op
+// is logged exactly as σ applied it.
 
 import { mapChange, own } from "../change.js"
 import { createRef } from "../create-doc.js"
@@ -70,6 +71,17 @@ function createEphemeralEnv(): ProjectionTestEnv {
         name: "record of structs",
         apply: () =>
           batch(doc, (d: any) => d.peers.set("alice", { name: "A" })),
+      },
+      {
+        // Completed before either store sees them: σ and the tree both take
+        // the zeros, and neither takes the undeclared key.
+        name: "untyped partial values with an undeclared key",
+        apply: () =>
+          batch(doc, (d: any) => {
+            d.outer.set({ x: 9, extra: true })
+            d.peers.set("bob", { extra: true })
+            d.blob.set({ label: "P" })
+          }),
       },
       {
         name: "sum variant switch",

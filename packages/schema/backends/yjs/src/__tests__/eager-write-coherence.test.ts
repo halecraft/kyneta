@@ -174,6 +174,16 @@ projectionConformance(
             }),
         },
         {
+          // Completed before either store sees them: σ and λ both take the
+          // zeros, and neither takes the undeclared key.
+          name: "untyped partial values with an undeclared key",
+          apply: () =>
+            batch(doc, (d: any) => {
+              d.items.push({ name: "c", extra: true })
+              d.meta.set({ tags: "partial" })
+            }),
+        },
+        {
           // A clear removes the keys the native map holds, so a write to it
           // earlier in the same batch has to have reached the map first.
           name: "record set, cleared and set again in one batch",

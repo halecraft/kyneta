@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest"
 import type { ChangeBase } from "../index.js"
 import {
   incrementChange,
+  invert,
   mapChange,
+  mapClearChange,
   own,
   replaceChange,
   samePlainValue,
@@ -141,6 +143,45 @@ describe("stepMap", () => {
 
   it("handles empty object", () => {
     expect(stepMap({}, mapChange(own({ x: 1 })))).toEqual({ x: 1 })
+  })
+})
+
+describe("a map write enumerates the record only for a clear", () => {
+  // A record whose `ownKeys` trap counts enumerations (`Object.keys` and
+  // friends): a set or delete costs O(|change|), so it reads no key list.
+  const counted = () => {
+    const calls = { ownKeys: 0 }
+    const record = new Proxy<Record<string, unknown>>(
+      { a: 1, b: 2, c: 3 },
+      {
+        ownKeys(target) {
+          calls.ownKeys++
+          return Reflect.ownKeys(target)
+        },
+      },
+    )
+    return { record, calls }
+  }
+
+  it.each([
+    ["set", mapChange(own({ d: 4 }))],
+    ["delete", mapChange(undefined, ["a"])],
+  ])("a %s enumerates nothing", (_name, change) => {
+    const forStep = counted()
+    stepInPlace(forStep.record, change)
+    expect(forStep.calls.ownKeys).toBe(0)
+    const forInvert = counted()
+    invert(forInvert.record, change)
+    expect(forInvert.calls.ownKeys).toBe(0)
+  })
+
+  it("a clear enumerates the record once", () => {
+    const forStep = counted()
+    stepInPlace(forStep.record, mapClearChange())
+    expect(forStep.calls.ownKeys).toBe(1)
+    const forInvert = counted()
+    invert(forInvert.record, mapClearChange())
+    expect(forInvert.calls.ownKeys).toBe(1)
   })
 })
 

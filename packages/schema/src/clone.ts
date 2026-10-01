@@ -16,9 +16,9 @@
  *
  * - **Change construction** (`own` in `change.ts`) copies a caller-supplied
  *   value so the op that carries it cannot be rewritten by whoever passed it.
- * - **The store boundary** (`ownedForStore` in `reader.ts`) copies a payload
- *   before it enters the store, so a later write into that subtree cannot
- *   rewrite an op a subscriber is still holding.
+ * - **The store boundary** (`ownedForStore` in `reader.ts`) copies a
+ *   completed payload before it enters the store, so a later write into that
+ *   subtree cannot rewrite an op a subscriber is still holding.
  * - **Inverse construction** snapshots the pre-state it captures, so the
  *   recorded inverse is a value rather than a view.
  * - **The `ephemeral` substrate** uses it as an aliasing barrier when a whole

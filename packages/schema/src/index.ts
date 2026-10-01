@@ -41,6 +41,7 @@ export type {
   MarkMap,
   Owned,
   OwnedRichTextInstruction,
+  PayloadSlot,
   ReplaceChange,
   RichTextChange,
   RichTextDelta,

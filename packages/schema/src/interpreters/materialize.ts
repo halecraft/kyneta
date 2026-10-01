@@ -23,8 +23,8 @@
 // place the catamorphism's separate `set` branch carries semantic weight.
 //
 // Zero fallback is delegated to `zeroInterpreter` (for scalars with
-// constraint handling) and `Zero.structural` (for sum defaults). This
-// avoids duplicating default-value logic.
+// constraint handling), and a sum's variant to `dispatchSum`, so neither
+// rule has a second implementation here.
 //
 // The closure-based design parallels `plainReader(state)` — the resolver
 // closes over backend state, eliminating Ctx threading. The interpreter's
@@ -33,13 +33,13 @@
 import type { RichTextDelta } from "../change.js"
 import { isNonNullObject } from "../guards.js"
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
+import { dispatchSum } from "../interpret.js"
 import { INTERPRETER } from "../interpreter-types.js"
 import type { FlatTreeNodeTopology } from "../reader.js"
 import type {
   CounterSchema,
   MapSchema,
   MovableSequenceSchema,
-  PositionalSumSchema,
   ProductSchema,
   RichTextSchema,
   ScalarSchema,
@@ -49,8 +49,7 @@ import type {
   TextSchema,
   TreeSchema,
 } from "../schema.js"
-import { isNullableSum } from "../schema.js"
-import { Zero, zeroInterpreter } from "../zero.js"
+import { zeroInterpreter } from "../zero.js"
 
 // ---------------------------------------------------------------------------
 // MaterializeResolver — backend-agnostic value resolution
@@ -217,39 +216,15 @@ export function createMaterializeInterpreter(
       return result
     },
 
-    // 5. sum — discriminated or positional dispatch
+    // 5. sum — the variant `dispatchSum` picks from the stored value, as
+    // every read picks it.
     sum(
       _ctx: MaterializeContext,
       path: Path,
       schema: SumSchema,
       variants: SumVariants<unknown>,
     ): unknown {
-      // Discriminated sum
-      if (schema.discriminant !== undefined && variants.byKey) {
-        const value = resolver.resolveValue(path)
-        if (isNonNullObject(value)) {
-          const discValue = value[schema.discriminant]
-          if (typeof discValue === "string") {
-            return variants.byKey(discValue)
-          }
-        }
-        return Zero.structural(schema)
-      }
-
-      // Positional sum
-      if (variants.byIndex) {
-        const value = resolver.resolveValue(path)
-        if (value === undefined) {
-          return Zero.structural(schema)
-        }
-        const posSchema = schema as PositionalSumSchema
-        if (isNullableSum(posSchema)) {
-          return value === null ? variants.byIndex(0) : variants.byIndex(1)
-        }
-        return variants.byIndex(0)
-      }
-
-      return Zero.structural(schema)
+      return dispatchSum(resolver.resolveValue(path), schema, variants)
     },
 
     // 6. text — resolve text, default to ""

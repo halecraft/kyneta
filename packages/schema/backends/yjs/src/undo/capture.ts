@@ -99,7 +99,7 @@ export function valueWrites(
   }
   if (isMapChange(change)) {
     const held = (pre ?? {}) as Record<string, unknown>
-    const { set, remove } = mapChangeEffects(change, Object.keys(held))
+    const { set, remove } = mapChangeEffects(change, () => Object.keys(held))
     const product = kindAt(tree, path) === "product"
     const at = (k: string) => (product ? path.field(k) : path.entry(k))
     const slot = (k: string): Slot =>

@@ -426,7 +426,8 @@ export function createLoroSubstrate(
       }
 
       // Local write — σ advances eagerly so reads are immediately
-      // consistent regardless of where λ is in the bracket.
+      // consistent regardless of where λ is in the bracket. The writable
+      // context completed the change, so σ and λ take the same value.
       applyChange(shadow, path, ownedForStore(change))
 
       // JSON-boundary write: every write targeting a path that
@@ -525,7 +526,7 @@ export function createLoroSubstrate(
 
     context(): WritableContext {
       if (!cachedCtx) {
-        cachedCtx = buildWritableContext(substrate, {
+        cachedCtx = buildWritableContext(substrate, schema, {
           nativeResolver: (
             nodeSchema: SchemaNode,
             path: { segments: readonly unknown[] },

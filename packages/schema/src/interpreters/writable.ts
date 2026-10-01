@@ -20,6 +20,7 @@ import { createDispatcher } from "@kyneta/machine"
 import type { ChangeBase } from "../change.js"
 import { incrementChange, own, replaceChange } from "../change.js"
 import type { Op } from "../changefeed.js"
+import { completeAt } from "../complete.js"
 import type {
   FlatTreeNode,
   Interpreter,
@@ -210,11 +211,15 @@ export interface PrepareStage {
  *   seal, so helpers in a `batch()` block collapse into one Changeset.
  */
 export interface WritableContext extends RefContext {
+  /** The document's root schema: what an authored change is completed
+   *  against, and what addressing derives a coordinate's schema from. */
+  readonly schema: Schema
   /**
    * Take one op into the batch being captured; `options.ingress` says how it
    * arrived. Throws outside `runBatch` or `announce`.
    *
-   * A fixed pipeline: resolve the path, run every stage's `before`, apply
+   * A fixed pipeline: resolve the path, complete an authored change against
+   * the schema it lands at (`completeAt`), run every stage's `before`, apply
    * the change to the substrate (for `author` and `compensate`) and add the
    * op to the batch's trace, then run every stage's `after`. Order comes from
    * that shape, never from the order in which layers registered.
@@ -277,12 +282,16 @@ export interface WritableContext extends RefContext {
 export function hasPreparePipeline(
   ctx: RefContext,
 ): ctx is RefContext &
-  Pick<WritableContext, "addPrepareStage" | "deliver" | "preparing"> {
+  Pick<
+    WritableContext,
+    "addPrepareStage" | "deliver" | "preparing" | "schema"
+  > {
   return (
     "addPrepareStage" in ctx &&
     typeof ctx.addPrepareStage === "function" &&
     "deliver" in ctx &&
-    typeof ctx.deliver === "function"
+    typeof ctx.deliver === "function" &&
+    "schema" in ctx
   )
 }
 
@@ -342,7 +351,8 @@ export interface SubstrateCapabilities {
 type DeliveryMsg = { readonly type: "deliver"; readonly batch: SealedBatch }
 
 /**
- * Builds a WritableContext around a substrate's mutation primitives.
+ * Builds a WritableContext around a substrate's mutation primitives, for a
+ * document whose root schema is `schema`.
  *
  * The substrate sees only authored ops and their compensations:
  * - `substrate.prepare(path, change, recordInverse)` — apply the change to
@@ -355,6 +365,7 @@ type DeliveryMsg = { readonly type: "deliver"; readonly batch: SealedBatch }
  */
 export function buildWritableContext(
   substrate: SubstratePrepare,
+  schema: Schema,
   capabilities: SubstrateCapabilities = {},
 ): WritableContext {
   // Inverse stack — per-frame ranges of recorded inverses. Each call to
@@ -427,11 +438,14 @@ export function buildWritableContext(
       : path
   }
 
-  // Resolve, `before` stages, the substrate call for the ingress and the op
-  // joining the open batch's trace, then `after` stages.
+  // Resolve, complete an authored change, `before` stages, the substrate call
+  // for the ingress and the op joining the open batch's trace, then `after`
+  // stages. Everything after completion sees the completed change. A
+  // compensation is read from σ and an announcement comes from a substrate
+  // that applied it, so both are complete already.
   const prepare = (
     rawPath: Path,
-    change: ChangeBase,
+    incoming: ChangeBase,
     options: PrepareOptions,
   ): void => {
     const trace = traces.at(-1)
@@ -439,6 +453,10 @@ export function buildWritableContext(
       throw new Error("ctx.prepare called outside runBatch or announce")
     }
     const path = resolve(rawPath)
+    const change =
+      options.ingress === "author"
+        ? completeAt(schema, substrate.reader, path, incoming)
+        : incoming
     preparing++
     try {
       for (const stage of stages.values()) {
@@ -599,6 +617,7 @@ export function buildWritableContext(
 
   const ctx: WritableContext = {
     reader: substrate.reader,
+    schema,
     prepare,
     addPrepareStage,
     get preparing() {
@@ -929,8 +948,9 @@ export function withWritable<A extends object>(
         set: (value: unknown): void => {
           // `own` copies the caller's object so the op keeps a value rather than a
           // view. Without it, a caller reusing the object it passed would rewrite what
-          // subscribers see, with no write recorded and no changeset emitted. The store
-          // takes its own copy separately, at `ownedForStore`.
+          // subscribers see, with no write recorded and no changeset emitted. `prepare`
+          // completes the value, and the store copies the completed value at
+          // `ownedForStore`.
           const change = replaceChange(own(value))
           ctx.dispatch(path, change)
         },
@@ -954,8 +974,9 @@ export function withWritable<A extends object>(
       defineMethod(result, "set", (value: unknown): void => {
         // `own` copies the caller's object so the op keeps a value rather than a
         // view. Without it, a caller reusing the object it passed would rewrite what
-        // subscribers see, with no write recorded and no changeset emitted. The store
-        // takes its own copy separately, at `ownedForStore`.
+        // subscribers see, with no write recorded and no changeset emitted. `prepare`
+        // completes the value, and the store copies the completed value at
+        // `ownedForStore`.
         const change = replaceChange(own(value))
         ctx.dispatch(path, change)
       })
@@ -1071,7 +1092,7 @@ export function withWritable<A extends object>(
       node: (id: string) => A,
     ): A & HasTransact {
       const result = base.tree(ctx, path, schema, nodes, node)
-      installTreeWriteOps(result, ctx, path)
+      installTreeWriteOps(result, ctx, path, schema.item)
       attachTransact(result, ctx, path)
       return result as A & HasTransact
     },

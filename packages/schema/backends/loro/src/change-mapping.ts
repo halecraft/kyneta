@@ -341,8 +341,9 @@ export function changeToDiff(
         binding,
         absPath,
         // A clear removes the keys the container holds when it is applied:
-        // Loro's own clear is observed-remove, and this keeps it so.
-        isLoroMap(resolved) ? resolved.keys() : [],
+        // Loro's own clear is observed-remove, and this keeps it so. Read
+        // only for a clear.
+        () => (isLoroMap(resolved) ? resolved.keys() : []),
       )
 
     case "increment":
@@ -557,8 +558,9 @@ function sequenceChangeToDiff(
  * Product fields are identity-keyed and advance the abs-path; map/record
  * entries keep their runtime key and leave the abs-path unchanged.
  *
- * `held` is the container's keys, which a clear removes. Only a record can be
- * cleared, so they are runtime keys, never identity-keyed field names.
+ * `held` reads the container's keys, which a clear removes; it is called only
+ * for a clear, so a set or delete reads none. Only a record can be cleared, so
+ * they are runtime keys, never identity-keyed field names.
  */
 function mapChangeToDiff(
   targetCID: ContainerID,
@@ -566,7 +568,7 @@ function mapChangeToDiff(
   targetSchema: SchemaNode,
   binding: SchemaBinding | undefined,
   absPath: string,
-  held: Iterable<string>,
+  held: () => Iterable<string>,
 ): [ContainerID, Diff | JsonDiff][] {
   const result: [ContainerID, Diff | JsonDiff][] = []
   const updated: Record<string, Value | JsonContainerID | undefined> = {}
@@ -592,7 +594,7 @@ function mapChangeToDiff(
 
   // `mapChangeEffects` keeps a key named in both lists set, as `stepMap`
   // leaves it in σ.
-  const effects = mapChangeEffects(change, change.clear ? held : [])
+  const effects = mapChangeEffects(change, held)
 
   for (const key of effects.remove) {
     updated[keyFor(key).mapKey] = undefined

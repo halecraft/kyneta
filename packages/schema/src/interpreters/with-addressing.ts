@@ -40,6 +40,7 @@ import {
   activeSchema,
   childSchema,
   coordinateExists,
+  liveSchemaAt,
 } from "../coordinate-exists.js"
 import { CoordinateTrie, coordinatePath } from "../coordinate-trie.js"
 import { isPropertyHost } from "../guards.js"
@@ -170,42 +171,30 @@ export function deletedFeed(
 // ---------------------------------------------------------------------------
 
 /**
- * The schema at `path`: the one recorded on its node, or, for a node the
- * interpreter never reached (a raw path resolved on its way in), derived
- * from its parent's and recorded.
+ * The schema at `path`: the one saved on its node, or, for a node no case
+ * has recorded (a raw path resolved on its way in), derived from `root`, the
+ * document's schema, and saved. `undefined` for a coordinate not in the trie.
  */
 function schemaAt(
   trie: CoordinateTrie,
+  root: SchemaNode,
   reader: Reader,
   path: AddressedPath,
 ): SchemaNode | undefined {
-  let schema: SchemaNode | undefined
-  let depth = 0
-  for (const node of trie.ancestors(path)) {
-    if (depth > 0 && node.schema === undefined && schema !== undefined) {
-      const segment = path.segments[depth - 1]
-      if (segment !== undefined) {
-        node.schema = childSchema(
-          schema,
-          reader,
-          path.slice(0, depth - 1),
-          segment,
-        )
-      }
-    }
-    schema = node.schema
-    depth++
-  }
-  return depth === path.length + 1 ? schema : undefined
+  const node = trie.node(path)
+  if (node === undefined) return undefined
+  node.schema ??= liveSchemaAt(root, reader, path)
+  return node.schema
 }
 
 /** Whether the coordinate at `path` holds removable children. */
 function isContainer(
   trie: CoordinateTrie,
+  root: SchemaNode,
   reader: Reader,
   path: AddressedPath,
 ): boolean {
-  const schema = schemaAt(trie, reader, path)
+  const schema = schemaAt(trie, root, reader, path)
   if (schema === undefined) return false
   switch (activeSchema(schema, reader, path)[KIND]) {
     case "sequence":
@@ -253,6 +242,7 @@ function advance(
  */
 function settle(
   trie: CoordinateTrie,
+  root: SchemaNode,
   reader: Reader,
   path: AddressedPath,
   change: ChangeBase,
@@ -262,7 +252,7 @@ function settle(
   const fates = planAddressFates(
     {
       path,
-      schema: schemaAt(trie, reader, path),
+      schema: schemaAt(trie, root, reader, path),
       dead: trie.node(path)?.address?.dead ?? false,
     },
     scope.flatMap(([at, node]) => {
@@ -362,7 +352,13 @@ export function withAddressing<A extends HasNavigation>(
         before: (path, change) =>
           advance(trie, coordinatePath(ctx, path), change),
         after: (path, change) =>
-          settle(trie, ctx.reader, coordinatePath(ctx, path), change),
+          settle(
+            trie,
+            ctx.schema,
+            ctx.reader,
+            coordinatePath(ctx, path),
+            change,
+          ),
       })
     }
 
@@ -455,7 +451,7 @@ export function withAddressing<A extends HasNavigation>(
       // entry address too, and removing one is a tree delete, not a map
       // delete.
       if (isPropertyHost(ref) && hasTransact(ref)) {
-        if (isContainer(trie, ctx.reader, parentPath)) {
+        if (isContainer(trie, ref[TRANSACT].schema, ctx.reader, parentPath)) {
           Object.defineProperty(ref, REMOVE, {
             value() {
               if (lastAddr.dead) {

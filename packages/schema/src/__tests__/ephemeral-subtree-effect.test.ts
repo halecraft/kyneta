@@ -222,7 +222,7 @@ describe("horizons agree with planSubtreeEffect at dynamic positions", () => {
           expect(raised.some(([key]) => key === at.join("."))).toBe(false)
         }
       } else if (effect !== "none" && schemaAt(path)[KIND] === "map") {
-        const { set, remove } = mapChangeEffects(change as MapChange, [])
+        const { set, remove } = mapChangeEffects(change as MapChange, () => [])
         for (const key of effect.keys) {
           const node = nodeAt(tree, [...at, key])
           const old = nodeAt(before, [...at, key])

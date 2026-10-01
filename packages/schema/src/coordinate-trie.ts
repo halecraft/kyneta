@@ -22,6 +22,7 @@ import {
   fieldAddress,
   indexAddress,
   type Path,
+  RawPath,
   resolveToAddressed,
   setDead,
 } from "./path.js"
@@ -44,6 +45,21 @@ export function coordinatePath(ctx: object, path: Path): AddressedPath {
     `A path in an addressing stack is not addressed: "${path.format()}". ` +
       "Compose withAddressing beneath this layer.",
   )
+}
+
+/**
+ * The number of coordinates holding a carrier in `ctx`'s trie.
+ *
+ * @internal Test-only. A kept carrier has no public symptom, only memory, so
+ * reading the structure is the only test that can hold.
+ */
+export function __countKeptRefs(ctx: object): number {
+  const trie = coordinatePath(ctx, RawPath.empty).trie
+  let count = trie.node(trie.root)?.ref === undefined ? 0 : 1
+  for (const [, node] of trie.below(trie.root)) {
+    if (node.ref !== undefined) count++
+  }
+  return count
 }
 
 /** A list's live item addresses by current index, for `.at(i)`. */

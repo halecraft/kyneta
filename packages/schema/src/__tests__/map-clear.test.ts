@@ -29,33 +29,41 @@ import { defined } from "../testing/index.js"
 
 describe("mapChangeEffects", () => {
   it("expands a clear against the keys held", () => {
-    expect(mapChangeEffects(mapClearChange(), ["a", "b"])).toEqual({
+    expect(mapChangeEffects(mapClearChange(), () => ["a", "b"])).toEqual({
       set: {},
       remove: ["a", "b"],
     })
   })
 
   it("keeps what the clear sets", () => {
-    expect(mapChangeEffects(mapClearChange(own({ a: 1 })), ["a", "b"])).toEqual(
-      {
-        set: { a: 1 },
-        remove: ["b"],
-      },
-    )
+    expect(
+      mapChangeEffects(mapClearChange(own({ a: 1 })), () => ["a", "b"]),
+    ).toEqual({
+      set: { a: 1 },
+      remove: ["b"],
+    })
   })
 
-  it("removes nothing held when the change is not a clear", () => {
-    expect(mapChangeEffects(mapChange(undefined, ["x"]), ["a", "b"])).toEqual({
+  it("does not ask for the keys held when the change is not a clear", () => {
+    let asked = 0
+    const held = () => {
+      asked++
+      return ["a", "b"]
+    }
+    expect(mapChangeEffects(mapChange(undefined, ["x"]), held)).toEqual({
       set: {},
       remove: ["x"],
     })
+    expect(asked).toBe(0)
   })
 
   it("sets a key named in both lists", () => {
-    expect(mapChangeEffects(mapChange(own({ a: 1 }), ["a"]), [])).toEqual({
-      set: { a: 1 },
-      remove: [],
-    })
+    expect(mapChangeEffects(mapChange(own({ a: 1 }), ["a"]), () => [])).toEqual(
+      {
+        set: { a: 1 },
+        remove: [],
+      },
+    )
   })
 })
 

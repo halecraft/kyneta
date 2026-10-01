@@ -11,6 +11,7 @@ import type {
 } from "../index.js"
 import {
   applyChange,
+  applyChanges,
   batch,
   bottomInterpreter,
   buildWritableContext,
@@ -746,6 +747,7 @@ describe("writable: write-only stack", () => {
     const dispatched: Array<{ path: any; change: any }> = []
     const ctx: WritableContext = {
       reader: store,
+      schema,
       prepare: (path, change) => dispatched.push({ path, change }),
       addPrepareStage: () => {},
       preparing: false,
@@ -904,7 +906,7 @@ describe("writable: compensation loop", () => {
       runBatch: (work: () => void) => work(),
     }
 
-    const ctx = buildWritableContext(mockSubstrate as any, {})
+    const ctx = buildWritableContext(mockSubstrate as any, schema)
     const doc = interpret(schema, fullInterpreter, ctx) as any
 
     try {
@@ -938,7 +940,7 @@ describe("writable: compensation loop", () => {
       runBatch: (work: () => void) => work(),
     }
 
-    const ctx = buildWritableContext(mockSubstrate as any, {})
+    const ctx = buildWritableContext(mockSubstrate as any, schema)
     const doc = interpret(schema, fullInterpreter, ctx) as any
 
     try {
@@ -966,7 +968,7 @@ describe("writable: announcements never reach the substrate", () => {
         calls.afterBatch++
       },
     }
-    const ctx = buildWritableContext(stub, {})
+    const ctx = buildWritableContext(stub, schema)
     const doc = interpret(schema, ctx)
       .with(readable)
       .with(writable)
@@ -1052,7 +1054,7 @@ function buildLifecycleDoc(options?: {
       if (ctx && options?.onCommit) options.onCommit(ctx)
     },
   }
-  ctx = buildWritableContext(stub, {})
+  ctx = buildWritableContext(stub, schema)
   const doc = interpret(schema, ctx)
     .with(readable)
     .with(writable)
@@ -1232,6 +1234,7 @@ it("[TRANSACT] is present on write-only stack refs", () => {
   const dispatched: unknown[] = []
   const ctx: WritableContext = {
     reader: plainReader(store),
+    schema,
     prepare: (path, change) => dispatched.push({ path, change }),
     addPrepareStage: () => {},
     preparing: false,
@@ -1311,5 +1314,50 @@ describe("writable: the prepare pipeline", () => {
     }, {})
 
     expect(calls).toEqual(["first"])
+  })
+})
+
+// ===========================================================================
+// Completion: an authored change is completed before anything sees it
+// ===========================================================================
+
+describe("writable: an authored change is completed first", () => {
+  const Point = Schema.struct({ x: Schema.number(), y: Schema.number() })
+  const schema = Schema.struct({ rows: Schema.record(Point) })
+
+  function setup() {
+    const store: Record<string, unknown> = { rows: {} }
+    const ctx = plainContext(schema, store)
+    const doc = interpret(schema, ctx)
+      .with(readable)
+      .with(writable)
+      .with(observation)
+      .done() as any
+    const before: ChangeBase[] = []
+    ctx.addPrepareStage(Symbol("observer"), {
+      before: (_path, change) => before.push(change),
+    })
+    return { store, doc, before }
+  }
+
+  it("a before stage sees an authored partial value completed", () => {
+    const { store, doc, before } = setup()
+    doc.rows.set("a", { x: 1, extra: true })
+    expect(before).toEqual([
+      { type: "map", set: { a: { x: 1, y: 0 } }, delete: undefined },
+    ])
+    expect(store).toEqual({ rows: { a: { x: 1, y: 0 } } })
+  })
+
+  it("applyChanges completes a partial value", () => {
+    const { store, doc, before } = setup()
+    applyChanges(doc, [
+      {
+        path: RawPath.empty.field("rows"),
+        change: { type: "map", set: { b: { y: 2 } } } as ChangeBase,
+      },
+    ])
+    expect(before).toEqual([{ type: "map", set: { b: { x: 0, y: 2 } } }])
+    expect(store).toEqual({ rows: { b: { x: 0, y: 2 } } })
   })
 })

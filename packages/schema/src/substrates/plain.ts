@@ -20,6 +20,7 @@ import type { ChangeBase } from "../change.js"
 import { replaceChange, trustAsOwned } from "../change.js"
 import type { Op } from "../changefeed.js"
 import { deepClonePlain } from "../clone.js"
+import { completeAt, completeValue } from "../complete.js"
 import { diffOps } from "../diff-ops.js"
 import type { Path } from "../interpret.js"
 import type { WritableContext } from "../interpreters/writable.js"
@@ -58,7 +59,6 @@ import {
   versionVectorJoin,
   versionVectorMeet,
 } from "../version-vector.js"
-import { Zero } from "../zero.js"
 import { createLocalUpdateSignal } from "./local-update-signal.js"
 import { deserializeOps, type SerializedOp, serializeOps } from "./op-codec.js"
 import { createPlainRevertible } from "./plain-revertible.js"
@@ -330,22 +330,29 @@ export function createPlainSubstrate(
   let cachedCtx: WritableContext | undefined
 
   /**
-   * How ops taken in from elsewhere reach the doc: applied, then announced,
-   * after the log already holds them. One announcement per sender batch.
+   * How ops taken in from elsewhere reach the doc: completed, applied, then
+   * announced, after the log already holds them as sent. One announcement
+   * per sender batch.
    */
   const docEffects = (options?: MergeOptions): PlainEffects => ({
     append(batch) {
-      applyOps(doc, batch)
-      substrate.context().announce(batch, {
+      // Each op is completed against σ as it stands when that op applies,
+      // since a sum's variant can depend on the ops before it.
+      const completed = batch.map(op => {
+        const change = completeAt(schema, reader, op.path, op.change)
+        applyChange(doc, op.path, ownedForStore(change))
+        return change === op.change ? op : { path: op.path, change }
+      })
+      substrate.context().announce(completed, {
         origin: options?.origin,
         local: false,
       })
     },
     adopt(state) {
       // Announce what a local writer would have written to get from `doc` to
-      // `state`, per field, record key and register, so every subscriber
-      // below a moved value hears it. A field `state` lacks reads as its zero.
-      const ops = diffOps(schema, doc, state)
+      // the completion of `state`, per field, record key and register, so
+      // every subscriber below a moved value hears it.
+      const ops = diffOps(schema, doc, completeValue(schema, state))
       applyOps(doc, ops)
       substrate.context().announce(ops, {
         origin: options?.origin,
@@ -382,6 +389,8 @@ export function createPlainSubstrate(
         // clone of the written subtree on every local write.
         recordInverse(path, invert(path.read(doc), change))
       }
+      // The writable context completed the change, so σ and the log take the
+      // same value.
       applyChange(doc, path, ownedForStore(change))
       // Freeze to an immutable RawPath before the op enters the log. The live
       // AddressedPath aliases memoized registry Address objects that a later
@@ -417,7 +426,7 @@ export function createPlainSubstrate(
     context(): WritableContext {
       if (!cachedCtx) {
         let nextTreeNodeCounter = 1
-        cachedCtx = buildWritableContext(substrate, {
+        cachedCtx = buildWritableContext(substrate, schema, {
           nativeResolver: (
             _schema: unknown,
             path: { segments: readonly unknown[] },
@@ -607,6 +616,12 @@ function createPlainCore(
      * Take in a payload: decide with `planMerge`, keep the log's books, and
      * hand the ops to `effects` to reach the state. A gap applies nothing,
      * which leaves the version short of the one the payload was offered at.
+     *
+     * The log keeps each batch as sent. It is history shared across peers and
+     * addressed by position: a schema-less replica serves it as received, and
+     * peers on different schemas would log different contents at the same
+     * positions if each rewrote it. A substrate's `effects` complete the ops
+     * on their way into σ.
      */
     merge(payload: PlainPayload, effects: PlainEffects): void {
       const plan = planMerge(position(), clock.lineage(), payload)
@@ -789,9 +804,8 @@ export function plainContext(
  * One `replace` op per top-level key in a state object.
  *
  * For a whole-document answer rather than a change: `delta()` in
- * `@kyneta/schema/basic` hands back an entirety this way, and `buildUpgrade`
- * applies structural defaults with it. A state that replaces another is
- * announced with `diffOps`, which names only what moved.
+ * `@kyneta/schema/basic` hands back an entirety this way. A state that
+ * replaces another is announced with `diffOps`, which names only what moved.
  */
 export function objectToReplaceOps(state: Record<string, unknown>): Op[] {
   const ops: Op[] = []
@@ -976,10 +990,10 @@ function refusable(
  * Upgrade a replica built by `createPlainReplica` into a substrate over the
  * same state and history.
  *
- * Structural defaults for schema keys the state lacks are applied to the doc
- * without entering the log. They are a pure function of the schema, so every
- * interpreter reconstructs them, and a fresh doc's version stays genesis ⊥.
- * Context: jj:kxswmuzx.
+ * σ is the completion of the replica's state: every value the schema declares
+ * and the state lacks is its zero, applied to the doc without entering the
+ * log. Completion is a pure function of the schema and the state, so every
+ * peer reconstructs it, and a fresh doc's version stays genesis ⊥.
  */
 function buildUpgrade(
   replica: Replica<PlainVersion>,
@@ -994,28 +1008,18 @@ function buildUpgrade(
   }
 
   // The replica keeps its materialized state cached, and the substrate
-  // steps containers in place, so the substrate takes a copy.
-  const doc = deepClonePlain(replica[BACKING_DOC])
-  const substrate = createPlainSubstrate(
+  // steps containers in place, so the substrate completes a copy.
+  const doc = completeValue(
+    schema,
+    deepClonePlain(replica[BACKING_DOC]),
+  ) as PlainState
+  return createPlainSubstrate(
     doc,
     schema,
     createPlainClock(replica.version().lineage),
     history(),
     authoring,
   )
-
-  const defaults = Zero.structural(schema) as Record<string, unknown>
-  const missing: Record<string, unknown> = {}
-  for (const key of Object.keys(defaults)) {
-    if (!(key in doc)) {
-      missing[key] = defaults[key]
-    }
-  }
-  for (const op of objectToReplaceOps(missing)) {
-    applyChange(doc, op.path, op.change)
-  }
-
-  return substrate
 }
 
 // ---------------------------------------------------------------------------

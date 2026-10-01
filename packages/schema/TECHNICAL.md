@@ -419,12 +419,21 @@ All substrates now share the same read semantics: reads go through `plainReader`
 
 **A plain substrate is its replica's core plus σ and a changefeed.** The core (`createPlainCore`) holds the base offset, the op log retained after it, and a `PlainClock`. `buildUpgrade` seeds the substrate from the replica's materialized state and its history, so `create` (`upgrade(createReplica())`), `fromEntirety` (`upgrade(replica.fromEntirety(payload))`) and promotion of a replicate document all keep the replica's version and log. Nothing restarts history.
 
+**σ is the completion of what the substrate took in** ([Zero / defaults](#zero--defaults)). Every way in completes against the schema:
+
+- an authored write is completed by the writable context before `prepare` sees it;
+- an appended batch is completed op by op with `completeAt`, each against σ as it stands when that op applies, since a sum's variant can depend on the ops before it;
+- an adopted state is gathered (`completeValue(schema, state)`), planned (`diffOps(schema, σ, completed)`) and executed;
+- `buildUpgrade` seeds σ with `completeValue(schema, replica state)`.
+
+**The log keeps authored ops completed and merged batches as sent.** The log is history shared across peers and addressed by position: a schema-less headless replica, such as a relay, forwards and serves it as received, and peers on different schemas would log different contents at the same positions if each rewrote it. So `exportSince` can carry a peer's incomplete op, and every receiver completes it on `append`. σ is the completion of the replayed log. The headless replica does not complete: it has no schema, so its state is λ.
+
 Key functions (in `src/substrates/plain.ts`):
 
 - `plainSubstrateFactory` / `plainReplicaFactory` — the public construction surface. `plainContext(schema, doc)` is a test shorthand.
 - `createPlainClock(lineage)` → `PlainClock`: the lineage, `adopt` (its only mutator), and the flush-count ↔ version mapping (`version`, `logOffset`).
-- `createPlainSubstrate(doc, schema, clock, history, authoring)` / `createPlainReplica(clock)` — module-level constructors, not exported from the package. The substrate takes `doc`'s schema, because a reset announces what it moved by diffing the two states under it.
-- `objectToReplaceOps(obj)` → one `ReplaceChange` op per top-level key: a whole-document answer, for `delta()` in `@kyneta/schema/basic` and the structural defaults `buildUpgrade` applies. A state that replaces another is announced with `diffOps` instead ([An announcement is as fine as the store](#an-announcement-is-as-fine-as-the-store)).
+- `createPlainSubstrate(doc, schema, clock, history, authoring)` / `createPlainReplica(clock)` — module-level constructors, not exported from the package. The substrate takes `doc`'s schema, because it completes what it merges and a reset announces what it moved by diffing the two states under it.
+- `objectToReplaceOps(obj)` → one `ReplaceChange` op per top-level key: a whole-document answer, for `delta()` in `@kyneta/schema/basic`. A state that replaces another is announced with `diffOps` instead ([An announcement is as fine as the store](#an-announcement-is-as-fine-as-the-store)).
 - `decodePlainPayload(payload)` → `PlainPayload`, and the pure `planMerge(position, lineage, payload)` → `gap | append | adopt | none` (see below).
 
 A headless replica materializes base + log on demand, cached per core revision. `applyChange` steps containers in place, so the replay runs on a deep copy of the base and copies each logged payload; replaying onto the base itself would re-apply the retained log on every rematerialization after a trim.
@@ -469,7 +478,7 @@ Merging is decode → decide → execute, once in `createPlainCore` for the subs
 
 - `decodePlainPayload` reads either shape into a `PlainPayload`.
 - `planMerge(position, lineage, payload)` is pure. A delta that starts at or before `position` appends the batches we lack, skipping the ones we hold, so a redelivered delta is harmless. One that starts past `position` is a **`gap`**: nothing is applied, which leaves the version short of the one the delta was offered at, and the receiver asks for the rest. A whole document ahead of `position` is **adopted**; at or behind it, nothing changes. A payload from a different REAL lineage is a gap, since it continues nothing we hold.
-- One core `adopt` replaces the state, takes the lineage and restarts the log at `at`. `merge`'s adopt plan, `resetFromEntirety` (which adopts unconditionally) and `plainReplicaFactory.fromEntirety` all use it, so a document built from a peer's whole document is at the peer's version, not at count 1. A substrate announces what the adoption moved as `diffOps(schema, σ, next)` — per field, record key and register — so a subscriber anywhere below a moved value hears it.
+- One core `adopt` replaces the state, takes the lineage and restarts the log at `at`. `merge`'s adopt plan, `resetFromEntirety` (which adopts unconditionally) and `plainReplicaFactory.fromEntirety` all use it, so a document built from a peer's whole document is at the peer's version, not at count 1. A substrate announces what the adoption moved as `diffOps(schema, σ, completeValue(schema, next))` — per field, record key and register — so a subscriber anywhere below a moved value hears it.
 
 Why this matters: a push is a delta from the version the sender believes the receiver will hold, and a peer that restarted without its state no longer holds that version. Appending the delta anyway corrupted it permanently (entries duplicated when the catch-up landed on top). A whole-document merge that appended one batch left the receiver's count disagreeing with the sender's, so every later delta mismatched.
 
@@ -666,10 +675,10 @@ Where a node's keys come from decides what their absence means, and the two answ
 
 "Absence carries no information" is the rule for a *map*, and it is why a removal has to be recorded rather than left as a missing key. It is false for a product, whose fields exist because the type says so. `keySpace` (`state-tree.ts`) is the one place that decides, and two things follow from it:
 
-- **Writes.** `writeNode` writes a map, or a product at a dynamic key, as a replacement: the writer may not have seen every key, and an entry's existence is itself last-writer-wins. A product at a declared key is written field by field by `writeProduct`, and a field the value omits is left alone.
+- **Writes.** `writeNode` writes a map, or a product at a dynamic key, as a replacement: the writer may not have seen every key, and an entry's existence is itself last-writer-wins. A product at a declared key is written field by field by `writeProduct`. An authored product value arrives complete ([Zero / defaults](#zero--defaults)), so every declared field is written, and an undeclared key was dropped before it reached `writeProduct`.
 - **Presence.** At a dynamic key a node is present if it is a live leaf or a replacement, or if anything beneath it is. A deletion with something written since is present because of that something. A declared key is always present, and its value comes from the fold.
 
-**Zeros come from the fold, not the tree.** The reader is schema-blind, so it cannot fill a declared field the tree does not hold. The projection can, because it is the schema's F-algebra: a declared field that is absent, pruned below a horizon, or missing from a partial entry reads as `Zero.structural` of its schema. A delta carries only the leaves that changed, so a peer can legitimately hold an entry with some of its fields.
+**Zeros come from the fold, not the tree.** The reader is schema-blind, so it cannot fill a declared field the tree does not hold. The projection can, because it is the schema's F-algebra: a declared field that is absent, pruned below a horizon, or missing from a partial entry reads as `Zero.structural` of its schema. A delta carries only the leaves that changed, so a peer can legitimately hold an entry with some of its fields. A written value is complete, so σ and the projection agree on it whether the tree holds every leaf or not.
 
 Three defects came from the missing distinction, and all were invisible locally because reads come from σ. A record whose last key was deleted dropped out of the projection. A partial struct value dropped the fields it did not mention from the tree, where they then resurrected from the next peer that still held them. And a deleted entry holding a nested struct stayed present on other peers, because presence was decided field by field against the schema and a declared nested container counted as present even with every leaf in it tombstoned.
 
@@ -681,7 +690,7 @@ Three answers rather than two, because *register* and *unrepresentable* are diff
 
 **A schema the tree cannot hold is refused before a document exists.** `stateTreeViolation` walks a schema and reports the first node with no representation, or the first `.decay()` below a register. Both seams a schema enters by call it: `bind()`, for the error site a caller expects, and `createStateSubstrate`, which `ephemeralSubstrateFactory` reaches without `bind()`. The second is not belt-and-braces: the first write to an unrepresentable field would store it in a shape the schema never declared. `.json()` is the escape hatch the message names, and a wrapped list keeps its `push`/`insert`/`delete` surface while replicating as one register value.
 
-The write path requires a schema, and a write whose path does not fit it throws rather than guessing a shape for the tree. The substrate always has a schema; the headless replica, which only merges, is the schemaless form.
+The write path requires a schema, and a write whose path does not fit it throws rather than guessing a shape for the tree. That throw (`childSchemaFor`) guards only such paths: completion drops an undeclared key from a value before the tree sees it. The substrate always has a schema; the headless replica, which only merges, is the schemaless form.
 
 Only `.json()` launders an unrepresentable kind. A `sum` also stores as one tuple, but `.nullable()` is not a request for opaque storage the way `.json()` is, so a list inside one still means the list semantics the schema asked for. `EphemeralLaws` draws the line in the same place, and `bind-constraints-ephemeral.test.ts` §4 pins the two against each other — that test found this exact disagreement.
 
@@ -749,8 +758,8 @@ CRDT substrates (Loro, Yjs) maintain a **shadow**: a `PlainState` object that se
 | announcer | reconcile λ | reconcile σ |
 |---|---|---|
 | Yjs / Loro event bridge | CRDT import or native write, already done | `syncShadow(shadow, materialize(λ))` |
-| plain `merge` | apply each op to the doc, `core.append(batch)` | σ is λ |
-| plain `resetFromEntirety` | apply replace ops, `core.resetLog(remote)` | σ is λ |
+| plain `merge` | `core.append(batch)` | apply each op's completion to σ: σ is the completion of λ |
+| plain `resetFromEntirety` | `core.adopt(remote)` | apply `diffOps(schema, σ, completeValue(schema, state))`: σ is the completion of λ |
 | ephemeral `merge` | `core.merge` joins the tree | apply `diffOps(schema, σ, projection)` |
 | ephemeral `tick` | none | apply `diffOps(schema, σ, projection)` |
 
@@ -772,7 +781,7 @@ A shadow-carrying substrate holds the document twice, and the law is that the tw
 
 Π is the substrate's own materialiser — `projectStateTree`, `materializeLoroShadow`, `materializeYjsShadow`. `projectionConformance` (`src/testing/projection-conformance.ts`) applies a sequence of writes and compares the two derivations after each one. `ephemeral`, `loro` and `yjs` run it.
 
-The comparison is not a function against itself. On the write path σ is advanced by `applyChange` and λ by `applyChangeToStateTree` or `changeToDiff` — different code reading the same change. A substrate uses its materialiser only when it announces, so reprojecting after a local write crosses from one derivation to the other. `plain` does not run the suite: σ *is* the document there, so Π is the identity and the comparison would hold for a reason unrelated to any substrate behaviour.
+The comparison is not a function against itself. On the write path σ is advanced by `applyChange` and λ by `applyChangeToStateTree` or `changeToDiff` — different code reading the same change. A substrate uses its materialiser only when it announces, so reprojecting after a local write crosses from one derivation to the other. `plain` does not run the suite: σ *is* the document there, Π is completion, and an authored op is logged exactly as σ applied it, so the comparison would hold for a reason unrelated to any substrate behaviour.
 
 Before this suite existed the law was tested twice by hand, in the Loro and Yjs `eager-write-coherence` files, and not at all for `ephemeral` — which is where it broke. Both hand-written versions compared Π(λ) against an object literal and spot-checked two fields of σ, so neither compared the two derivations at all.
 
@@ -848,6 +857,8 @@ The claim was true when written. What made it decay is that nothing enforced it 
 The current arrangement is structural instead. `walkPath` is the only traversal; `foldPath`, `pathSchema`, `findOpaqueBoundary`, and the `ephemeral` substrate's schema lookup are projections of it that differ only in policy. The single-step primitive underneath (`stepSchema`) is package-internal and deliberately *not* exported, because handing it out is what made a divergent walker easy to write.
 
 `advanceSchema` — the public throwing wrapper over that primitive — has been removed. It was retained through 2.x on the reasoning that it had lost its callers but was still public, and it was pinned with tests so its behaviour could not drift. That retention was the last piece of the decayed arrangement still standing: an exported single-step descent is precisely what the paragraph above identifies as the hazard, and keeping it meant the package's most thorough descent tests pointed at a function nothing called. Those tests now target `stepSchema` directly (`src/__tests__/step-schema.test.ts`), including the `descend`-versus-`boundary` distinction the wrapper could not express. `walkPath` is the supported replacement for outside callers.
+
+**`liveSchemaAt` is the σ-aware sibling, not a second walker.** `walkPath` reads no values, so it stops at a sum. Completion and coordinate fates must see through a sum to the variant σ holds, so they need σ. `liveSchemaAt(root, reader, path)` (`coordinate-exists.ts`) folds `childSchema` over the path, resolving each sum with `activeSchema`, the rule `dispatchSum` applies; it is the one such fold. Completion's `landingSchema` and addressing's `schemaAt`, which saves the result on the coordinate's trie node, both call it.
 
 Notably, the boundary rule needed no separate implementation once the walkers were consolidated. Reporting a `boundary` from one place meant every projection inherited it — the rule was never a policy anyone had to write down, only a question that had been asked in three places instead of one.
 
@@ -948,7 +959,7 @@ A ref is a pointer to a coordinate, and a coordinate is one node in the context'
 | Slot | Owner | Holds |
 |------|-------|-------|
 | `address` | `withAddressing` | The coordinate's `Address` (absent only at the root) |
-| `schema` | `withAddressing` | The schema the interpreter saw here — a sum's own schema at a sum, since the sum's case runs before its variants' |
+| `schema` | `withAddressing` | The schema the interpreter saw here — a sum's own schema at a sum, since the sum's case runs before its variants'. A node no case reached (a raw path resolved on its way in) gets `liveSchemaAt(ctx.schema, σ, path)` the first time it is asked for |
 | `sequenceTable` | `withAddressing` | At a list: its live item addresses by index, for `.at(i)` and advancement |
 | `ref` | `withCaching` | The memoized carrier of a list item, map entry or tree node |
 | `read` | `withCaching` | The cached read ([Read identity](#read-identity)) |
@@ -957,7 +968,7 @@ A ref is a pointer to a coordinate, and a coordinate is one node in the context'
 
 **A coordinate lives exactly while it exists.** After every change, `withAddressing`'s `after` stage walks the coordinates the change may have rewritten (`CoordinateTrie.within(path, planSubtreeEffect(change))`), parents first, and `planAddressFates` (pure) decides each one's fate. Existence is `coordinateExists(parentSchema, reader, parentPath, segment)`, pure over its inputs:
 
-- A **field** exists iff the parent's schema declares it, with any sum resolved from σ by the rule `dispatchSum` applies — so an inactive variant's fields, and a null nullable's, do not. A plain product's declared field exists even where σ lacks it (a partial ephemeral entry reads as zeros).
+- A **field** exists iff the parent's schema declares it, with any sum resolved from σ by the rule `dispatchSum` applies — so an inactive variant's fields, and a null nullable's, do not. A declared field exists by the schema alone, whether or not σ holds a value for it.
 - A **map key** exists iff σ has it.
 - A **tree node** exists iff its id is in the forest.
 - A **list item** is not asked. Inside a rewritten subtree it has no correspondence; outside one, its address advances with the sequence's instructions (the `before` stage), and a deleted item is dropped there.
@@ -1008,7 +1019,7 @@ Source: `packages/schema/src/interpreters/materialize.ts`.
 - `resolveLength(path)` — item count for sequences and movable lists
 - `resolveKeys(path)` — key enumeration for maps and sets
 
-The 11 interpreter cases partition into **container cases** (product, tree — structurally identical for all backends, no resolver calls) and **resolution cases** (the remaining 9, each calling one of the 6 resolver methods). Zero fallback is delegated to `zeroInterpreter` (scalars) and `Zero.structural` (sums), making the materializer the canonical consumer of zero defaults for CRDT substrates.
+The 11 interpreter cases partition into **container cases** (product, tree — structurally identical for all backends, no resolver calls) and **resolution cases** (the remaining 9, each calling one of the 6 resolver methods). Zero fallback is delegated to `zeroInterpreter` (scalars), and a sum's variant to `dispatchSum`, the rule every read applies, so an unknown discriminant materializes as the first variant. `completeValue` applies the same rule to a value on its way into σ ([Zero / defaults](#zero--defaults)); `store-completion.test.ts` pins the two against each other.
 
 Three resolution cases — `sequence`, `movable`, `set` — share an array-collection pattern, factored into `collectArrayByLength(length, item)` and `collectArrayByKeys(keys, item)`. Sequence and movable use the length-based helper; set uses the keys-based helper. All three produce `Plain<I>[]` — `materialize.set` is **not** identical to `materialize.map`: sets project to `T[]` while maps project to `Record<string, T>`. The catamorphism's separate `set` branch carries semantic weight here, even though the storage-layer key enumeration is the same as map's.
 
@@ -1113,7 +1124,12 @@ Source: `packages/schema/src/zero.ts`.
 
 `scalarDefault(kind)` is the scalar-only version. Used by `createDoc` when no initial state is supplied, by migrations' `setDefault` primitive, and by tests.
 
-The materializer is the canonical consumer of zeros for every shadow-carrying substrate: the `zeroInterpreter` is the single source of truth, and no substrate writes zeros into its native state. CRDT initialization routines (`ensureRootContainer`, `ensureContainers`) only create structural containers, and the ephemeral substrate's tree starts empty. A zero is what the fold answers for a node nothing has been written to, or one decay has retired.
+The `zeroInterpreter` is the single source of truth for zeros, and one rule applies it: an absent value means its zero.
+
+- **Initialization writes no zeros.** CRDT initialization routines (`ensureRootContainer`, `ensureContainers`) only create structural containers, and the ephemeral substrate's tree starts empty. A zero is what the materializer's fold answers for a node nothing has been written to, or one decay has retired.
+- **A value a write carries is completed before it reaches the store.** `completeValue(schema, value)` (`src/complete.ts`) fills every absent declared field with its `Zero.structural`, drops every undeclared key, and completes a sum as the variant `dispatchSum` picks. `completeChange(schema, change)` does it for every value a change carries, through `mapPayload`'s slots. An omitted field is therefore stored as its zero in σ and λ alike, so every read, peer and substrate sees the same value. The writable context completes authored writes ([The prepare pipeline](#the-prepare-pipeline)); the plain substrate completes what it merges ([The plain substrate](#the-plain-substrate)).
+
+Completion recurses by schema kind, not storage class: a sum's variant and a `.json()` struct are completed too. It rebuilds only the nodes that change, so a complete value costs one walk and comes back as itself. A value of the wrong kind passes through; validation is a separate concern. Completion can make two set members equal (`{x: 1}` and `{x: 1, y: 0}` under `{x, y}`), and `stepSet` then keeps one, as the schema says it should.
 
 ---
 
@@ -1141,7 +1157,7 @@ Every mutation flows through a `Change` — a discriminated union identified by 
 | `"increment"` | `{ delta: number }` — counter increment | `additive` | Counters |
 | `"richtext"` | `{ instructions: RichTextInstruction[] }` — retain / insert / delete / format over characters | `positional-ot` | Rich text CRDTs |
 
-**A map change's `clear` is intent, not a key list.** It says every key goes, seen or not, before `delete` and `set` apply, and which keys that reaches is the substrate's merge law to decide. `mapChangeEffects(change, held)` is the single definition of what a map change removes and writes, given the keys a consumer holds: a key named in both `delete` and `set` ends up set, and a clear removes every held key the change does not set. `step`, `invert`, `planSubtreeEffect` and the Loro and Yjs bridges all read map changes through it, each against its own keys, which is what observed-remove is. The ephemeral substrate is the one reader that does not expand a clear: it raises a horizon over the whole map (see [Deletion](#deletion)). `record.clear()` dispatches the intent every time, even on a record that looks empty.
+**A map change's `clear` is intent, not a key list.** It says every key goes, seen or not, before `delete` and `set` apply, and which keys that reaches is the substrate's merge law to decide. `mapChangeEffects(change, held)` is the single definition of what a map change removes and writes, given the keys a consumer holds (`held` is a thunk, called only for a clear, so a set or delete enumerates nothing): a key named in both `delete` and `set` ends up set, and a clear removes every held key the change does not set. `step`, `invert`, `planSubtreeEffect` and the Loro and Yjs bridges all read map changes through it, each against its own keys, which is what observed-remove is. The ephemeral substrate is the one reader that does not expand a clear: it raises a horizon over the whole map (see [Deletion](#deletion)). `record.clear()` dispatches the intent every time, even on a record that looks empty.
 
 Note: `TextChange` and `SequenceChange` are parameterizations of the same positional algebra, unified by the `Instruction` type. Both use `retain`/`insert`/`delete` cursor instructions; the only difference is the content type (`string` vs `T[]`). The shared algebra is captured by `foldInstructions`, `transformIndex`, and `advanceAddresses`, which operate on `Instruction` generically.
 
@@ -1185,7 +1201,7 @@ End-to-end flow:
 1. `change` resolves `ref[TRANSACT]` → the `WritableContext`.
 2. `ctx.runBatch(work, opts)` opens a frame (push on `frameStarts`/`inverseStack`). At depth-0 entry it opens the batch's **trace** and invokes the substrate's `runBatch` bracket (Loro `doc.commit()` after the body, Yjs `Y.transact`) inside the delivery dispatcher's `hold`.
 3. `fn(doc)` runs. Inside `fn`, each helper (`.set`, `.push`, `.insert`, …) routes through `ctx.dispatch(path, change)` — the depth-aware combinator. Inside a frame, dispatch is just `ctx.prepare`; outside any frame it opens an implicit single-op runBatch (auto-commit).
-4. `ctx.prepare(path, change, { ingress: "author" })` runs the [prepare pipeline](#the-prepare-pipeline): it resolves the path, runs every layer's `before` stage, calls `substrate.prepare(path, change, recordInverse)` and appends the op to the trace, then runs every `after` stage. The substrate captures σ at the change's target path, computes the inverse via `invert(pre, change)` and records it on the active frame, then advances σ and λ in lockstep.
+4. `ctx.prepare(path, change, { ingress: "author" })` runs the [prepare pipeline](#the-prepare-pipeline): it resolves the path, completes the change against the schema it lands at, runs every layer's `before` stage, calls `substrate.prepare(path, change, recordInverse)` and appends the op to the trace, then runs every `after` stage. The substrate captures σ at the change's target path, computes the inverse via `invert(pre, change)` and records it on the active frame, then advances σ and λ in lockstep.
 5. After `fn` returns, still inside the bracket, the depth-0 release calls `substrate.afterBatch()` and **seals** the batch: the trace becomes a `SealedBatch` (`{ options, ops }`) and is dispatched for delivery. The native commit closes, the `hold` ends, and the delivery dispatcher calls `ctx.deliver(batch)` → `planDelivery` → `deliverNotifications`. One `Changeset` per affected subscriber.
 6. If `fn` throws, the catch path replays this frame's recorded inverses LIFO through `ctx.prepare(path, inverse, { ingress: "compensate" })` (reaching the substrate with `recordInverse === null`), runs `afterBatch`, seals the batch with `aborted: true`, then rethrows once it has been delivered. External observers see one batched native event whose ops net to zero.
 
@@ -1221,7 +1237,7 @@ Source: `src/interpreters/writable.ts` (`buildWritableContext`, `authoredSince`,
 
 **Changesets are delivered in seal order, each after every native commit that was open when it was sealed.** The writable context owns the whole lifecycle, because it is the one place that sees both which ops belong to which batch and when a native commit is open:
 
-- **Capture.** A stack of **traces**, each a list of `{ op, authored }`. The outermost `runBatch` frame opens one, and so does `announce`. The base `prepare` appends every op to the top trace; with no trace open it throws. An announcement made while an authored batch is open gets its own trace, so neither batch can pick up the other's ops.
+- **Capture.** A stack of **traces**, each a list of `{ op, authored }`. An authored op is traced completed, so `batch()`'s return value, the delivered changeset and the plain log carry the value σ holds. The outermost `runBatch` frame opens one, and so does `announce`. The base `prepare` appends every op to the top trace; with no trace open it throws. An announcement made while an authored batch is open gets its own trace, so neither batch can pick up the other's ops.
 - **The trace is also `batch()`'s return value.** Each frame notes the trace length on entry and returns `authoredSince(trace, start)`: the authored ops, without compensations. The sealed changeset carries every entry.
 - **Seal.** At the end of the outermost frame, inside the bracket, `afterBatch` runs and `seal(trace, options)` makes a `SealedBatch`. The trace is popped at once, so a stray prepare afterwards throws instead of joining a sealed batch.
 - **Release.** Each context has one delivery dispatcher (`createDispatcher`, label `"changefeed"`, message `{ type: "deliver", batch }`, the context's `lease`), created on first use. `runBatch` runs the substrate bracket inside `deliveries.hold(...)`: anything sealed while it runs — the batch itself, and any announcement a native listener triggers during the commit — queues, and drains in seal order when the commit closes. The dispatcher's handler calls `ctx.deliver(batch)`, which the changefeed layer wraps.
@@ -1238,9 +1254,10 @@ Source: `src/interpreters/writable.ts` (`buildWritableContext`, `PrepareStage`),
 Every op reaches `ctx.prepare` — authored (`dispatch`), announced (`announce`) and compensating — and `prepare` is a fixed pipeline:
 
 1. **Resolve.** When the context's root path is addressed, `resolveToAddressed` turns a raw path (from `announce` or `applyChanges`) into the addressed path whose `key` the listeners, the coordinate trie and the caches use. Idempotent for addressed paths.
-2. **`before` stages.** σ still holds the state before the change.
-3. **Base.** The substrate call for the ingress (none for an announcement, whose σ has already moved) and the op joining the open batch's trace.
-4. **`after` stages.** σ holds the state after the change.
+2. **Complete.** An authored change that carries values is replaced by `completeAt(schema, σ, path, change)`, which is `completeChange(at, change)` at the schema the change lands at. `buildWritableContext(substrate, schema, capabilities)` takes the document's root schema, and `WritableContext.schema` exposes it. `landingSchema` finds `at` from σ: `liveSchemaAt` for a `replace`, whose value decides a sum's variant, and the variant σ holds for any other change, which presupposes it (a `push` onto a nullable list is a sequence change at the sum's own path). Everything after this step sees the completed change: the stages, the substrate, the trace, delivery, the inverse pairing and so undo. A compensation is read from σ and an announcement comes from a substrate that applied it, so neither is completed again.
+3. **`before` stages.** σ still holds the state before the change.
+4. **Base.** The substrate call for the ingress (none for an announcement, whose σ has already moved) and the op joining the open batch's trace.
+5. **`after` stages.** σ holds the state after the change.
 
 A layer registers one stage per context, with `ctx.addPrepareStage(layer, { before?, after? })`; a second registration under the same layer symbol is ignored. `prepare` itself is never reassigned. Stages within a phase must commute, so order comes from the pipeline's shape and never from the order in which layers happened to install themselves — which, with interpretation lazy, is the order in which each first interpreted a node. (When three layers each wrapped `prepare`, the addressing wrapper, usually installed last, ran outside the changefeed wrapper's path resolution and missed a remote change to a nested list.) `ctx.preparing` is true while a `prepare` runs: a callback a stage causes (a death listener) must compute any read from σ, since the caches have not all settled.
 
@@ -1274,6 +1291,8 @@ Source: `packages/schema/src/step.ts`.
 Purity has a cost that only shows up in bulk: returning a fresh σ' means rebuilding the whole carrier, so *k* writes into a container of size *n* cost O(n·k) — a batch that fills a list or a record is quadratic in its own size.
 
 Every container case of `step` is already `copy-then-mutate`. Those mutating cores are factored out, `step`'s container cases are defined as copy ∘ core, and `stepInPlace(state, change)` is the same arrow without the copy. There is one implementation of the semantics and two entry points into it; `src/__tests__/step.test.ts` pins both halves — that `step` never reaches through its copy into σ, and that the two duals agree.
+
+A map step is O(|change|), and O(|record|) only for a clear, which reads the record's keys once through `mapChangeEffects`'s `held` thunk.
 
 `stepInPlace` returns the σ it was given when δ's carrier is a container (map, sequence, set, tree), and a new value otherwise (text, scalar, counter, rich-text delta, or a δ whose carrier contradicts the σ at the path). `applyChange` compares identities and writes back only in the second case.
 
@@ -1309,7 +1328,7 @@ The substrate is a functor `Π : ChangeGroupoid → NativeStateCategory` (σ, λ
 
 Both must hold. Naturality over `invert` is what makes the abort path correct: when the bracket replays inverses inside the same commit, the σ-side compensation matches the λ-side compensation step-for-step, so external observers see one batched event with net-zero delta simultaneously on σ AND λ. A backend whose `applyChange` is not natural over `invert` would fail abort silently (σ revert, λ partial — or vice versa).
 
-Substrate-implementation contract: **any backend whose `applyChange` is a natural transformation over the change groupoid (forward AND inverse arrows) automatically gets correct abort for free.** PlainSubstrate is the degenerate case (σ ≡ λ, Π = id; both naturality squares hold trivially). Loro and Yjs satisfy naturality by design.
+Substrate-implementation contract: **any backend whose `applyChange` is a natural transformation over the change groupoid (forward AND inverse arrows) automatically gets correct abort for free.** PlainSubstrate is the degenerate case (Π is completion, and an authored op is logged exactly as σ applied it, so both naturality squares hold trivially). Loro and Yjs satisfy naturality by design.
 
 A bridged change can't use incremental σ-step: CRDT merge is a lattice join with no sequential decomposition. The correct response is `syncShadow(materialize(λ))` in the event bridge, before the announcement — re-materialise σ from λ in one Π pass.
 
@@ -1320,7 +1339,9 @@ An op's payload is a value, not a window onto the store. Two independent copies 
 - **`own(value)`**, at construction, in every write helper: `.set()`, `push`/`insert`, a map's `set`, a set's `add`, rich-text marks, a tree node's initial data. Copies the caller's object so the op keeps a value. Enforced by the type system: `replaceChange`, `sequenceChange`, `mapChange`, `mapClearChange`, `setOpChange` and `richTextChange` take their carried values `Owned`, so a construction site must call either `own` (copy) or `trustAsOwned` (assert nobody else holds it — each with a one-line reason: a value just built, or decoded from the wire). The brand covers object payloads and payloads typed `unknown` — a value typed as a primitive cannot be aliased, and branding those multiplied the call-site edits sixfold for no safety.
 - **`ownedForStore(change)`**, at the store boundary, in each substrate's `prepare`. Copies every carried value before `applyChange` writes it in, so a later write into that subtree cannot rewrite an op a subscriber is still holding.
 
-Both edges cover every change kind through one definition of "the values a change carries": `mapPayload(change, f)` (`change.ts`) applies `f` to a `replace` value, sequence `insert` items, map `set` values, set-op `add` members and rich-text `marks`, and returns the change itself when nothing changed. `ownedForStore` is `mapPayload(change, deepClonePlain)`. The read side keeps the third party out: a read is a frozen copy (`frozenClone`), so a caller that hands a read back to a write gets it copied at construction, and σ never holds a frozen object.
+Both edges cover every change kind through one definition of "the values a change carries": `mapPayload(change, f)` (`change.ts`) applies `f` to a `replace` value, sequence `insert` items, map `set` values, set-op `add` members and rich-text `marks`, passing each value's `PayloadSlot` (`self`, `item`, `key` or `marks`), and returns the change itself when nothing changed. `ownedForStore` is `mapPayload(change, deepClonePlain)`.
+
+Completion comes before the store copy: the writable context completes an authored change before `substrate.prepare` runs, and `ownedForStore` copies the completed change. A complete value comes back from completion as itself, so it is copied once, by `ownedForStore`. The read side keeps the third party out: a read is a frozen copy (`frozenClone`), so a caller that hands a read back to a write gets it copied at construction, and σ never holds a frozen object.
 
 The store edge applies to **all four `PlainState`-backed substrates**: plain, ephemeral, and both CRDT backends, whose shadow (σ) is a plain object mutated by the same `applyChange` even though their native tree (λ) is not.
 
@@ -1332,7 +1353,7 @@ Comparing clone costs in isolation predicts the opposite, and is misleading twic
 
 **The inverse path does not need its own copy.** Each substrate used to `deepClonePlain` the pre-state before handing it to `invert`. `invert` already snapshots whatever it retains — `invertReplace`, `invertMap`, `invertSequence` and the rich-text marks each clone what they capture — so the substrate-side copy protected nothing and cost a deep clone of the written subtree on every local write.
 
-**Finding every aliasing site.** Reading the code is not sufficient here; it missed a whole substrate. The reliable method is to make the hazard loud: deep-freeze every carried value at construction (`mapPayload` over the constructors) and run the suites, and every mutation through an alias throws at the frame responsible. One path hands the store a value it legitimately owns and must be excluded from such a run, or it reports artifacts rather than defects: genesis (`objectToReplaceOps` in `buildUpgrade`, applied directly and never delivered). The ephemeral substrate's merges and decay ticks no longer need excluding: they announce `diffOps`'s ops, which are copies, and apply them to σ through `ownedForStore` like any other.
+**Finding every aliasing site.** Reading the code is not sufficient here; it missed a whole substrate. The reliable method is to make the hazard loud: deep-freeze every carried value at construction (`mapPayload` over the constructors) and run the suites, and every mutation through an alias throws at the frame responsible. The ephemeral substrate's merges and decay ticks no longer need excluding: they announce `diffOps`'s ops, which are copies, and apply them to σ through `ownedForStore` like any other.
 
 ### `applyChanges(ref, changes)`: declarative application
 
@@ -1875,6 +1896,10 @@ Source: `packages/schema/src/migration.ts` → `deriveIdentity`, `deriveManifest
 
 The substrate consumes the `SchemaBinding` in its `factoryBuilder` context. Loro and Yjs backends use `forward` to determine container keys: a product field named `"title"` with identity hash `"abc123…"` is stored at `LoroMap.getMap("abc123…")`, not at `LoroMap.getMap("title")`. Renaming a field changes its display name, not its stored identity — the CRDT state survives the rename.
 
+### A rename on json documents loses data
+
+The plain substrate keys σ by field name, not by identity. A schema with `rename("zip", "postalCode")` advertises support for its ancestor (the rename is identity-preserving), so the exchange syncs the two, but to the plain substrate `zip` and `postalCode` are different keys. The newer peer never sees the older peer's `zip`, and merging its newer document back overwrites the older peer's value with `""`. `store-completion.test.ts` ("a rename on json documents") pins it with an `it.fails` test, beside a passing assertion that the newer schema's `supportedHashes` includes the older's hash, so a fix has to change that claim deliberately.
+
 ### Peer identity and when a substrate may claim it
 
 Source: `packages/schema/src/substrate.ts` → `beginHydration`, `beginUpgrade`, `SubstrateFactory.createForHydration`, `SubstrateFactory.upgradeForHydration`.
@@ -2265,9 +2290,10 @@ The worked example is `__countCachedReads` (`src/read-cache.ts`), a backdoor for
 | `src/migration.ts` | 14 primitives, 4 tiers, identity derivation, chain validation, `MIGRATION_CHAIN`. |
 | `src/change.ts` | Change vocabulary, constructors, guards, `Owned`/`own`/`trustAsOwned`, `mapPayload`, `transformIndex`, `diffText`, `textInstructionsToPatches`, `advanceAddresses`. |
 | `src/subtree-effect.ts` | `planSubtreeEffect` — what a change may have rewritten below its path — and `projectChange`, the change as seen from inside that part. Pure. |
+| `src/complete.ts` | `completeValue`, `completeChange` — a value or change shaped by its schema before it enters σ; `completeAt`, a change completed at the schema it lands at in σ. Pure over a reader. |
 | `src/diff-ops.ts` | `diffOps` — the ops a local writer would have produced between two states; the state-based merges' announcer. Pure. |
-| `src/coordinate-trie.ts` | `CoordinateTrie` — one node per coordinate; `coordinatePath`. |
-| `src/coordinate-exists.ts` | `coordinateExists`, `childSchema`, `activeSchema` — existence and schema of a coordinate, sums resolved from σ. Pure. |
+| `src/coordinate-trie.ts` | `CoordinateTrie` — one node per coordinate; `coordinatePath`; `__countKeptRefs`. |
+| `src/coordinate-exists.ts` | `coordinateExists`, `childSchema`, `activeSchema`, `liveSchemaAt`, `landingSchema` — existence and schema of a coordinate, sums resolved from σ. Pure over a reader. |
 | `src/address-fates.ts` | `planAddressFates` — which coordinates a change killed, dropped or revived. Pure. |
 | `src/read-cache.ts` | `readAt`, `storeRead`, `invalidateReads` — the read slot on the trie; `__countCachedReads`. |
 | `src/clone.ts` | `deepClonePlain`, `frozenClone` — the copy primitives. |

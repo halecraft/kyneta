@@ -54,12 +54,24 @@ export const Optional = Schema.struct({
 // lands on the other side of it, so a `richText` field cannot join this schema
 // at all. It is covered per-backend instead, in each backend's
 // `eager-write-coherence.test.ts`.
+//
+// `rows` is a record of structs, for values the schema did not shape: an
+// untyped entry that omits declared fields (one of them a nested struct) and
+// carries a key the schema does not declare. Every substrate stores the
+// entry's completion, and the writer and receiver must read the same value.
 export const ConformanceSchema = Schema.struct({
   a: Schema.string(),
   b: Schema.string(),
   shape: Shape,
   optional: Optional,
   peers: Schema.record(Schema.number()),
+  rows: Schema.record(
+    Schema.struct({
+      n: Schema.number(),
+      s: Schema.string(),
+      inner: Schema.struct({ x: Schema.number() }),
+    }),
+  ),
 })
 
 /** Whether concurrent writes to two DIFFERENT fields both survive a merge. */

@@ -9,12 +9,15 @@
 // keyed-helpers is the install-pattern; the contents are tree-shaped.
 
 import type { TreeInstruction } from "../change.js"
-import { mapChange, own, treeChange } from "../change.js"
+import { mapChange, own, treeChange, trustAsOwned } from "../change.js"
+import { completeValue } from "../complete.js"
 import { coordinatePath } from "../coordinate-trie.js"
 import type { ForestNode } from "../forest.js"
 import { nestForest, subtreeIds } from "../forest.js"
+import { isPlainObject } from "../guards.js"
 import type { FlatTreeNode, Path } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
+import type { Schema as SchemaNode } from "../schema.js"
 import { hasTreeNodeAllocation, TREE_NODE_ALLOCATE } from "../substrate.js"
 import { CALL } from "./bottom.js"
 import type { WritableContext } from "./writable.js"
@@ -189,6 +192,11 @@ export function installTreeReadable<T extends object>(
  * Split such cases across separate transactions.
  */
 export interface TreeWriteOps {
+  /**
+   * Create a node and write its data: `opts.data` completed by the tree's
+   * item schema, so a field it omits, or every field when it is absent, is
+   * written as its zero.
+   */
   readonly create: (opts?: {
     parent?: string | null
     index?: number
@@ -205,6 +213,7 @@ export function installTreeWriteOps<T extends object>(
   result: T,
   ctx: WritableContext,
   path: Path,
+  item: SchemaNode,
 ): asserts result is T & TreeWriteOps {
   function readTopology() {
     return ctx.reader.forestTopology(path)
@@ -233,10 +242,15 @@ export function installTreeWriteOps<T extends object>(
         { action: "create", target: id, parent, index },
       ]
       ctx.dispatch(path, treeChange(instructions))
-      // Initial data lands as a MapChange at the new node's data path —
-      // separate dispatch keeps the create instruction shape stable.
-      if (opts?.data && Object.keys(opts.data).length > 0) {
-        ctx.dispatch(path.node(id), mapChange(own(opts.data)))
+      // The data lands as a map change at the new node's data path, separate
+      // from the create instruction. A map change on a struct writes only the
+      // fields it names, so the data is completed here rather than by the
+      // context: every field is named.
+      const data = completeValue(item, own(opts?.data ?? {}))
+      if (isPlainObject(data)) {
+        // `own` copied the caller's data, and completion adds only zeros
+        // built for this call.
+        ctx.dispatch(path.node(id), mapChange(trustAsOwned(data)))
       }
       return id
     },

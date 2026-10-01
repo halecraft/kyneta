@@ -17,9 +17,9 @@
 // its materialiser only on the *replay* path, so reprojecting after a local
 // write crosses from one derivation to the other.
 //
-// **Why `plain` does not run it.** There σ *is* the document and Π is the
-// identity, so the comparison holds for a reason unrelated to any substrate
-// behaviour.
+// **Why `plain` does not run it.** There σ *is* the document, Π is
+// completion, and an authored op is logged exactly as σ applied it, so the
+// comparison holds for a reason unrelated to any substrate behaviour.
 //
 // The env supplies the schema and the writes, and the suite supplies only the
 // law, because the admissible schema differs per substrate: `ephemeral` has no

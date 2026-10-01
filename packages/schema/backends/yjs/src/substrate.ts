@@ -340,7 +340,8 @@ export function createYjsSubstrate(
 
       // Local write — σ advances eagerly. CRDT-side writes happen
       // inside the ambient Y.transact opened by runBatch, which wraps
-      // the batch's prepare-loop and flush.
+      // the batch's prepare-loop and flush. The writable context completed
+      // the change, so σ and λ take the same value.
       applyChange(shadow, path, ownedForStore(change))
 
       // JSON-boundary write: stage a full-value write at the
@@ -409,7 +410,7 @@ export function createYjsSubstrate(
 
     context(): WritableContext {
       if (!cachedCtx) {
-        cachedCtx = buildWritableContext(substrate, {
+        cachedCtx = buildWritableContext(substrate, schema, {
           nativeResolver: (
             nodeSchema: SchemaNode,
             path: { segments: readonly unknown[] },
