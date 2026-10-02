@@ -10,6 +10,14 @@
 // write should be tried again (`retry`), as effects, so the executor acts on
 // them with the model already updated.
 //
+// It lets a document go once the store holds all of it (`release`), so its
+// instance can leave memory: `released` is emitted from one check after every
+// transition, for each document asked to be released whose phase is
+// `storedEntirely`, and the document stops being tracked. Only an `idle` phase
+// without failures qualifies: `unwritten` holds nothing confirmed, a phase with
+// failures has a retry scheduled, and a lost seat can never store what is
+// unconfirmed.
+//
 // Losing the store's seat (`seat-lost`) is final and store-wide: every later
 // write would fail the same way, so the model becomes terminal and asks for
 // nothing more. A write refused because another seat writes the document
@@ -20,6 +28,7 @@
 
 import type { Program } from "@kyneta/machine"
 import type { DocId } from "@kyneta/transport"
+import type { Generation } from "../lifecycle-program.js"
 import type { WriterRefusedError } from "./seats.js"
 
 // ---------------------------------------------------------------------------
@@ -70,6 +79,12 @@ export type DocPhase =
 export type StoreModel = {
   docs: Map<DocId, DocPhase>
   /**
+   * The documents asked to be released, by the generation the lifecycle asked
+   * for, which `released` echoes. Each is released, and leaves `docs`, at the
+   * first transition after which its phase is `storedEntirely`.
+   */
+  releasing: ReadonlyMap<DocId, Generation>
+  /**
    * Set once a write found the store's seat claimed by another writer: the
    * `SeatLostError`. The model is then terminal. It tracks no document, so
    * every document counts as settled, and it answers every input with
@@ -101,6 +116,10 @@ export type StoreInput =
    * the serialized document's writer.
    */
   | { type: "writer-refused"; docId: DocId; error: WriterRefusedError }
+  /** Emit `released` once the store holds all of `docId`, then stop tracking it. */
+  | { type: "release"; docId: DocId; gen: Generation }
+  /** Withdraw a release not yet made. */
+  | { type: "keep"; docId: DocId }
 
 // ---------------------------------------------------------------------------
 // StoreEffect — data effects interpreted by the Runtime executor
@@ -125,6 +144,12 @@ export type StoreEffect =
   | { type: "persist"; docId: DocId; write: Write }
   /** The store now holds the document at `version`. */
   | { type: "persisted"; docId: DocId; version: string }
+  /**
+   * The store holds all of the document, at `version`, and no longer tracks
+   * it. `gen` is the release's, echoed. An offer: a lifecycle that kept the
+   * document meanwhile hands it back with `hydrated` at `version`.
+   */
+  | { type: "released"; docId: DocId; gen: Generation; version: string }
   /** A write failed and none is owed: ask for one again after `afterMs`. */
   | { type: "retry"; docId: DocId; afterMs: number }
   | { type: "persist-delete"; docId: DocId }
@@ -157,7 +182,39 @@ function withDoc(
   } else {
     docs.set(docId, phase)
   }
-  return { docs }
+  return { ...model, docs }
+}
+
+/** `model` with `docId`'s release recorded under `gen`, or withdrawn. */
+function withRelease(
+  model: StoreModel,
+  docId: DocId,
+  gen: Generation | null,
+): StoreModel {
+  const releasing = new Map(model.releasing)
+  if (gen === null) releasing.delete(docId)
+  else releasing.set(docId, gen)
+  return { ...model, releasing }
+}
+
+/**
+ * Release every document asked to be released whose phase is
+ * `storedEntirely`, after the effects of the transition that made it so: a
+ * `persisted` the same write emitted comes first.
+ */
+function releaseStored(
+  model: StoreModel,
+  effects: StoreEffect[],
+): [StoreModel, ...StoreEffect[]] {
+  let next = model
+  const released: StoreEffect[] = []
+  for (const [docId, gen] of model.releasing) {
+    const phase = model.docs.get(docId)
+    if (phase === undefined || !storedEntirely(phase)) continue
+    next = withRelease(withDoc(next, docId, null), docId, null)
+    released.push({ type: "released", docId, gen, version: phase.version })
+  }
+  return [next, ...effects, ...released]
 }
 
 /**
@@ -226,134 +283,151 @@ function settle(
 // ---------------------------------------------------------------------------
 
 export const storeProgram: Program<StoreInput, StoreModel, StoreEffect> = {
-  init: [{ docs: new Map() }],
+  init: [{ docs: new Map(), releasing: new Map() }],
 
   update(msg: StoreInput, model: StoreModel): [StoreModel, ...StoreEffect[]] {
     if (model.seatLost !== undefined) return [model]
-    switch (msg.type) {
-      case "register": {
-        // A document hydration found nowhere. It has nothing confirmed, so its
-        // first write is the whole document.
-        const existing = model.docs.get(msg.docId) ?? { status: "unwritten" }
-        return request(model, msg.docId, existing, "advance")
-      }
-
-      case "hydrated": {
-        // The store holds the document at `version`. The document may be
-        // ahead of that, by writes made while it loaded, so a `since` write
-        // is owed from there; when nothing arrived it touches no store.
-        const phase: DocPhase = { status: "idle", version: msg.version }
-        return request(model, msg.docId, phase, "advance")
-      }
-
-      case "state-advanced": {
-        // Unknown documents are not ours to write: transient, deferred, or
-        // still hydrating.
-        const existing = model.docs.get(msg.docId)
-        if (!existing) return [model]
-        return request(model, msg.docId, existing, "advance")
-      }
-
-      case "compact": {
-        const existing = model.docs.get(msg.docId)
-        if (!existing) return [model]
-        return request(model, msg.docId, existing, "compact")
-      }
-
-      case "destroy": {
-        const effect: StoreEffect = {
-          type: "persist-delete",
-          docId: msg.docId,
-        }
-        return [withDoc(model, msg.docId, null), effect]
-      }
-
-      case "write-succeeded": {
-        // `persisted` comes before the owed write's `persist`, so the
-        // executor acts on this confirmation before the next write starts.
-        const existing = model.docs.get(msg.docId)
-        if (!existing || existing.status !== "writing") return [model]
-        const confirmed: StoreEffect = {
-          type: "persisted",
-          docId: msg.docId,
-          version: msg.version,
-        }
-        const [phase, ...effects] = settle(msg.docId, existing, {
-          status: "idle",
-          version: msg.version,
-        })
-        return [withDoc(model, msg.docId, phase), confirmed, ...effects]
-      }
-
-      case "write-failed": {
-        // Fall back to where this write started. For a document with a
-        // confirmed version the next `since` recomputes from it, covering the
-        // failed write's changes; for one without, the next write is whole
-        // again.
-        //
-        // An owed write, if there is one, starts now and is the retry.
-        // Otherwise `retry` asks for one after a delay that doubles with each
-        // failure in a row, up to `MAX_RETRY_MS`, which bounds a persistently
-        // failing store to one attempt per `MAX_RETRY_MS` rather than a loop.
-        const existing = model.docs.get(msg.docId)
-        if (!existing || existing.status !== "writing") return [model]
-        const errorEffect: StoreEffect = {
-          type: "store-error",
-          docId: msg.docId,
-          operation: "write",
-          error: msg.error,
-        }
-        const fallback: SettledPhase = {
-          ...existing.revertTo,
-          failures: (existing.revertTo.failures ?? 0) + 1,
-        }
-        const [phase, ...effects] = settle(msg.docId, existing, fallback)
-        if (effects.length === 0) {
-          const retry: StoreEffect = {
-            type: "retry",
-            docId: msg.docId,
-            afterMs: retryDelay(fallback.failures ?? 1),
-          }
-          return [withDoc(model, msg.docId, phase), errorEffect, retry]
-        }
-        return [withDoc(model, msg.docId, phase), errorEffect, ...effects]
-      }
-
-      case "writer-refused": {
-        // Not a failed write: retrying it would retry a write that is not
-        // this seat's to make. The document stops being tracked, owed write
-        // included, until the rebuild reports what the store holds; a write
-        // still in flight then finds no phase and is ignored.
-        const errorEffect: StoreEffect = {
-          type: "store-error",
-          docId: msg.docId,
-          operation: "write",
-          error: msg.error,
-        }
-        return [
-          withDoc(model, msg.docId, null),
-          { type: "rebuild", docId: msg.docId, error: msg.error },
-          errorEffect,
-        ]
-      }
-
-      case "seat-lost": {
-        // Every document stops being tracked: nothing is in flight that could
-        // be confirmed, and nothing is owed that could be written.
-        const errorEffect: StoreEffect = {
-          type: "store-error",
-          docId: msg.docId,
-          operation: "write",
-          error: msg.error,
-        }
-        return [
-          { docs: new Map(), seatLost: msg.error },
-          { type: "seat-lost" },
-          errorEffect,
-        ]
-      }
-    }
+    const [next, ...effects] = transition(msg, model)
+    return releaseStored(next, effects)
   },
+}
+
+function transition(
+  msg: StoreInput,
+  model: StoreModel,
+): [StoreModel, ...StoreEffect[]] {
+  switch (msg.type) {
+    case "register": {
+      // A document hydration found nowhere. It has nothing confirmed, so its
+      // first write is the whole document.
+      const existing = model.docs.get(msg.docId) ?? { status: "unwritten" }
+      return request(model, msg.docId, existing, "advance")
+    }
+
+    case "hydrated": {
+      // The store holds the document at `version`. The document may be
+      // ahead of that, by writes made while it loaded, so a `since` write
+      // is owed from there; when nothing arrived it touches no store.
+      const phase: DocPhase = { status: "idle", version: msg.version }
+      return request(model, msg.docId, phase, "advance")
+    }
+
+    case "state-advanced": {
+      // Unknown documents are not ours to write: transient, deferred, or
+      // still hydrating.
+      const existing = model.docs.get(msg.docId)
+      if (!existing) return [model]
+      return request(model, msg.docId, existing, "advance")
+    }
+
+    case "compact": {
+      const existing = model.docs.get(msg.docId)
+      if (!existing) return [model]
+      return request(model, msg.docId, existing, "compact")
+    }
+
+    case "destroy": {
+      const effect: StoreEffect = {
+        type: "persist-delete",
+        docId: msg.docId,
+      }
+      return [
+        withRelease(withDoc(model, msg.docId, null), msg.docId, null),
+        effect,
+      ]
+    }
+
+    case "release":
+      return [withRelease(model, msg.docId, msg.gen)]
+
+    case "keep":
+      return [withRelease(model, msg.docId, null)]
+
+    case "write-succeeded": {
+      // `persisted` comes before the owed write's `persist`, so the
+      // executor acts on this confirmation before the next write starts.
+      const existing = model.docs.get(msg.docId)
+      if (!existing || existing.status !== "writing") return [model]
+      const confirmed: StoreEffect = {
+        type: "persisted",
+        docId: msg.docId,
+        version: msg.version,
+      }
+      const [phase, ...effects] = settle(msg.docId, existing, {
+        status: "idle",
+        version: msg.version,
+      })
+      return [withDoc(model, msg.docId, phase), confirmed, ...effects]
+    }
+
+    case "write-failed": {
+      // Fall back to where this write started. For a document with a
+      // confirmed version the next `since` recomputes from it, covering the
+      // failed write's changes; for one without, the next write is whole
+      // again.
+      //
+      // An owed write, if there is one, starts now and is the retry.
+      // Otherwise `retry` asks for one after a delay that doubles with each
+      // failure in a row, up to `MAX_RETRY_MS`, which bounds a persistently
+      // failing store to one attempt per `MAX_RETRY_MS` rather than a loop.
+      const existing = model.docs.get(msg.docId)
+      if (!existing || existing.status !== "writing") return [model]
+      const errorEffect: StoreEffect = {
+        type: "store-error",
+        docId: msg.docId,
+        operation: "write",
+        error: msg.error,
+      }
+      const fallback: SettledPhase = {
+        ...existing.revertTo,
+        failures: (existing.revertTo.failures ?? 0) + 1,
+      }
+      const [phase, ...effects] = settle(msg.docId, existing, fallback)
+      if (effects.length === 0) {
+        const retry: StoreEffect = {
+          type: "retry",
+          docId: msg.docId,
+          afterMs: retryDelay(fallback.failures ?? 1),
+        }
+        return [withDoc(model, msg.docId, phase), errorEffect, retry]
+      }
+      return [withDoc(model, msg.docId, phase), errorEffect, ...effects]
+    }
+
+    case "writer-refused": {
+      // Not a failed write: retrying it would retry a write that is not
+      // this seat's to make. The document stops being tracked, owed write
+      // included, until the rebuild reports what the store holds; a write
+      // still in flight then finds no phase and is ignored.
+      const errorEffect: StoreEffect = {
+        type: "store-error",
+        docId: msg.docId,
+        operation: "write",
+        error: msg.error,
+      }
+      return [
+        withDoc(model, msg.docId, null),
+        { type: "rebuild", docId: msg.docId, error: msg.error },
+        errorEffect,
+      ]
+    }
+
+    case "seat-lost": {
+      // Every document stops being tracked: nothing is in flight that could
+      // be confirmed, and nothing is owed that could be written.
+      const errorEffect: StoreEffect = {
+        type: "store-error",
+        docId: msg.docId,
+        operation: "write",
+        error: msg.error,
+      }
+      return [
+        { docs: new Map(), releasing: new Map(), seatLost: msg.error },
+        { type: "seat-lost" },
+        errorEffect,
+      ]
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -381,6 +455,13 @@ export function retryDelay(failures: number): number {
 export function confirmedVersion(phase: DocPhase): string | undefined {
   const settled = phase.status === "writing" ? phase.revertTo : phase
   return settled.status === "idle" ? settled.version : undefined
+}
+
+/** The store holds everything: nothing in flight, nothing owed, nothing failed. */
+export function storedEntirely(
+  phase: DocPhase,
+): phase is Extract<SettledPhase, { status: "idle" }> {
+  return phase.status === "idle" && phase.failures === undefined
 }
 
 /** No write in flight for this document, and none owed. */

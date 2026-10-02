@@ -161,9 +161,9 @@ describe("replicate mode", () => {
         SYNC_COLLABORATIVE,
         LoroFields.schemaHash,
       )
-      const entry = exchange.runtime.getEntry("doc")
-      if (entry?.mode !== "replicate") throw new Error("expected a replica")
-      return new WeakRef(entry.readyInfo.replica)
+      const instance = exchange.runtime.instanceOf("doc")
+      if (instance?.tier !== "replicate") throw new Error("expected a replica")
+      return new WeakRef(instance.readyInfo.replica)
     }
     const replica = replicaOf()
     await exchange.flush()

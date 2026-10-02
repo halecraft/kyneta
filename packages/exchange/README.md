@@ -422,9 +422,36 @@ const exchange = new Exchange({
 
 `exchange.get(docId, bound)` gives a document, creating it if this exchange has never seen it. `exchange.open(docId, bound)` gives it only if this exchange holds it (open, or in its store), and resolves `undefined` otherwise: it never creates one.
 
-`exchange.destroy(docId)` removes a document for good, and releases its memory: its native document (a `LoroDoc`, a `Y.Doc`) is freed, and once you let go of its refs, they are collected too. A ref you still hold reads the document's last value, but its writes, `unwrap`, and the sync functions throw `DocumentClosedError`, and `writeRefusal(doc)` returns that error. `reset()` and `shutdown()` close every document the same way.
-
 > **Peer identity:** you name a `principal`, who this exchange speaks for: a user, a service. Several exchanges may share one. The exchange issues its own `peerId`, its **seat**, which is the address its operations are written under. **A store makes the seat stable across restarts**: the store issues it, and a reload over the same storage gets it back, while two tabs or processes open at once hold different seats. Without a store, each session is a new peer. Key policies on `principal` when you mean *who*, and on `peerId` when you mean *which replica*. Input documents above are keyed by seat, one per tab.
+
+### Done with a document: suspend, unload, destroy
+
+| | leaves the sync graph | leaves memory | leaves the store | comes back with |
+|---|---|---|---|---|
+| `exchange.suspend(docId)` | yes | no | no | `resume(docId)` |
+| `exchange.unload(docId)` | yes | yes | no | `get` or `open` |
+| `exchange.destroy(docId)` | yes | yes | yes | — (a `get` creates a new one) |
+
+`unload` is for a document you will want again, such as a card the user closed: it releases the document's memory and keeps it stored, and opening it loads it back, with every write you made, in the tier it had and suspended if it was. It needs a store, and throws for a transient (ephemeral) document, which no store would hold.
+
+<!-- ts-docs-setup
+declare const exchange: Exchange
+-->
+```ts
+const card = exchange.get("card-7", MyDoc)
+batch(card, d => d.title.insert(0, "Groceries"))
+
+exchange.unload("card-7")       // its memory goes once the store holds it
+// …later
+const again = await exchange.open("card-7", MyDoc)  // loads it from the store
+```
+
+- **Peers receive every write made before the unload.** The document stays in memory, still sending what peers are owed, until the store holds all of it; it takes nothing new in meanwhile.
+- **A ref held across the unload** reads its last value. Its writes throw `DocumentClosedError` (reason `"unloaded"`) from the moment you call `unload`, and `writeRefusal(doc)` returns that error.
+- **Opening it while it unloads** cancels the unload if the store does not yet hold everything, and returns the same ref, writable again. After that, it loads the document again as a new ref.
+- **While unloaded**, `exchange.documents` shows it as `{ mode: "unloaded" }` and `exchange.has` is `true`; peers are not told of it, and an index built with `@kyneta/index` drops its rows until it is opened. On a server (`authority: "self"`), a client asking for an unloaded document loads it again, and the first such request logs an `unloaded-doc-reloaded` warning: a server unloading a document still in use pays a load for it.
+
+`destroy` releases memory the same way: its native document (a `LoroDoc`, a `Y.Doc`) is freed, and once you let go of its refs, they are collected too. A ref you still hold reads the document's last value, but its writes, `unwrap`, and the sync functions throw `DocumentClosedError`, and `writeRefusal(doc)` returns that error. `reset()` and `shutdown()` close every document the same way.
 
 ### Heterogeneous Documents
 
@@ -703,7 +730,7 @@ await stack.redo()
 - **The stack is a document.** With a Store it survives a reload, and a crash in the middle of an undo is finished on the next load without applying anything twice. Without one it lasts the session. The document is serialized, so one runtime writes it: give each tab its own id for per-tab undo, or share one over a device's Store.
 - **Undo by document.** `stack.undo({ docs: [cardId] })` undoes the newest step that wrote that card, even under steps in other cards, and `redo({ docs })` likewise. So one stack per tab serves every card: each editor passes its own card. Steps conflict by what they write: a document, down to its record keys. A step is never taken from under a newer one it conflicts with, so `undo({ docs })` can be `false` while that card has steps, and `top` agrees. A new step clears the redo steps it conflicts with, and those made on them.
 - **What there is to undo** is `stack.top("undo", [cardId])`: the step an undo would try first, or `undefined`. It is a tracked read, so `useSelector(() => stack.top("undo", [cardId]) !== undefined)` re-renders when it changes.
-- **A destroyed document's steps are skipped.** An undo opens a step's documents with `exchange.open`, so it never creates a document; a part whose document is gone does not stand, and the undo goes on to the step below.
+- **A destroyed document's steps are skipped.** An undo opens a step's documents with `exchange.open`, so it never creates a document; a part whose document is gone does not stand, and the undo goes on to the step below. An unloaded document is opened again, and opening one still unloading cancels its unload.
 - Plain, Loro and Yjs documents are undoable; ephemeral ones are not.
 
 ### Escape Hatches
@@ -901,10 +928,11 @@ You only engage the next level when you need it. Each level is additive — it d
 | `get(docId, boundSchema)` | Get or create a document in interpret mode. Returns `Ref<S>`. Auto-registers the schema in the capabilities registry. |
 | `replicate(docId)` | Promote a deferred document — factory resolved from the capabilities registry. |
 | `replicate(docId, replicaFactory, syncMode, schemaHash)` | Register a document for headless replication with explicit arguments. |
-| `has(docId)` | Check if a document exists (interpret or replicate mode). |
+| `has(docId)` | Check if a document exists (interpret, replicate, deferred or unloaded). |
 | `deferred` | `ReadonlySet<DocId>` — deferred document IDs. Participate in routing but have no local representation. |
 | `destroy(docId)` | Remove a document for good: broadcasts `dismiss`, deletes it from the store, and releases its memory. A ref you still hold reads its last value, and its writes throw `DocumentClosedError`. |
 | `suspend(docId)` / `resume(docId)` | Leave / re-enter the sync graph, keeping the document and its local state. |
+| `unload(docId)` | Release a stored document's memory and keep it in the store: `get` or `open` loads it again. Peers receive every write made before it; a ref you still hold reads its last value, and its writes throw `DocumentClosedError`. |
 | `peers` | `CallableChangefeed<ReadonlyMap<PeerId, PeerIdentityDetails>, PeerChange>` — reactive peer connection lifecycle (established / disconnected / reconnected / departed). |
 | `flush()` | Await all pending storage operations. |
 | `shutdown()` | Flush the store, disconnect transports, close handles and every document. The recommended graceful teardown. |

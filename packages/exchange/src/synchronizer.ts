@@ -83,6 +83,7 @@ import {
   type DocEntry,
   hasReconciled,
   initSync,
+  type LeaveAs,
   type LineageCrossing,
   reconciledMatching,
   type SyncEffect,
@@ -104,6 +105,14 @@ import type {
 
 /** A registered document, as the Synchronizer sees it: the Runtime's record, read-only. */
 type RegisteredDoc = Readonly<DocReadyInfo>
+
+/** A leave in flight: the record it lets go of at `doc-left`, and whom to
+ *  tell. */
+type Departure = {
+  readonly record: RegisteredDoc | undefined
+  readonly as: LeaveAs
+  readonly left: (() => void) | undefined
+}
 
 /**
  * Fired by the `ensure-doc` effect when a peer announces an unknown doc.
@@ -154,6 +163,13 @@ export type SynchronizerParams = {
    */
   publishable: (docId: DocId) => boolean
   onEnsureDoc?: DocCreationCallback
+  /**
+   * Whether a peer's request for a document this peer has unloaded loads it
+   * again (`onReloadDoc`). Default: never.
+   */
+  servesUnloaded?: () => boolean
+  /** Load an unloaded document a peer asked for. */
+  onReloadDoc?: (docId: DocId) => void
   departureTimeout?: number
   /**
    * Wire features advertised by this peer in outbound `establish`.
@@ -575,7 +591,15 @@ export class Synchronizer {
   #outerHandle: DispatcherHandle<OuterMsg>
 
   readonly #docs = new Map<DocId, RegisteredDoc>()
+  /**
+   * The leaves dispatched and not yet done, per document, in dispatch order:
+   * each `sync/doc-leave` emits one `doc-left`, and the dispatcher keeps
+   * their order.
+   */
+  readonly #departures = new Map<DocId, Departure[]>()
   readonly #docCreationCallback?: DocCreationCallback
+  readonly #servesUnloaded: () => boolean
+  readonly #reloadDoc: ((docId: DocId) => void) | undefined
 
   /**
    * Outbound message queue — accumulated during dispatch, flushed at
@@ -683,6 +707,8 @@ export class Synchronizer {
     rebuildReplica,
     publishable,
     onEnsureDoc,
+    servesUnloaded,
+    onReloadDoc,
     departureTimeout,
     selfFeatures,
     lease,
@@ -700,6 +726,8 @@ export class Synchronizer {
     this.#canShare = canShare
     this.#canAccept = canAccept
     this.#docCreationCallback = onEnsureDoc
+    this.#servesUnloaded = servesUnloaded ?? (() => false)
+    this.#reloadDoc = onReloadDoc
     this.#lease = lease ?? createLease()
     ;[this.#sessionHandle, this.#syncHandle, this.#outerHandle] =
       this.#buildHandles()
@@ -774,6 +802,7 @@ export class Synchronizer {
       update: createSyncUpdate({
         canShare: this.#canShare,
         canAccept: this.#canAccept,
+        servesUnloaded: this.#servesUnloaded,
       }),
     }
     const syncHandle = createObservableProgram(
@@ -887,30 +916,35 @@ export class Synchronizer {
   }
 
   /**
-   * Track a document and announce it to peers via `doc-ensure`.
-   * Called by Exchange.get() / Exchange.replicate() after the
-   * substrate/replica is created.
+   * Track a document, and announce it to peers via `doc-ensure` unless it is
+   * suspended: a suspended document is held and out of the sync graph, so it
+   * registers without being announced, whether it was loaded or promoted.
+   * The Exchange calls this from the Runtime's `onDocReady`.
    */
-  registerDoc(doc: RegisteredDoc): void {
-    const sync = this.#syncHandle.getState()
-    const existing = sync.documents.get(doc.docId)
-    // The promoted-vs-created distinction depends on the *pre-dispatch*
-    // model state; capture it before #docs mutates and the
-    // dispatch updates sync.documents.
+  registerDoc(doc: RegisteredDoc, { suspended }: { suspended: boolean }): void {
+    // The promoted-vs-created distinction depends on the mode the document
+    // had before this registration: the record's, or for a document with no
+    // record (deferred, unloaded) the sync model's. Read it before #docs
+    // mutates and the dispatch updates sync.documents. A suspended document
+    // has a record and no sync entry, so the record decides.
+    //
     // Any change of mode is a promotion, not just `deferred → X`: a document
     // relayed headlessly and now interpreted has moved tier exactly as a
-    // deferred one does.
+    // deferred one does, and so has an unloaded one loaded again.
     //
     // Emitting matters more than it looks. `#emitDocEvents` updates the
     // `DocInfo` of exactly the documents its events name, so a transition
     // with no event is not a missing notification — it is
     // `exchange.documents` reporting the old mode indefinitely.
-    let event: DocChange | undefined
-    if (existing && existing.mode !== doc.mode) {
-      event = { type: "doc-promoted", docId: doc.docId }
-    } else if (!this.#docs.has(doc.docId)) {
-      event = { type: "doc-created", docId: doc.docId }
-    }
+    const before =
+      this.#docs.get(doc.docId)?.mode ??
+      this.#syncHandle.getState().documents.get(doc.docId)?.mode
+    const event: DocChange | undefined =
+      before === undefined
+        ? { type: "doc-created", docId: doc.docId }
+        : before !== doc.mode
+          ? { type: "doc-promoted", docId: doc.docId }
+          : undefined
 
     this.#docs.set(doc.docId, doc)
 
@@ -924,6 +958,7 @@ export class Synchronizer {
       syncMode: doc.syncMode,
       schemaHash: doc.schemaHash,
       ...(doc.supportedHashes ? { supportedHashes: doc.supportedHashes } : {}),
+      suspended,
       event,
     })
   }
@@ -1051,38 +1086,60 @@ export class Synchronizer {
     return this.#docs.has(docId)
   }
 
-  dismissDocument(docId: DocId): void {
-    const sync = this.#syncHandle.getState()
-    const event: DocChange | undefined =
-      this.#docs.has(docId) || sync.documents.has(docId)
-        ? { type: "doc-removed", docId }
-        : undefined
-    // Delete locally before the dispatch: emit-doc-events rebuilds the doc
-    // map from #docs, so a live entry here would re-introduce the doc the
-    // event is meant to remove.
-    this.#docs.delete(docId)
+  /**
+   * Take our document out of the sync graph, as `as` (`planLeave`). The
+   * record held now is captured, and let go of at the leave's `doc-left`
+   * (unless suspending), after everything queued before the leave has read
+   * it; then `left` is called. A record a later registration put under the id
+   * meanwhile is a different object, and stays.
+   */
+  leaveDocument(docId: DocId, as: LeaveAs, left?: () => void): void {
+    const record = this.#docs.get(docId)
+    const departures = this.#departures.get(docId) ?? []
+    departures.push({ record, as, left })
+    this.#departures.set(docId, departures)
     this.#dispatchSync({
-      type: "sync/doc-dismiss",
+      type: "sync/doc-leave",
       docId,
-      event,
+      as,
+      ...(record === undefined
+        ? {}
+        : {
+            metadata: {
+              replicaType: record.replicaFactory.replicaType,
+              syncMode: record.syncMode,
+              schemaHash: record.schemaHash,
+              ...(record.supportedHashes
+                ? { supportedHashes: record.supportedHashes }
+                : {}),
+            },
+          }),
     })
   }
 
-  suspendDocument(docId: DocId): void {
-    const sync = this.#syncHandle.getState()
-    const event: DocChange | undefined =
-      this.#docs.has(docId) || sync.documents.has(docId)
-        ? { type: "doc-suspended", docId }
-        : undefined
-    // Runtime survives — `resume()` re-registers from it. Emit-doc-events
-    // computes `suspended: !sync.documents.has(docId)`; folding the event
-    // into doc-dismiss is what makes sync.documents lose the doc before
-    // the emit rebuild reads it, so `suspended: true` is visible.
-    this.#dispatchSync({
-      type: "sync/doc-dismiss",
-      docId,
-      event,
-    })
+  /** A leave is done: let go of its record, and tell whoever asked. */
+  #docLeft(docId: DocId): void {
+    const departures = this.#departures.get(docId)
+    const departure = departures?.shift()
+    if (departures?.length === 0) this.#departures.delete(docId)
+    if (departure === undefined) return
+    const { record, as, left } = departure
+    if (
+      as !== "suspend" &&
+      record !== undefined &&
+      this.#docs.get(docId) === record
+    ) {
+      this.#docs.delete(docId)
+    }
+    left?.()
+  }
+
+  /**
+   * Start or stop leaving the sync graph: while leaving, the document sends
+   * what it owes and takes nothing in.
+   */
+  setLeaving(docId: DocId, leaving: boolean): void {
+    this.#dispatchSync({ type: "sync/doc-unloading", docId, leaving })
   }
 
   /**
@@ -1123,6 +1180,8 @@ export class Synchronizer {
       historyFree: doc.replicaFactory.historyFree,
       syncMode: doc.syncMode,
       schemaHash: doc.schemaHash,
+      ...(doc.supportedHashes ? { supportedHashes: doc.supportedHashes } : {}),
+      suspended: false,
       event: { type: "doc-resumed", docId },
     })
   }
@@ -1511,6 +1570,12 @@ export class Synchronizer {
         break
       case "emit-doc-events":
         this.#emitDocEvents(effect.events)
+        break
+      case "doc-left":
+        this.#docLeft(effect.docId)
+        break
+      case "reload-doc":
+        this.#reloadDoc?.(effect.docId)
         break
       case "emit-ready-state-changes":
         this.#emitPeerSyncChanges(effect.docIds)
@@ -1969,16 +2034,22 @@ export class Synchronizer {
 
     // Bring each document the events name up to date: an interpret or
     // replicate document from `#docs`, suspended while the sync model does
-    // not hold it, and a deferred one from the sync model alone.
+    // not hold it, and a deferred or unloaded one from the sync model alone.
     const sync = this.#syncHandle.getState()
     const infoOf = (docId: DocId): DocInfo | undefined => {
       const doc = this.#docs.get(docId)
       if (doc !== undefined) {
         return { mode: doc.mode, suspended: !sync.documents.has(docId) }
       }
-      return sync.documents.get(docId)?.mode === "deferred"
-        ? { mode: "deferred", suspended: false }
-        : undefined
+      const entry = sync.documents.get(docId)
+      switch (entry?.mode) {
+        case "deferred":
+          return { mode: "deferred", suspended: false }
+        case "unloaded":
+          return { mode: "unloaded", suspended: entry.suspended }
+        default:
+          return undefined
+      }
     }
     for (const [docId, info] of docInfoChanges(events, infoOf)) {
       if (info === undefined) handle.delete(docId)
@@ -2056,12 +2127,16 @@ export class Synchronizer {
     const docIds: DocId[] = []
     for (const docId of this.#docs.keys()) docIds.push(docId)
     for (const [docId, entry] of sync.documents) {
-      if (entry.mode === "deferred" && !this.#docs.has(docId)) {
+      if (
+        (entry.mode === "deferred" || entry.mode === "unloaded") &&
+        !this.#docs.has(docId)
+      ) {
         docIds.push(docId)
       }
     }
 
     this.#docs.clear()
+    this.#departures.clear()
 
     if (docIds.length > 0) {
       this.#dispatchSync({

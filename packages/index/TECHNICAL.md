@@ -231,6 +231,8 @@ One rule, applied identically on all three paths into the source — the constru
 
 **Suspension is not a membership condition.** A suspended document stays indexed. Suspension is sync-graph state, not a phase — the document is still interpreted, still in `exchange.documents()`, and still holds a live readable ref. If it decided membership, `exchange.suspend(docId)` would delete a row from every `Collection` and `Index.by` view built on the source and `resume` would put it back, which downstream subscribers see as `removed` + `added` for a document whose contents never changed. Churn in the UI because the network went quiet. `remove()` and `destroy()` are the exits — both drop the document from `exchange.documents()`.
 
+**An unloaded document is not tracked.** `exchange.unload(docId)` takes a document out of memory and keeps it in the store; `exchange.documents()` then shows it as `unloaded`, and the `interpret`-mode clause drops its rows. That differs from suspension because its content is no longer in memory: no live ref holds it, and keeping its row would mean either a row over a closed ref or loading the document again, which would undo the unload the application asked for. Its rows return when something opens it, which `exchange.documents()` records as a promotion back to `interpret`.
+
 There is no event table here on purpose. The subscriber does not dispatch on `DocChange.type`; every event means "this document may have changed," and membership is re-decided from the exchange's current state. A seventh `DocChange` member is handled the day it ships.
 
 ### `Source.fromReactiveMap` — bridging a changefeed `ReactiveMap`

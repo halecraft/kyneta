@@ -16,6 +16,7 @@ import {
   type StoreEffect,
   type StoreInput,
   type StoreModel,
+  storedEntirely,
   storeProgram,
   type Write,
 } from "../store-program.js"
@@ -600,5 +601,137 @@ describe("storeProgram — a refused writer", () => {
     const [next, ...effects] = step(lost, writerRefused)
     expect(next).toBe(lost)
     expect(effects).toEqual([])
+  })
+})
+
+describe("storeProgram — a release", () => {
+  const release = (gen = 4): StoreInput => ({
+    type: "release",
+    docId: "doc-1",
+    gen,
+  })
+  const keep: StoreInput = { type: "keep", docId: "doc-1" }
+  const releasedAt = (version: string, gen = 4): StoreEffect => ({
+    type: "released",
+    docId: "doc-1",
+    gen,
+    version,
+  })
+
+  it("storedEntirely: only an idle phase with no failures", () => {
+    const table: [DocPhase, boolean][] = [
+      [{ status: "idle", version: "v1" }, true],
+      [{ status: "idle", version: "v1", failures: 1 }, false],
+      [{ status: "unwritten" }, false],
+      [{ status: "unwritten", failures: 2 }, false],
+      [
+        { status: "writing", revertTo: { status: "idle", version: "v1" } },
+        false,
+      ],
+    ]
+    for (const [phase, expected] of table) {
+      expect(storedEntirely(phase)).toBe(expected)
+    }
+  })
+
+  it("from idle, releases at once with the generation and the confirmed version, and stops tracking", () => {
+    const [model, ...effects] = step(idleAt("v1"), release())
+    expect(effects).toEqual([releasedAt("v1")])
+    expect(model.docs.has("doc-1")).toBe(false)
+    expect(model.releasing.size).toBe(0)
+  })
+
+  it("while writing, waits for the chain, owed write included, and follows the last persisted", () => {
+    // A write in flight, and another owed behind it.
+    const owing = run(writingFromV1(), advanced, release())[0]
+    expect(owing.docs.has("doc-1")).toBe(true)
+
+    const [mid, ...first] = step(owing, succeeded("v2"))
+    expect(first).toEqual([
+      persisted("v2"),
+      persist({ kind: "since", version: "v2" }),
+    ])
+    expect(mid.releasing.has("doc-1")).toBe(true)
+
+    const [done, ...last] = step(mid, succeeded("v3"))
+    expect(last).toEqual([persisted("v3"), releasedAt("v3")])
+    expect(done.docs.has("doc-1")).toBe(false)
+  })
+
+  it("after a failed write, waits for the retry to succeed", () => {
+    const [failing, ...effects] = run(writingFromV1(), release(), failed())
+    expect(effects.map(e => e.type)).toEqual(["store-error", "retry"])
+    expect(failing.releasing.has("doc-1")).toBe(true)
+
+    const [retrying, ...again] = step(failing, advanced)
+    expect(again).toEqual([persist({ kind: "since", version: "v1" })])
+    const [, ...last] = step(retrying, succeeded("v2"))
+    expect(last).toEqual([persisted("v2"), releasedAt("v2")])
+  })
+
+  it("never releases an unwritten document", () => {
+    const [unwritten] = run(init, register, failed(), release())
+    expect(getPhase(unwritten, "doc-1")).toMatchObject({ status: "unwritten" })
+    expect(unwritten.releasing.has("doc-1")).toBe(true)
+  })
+
+  it("keep withdraws a release not yet made", () => {
+    const [kept] = run(writingFromV1(), release(), keep)
+    expect(kept.releasing.size).toBe(0)
+    const [, ...effects] = step(kept, succeeded("v2"))
+    expect(effects).toEqual([persisted("v2")])
+  })
+
+  it("a release handed back with hydrated is tracked again, and a later write is stored", () => {
+    const [releasedModel] = step(idleAt("v1"), release())
+    const [tracked, ...effects] = step(releasedModel, hydrated("v1"))
+    expect(effects).toEqual([persist({ kind: "since", version: "v1" })])
+    const [idle] = step(tracked, succeeded("v1"))
+    const [, ...writes] = step(idle, advanced)
+    expect(writes).toEqual([persist({ kind: "since", version: "v1" })])
+  })
+
+  it("writer-refused on a releasing document releases after the rebuild's hydrated", () => {
+    const refused = new WriterRefusedError("doc-1", "other-seat")
+    const [rebuilding] = run(writingFromV1(), release(), {
+      type: "writer-refused",
+      docId: "doc-1",
+      error: refused,
+    })
+    expect(rebuilding.releasing.has("doc-1")).toBe(true)
+    const [loaded] = step(rebuilding, hydrated("v3"))
+    const [, ...effects] = step(loaded, succeeded("v3"))
+    expect(effects).toEqual([persisted("v3"), releasedAt("v3")])
+  })
+
+  it("destroy while releasing deletes, and releases nothing", () => {
+    const [destroyed, ...effects] = run(writingFromV1(), release(), {
+      type: "destroy",
+      docId: "doc-1",
+    })
+    expect(effects).toEqual([{ type: "persist-delete", docId: "doc-1" }])
+    expect(destroyed.releasing.size).toBe(0)
+    expect(step(destroyed, succeeded("v2"))).toEqual([destroyed])
+  })
+
+  it("a lost seat releases nothing", () => {
+    const [lost] = run(writingFromV1(), release(), {
+      type: "seat-lost",
+      docId: "doc-1",
+      error: new Error("lost"),
+    })
+    expect(lost.releasing.size).toBe(0)
+    expect(step(lost, succeeded("v2"))).toEqual([lost])
+  })
+
+  it("every transition through a document keeps the other releases", () => {
+    const [model] = run(
+      idleAt("v1"),
+      { type: "register", docId: "doc-2" },
+      { type: "release", docId: "doc-2", gen: 9 },
+      advanced,
+      succeeded("v2"),
+    )
+    expect(model.releasing.get("doc-2")).toBe(9)
   })
 })

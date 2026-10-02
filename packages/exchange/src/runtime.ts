@@ -1,7 +1,7 @@
 // runtime — the local imperative shell for document execution.
 //
-// The Runtime owns the *local* lifecycle of documents: the document cache,
-// persistent storage (hydration + persistence via the pure store-program
+// The Runtime owns the *local* lifecycle of documents: the lifecycle
+// program's model and each instance's live objects, persistent storage (hydration + persistence via the pure store-program
 // Mealy machine), the cascade `Lease` (cooperating dispatch budget), and
 // a ticking clock for time-based projections (e.g. `.decay()`).
 //
@@ -17,9 +17,9 @@
 // is hydrated from storage, the Runtime fires `onDocReady`; the Exchange
 // responds by registering the doc with the Synchronizer for network sync.
 //
-// FC/IS boundary: the store-program (Mealy machine) is a pure functional
-// core; the Runtime is the imperative shell that interprets its effects as
-// real I/O. The tick clock (`setInterval`) lives here, not in substrates —
+// FC/IS boundary: the store program and the lifecycle program are pure
+// functional cores; the Runtime is the imperative shell that interprets
+// their effects as real I/O. The tick clock (`setInterval`) lives here, not in substrates —
 // substrates expose a pure `tick?(now: number)` that the Runtime calls.
 
 import {
@@ -53,7 +53,7 @@ import {
   createRef,
   DEFAULT_LINEAGE,
   DocumentClosedError,
-  metadataOf,
+  type MetadataMismatch,
   replicaFromEntirety,
   replicaTypesCompatible,
   subscribe,
@@ -62,13 +62,33 @@ import {
 } from "@kyneta/schema"
 import type { DocId, PeerId } from "@kyneta/transport"
 import {
+  closedHydration,
   closeTerms,
   type Hydration,
   type Persistence,
   registerLocalTerms,
   termsOf,
 } from "./document-terms.js"
-import { planInterpretation } from "./interpret.js"
+import {
+  type BuildSpec,
+  currentGen,
+  deferredIds,
+  type Generation,
+  hydrationOf,
+  type Intent,
+  initialLifecycle,
+  isHeld,
+  type Lifecycle,
+  type LifecycleEffect,
+  type LifecycleInput,
+  type LifecycleModel,
+  type LifecycleRequest,
+  type LoadOutcome,
+  lifecycleProgram,
+  type Refusal,
+  storedOf,
+  unloadingOf,
+} from "./lifecycle-program.js"
 import { gateOpen } from "./publish-gate.js"
 import {
   type Seat,
@@ -174,9 +194,12 @@ const NO_AUTHORSHIP: Authorship = { adopt: () => {} }
 /**
  * Who, besides the substrate, refuses an interpreted document's authored
  * writes: its owner's answer, which `createRef` attaches to the context as
- * `firstDefined(seat, network)`.
+ * `firstDefined(unloading, seat, network)`.
  */
 type Refusals = {
+  /** Derived from the lifecycle: `DocumentClosedError("unloaded")` while the
+   *  instance unloads. Set to its closing value when the instance closes. */
+  readonly unloading: Settable<WriteRefusal | undefined>
   /** Another seat of the storage writes this serialized document. Set once,
    *  at load or after a lost race, and kept for the session. */
   readonly seat: Settable<WriteRefusal | undefined>
@@ -185,28 +208,8 @@ type Refusals = {
   readonly network: Settable<WriteRefusal | undefined>
 }
 
-/** What a latch says, as the hydration term reports it. */
-function hydrationOf(latch: HydrationLatch): Hydration {
-  return latch.state === "failed"
-    ? { status: "failed", error: latch.error }
-    : { status: latch.state }
-}
-
-/** What a document that has not become ready has wired: nothing. */
+/** What an interpreted document that is not yet wired has wired: nothing. */
 const NOTHING_WIRED = (): void => {}
-
-/** What loading found. `#hydrate` gathers it; `#becomeReady` acts on it. */
-export type LoadOutcome =
-  /**
-   * The store holds the document at `version`: the join of the stored
-   * entries the replica reaches.
-   */
-  | { readonly kind: "stored"; readonly version: string }
-  /** The store holds nothing of the document the replica could take in. */
-  | { readonly kind: "empty" }
-  /** Nothing was loaded: no store, a transient document, or a promotion
-   *  whose replica already loaded. */
-  | { readonly kind: "none" }
 
 /**
  * What `#hydrate` gathers: the outcome, and the seat the store records as the
@@ -219,49 +222,76 @@ type Loaded = {
 
 const NOTHING_LOADED: Loaded = { outcome: { kind: "none" }, writer: null }
 
-/**
- * Why an interpreted document was created: to be had whatever the store
- * holds (`get`), or only if this Runtime holds it (`open`). A deferred entry
- * holds nothing, so an `open` that finds nothing puts it back from
- * `wasDeferred` alone.
- */
-export type Intent =
-  | { readonly kind: "create" }
-  | { readonly kind: "open"; readonly wasDeferred: boolean }
-
-export const CREATE: Intent = { kind: "create" }
-
-/**
- * What a finished load makes of a document. `ready` carries the store
- * program's view of the load, or `null` when there is nothing to tell it:
- * `hydrated` carries the version the store holds, which the program keeps as
- * its baseline for later writes. An `open` that loaded nothing is `absent`:
- * with no store, or a transient document, not open means not held.
- */
-export function readinessFor(
-  docId: DocId,
-  outcome: LoadOutcome,
-  intent: Intent,
-):
-  | { readonly kind: "ready"; readonly input: StoreInput | null }
-  | { readonly kind: "absent" } {
-  if (outcome.kind === "stored") {
-    return {
-      kind: "ready",
-      input: { type: "hydrated", docId, version: outcome.version },
-    }
-  }
-  if (intent.kind === "open") return { kind: "absent" }
-  return {
-    kind: "ready",
-    input: outcome.kind === "empty" ? { type: "register", docId } : null,
+/** The error every door that throws `refusal` throws. */
+export function refusalError(refusal: Refusal): Error {
+  const { docId } = refusal
+  switch (refusal.kind) {
+    case "not-hydrated":
+      return new Error(
+        `Document '${docId}' is still loading from storage. ` +
+          `Await whenHydrated('${docId}') before calling get() ` +
+          `— promoting a document mid-load would lose part of it.`,
+      )
+    case "load-failed":
+      return refusal.error instanceof Error
+        ? refusal.error
+        : new Error(String(refusal.error))
+    case "mismatch":
+      return mismatchError(docId, refusal.mismatch, "document")
+    case "not-held":
+      switch (refusal.phase) {
+        case "absent":
+          return new Error(`Document '${docId}' does not exist.`)
+        case "unloaded":
+          return new Error(`Document '${docId}' is unloaded; open it first.`)
+        case "deferred":
+          return refusal.door === "resume"
+            ? notSuspended(docId)
+            : new Error(`Cannot ${refusal.door} deferred document '${docId}'.`)
+      }
+      break
+    case "not-suspended":
+      return notSuspended(docId)
+    case "already-held":
+      return new Error(
+        `Document '${docId}' is already registered. ` +
+          `Cannot replicate an existing document.`,
+      )
+    case "not-stored":
+      return new Error(
+        `Document '${docId}' is not stored: unloading it would lose its ` +
+          `data. Unloading needs a store and a persistent sync mode.`,
+      )
+    case "unloading":
+      return new Error(
+        `Document '${docId}' is unloading; cannot ${refusal.door} it ` +
+          `until it is opened again.`,
+      )
   }
 }
 
-/** A cache entry that can become ready: anything but a deferred one. */
-type ReadyEntry = Extract<DocCacheEntry, { mode: "interpret" | "replicate" }>
+function notSuspended(docId: DocId): Error {
+  return new Error(
+    `Document '${docId}' is not suspended. Call suspend() first.`,
+  )
+}
 
-type InterpretEntry = Extract<DocCacheEntry, { mode: "interpret" }>
+/**
+ * A schema that cannot read a document, as an error. `other` names where the
+ * document's metadata came from: this Runtime's record (`document`), or a
+ * peer's announcement (`discovered`).
+ */
+export function mismatchError(
+  docId: DocId,
+  mismatch: MetadataMismatch,
+  other: "document" | "discovered",
+): Error {
+  return new Error(
+    `Document '${docId}' cannot be interpreted with this schema: ` +
+      `${mismatch.axis} disagrees (local ${mismatch.local} ` +
+      `vs ${other} ${mismatch.remote}).`,
+  )
+}
 
 // ---------------------------------------------------------------------------
 // RuntimeGet — the call signature for Runtime.get (mirrors Exchange's Get type)
@@ -315,46 +345,8 @@ type InterpretReadyInfo = Extract<DocReadyInfo, { mode: "interpret" }>
 type ReplicateReadyInfo = Extract<DocReadyInfo, { mode: "replicate" }>
 
 // ---------------------------------------------------------------------------
-// DocCacheEntry — local document registry entry
+// Instance — the live objects of one generation of a document
 // ---------------------------------------------------------------------------
-
-/**
- * Where a document's load-from-storage has got to.
- *
- * Three states, not two, because "still loading" and "tried and failed" must
- * not look alike to anything downstream. A document whose store read threw is
- * *not* an empty document — treating it as one would mean writing defaults
- * over data we merely failed to read, which is the failure this whole
- * readiness layer exists to prevent. So a failed load keeps the document
- * un-settled and hangs on to the error for whoever asks.
- *
- * Every latch starts `pending`, and `#becomeReady` is what moves it on, on
- * every path. A document with nothing to load passes through it before
- * `get()` returns, so no caller ever sees it pending.
- */
-export type HydrationLatch = {
-  state: "pending" | "loaded" | "failed"
-  error?: unknown
-  /** Fired once when the state leaves `pending`. */
-  readonly listeners: Set<() => void>
-}
-
-/** @internal Move a latch out of `pending` and wake anyone waiting on it. */
-export function resolveHydration(
-  latch: HydrationLatch,
-  outcome: { ok: true } | { ok: false; error: unknown },
-): void {
-  if (latch.state !== "pending") return
-  latch.state = outcome.ok ? "loaded" : "failed"
-  if (!outcome.ok) latch.error = outcome.error
-  for (const listener of latch.listeners) listener()
-  latch.listeners.clear()
-}
-
-/** @internal A latch for a document that has not become ready yet. */
-export function createHydrationLatch(): HydrationLatch {
-  return { state: "pending", listeners: new Set() }
-}
 
 /**
  * Where an interpreted document's own writes stand against its store. See
@@ -383,52 +375,93 @@ function createPublication(): Publication {
   }
 }
 
+/** An instance's values the lifecycle model decides. */
+type Observed = {
+  readonly hydration: Hydration
+  readonly refusal: WriteRefusal | undefined
+}
+
 /**
- * `readyInfo` + `announced` let {@link Runtime.setHooks} safely backfill
- * `onDocReady` for documents that already existed before hooks were
- * attached (e.g. a standalone `Runtime` later wrapped in an `Exchange`).
- * `readyInfo` is captured when the entry is created, and announced by
- * `#becomeReady` once the document is ready; `announced` tracks whether
- * `onDocReady` has actually fired for it yet, so the `setHooks` backfill and
- * `#becomeReady` never both announce one document. Context: jj:mrlnmlus.
- *
- * `hydration` is the storage half of the document's readiness — see
- * {@link HydrationLatch} and `settle.ts`. `publication` is where its own
- * writes stand against the store — see {@link Publication}.
+ * Whoever follows an instance's {@link Observed} values: `whenHydrated(docId)`,
+ * and the subscribers of its hydration term and its unloading refusal. Each
+ * is called with the new values when a step changes them, and with the
+ * closing values when the instance closes.
  */
-export type DocCacheEntry =
+type Observers = Set<(observed: Observed) => void>
+
+/**
+ * The live objects of one instance of a document, under its generation. What
+ * the instance *is* (its phase, tier, metadata, writer, whether it is
+ * suspended or registered) is data, and lives in the lifecycle model; this is
+ * what a model cannot hold.
+ *
+ * Exported so `Runtime`'s declarations can name it; `index.ts` does not
+ * export it.
+ */
+export type Instance =
   | {
-      mode: "interpret"
-      ref: any
-      bound: BoundSchema
-      readyInfo: InterpretReadyInfo
-      announced: boolean
-      suspended?: boolean
-      hydration: HydrationLatch
-      publication: Publication
-      /** Undoes what `#becomeReady` wired; a no-op until then. */
+      readonly tier: "interpret"
+      readonly ref: any
+      readonly bound: BoundSchema
+      readonly readyInfo: InterpretReadyInfo
+      readonly authorship: Authorship
+      readonly refusals: Refusals
+      /** Where its own writes stand against the store. */
+      readonly publication: Publication
+      /** What its unloading refusal answers: one object, so the refusal
+       *  reads the same each time. */
+      readonly unloaded: DocumentClosedError
+      readonly observers: Observers
+      /** Undoes what `wire` attached; a no-op until then. */
       unwire: () => void
-      authorship: Authorship
-      refusals: Refusals
-      /** The writer the store recorded when the document loaded. */
-      writer: PeerId | null
-      /** Why it was created. A `get` while an `open` loads makes it
-       *  `create`: the `get` caller holds the ref. */
-      intent: Intent
     }
   | {
-      mode: "replicate"
-      readyInfo: ReplicateReadyInfo
-      announced: boolean
-      suspended?: boolean
-      hydration: HydrationLatch
-      /**
-       * The writer the store recorded when the document loaded, so a
-       * promotion knows it without reading the store again.
-       */
-      writer: PeerId | null
+      readonly tier: "replicate"
+      readonly readyInfo: ReplicateReadyInfo
+      readonly observers: Observers
     }
-  | { mode: "deferred" }
+
+type InterpretInstance = Extract<Instance, { tier: "interpret" }>
+
+/** What a step came to: a refusal, or the instance it built, if any. */
+type Stepped =
+  | { readonly refusal: Refusal }
+  | { readonly built: Instance | undefined }
+
+/** Two hydrations say the same: one status, and for a failure one error. */
+function sameHydration(a: Hydration, b: Hydration): boolean {
+  if (a.status !== b.status) return false
+  return a.status !== "failed" || (b.status === "failed" && a.error === b.error)
+}
+
+/** Two observations say the same: by value, each refusal by identity. */
+function sameObserved(a: Observed, b: Observed): boolean {
+  return sameHydration(a.hydration, b.hydration) && a.refusal === b.refusal
+}
+
+/** What `model` says of the instance of `gen`. */
+function observedIn(
+  model: LifecycleModel,
+  docId: DocId,
+  gen: Generation,
+  instance: Instance,
+): Observed {
+  return {
+    hydration: hydrationOf(model, docId),
+    refusal:
+      instance.tier === "interpret" && unloadingOf(model, docId, gen)
+        ? instance.unloaded
+        : undefined,
+  }
+}
+
+/** Follow `observers` with a callback that ignores the values; return what
+ *  stops it. */
+function observe(observers: Observers, onChange: () => void): () => void {
+  const observer = (): void => onChange()
+  observers.add(observer)
+  return () => observers.delete(observer)
+}
 
 /**
  * Lifecycle hooks the Exchange implements to bridge the local Runtime
@@ -439,12 +472,14 @@ export type DocCacheEntry =
 export type RuntimeHooks = {
   /**
    * Called when a document has been fully hydrated from storage (or
-   * immediately if no store is configured) and is ready to participate
-   * in the sync graph.
+   * immediately if no store is configured), or when an unload begun before
+   * an Exchange set hooks is cancelled: it is ready to participate in the
+   * sync graph. A `suspended` one is held out of the sync graph, so it
+   * registers without being announced.
    *
    * The Exchange implements this to call `synchronizer.registerDoc(...)`.
    */
-  onDocReady?: (info: DocReadyInfo) => void
+  onDocReady?: (info: DocReadyInfo, state: { suspended: boolean }) => void
 
   /**
    * Called when an interpreted document's changeset fires, local or replay.
@@ -479,24 +514,40 @@ export type RuntimeHooks = {
   onDocPublishable?: (docId: DocId) => void
 
   /**
-   * Called when a document is destroyed locally — remove from sync graph
-   * AND delete from the store. The Exchange implements this to broadcast
-   * `dismiss` to peers via the Synchronizer.
+   * Called when a document is gone: destroyed locally, or found deleted from
+   * the store when an unloaded one was opened. The Exchange implements this
+   * to take it out of the sync graph as destroyed
+   * (`synchronizer.leaveDocument`).
    */
   onDocDestroyed?: (docId: DocId) => void
 
   /**
-   * Called when a document is suspended locally — leave the sync graph
-   * but keep all local state (including in the Synchronizer's runtime).
-   * The Exchange implements this to call `synchronizer.suspendDocument()`
-   * which broadcasts a wire `dismiss` but retains the doc runtime.
+   * Called when a document is suspended locally: it leaves the sync graph
+   * and keeps all local state. The Exchange implements this to take it out
+   * of the sync graph as suspended (`synchronizer.leaveDocument`), which
+   * keeps its record for `resume`.
    */
   onDocSuspended?: (docId: DocId) => void
 
   /**
+   * Called when an unload starts (`on`) or is cancelled: while leaving, the
+   * document sends what it owes peers and takes nothing in. The Exchange
+   * implements this with `synchronizer.setLeaving`.
+   */
+  onDocLeaving?: (docId: DocId, on: boolean) => void
+
+  /**
+   * Called once the store holds all of an unloading document: take it out of
+   * the sync graph as unloaded, then call `left`, after which its replica is
+   * disposed. The Exchange implements this with
+   * `synchronizer.leaveDocument`. Without it, the document leaves at once.
+   */
+  onDocUnload?: (docId: DocId, left: () => void) => void
+
+  /**
    * Called when an interpreted document is created, on every path (a new
    * document, a stored one, a promotion from a relay), and for every
-   * interpreted document already cached when the hooks are set. Fired
+   * interpreted document already held when the hooks are set. Fired
    * before the document becomes ready, so what is attached here observes its
    * registration with the sync graph.
    *
@@ -569,8 +620,9 @@ export type RuntimeParams = {
 /**
  * The local imperative shell for document execution.
  *
- * Owns the document cache, persistent storage (hydration + persistence),
- * the cascade `Lease`, and the ticking clock. This is the layer between
+ * Owns the documents (the lifecycle program's model, and each instance's
+ * live objects), persistent storage (hydration + persistence), the cascade
+ * `Lease`, and the ticking clock. This is the layer between
  * the pure CRDT math (substrates) and the network shell (`Exchange`).
  *
  * A standalone local-first application (no network) uses a `Runtime`
@@ -604,7 +656,11 @@ export class Runtime {
   /** Store-program handle — pure Mealy machine for store coordination. */
   readonly #storeHandle: ObservableHandle<StoreInput, StoreModel> | null
 
-  readonly #docCache = new Map<DocId, DocCacheEntry>()
+  /** Every document's lifecycle: the lifecycle program's model. */
+  #lifecycle: LifecycleModel
+
+  /** The live objects of every held instance, by generation. */
+  readonly #instances = new Map<Generation, Instance>()
 
   /** Loads and local-change drains still running, which flush() and
    *  shutdown() wait for. */
@@ -644,6 +700,7 @@ export class Runtime {
     this.seat = store?.seat ?? sessionSeat()
     this.peerId = this.seat.peerId
     this.#tickIntervalMs = tickInterval
+    this.#lifecycle = initialLifecycle(store !== undefined)
 
     // ── Store-program — pure machine for store coordination ──
     if (store) {
@@ -667,7 +724,12 @@ export class Runtime {
               break
             }
             case "persisted": {
-              this.#confirmed(effect.docId)
+              this.#confirmed(effect.docId, effect.version)
+              break
+            }
+            case "released": {
+              const { docId, gen, version } = effect
+              this.#step({ type: "released", docId, gen, version })
               break
             }
             case "retry": {
@@ -704,8 +766,10 @@ export class Runtime {
             }
             case "seat-lost": {
               this.#cancelAllRetries()
-              for (const entry of this.#docCache.values()) {
-                if (entry.mode === "interpret") this.#reportPersistence(entry)
+              for (const instance of this.#instances.values()) {
+                if (instance.tier === "interpret") {
+                  this.#reportPersistence(instance)
+                }
               }
               break
             }
@@ -742,13 +806,13 @@ export class Runtime {
    * `onDocInterpreted` exactly once: from the backfill below if it already
    * exists, at creation otherwise.
    *
-   * Backfills `onDocInterpreted` for every interpreted document in the
-   * cache, then `onDocReady` for every already-live, non-deferred one —
-   * covers the "standalone Runtime later wrapped in an Exchange" path
-   * (`new Exchange(runtime, params)`), where documents created via
-   * `runtime.get()`/`runtime.replicate()` before this call had no hooks to
-   * fire: they gain `sync()` and the peer settle term, and are announced.
-   * Context: jj:mrlnmlus.
+   * Backfills `onDocInterpreted` for every interpreted document, then steps
+   * `hooked`, which registers every ready one with the sync graph. This is
+   * the "standalone Runtime later wrapped in an Exchange" path
+   * (`new Exchange(runtime, params)`): documents created before this call
+   * had no hooks to fire, so they gain `sync()` and the peer settle term,
+   * and are announced. One still loading is announced when its load
+   * finishes, and one whose load failed never is.
    */
   setHooks(hooks: RuntimeHooks): void {
     if (this.#hooks)
@@ -758,16 +822,12 @@ export class Runtime {
     this.#hooks = hooks
     // Network capabilities first, so a peer term is listening before the
     // document registers with the sync graph.
-    if (hooks.onDocInterpreted) {
-      for (const [docId, entry] of this.#docCache) {
-        if (entry.mode === "interpret") hooks.onDocInterpreted(docId, entry.ref)
+    for (const instance of [...this.#instances.values()]) {
+      if (instance.tier === "interpret") {
+        hooks.onDocInterpreted?.(instance.readyInfo.docId, instance.ref)
       }
     }
-    if (hooks.onDocReady) {
-      for (const [, entry] of this.#docCache) {
-        if (entry.mode !== "deferred") this.#register(entry)
-      }
-    }
+    this.#step({ type: "hooked" })
   }
 
   // =========================================================================
@@ -777,70 +837,29 @@ export class Runtime {
   /**
    * Gets (or creates) an interpreted document.
    *
-   * Creates the substrate + ref, caches the entry, and begins hydration
-   * (if a store is configured). Returns the ref synchronously. If a store
-   * is configured, hydration completes asynchronously — the ref starts
-   * empty and the changefeed fires when stored data is merged.
+   * Creates the substrate + ref and begins hydration (if a store is
+   * configured). Returns the ref synchronously. If a store is configured,
+   * hydration completes asynchronously — the ref starts empty and the
+   * changefeed fires when stored data is merged.
    *
    * Multiple calls with the same `docId` return the same instance. Calling
    * with a schema that cannot read what is already there throws, naming the
-   * axis that disagrees.
+   * axis that disagrees. A replicate document is promoted once it has loaded;
+   * one still loading, or whose load failed, throws.
    *
    * @param docId - The document ID
    * @param bound - A BoundSchema created by `bind()`
    * @returns A full-stack ref with the local substrate
    */
-  get: RuntimeGet = (docId, bound) => {
-    const cached = this.#docCache.get(docId)
-
-    // A standalone Runtime is a complete door, not a shortcut through the
-    // Exchange's. Both consult the same classifier, so a local-first
-    // application gets the same compatibility check and the same hydration
-    // precondition — without this, `createInterpretDoc` below would upgrade a
-    // replicate document having verified nothing.
-    //
-    // Only `deferred` needs metadata the Runtime does not hold, and it never
-    // holds a deferred document, so that arm is unreachable from here.
-    if (cached?.mode === "replicate" || cached?.mode === "interpret") {
-      const action = planInterpretation({
-        phase: cached.mode,
-        reader: metadataOf(bound),
-        // An interpreted document's shape is the `BoundSchema` it was made
-        // with — a `BoundSchema` carries the three `DocMetadata` fields, so
-        // it *is* that shape.
-        doc:
-          cached.mode === "interpret"
-            ? cached.bound
-            : {
-                replicaType: cached.readyInfo.replicaFactory.replicaType,
-                syncMode: cached.readyInfo.syncMode,
-                schemaHash: cached.readyInfo.schemaHash,
-              },
-        hydrated: this.hydrated(docId),
-      })
-      if (action.action === "refuse") {
-        throw action.kind === "not-hydrated"
-          ? new Error(
-              `Document '${docId}' is still loading from storage. ` +
-                `Await whenHydrated('${docId}') before calling get() ` +
-                `— promoting a document mid-load would lose part of it.`,
-            )
-          : new Error(
-              `Document '${docId}' cannot be interpreted with this schema: ` +
-                `${action.mismatch.axis} disagrees (local ${action.mismatch.local} ` +
-                `vs document ${action.mismatch.remote}).`,
-            )
-      }
-    }
-
-    return this.createInterpretDoc(docId, bound, CREATE) as never
-  }
+  get: RuntimeGet = (docId, bound) =>
+    this.createInterpretDoc(docId, bound, "create") as never
 
   /**
    * Register a document for headless replication — no schema, no ref.
    *
    * The document participates in the sync graph via a bare `Replica<V>`,
    * enabling version tracking and state accumulation without interpretation.
+   * Throws for a document this Runtime already holds, in either tier.
    */
   replicate(
     docId: DocId,
@@ -848,33 +867,40 @@ export class Runtime {
     syncMode: SyncMode,
     schemaHash: string,
   ): void {
-    this.#createReplicateDoc(docId, replicaFactory, syncMode, schemaHash)
+    this.#throwing({
+      type: "replicate",
+      docId,
+      replicaFactory,
+      syncMode,
+      schemaHash,
+    })
   }
 
   /**
-   * Check if a document exists in the runtime.
+   * Check if a document exists in the runtime: held in either tier,
+   * deferred, or unloaded.
    */
   has(docId: DocId): boolean {
-    return this.#docCache.has(docId)
+    return this.#lifecycle.docs.has(docId)
   }
 
   /**
    * Has this document finished loading from storage?
    *
-   * The docId-keyed twin of `hydrated(ref)` in `settle.ts`. Both exist because
-   * not every document has a ref to ask about: one held in `replicate` mode is
-   * a bare replica with no schema and no interpreter stack, so the ref-keyed
-   * form has nothing to key on. The parameter type says which surface you are
-   * using.
+   * The docId-keyed twin of `hydrated(ref)` in `settle.ts`, and the same
+   * answer. Both exist because not every document has a ref to ask about:
+   * one held in `replicate` mode is a bare replica with no schema and no
+   * interpreter stack, so the ref-keyed form has nothing to key on. The
+   * parameter type says which surface you are using.
    *
-   * An unknown document reports `true`. There is nothing to load, so the load
-   * is trivially finished — the same answer `hydrated(ref)` gives a document
-   * with no store behind it, and it saves every caller an existence check.
+   * `false` while the load runs and after it fails: a failed read is not an
+   * empty document. An unknown document reports `true`. There is nothing to
+   * load, so the load is trivially finished — the same answer `hydrated(ref)`
+   * gives a document with no store behind it, and it saves every caller an
+   * existence check.
    */
   hydrated(docId: DocId): boolean {
-    const entry = this.#docCache.get(docId)
-    if (!entry || entry.mode === "deferred") return true
-    return entry.hydration.state !== "pending"
+    return hydrationOf(this.#lifecycle, docId).status === "loaded"
   }
 
   /**
@@ -888,35 +914,48 @@ export class Runtime {
    * data we merely failed to read.
    */
   whenHydrated(docId: DocId): Promise<void> {
-    const entry = this.#docCache.get(docId)
-    if (!entry || entry.mode === "deferred") return Promise.resolve()
-
-    const latch = entry.hydration
-    if (latch.state === "loaded") return Promise.resolve()
-    if (latch.state === "failed") return Promise.reject(latch.error)
-
+    const hydration = hydrationOf(this.#lifecycle, docId)
+    if (hydration.status === "loaded") return Promise.resolve()
+    if (hydration.status === "failed") return Promise.reject(hydration.error)
+    // Pending: an instance is loading, and its observers hear how it ends.
+    const instance = this.#current(docId)
+    if (instance === undefined) return Promise.resolve()
+    const { observers } = instance
     return new Promise<void>((resolve, reject) => {
-      latch.listeners.add(() => {
-        if (latch.state === "failed") reject(latch.error)
+      const observer = ({ hydration }: Observed): void => {
+        if (hydration.status === "pending") return
+        observers.delete(observer)
+        if (hydration.status === "failed") reject(hydration.error)
         else resolve()
-      })
+      }
+      observers.add(observer)
     })
   }
 
   /**
-   * Get a cached document entry, or undefined.
+   * The live objects of the instance held under `docId`, if one is.
    */
-  getEntry(docId: DocId): DocCacheEntry | undefined {
-    return this.#docCache.get(docId)
+  instanceOf(docId: DocId): Readonly<Instance> | undefined {
+    return this.#current(docId)
   }
 
   /**
-   * All document IDs currently in interpret mode.
+   * The lifecycle the Runtime records for `docId`: its phase, tier,
+   * generation and metadata, or `undefined` for a document it knows nothing
+   * of.
+   */
+  lifecycleOf(docId: DocId): Lifecycle | undefined {
+    return this.#lifecycle.docs.get(docId)
+  }
+
+  /**
+   * Every document held in memory in interpret mode, including one still
+   * loading or unloading.
    */
   documentIds(): ReadonlySet<DocId> {
     const result = new Set<DocId>()
-    for (const [docId, entry] of this.#docCache) {
-      if (entry.mode === "interpret") result.add(docId)
+    for (const [docId, entry] of this.#lifecycle.docs) {
+      if (isHeld(entry) && entry.spec.tier === "interpret") result.add(docId)
     }
     return result
   }
@@ -925,21 +964,17 @@ export class Runtime {
    * The set of deferred document IDs.
    */
   get deferred(): ReadonlySet<DocId> {
-    const result = new Set<DocId>()
-    for (const [docId, entry] of this.#docCache) {
-      if (entry.mode === "deferred") result.add(docId)
-    }
-    return result
+    return deferredIds(this.#lifecycle)
   }
 
   /**
-   * Schema hash for a document, if it exists.
+   * Schema hash for a document, if it is interpreted here.
    */
   getDocSchemaHash(docId: DocId): string | undefined {
-    const cached = this.#docCache.get(docId)
-    if (!cached) return undefined
-    if (cached.mode === "interpret") return cached.bound.schemaHash
-    return undefined
+    const instance = this.#current(docId)
+    return instance?.tier === "interpret"
+      ? instance.bound.schemaHash
+      : undefined
   }
 
   // =========================================================================
@@ -947,102 +982,86 @@ export class Runtime {
   // =========================================================================
 
   /**
-   * Destroy a document — close it, remove it from the cache and delete it from
-   * the store.
+   * Destroy a document — close it, remove it, and delete it from the store.
    *
-   * Closing releases its native document (`#evict`): a ref the application
-   * still holds reads its last value, and its writes throw
-   * `DocumentClosedError` with reason `"destroyed"`.
+   * Closing releases its native document: a ref the application still holds
+   * reads its last value, and its writes throw `DocumentClosedError` with
+   * reason `"destroyed"`.
    *
    * Fires {@link RuntimeHooks.onDocDestroyed} so the Exchange can broadcast
    * `dismiss` to peers and remove the doc from the sync graph.
    *
-   * The store delete is skipped for a document that was never stored, which is
-   * only knowable from the cache entry. Gathering the facts, deciding, then
-   * executing makes "read the entry before deleting it" a property of the
-   * code's shape rather than of a comment asking nobody to reorder two lines.
+   * The store delete is skipped only for a document known never to have been
+   * stored (see the program's `destroy` row).
    */
   destroy(docId: DocId): void {
-    const entry = this.#docCache.get(docId)
-
-    // Both "we don't know" cases default to deleting, because skipping is only
-    // safe when we know the document was never stored. An absent cache entry is
-    // exactly the case where we know nothing: `Exchange.destroy` is the single
-    // public API for removal and has to work on a document left on disk by an
-    // earlier session. A deferred entry holds no replica, so there is no sync
-    // mode to consult either.
-    //
-    // Discriminating on `mode` is forced rather than stylistic — the deferred
-    // variant is `{ mode: "deferred" }`, with no `readyInfo` to reach through.
-    const touchesStore =
-      entry === undefined ||
-      entry.mode === "deferred" ||
-      this.#usesStore(entry.readyInfo.syncMode)
-
-    this.#evict(docId, "destroyed")
-    if (touchesStore) this.#storeHandle?.dispatch({ type: "destroy", docId })
-    this.#hooks?.onDocDestroyed?.(docId)
+    this.#throwing({ type: "destroy", docId })
   }
 
   /**
    * Suspend a document — leave the sync graph but keep all local state.
    *
-   * Fires {@link RuntimeHooks.onDocSuspended} so the Exchange can suspend
-   * the doc in the Synchronizer (broadcasts `dismiss` but retains runtime).
+   * Fires {@link RuntimeHooks.onDocSuspended} so the Exchange can take it out
+   * of the sync graph. Suspending a suspended document does nothing; one not
+   * held here, or unloading, throws.
    */
   suspend(docId: DocId): void {
-    const cached = this.#docCache.get(docId)
-    if (!cached) {
-      throw new Error(`Document '${docId}' does not exist.`)
-    }
-    if (cached.mode === "deferred") {
-      throw new Error(`Cannot suspend deferred document '${docId}'.`)
-    }
-    if (cached.suspended) {
-      return // Already suspended — idempotent
-    }
-    cached.suspended = true
-    this.#hooks?.onDocSuspended?.(docId)
+    this.#throwing({ type: "suspend", docId })
   }
 
   /**
-   * Resume a suspended document.
+   * Resume a suspended document. Throws for one that is not suspended.
    */
   resume(docId: DocId): void {
-    const cached = this.#docCache.get(docId)
-    if (!cached) {
-      throw new Error(`Document '${docId}' does not exist.`)
-    }
-    if (cached.mode === "deferred" || !cached.suspended) {
-      throw new Error(
-        `Document '${docId}' is not suspended. Call suspend() first.`,
-      )
-    }
-    cached.suspended = false
-    this.#hooks?.onDocResumed?.(docId)
+    this.#throwing({ type: "resume", docId })
   }
 
   /**
-   * Delete a deferred entry and return its metadata (for promotion).
+   * Unload a document: release its memory and keep it in the store, so that
+   * `get` or `open` loads it again, in the tier it had and suspended if it
+   * was.
    *
-   * @internal — used by Exchange for deferred→interpret/replicate promotion.
+   * At once, its writes are refused with `DocumentClosedError` (reason
+   * `"unloaded"`); it still sends what peers are owed, and takes nothing in. Once the store holds all of it, its
+   * ref closes and it leaves the sync graph; then its replica is disposed. A
+   * `get` or `open` before the store holds all of it cancels the unload and
+   * returns the same ref; one after loads it again.
+   *
+   * Throws for a document not held, still loading, whose load failed, or not
+   * stored (no store, or a transient sync mode). Does nothing for one already
+   * unloading or unloaded.
    */
-  deleteDeferred(docId: DocId): DocCacheEntry | undefined {
-    const entry = this.#docCache.get(docId)
-    if (entry?.mode === "deferred") {
-      this.#docCache.delete(docId)
-      return entry
-    }
-    return undefined
+  unload(docId: DocId): void {
+    this.#throwing({ type: "unload", docId })
   }
 
   /**
-   * Mark a document as deferred (participates in routing but has no local data).
+   * Record that a peer announced a document this Runtime holds nothing of.
+   * A document it holds stays as it is.
    *
-   * @internal — used by Exchange for unsupported/deferred documents.
+   * @internal — used by the Exchange for documents it defers.
    */
-  markDeferred(docId: DocId): void {
-    this.#docCache.set(docId, { mode: "deferred" })
+  defer(docId: DocId): void {
+    this.#throwing({ type: "defer", docId })
+  }
+
+  /**
+   * Step a request, and return its refusal rather than throw it.
+   *
+   * @internal — for the Exchange's doors that skip a refusal: `onEnsureDoc`,
+   * `registerSchema`'s sweep, and a peer's request for an unloaded document
+   * (`reload`).
+   */
+  request(input: LifecycleRequest): Refusal | undefined {
+    const stepped = this.#step(input)
+    return "refusal" in stepped ? stepped.refusal : undefined
+  }
+
+  /** Step a request, throw its refusal, and return what it built. */
+  #throwing(input: LifecycleRequest): Instance | undefined {
+    const stepped = this.#step(input)
+    if ("refusal" in stepped) throw refusalError(stepped.refusal)
+    return stepped.built
   }
 
   // =========================================================================
@@ -1060,9 +1079,9 @@ export class Runtime {
    * write is in flight collapses into the one write owed after it, and that
    * write finds nothing new and touches no store.
    *
-   * Carries a `docId` and nothing else. The Runtime resolves the document
-   * from its own cache, which is where the document lives, so the network
-   * shell never needs local bookkeeping to make the call.
+   * Carries a `docId` and nothing else. The store program's executor
+   * resolves the document's current instance when a write starts, so the
+   * network shell never needs local bookkeeping to make the call.
    */
   onStateAdvanced(docId: DocId): void {
     this.#storeHandle?.dispatch({ type: "state-advanced", docId })
@@ -1081,25 +1100,16 @@ export class Runtime {
    * replica is disposed.
    */
   rebuildReplica(docId: DocId, payload: SubstratePayload): void {
-    const entry = this.#docCache.get(docId)
-    if (entry?.mode !== "replicate") {
+    const instance = this.#current(docId)
+    if (instance?.tier !== "replicate") {
       throw new Error(
         `[runtime] cannot rebuild '${docId}': not a replicate-mode document`,
       )
     }
-    const replaced = entry.readyInfo.replica
-    entry.readyInfo.replica = replicaFromEntirety(
-      entry.readyInfo.replicaFactory,
-      payload,
-    )
+    const { readyInfo } = instance
+    const replaced = readyInfo.replica
+    readyInfo.replica = replicaFromEntirety(readyInfo.replicaFactory, payload)
     replaced.dispose("disposed")
-  }
-
-  /**
-   * Will this document's state ever reach a store, in either direction?
-   */
-  #usesStore(syncMode: SyncMode): boolean {
-    return this.#store !== undefined && syncMode.durability === "persistent"
   }
 
   /**
@@ -1116,9 +1126,9 @@ export class Runtime {
    * same. Without a store, only the trim happens.
    */
   async compact(docId: DocId, trimTo?: Version): Promise<void> {
-    const entry = this.#docCache.get(docId)
-    if (entry === undefined || entry.mode === "deferred") return
-    const { replica } = entry.readyInfo
+    const instance = this.#current(docId)
+    if (instance === undefined) return
+    const { replica } = instance.readyInfo
     replica.advance(trimTo ?? replica.version())
 
     if (!this.#storeHandle) return
@@ -1189,13 +1199,13 @@ export class Runtime {
    * discarded when it was rebuilt.
    */
   #authored(docId: DocId): WriteOptions {
-    const entry = this.#docCache.get(docId)
+    const instance = this.#current(docId)
     return {
       authored:
-        entry?.mode === "interpret" &&
-        entry.readyInfo.syncMode.writerModel === "serialized" &&
-        entry.publication.ownHigh !== undefined &&
-        entry.refusals.seat() === undefined,
+        instance?.tier === "interpret" &&
+        instance.readyInfo.syncMode.writerModel === "serialized" &&
+        instance.publication.ownHigh !== undefined &&
+        instance.refusals.seat() === undefined,
     }
   }
 
@@ -1203,11 +1213,12 @@ export class Runtime {
    * Compact a document, and resolve with the version the store then holds.
    *
    * 1. Read the store's mark, then every entry.
-   * 2. Stop if the document is no longer the one held when the read began:
-   *    nothing is merged into, or pushed from, a document that is gone. The
-   *    store orders calls, not this whole compaction (`serialStore`), so a
-   *    destroy's delete may run between the read and the write; this check
-   *    is what keeps the write from storing the document again.
+   * 2. Stop if the instance held when the read began is no longer current
+   *    (its generation differs): nothing is merged into, or pushed from, a
+   *    document that is gone. The store orders calls, not this whole
+   *    compaction (`serialStore`), so a destroy's delete may run between the
+   *    read and the write; this check is what keeps the write from storing
+   *    the document again.
    * 3. Take what was read into the live replica, toward its own lineage, or
    *    toward the latest stored one while it is still at genesis, since
    *    joining a lineage from genesis is not a crossing. Records other
@@ -1229,18 +1240,18 @@ export class Runtime {
     docId: DocId,
     options: WriteOptions,
   ): Promise<string> {
-    const held = this.#docCache.get(docId)
+    const held = currentGen(this.#lifecycle, docId)
     const mark = await store.mark(docId)
     const entries: StoredEntry[] = []
     for await (const record of store.loadAll(docId)) {
       if (record.kind === "entry") entries.push(record)
     }
 
-    const entry = this.#docCache.get(docId)
-    if (entry === undefined || entry !== held || entry.mode === "deferred") {
+    const instance = this.#current(docId)
+    if (instance === undefined || currentGen(this.#lifecycle, docId) !== held) {
       throw new Error(`[runtime] cannot compact '${docId}': document not held`)
     }
-    const { replica, replicaFactory } = entry.readyInfo
+    const { replica, replicaFactory } = instance.readyInfo
     const before = replica.version()
     const toward =
       before.lineage === DEFAULT_LINEAGE
@@ -1289,15 +1300,16 @@ export class Runtime {
    * than thrown through the dispatcher.
    */
   #prepareWrite(docId: DocId, write: Write): Prepared {
-    const entry = this.#docCache.get(docId)
-    if (!entry || entry.mode === "deferred") {
+    const instance = this.#current(docId)
+    if (instance === undefined) {
       throw new Error(`[runtime] cannot write '${docId}': document not held`)
     }
     // Commit, read the version, export: otherwise the export commits a
     // pending native write here, its signal fires from inside this executor,
     // and the drain asks for one more write that finds nothing new.
-    if (entry.mode === "interpret") entry.readyInfo.replica.commitPending()
-    const { replica, replicaFactory, syncMode, schemaHash } = entry.readyInfo
+    if (instance.tier === "interpret")
+      instance.readyInfo.replica.commitPending()
+    const { replica, replicaFactory, syncMode, schemaHash } = instance.readyInfo
     const current = replica.version()
     const version = current.serialize()
 
@@ -1364,9 +1376,7 @@ export class Runtime {
     this.#storeHandle?.dispose()
     this.#stopTick()
     this.#cancelAllRetries()
-    for (const docId of [...this.#docCache.keys()]) {
-      this.#evict(docId, "disposed")
-    }
+    this.#step({ type: "close-all", reason: "disposed" })
     await this.#store?.close()
   }
 
@@ -1379,9 +1389,7 @@ export class Runtime {
     this.#stopTick()
     this.#cancelAllRetries()
     this.#storeHandle?.dispose()
-    for (const docId of [...this.#docCache.keys()]) {
-      this.#evict(docId, "disposed")
-    }
+    this.#step({ type: "close-all", reason: "disposed" })
   }
 
   // =========================================================================
@@ -1389,44 +1397,142 @@ export class Runtime {
   // =========================================================================
 
   /**
-   * Create an interpreted document — non-generic internal path.
+   * Get or open an interpreted document — non-generic internal path.
    *
-   * This is the same as {@link get} but without the generic type
-   * parameters, avoiding TS2589 when called from non-generic contexts
-   * (e.g. Exchange's onEnsureDoc callback). The public {@link get} method
-   * delegates here with an `as never` cast to preserve precise types.
+   * {@link get} without the generic type parameters, avoiding TS2589 when
+   * called from non-generic contexts (the Exchange's doors). The public
+   * {@link get} delegates here with an `as never` cast to preserve precise
+   * types. `kind` is the request's intent: an `open` that can load nothing
+   * builds nothing, and returns `undefined`. Throws the step's refusal.
    *
    * @internal
    */
-  createInterpretDoc(docId: DocId, bound: BoundSchema, intent: Intent): any {
-    // Ensure semantics: if this doc already exists in interpret mode,
-    // return the existing ref. A `get` of a document an `open` is loading
-    // keeps it, whatever the load finds.
-    const cached = this.#docCache.get(docId)
-    if (cached && cached.mode === "interpret") {
-      if (intent.kind === "create") cached.intent = CREATE
-      return cached.ref
+  createInterpretDoc(
+    docId: DocId,
+    bound: BoundSchema,
+    kind: Intent["kind"],
+  ): any {
+    // What this step built, even if a nested step has closed it since: the
+    // caller then holds a closed ref. Otherwise the instance already held.
+    const instance =
+      this.#throwing({ type: "get", docId, bound, intent: kind }) ??
+      this.#current(docId)
+    return instance?.tier === "interpret" ? instance.ref : undefined
+  }
+
+  // =========================================================================
+  // INTERNAL — The lifecycle program's shell
+  // =========================================================================
+
+  /**
+   * Run one step of the lifecycle program, as a transaction:
+   * 1. `update` computes the next model and its effects. Those that can fail
+   *    (`refuse`, `build`) lead the list.
+   * 2. A refusal is returned, and nothing is committed. Otherwise the step
+   *    returns the instance it built, if any.
+   * 3. Each `build` constructs its instance. A throw disposes what this step
+   *    built and propagates: nothing is committed, and the generation it was
+   *    issued is never used.
+   * 4. The model is committed, and the built instances join `#instances`. A
+   *    promotion's build took the promoted replica, so that instance leaves
+   *    without being disposed.
+   * 5. The remaining effects run in order (`#execute`).
+   * 6. The observers of each document whose observed values changed (its
+   *    load, its unloading refusal) are told.
+   *
+   * Synchronous, not on a `@kyneta/machine` runtime: both of those queue a
+   * re-entrant dispatch, and a door reached from inside an effect
+   * (`onDocReady` → `onEnsureDoc` → `get`) must return its ref. Such a step
+   * runs against the committed model, and an outer effect it made stale finds
+   * no instance under its generation and is skipped. Nothing between `update`
+   * and the commit calls a hook, so no door can step in between.
+   */
+  #step(input: LifecycleInput): Stepped {
+    const before = this.#lifecycle
+    const [next, ...effects] = lifecycleProgram.update(input, before)
+
+    const built = new Map<Generation, Instance>()
+    let promoted: Generation | undefined
+    try {
+      for (const effect of effects) {
+        if (effect.type === "refuse") return { refusal: effect.refusal }
+        if (effect.type !== "build") break
+        built.set(
+          effect.gen,
+          this.#build(effect.docId, effect.gen, effect.spec),
+        )
+        if (
+          effect.spec.tier === "interpret" &&
+          typeof effect.spec.from === "object"
+        ) {
+          promoted = effect.spec.from.promote
+        }
+      }
+    } catch (error) {
+      for (const instance of built.values()) {
+        instance.readyInfo.replica.dispose("disposed")
+      }
+      throw error
     }
 
-    // A replicate entry holds an accumulated `Replica` and no ref. Promoting
-    // it means giving that same replica a schema, not building a new document
-    // beside it — `factory.upgrade` wraps the existing backing state, so the
-    // accumulated bytes carry across. Falling through to ordinary construction
-    // instead would replace them with a fresh, empty substrate, losing the
-    // state with no error and no event, in the tier relays and audit logs use
-    // — exactly where nobody is reading contents closely enough to notice.
-    const promoting = cached?.mode === "replicate" ? cached : undefined
+    this.#lifecycle = next
+    for (const [gen, instance] of built) this.#instances.set(gen, instance)
+    if (promoted !== undefined) this.#instances.delete(promoted)
 
+    for (const effect of effects) this.#execute(effect)
+    this.#notify(input, before)
+    return { built: built.values().next().value }
+  }
+
+  /** The instance held under `docId`, by the model's current generation. */
+  #current(docId: DocId): Instance | undefined {
+    const gen = currentGen(this.#lifecycle, docId)
+    return gen === undefined ? undefined : this.#instances.get(gen)
+  }
+
+  /**
+   * Construct the live objects a `build` names. Calls no hook, so nothing
+   * here can step the program.
+   */
+  #build(docId: DocId, gen: Generation, spec: BuildSpec): Instance {
+    if (spec.tier === "interpret") return this.#buildInterpret(docId, gen, spec)
+    const readyInfo: ReplicateReadyInfo = {
+      docId,
+      mode: "replicate",
+      replica: spec.replicaFactory.createEmpty(),
+      replicaFactory: spec.replicaFactory,
+      syncMode: spec.syncMode,
+      schemaHash: spec.schemaHash,
+    }
+    return { tier: "replicate", readyInfo, observers: new Set() }
+  }
+
+  /**
+   * Construct an interpreted instance: its substrate, ref, refusals,
+   * publication record and local terms.
+   *
+   * A promotion's build is transactional up to `upgradeReplica`'s take, and
+   * no further. Everything that depends on the input runs before it: the
+   * factory, the replica's origin (`upgrade` checks it before it takes), and
+   * the schema's fit, which `update` already decided. `createRef` needs the
+   * substrate, so it cannot run first; after the take, only a bug can throw.
+   * Should one, nothing is committed, and the model records a ready replica
+   * over a closed one, whose every use throws `DocumentClosedError`.
+   */
+  #buildInterpret(
+    docId: DocId,
+    gen: Generation,
+    spec: Extract<BuildSpec, { tier: "interpret" }>,
+  ): InterpretInstance {
+    const { bound, from } = spec
     const factory = bound.factory({
       peerId: this.peerId,
       binding: bound.identityBinding,
     })
 
-    // ── Shared prefix: create substrate, build ref ──
-    //
     // A document that will hydrate is about to import operations this peer
     // wrote in an earlier session, so it takes the deferred-identity path:
-    // `adopt` is called by `#becomeReady` once that import finishes. One that
+    // its `adopt` effect claims identity once that import finishes. One that
     // will not hydrate has nothing to import, so `upgrade`'s immediate claim
     // is correct and `adopt` is a no-op.
     //
@@ -1434,250 +1540,306 @@ export class Runtime {
     // this file should hold: `beginHydration` puts the question to the factory
     // and falls back to the safe answer for backends that do not care.
     //
-    // Bound once and used at every decision point below — see
-    // `#usesStores` for why they have to agree. A promotion never hydrates:
-    // the replica it upgrades has already loaded, which is the precondition
-    // the caller had to satisfy to get here.
-    const willHydrate = !promoting && this.#usesStore(bound.syncMode)
+    // Otherwise a replica is upgraded, which claims at once: a promoted
+    // relay's, whose import has already finished, or an empty one, with
+    // nothing to import. Making it defer would leave the identity unclaimed
+    // with nothing left to claim it. `upgradeReplica` closes the replica,
+    // which `upgrade` took or copied. Promoting means giving the replica a
+    // schema, not building a new document beside it: a fresh substrate would
+    // replace the accumulated state, with no error and no event.
+    const { substrate, ...authorship } =
+      from === "hydration"
+        ? beginHydration(factory, bound.schema)
+        : {
+            substrate: upgradeReplica(
+              factory,
+              from === "empty"
+                ? factory.replica.createEmpty()
+                : this.#promotedReplica(from.promote),
+              bound.schema,
+            ),
+            ...NO_AUTHORSHIP,
+          }
 
-    // Both ways end with this peer's identity claimed; they differ in *when*.
-    // `beginHydration` defers, because an import is still coming. Otherwise
-    // a replica is upgraded, which claims at once: the relay's, whose import
-    // has already finished, or an empty one, with nothing to import. Making
-    // it defer would leave the identity unclaimed with nothing left to claim
-    // it. `upgradeReplica` closes the replica, which `upgrade` took or copied.
-    const { substrate, ...authorship } = willHydrate
-      ? beginHydration(factory, bound.schema)
-      : {
-          substrate: upgradeReplica(
-            factory,
-            promoting?.readyInfo.replica ?? factory.replica.createEmpty(),
-            bound.schema,
+    try {
+      // Who refuses its authored writes besides the substrate: its lifecycle,
+      // while it unloads; another seat of the storage, which may write it
+      // (`#refuse`); and the network.
+      const observers: Observers = new Set()
+      const unloaded = new DocumentClosedError("unloaded")
+      const refusals: Refusals = {
+        unloading: settableFeed<WriteRefusal | undefined>(
+          signalFeed(
+            () =>
+              unloadingOf(this.#lifecycle, docId, gen) ? unloaded : undefined,
+            onChange => observe(observers, onChange),
           ),
-          ...NO_AUTHORSHIP,
-        }
-
-    // Who may author it besides the substrate: another seat of the storage
-    // may write it (`#refuse`), and the network may refuse it.
-    const refusals: Refusals = {
-      seat: settableFeed<WriteRefusal | undefined>(undefined),
-      network: settableFeed<WriteRefusal | undefined>(undefined),
-    }
-    const ref: any = createRef(bound.schema, substrate, {
-      lease: this.lease,
-      refusal: firstDefined(refusals.seat, refusals.network),
-    })
-
-    const readyInfo: InterpretReadyInfo = {
-      docId,
-      mode: "interpret",
-      replica: substrate,
-      replicaFactory: factory.replica,
-      syncMode: bound.syncMode,
-      schemaHash: bound.schemaHash,
-      supportedHashes: [...bound.supportedHashes],
-    }
-
-    const hydration = createHydrationLatch()
-    const publication = createPublication()
-
-    const entry: InterpretEntry = {
-      mode: "interpret",
-      ref,
-      bound,
-      readyInfo,
-      announced: false,
-      hydration,
-      publication,
-      unwire: NOTHING_WIRED,
-      authorship,
-      refusals,
-      writer: null,
-      // A promoted replica is held, so it is had whatever an `open` asked.
-      intent: promoting ? CREATE : intent,
-      // Suspension survives promotion. The two say different things: which
-      // tier holds the document, versus whether it is in the sync graph.
-      // Dropping the flag here would let a `get()` silently re-announce a
-      // document the application had deliberately withdrawn — the property
-      // `get()` is specifically built not to have.
-      ...(promoting?.suspended ? { suspended: true } : {}),
-    }
-    // The early returns at the top of this method are the only thing between
-    // an existing entry and this overwrite. Any new document mode has to be
-    // handled up there — returned early, or refused — or it reaches this line
-    // and whatever it was holding is replaced without a word.
-    this.#docCache.set(docId, entry)
-
-    // The local terms: the storage term, which joins this document's settle
-    // conjunction, and the persistence term. They are registered here rather
-    // than after hydration finishes, because the point of the storage term is
-    // to be observable *while* still pending — that is what stops a caller
-    // concluding "empty" from a document that simply has not finished
-    // loading. Each follows a live feed over this entry until the document
-    // closes (`#evict`).
-    registerLocalTerms(ref, {
-      syncMode: bound.syncMode,
-      hydration: settableFeed<Hydration>(
-        signalFeed(
-          () => hydrationOf(hydration),
-          onChange => {
-            if (hydration.state !== "pending") return () => {}
-            hydration.listeners.add(onChange)
-            return () => hydration.listeners.delete(onChange)
-          },
         ),
-      ),
-      persistence: settableFeed<Persistence>(
-        signalFeed(
-          () => ({
-            persisted: this.#persisted(entry),
-            error: this.#persistenceError(entry),
-          }),
-          onChange => {
-            publication.listeners.add(onChange)
-            return () => publication.listeners.delete(onChange)
-          },
-        ),
-      ),
-    })
-
-    // Before it can become ready: a document that loads nothing does so
-    // below, synchronously, and registers with the sync graph.
-    this.#hooks?.onDocInterpreted?.(docId, ref)
-
-    if (willHydrate) {
-      this.#loadThenBecomeReady(entry)
-    } else {
-      // A promotion loads nothing more, and knows the writer its replica
-      // loaded with.
-      this.#becomeReady(entry, {
-        outcome: NOTHING_LOADED.outcome,
-        writer: promoting?.writer ?? null,
-      })
-    }
-
-    return ref
-  }
-
-  /**
-   * Create a replicated (headless) document.
-   */
-  #createReplicateDoc(
-    docId: DocId,
-    replicaFactory: ReplicaFactoryLike,
-    syncMode: SyncMode,
-    schemaHash: string,
-  ): void {
-    // Ensure semantics: first writer wins.
-    const cached = this.#docCache.get(docId)
-    if (cached && cached.mode === "replicate") return
-
-    const replica = replicaFactory.createEmpty()
-
-    const readyInfo: ReplicateReadyInfo = {
-      docId,
-      mode: "replicate",
-      replica,
-      replicaFactory,
-      syncMode,
-      schemaHash,
-    }
-
-    // Same rule as the interpret path — a relay holds transient documents too.
-    const willHydrate = this.#usesStore(syncMode)
-
-    // A replicate document has no ref, so no settle term can be keyed to it
-    // and it has no `docStatus` surface. The latch is still tracked so the
-    // entry's hydration state is uniform across modes, and
-    // `whenHydrated(docId)` can wait on it.
-    const hydration = createHydrationLatch()
-
-    const entry: DocCacheEntry = {
-      mode: "replicate",
-      readyInfo,
-      announced: false,
-      hydration,
-      writer: null,
-    }
-    this.#docCache.set(docId, entry)
-
-    if (willHydrate) {
-      this.#loadThenBecomeReady(entry)
-    } else {
-      this.#becomeReady(entry, NOTHING_LOADED)
-    }
-  }
-
-  /**
-   * Load the document from the store, then make it ready. A failed load
-   * marks the latch `failed` and nothing else: its state is unknown, so the
-   * document is neither registered, announced, nor given a stable identity.
-   */
-  #loadThenBecomeReady(entry: ReadyEntry): void {
-    const loading = this.#hydrate(entry.readyInfo).then(
-      loaded => this.#becomeReady(entry, loaded),
-      (error: unknown) =>
-        resolveHydration(entry.hydration, { ok: false, error }),
-    )
-    this.#track(loading)
-  }
-
-  /**
-   * The one place a document becomes ready, whatever path created it.
-   *
-   * The order is fixed:
-   * 1. A document closed while it loaded is no longer this entry's to make
-   *    ready, and nothing below runs. `#evict` already failed its latch with
-   *    the close error, so waiters are not told a document that is gone has
-   *    loaded.
-   * 2. What was loaded decides (`readinessFor`). An `open` that found
-   *    nothing fails its latch, then takes the document out again and puts
-   *    back the deferred entry it replaced, in this one step, so nothing sees
-   *    it missing between; nothing was registered, written or announced.
-   *    Otherwise the store program learns what the store holds.
-   * 3. `adopt` claims identity (Yjs, Loro) and lifts plain's loading refusal
-   *    before anyone is told the document has loaded, so a listener that
-   *    writes on that signal finds the document writable. A serialized
-   *    document another seat of the storage writes is refused instead (its
-   *    seat refusal is set), so such a listener's write throws.
-   * 4. The latch resolves `loaded`.
-   * 5. `#register` publishes the document to the sync graph, and an
-   *    interpreted document is wired: its local updates start leaving the
-   *    process, and its changesets reach the observation hook. Both carry
-   *    the identity claimed in step 3.
-   */
-  #becomeReady(entry: ReadyEntry, loaded: Loaded): void {
-    const { docId } = entry.readyInfo
-    // Closed while it loaded: `#evict` failed its latch with the close error.
-    if (this.#docCache.get(docId) !== entry) return
-    const intent = entry.mode === "interpret" ? entry.intent : CREATE
-    const readiness = readinessFor(docId, loaded.outcome, intent)
-    if (readiness.kind === "absent") {
-      // Failed first, so its terms close with this error, not the close's.
-      resolveHydration(entry.hydration, {
-        ok: false,
-        error: new Error(`Document '${docId}' is not held here`),
-      })
-      this.#evict(docId, "disposed")
-      if (intent.kind === "open" && intent.wasDeferred) this.markDeferred(docId)
-      return
-    }
-    if (readiness.input) this.#storeHandle?.dispatch(readiness.input)
-    entry.writer = loaded.writer
-    if (entry.mode === "interpret") {
-      entry.authorship.adopt()
-      const { writerModel } = entry.readyInfo.syncMode
-      if (
-        writerModel === "serialized" &&
-        loaded.writer !== null &&
-        loaded.writer !== this.peerId
-      ) {
-        this.#refuse(entry, new WriterRefusedError(docId, loaded.writer))
+        seat: settableFeed<WriteRefusal | undefined>(undefined),
+        network: settableFeed<WriteRefusal | undefined>(undefined),
       }
+      const ref: any = createRef(bound.schema, substrate, {
+        lease: this.lease,
+        refusal: firstDefined(
+          refusals.unloading,
+          refusals.seat,
+          refusals.network,
+        ),
+      })
+      const readyInfo: InterpretReadyInfo = {
+        docId,
+        mode: "interpret",
+        replica: substrate,
+        replicaFactory: factory.replica,
+        syncMode: bound.syncMode,
+        schemaHash: bound.schemaHash,
+        supportedHashes: [...bound.supportedHashes],
+      }
+      const instance: InterpretInstance = {
+        tier: "interpret",
+        ref,
+        bound,
+        readyInfo,
+        authorship,
+        refusals,
+        publication: createPublication(),
+        unloaded,
+        observers,
+        unwire: NOTHING_WIRED,
+      }
+
+      // The local terms: the storage term, which joins this document's settle
+      // conjunction, and the persistence term. They are registered now rather
+      // than once the load finishes, because the point of the storage term is
+      // to be observable *while* still pending — that is what stops a caller
+      // concluding "empty" from a document that simply has not finished
+      // loading. Each follows a live feed over this instance until it closes.
+      const { publication } = instance
+      registerLocalTerms(ref, {
+        syncMode: bound.syncMode,
+        hydration: settableFeed<Hydration>(
+          signalFeed(
+            () => this.#hydrationFor(docId, gen),
+            onChange => observe(observers, onChange),
+          ),
+        ),
+        persistence: settableFeed<Persistence>(
+          signalFeed(
+            () => ({
+              persisted: this.#persisted(instance),
+              error: this.#persistenceError(instance),
+            }),
+            onChange => {
+              publication.listeners.add(onChange)
+              return () => publication.listeners.delete(onChange)
+            },
+          ),
+        ),
+      })
+      return instance
+    } catch (error) {
+      substrate.dispose("disposed")
+      throw error
     }
-    resolveHydration(entry.hydration, { ok: true })
-    this.#register(entry)
-    if (entry.mode === "interpret") entry.unwire = this.#wire(docId, entry)
+  }
+
+  /** The replica a promotion upgrades: the ready replica of `gen`. */
+  #promotedReplica(gen: Generation): ReplicaLike {
+    const instance = this.#instances.get(gen)
+    if (instance?.tier !== "replicate") {
+      throw new Error(`[runtime] no replica to promote under generation ${gen}`)
+    }
+    return instance.readyInfo.replica
+  }
+
+  /**
+   * The hydration term's live value for the instance of `gen`. Read only
+   * while that instance is current: its term is set to a constant when it
+   * closes, and nothing reads it before its step commits.
+   */
+  #hydrationFor(docId: DocId, gen: Generation): Hydration {
+    return currentGen(this.#lifecycle, docId) === gen
+      ? hydrationOf(this.#lifecycle, docId)
+      : { status: "pending" }
+  }
+
+  /**
+   * Execute one effect after the commit. An effect that names a generation
+   * runs against that instance, and does nothing if it is gone: a nested step
+   * closed or replaced it.
+   */
+  #execute(effect: LifecycleEffect): void {
+    switch (effect.type) {
+      case "refuse":
+      case "build":
+        return
+      case "store":
+        this.#storeHandle?.dispatch(effect.input)
+        return
+      case "notify": {
+        const hooks = this.#hooks
+        if (effect.hook === "destroyed") hooks?.onDocDestroyed?.(effect.docId)
+        else if (effect.hook === "suspended") {
+          hooks?.onDocSuspended?.(effect.docId)
+        } else hooks?.onDocResumed?.(effect.docId)
+        return
+      }
+      case "leaving":
+        this.#hooks?.onDocLeaving?.(effect.docId, effect.on)
+        return
+    }
+
+    const instance = this.#instances.get(effect.gen)
+    if (instance === undefined) return
+    switch (effect.type) {
+      case "interpreted":
+        // The network terms attach here, before the document can register,
+        // so what is attached observes its registration with the sync graph.
+        if (instance.tier === "interpret") {
+          this.#hooks?.onDocInterpreted?.(effect.docId, instance.ref)
+        }
+        return
+      case "load":
+        this.#load(effect.docId, effect.gen, instance)
+        return
+      case "adopt":
+        if (instance.tier === "interpret") this.#adopt(instance, effect.writer)
+        return
+      case "register":
+        this.#hooks?.onDocReady?.(instance.readyInfo, {
+          suspended: effect.suspended,
+        })
+        return
+      case "wire":
+        if (instance.tier === "interpret") {
+          instance.unwire = this.#wire(effect.docId, instance)
+        }
+        return
+      case "drain":
+        this.#drainLocal(effect.docId)
+        return
+      case "leave": {
+        const { docId, gen } = effect
+        const left = (): void => {
+          this.#step({ type: "left", docId, gen })
+        }
+        const unload = this.#hooks?.onDocUnload
+        if (unload === undefined) left()
+        else unload(docId, left)
+        return
+      }
+      case "close":
+        this.#close(instance, effect.reason, effect.hydration)
+        return
+      case "dispose":
+        this.#dispose(instance, effect.gen, effect.reason)
+        return
+    }
+  }
+
+  /**
+   * Load the instance of `gen` from the store, and report how it went under
+   * that generation: a load that returns after its document closed, or was
+   * replaced, is ignored by `update`.
+   */
+  #load(docId: DocId, gen: Generation, instance: Instance): void {
+    this.#track(
+      this.#hydrate(instance.readyInfo).then(
+        ({ outcome, writer }) => {
+          this.#step({ type: "loaded", docId, gen, outcome, writer })
+        },
+        (error: unknown) => {
+          this.#step({ type: "load-failed", docId, gen, error })
+        },
+      ),
+    )
+  }
+
+  /**
+   * Claim this peer's identity (Yjs, Loro), and lift plain's loading
+   * refusal. A serialized document another seat of the storage writes is
+   * refused instead (its seat refusal is set), so a listener's write on the
+   * loaded signal throws.
+   */
+  #adopt(instance: InterpretInstance, writer: PeerId | null): void {
+    instance.authorship.adopt()
+    if (
+      instance.readyInfo.syncMode.writerModel === "serialized" &&
+      writer !== null &&
+      writer !== this.peerId
+    ) {
+      this.#refuse(
+        instance,
+        new WriterRefusedError(instance.readyInfo.docId, writer),
+      )
+    }
+  }
+
+  /**
+   * End an instance's ref, in this order:
+   * 1. Close its hydration once (`closedHydration`): a load still pending
+   *    fails with the close error, and an answer already given stands.
+   * 2. Unwire it. Its changeset subscription lives in the context's
+   *    subscriber trie, which a held ref keeps, and closes over this Runtime.
+   * 3. Fix its unloading refusal at its closing value, which an unload keeps
+   *    until the replica is disposed; then close its terms (`closeTerms`)
+   *    with that hydration: each keeps the answer it had, and none reaches
+   *    this Runtime any more. The network refusal is emptied, letting go of
+   *    whatever filled it.
+   * 4. Tell every observer those values, so `whenHydrated(ref)` and
+   *    `whenHydrated(docId)` settle with the same error object.
+   *
+   * The replica is left to `#dispose`: an unload closes at its release and
+   * disposes once it has left the sync graph, which may still read it.
+   */
+  #close(instance: Instance, reason: ClosedReason, before: Hydration): void {
+    const error = new DocumentClosedError(reason)
+    const hydration = closedHydration(before, error)
+    let refusal: WriteRefusal | undefined
+    if (instance.tier === "interpret") {
+      instance.unwire()
+      // Fixed first: a term's subscriber may write as it hears the close.
+      refusal = reason === "unloaded" ? instance.unloaded : undefined
+      instance.refusals.unloading.set(refusal)
+      const terms = termsOf(instance.ref)
+      if (terms !== undefined) closeTerms(terms, error, hydration)
+      instance.refusals.network.set(undefined)
+    }
+    for (const observer of [...instance.observers]) {
+      observer({ hydration, refusal })
+    }
+    instance.observers.clear()
+  }
+
+  /**
+   * Release an instance's memory: dispose its replica, which releases the
+   * native document, and delete the instance. A held ref reads its last
+   * value, and every write throws `DocumentClosedError`.
+   */
+  #dispose(instance: Instance, gen: Generation, reason: ClosedReason): void {
+    instance.readyInfo.replica.dispose(reason)
+    this.#instances.delete(gen)
+  }
+
+  /**
+   * Tell the observers of each document whose observed values the step
+   * changed. The step names one document, or for `hooked` and `close-all`
+   * every one. Compared by value, so a step that only registers a document
+   * wakes nobody.
+   */
+  #notify(input: LifecycleInput, before: LifecycleModel): void {
+    const ids =
+      "docId" in input
+        ? [input.docId]
+        : new Set([...before.docs.keys(), ...this.#lifecycle.docs.keys()])
+    for (const docId of ids) {
+      const gen = currentGen(this.#lifecycle, docId)
+      const instance = gen === undefined ? undefined : this.#instances.get(gen)
+      if (gen === undefined || instance === undefined) continue
+      const now = observedIn(this.#lifecycle, docId, gen, instance)
+      if (sameObserved(observedIn(before, docId, gen, instance), now)) continue
+      for (const observer of [...instance.observers]) observer(now)
+    }
   }
 
   /**
@@ -1691,49 +1853,20 @@ export class Runtime {
    *
    * Nothing needs to have been heard before this point: whatever was written
    * while the document loaded is owed to the store by `hydrated`, and
-   * `#register` has just published the live version to peers.
+   * `register`, once hooks are set, has just published the live version to
+   * peers.
    */
-  #wire(docId: DocId, entry: InterpretEntry): () => void {
-    const stopLocalUpdates = entry.readyInfo.replica.subscribeLocalUpdates(() =>
-      this.#markLocalChangeDirty(docId),
+  #wire(docId: DocId, instance: InterpretInstance): () => void {
+    const stopLocalUpdates = instance.readyInfo.replica.subscribeLocalUpdates(
+      () => this.#markLocalChangeDirty(docId),
     )
-    const stopChangesets = subscribe(entry.ref, changeset =>
+    const stopChangesets = subscribe(instance.ref, changeset =>
       this.#hooks?.onDocChangeset?.(docId, changeset),
     )
     return () => {
       stopLocalUpdates()
       stopChangesets()
     }
-  }
-
-  /**
-   * Close a document and remove it from the cache, in this order:
-   * 1. Unwire it. Its changeset subscription lives in the context's
-   *    subscriber trie, which a held ref keeps, and closes over this Runtime.
-   * 2. Close its terms (`closeTerms`): each keeps the answer it had, a
-   *    pending one fails with the close error, and none reaches this Runtime
-   *    any more. A load still in flight fails its latch with the same error,
-   *    for the waiters `whenHydrated(docId)` attached to it. The network
-   *    refusal is emptied, letting go of whatever filled it.
-   * 3. Dispose its replica, which releases the native document. A held ref
-   *    reads its last value, and every write throws `DocumentClosedError`.
-   * 4. Delete the entry.
-   */
-  #evict(docId: DocId, reason: ClosedReason): void {
-    const entry = this.#docCache.get(docId)
-    if (entry === undefined) return
-    if (entry.mode !== "deferred") {
-      const error = new DocumentClosedError(reason)
-      if (entry.mode === "interpret") {
-        entry.unwire()
-        const terms = termsOf(entry.ref)
-        if (terms !== undefined) closeTerms(terms, error)
-        entry.refusals.network.set(undefined)
-      }
-      resolveHydration(entry.hydration, { ok: false, error })
-      entry.readyInfo.replica.dispose(reason)
-    }
-    this.#docCache.delete(docId)
   }
 
   /**
@@ -1748,8 +1881,8 @@ export class Runtime {
    */
   #markLocalChangeDirty(docId: DocId): void {
     this.#dirtyLocalChanges.add(docId)
-    const entry = this.#docCache.get(docId)
-    if (entry?.mode === "interpret") this.#reportPersistence(entry)
+    const instance = this.#current(docId)
+    if (instance?.tier === "interpret") this.#reportPersistence(instance)
     if (this.#localChangeDrain) return // Already scheduled this tick.
     this.#localChangeDrain = Promise.resolve().then(() => {
       this.#localChangeDrain = null
@@ -1781,47 +1914,24 @@ export class Runtime {
    *   has confirmed.
    *
    * Runs from the microtask drain for every dirty document, and on demand
-   * from `publishable`, which is why it is per document. A document evicted
+   * from `publishable`, which is why it is per document. A document closed
    * since it was marked is dropped.
    */
   #drainLocal(docId: DocId): void {
-    const entry = this.#docCache.get(docId)
-    if (entry?.mode !== "interpret") {
+    const instance = this.#current(docId)
+    if (instance?.tier !== "interpret") {
       this.#dirtyLocalChanges.delete(docId)
       return
     }
-    const { replica, syncMode } = entry.readyInfo
+    const { replica, syncMode } = instance.readyInfo
     replica.commitPending()
     if (!this.#dirtyLocalChanges.delete(docId)) return
-    if (this.#usesStore(syncMode)) {
-      entry.publication.ownHigh = replica.version()
-      this.#reportPersistence(entry)
+    if (storedOf(this.#lifecycle, syncMode)) {
+      instance.publication.ownHigh = replica.version()
+      this.#reportPersistence(instance)
     }
     this.onStateAdvanced(docId)
     this.#hooks?.onDocAdvanced?.(docId)
-  }
-
-  /**
-   * Fire the `onDocReady` hook for a document, exactly once.
-   *
-   * No reference to any `Store` — structurally incapable of triggering a
-   * hydration replay. Safe to call for an already-announced entry (no-op)
-   * or for an entry that was hydrated before hooks existed (backfill via
-   * {@link setHooks}). This is the only method permitted to call
-   * `RuntimeHooks.onDocReady`. Context: jj:mrlnmlus.
-   *
-   * `announced` only flips to `true` once a hook is actually present and
-   * called — a doc created before any hooks exist (the standalone-Runtime
-   * case) must remain un-announced so `setHooks`'s later backfill still
-   * fires for it.
-   */
-  #register(
-    entry: Extract<DocCacheEntry, { mode: "interpret" | "replicate" }>,
-  ): void {
-    if (entry.announced) return
-    if (!this.#hooks?.onDocReady) return
-    this.#hooks.onDocReady(entry.readyInfo)
-    entry.announced = true
   }
 
   // =========================================================================
@@ -1857,15 +1967,15 @@ export class Runtime {
 
   /**
    * Async hydration — loads stored entries, merges them into the replica,
-   * and returns what it found; `#becomeReady` decides from that. Its reads go
-   * through `serialStore`, so a load after a destroy reads after the delete.
+   * and returns what it found; the lifecycle program's `loaded` row decides
+   * from that. Its reads go through `serialStore`, so a load after a destroy
+   * reads after the delete.
    *
    * Storage I/O only — this method never fires `onDocReady`. It has no
    * knowledge of hooks at all, which makes it structurally impossible to
    * accidentally re-run hydration (and therefore double-`merge()` stored
-   * ops) while trying to announce an already-hydrated document. Callers
-   * call {@link Runtime.#register} separately, once hydration resolves.
-   * Context: jj:mrlnmlus.
+   * ops) while trying to announce an already-hydrated document. Context:
+   * jj:mrlnmlus.
    *
    * For interpret mode with structural clientID 0, an upgraded empty replica
    * produces structural ops at `(0, 0..N)` — identical to what any stored
@@ -1933,12 +2043,12 @@ export class Runtime {
     if (this.#tickTimer !== null) return
     this.#tickTimer = setInterval(() => {
       const now = Date.now()
-      for (const [, entry] of this.#docCache) {
-        if (entry.mode !== "interpret") continue
+      for (const instance of this.#instances.values()) {
+        if (instance.tier !== "interpret") continue
         // `tick` is optional on the Substrate interface, and most substrates
         // have no use for it — only `ephemeral` does, to re-project decayed
         // leaves as their structural zeros. Everything durable skips this.
-        entry.readyInfo.replica.tick?.(now)
+        instance.readyInfo.replica.tick?.(now)
       }
     }, this.#tickIntervalMs)
     // Don't keep the Node.js process alive just for the tick.
@@ -1971,25 +2081,27 @@ export class Runtime {
    * @internal The Exchange wires it into the Synchronizer.
    */
   publishable(docId: DocId): boolean {
-    const entry = this.#docCache.get(docId)
+    const instance = this.#current(docId)
     // Replicate documents make no operations of their own, and a deferred
     // one holds nothing to export.
-    if (entry?.mode !== "interpret") return true
+    if (instance?.tier !== "interpret") return true
     this.#drainLocal(docId)
-    return this.#gateOpen(entry)
+    return this.#gateOpen(instance)
   }
 
   /**
    * Has the store confirmed every own write of this document? Always, for a
-   * document without a store.
+   * document without a store. `confirmed`: the version the store holds it
+   * at, read from the store program unless given.
    */
-  #gateOpen(entry: InterpretEntry): boolean {
-    const { replica, replicaFactory, syncMode, docId } = entry.readyInfo
-    if (!this.#usesStore(syncMode)) return true
-    const phase = this.#storeHandle?.getState().docs.get(docId)
-    const confirmed = phase === undefined ? undefined : confirmedVersion(phase)
+  #gateOpen(
+    instance: InterpretInstance,
+    confirmed = this.#storedVersion(instance.readyInfo.docId),
+  ): boolean {
+    const { replica, replicaFactory, syncMode } = instance.readyInfo
+    if (!storedOf(this.#lifecycle, syncMode)) return true
     return gateOpen({
-      ownHigh: entry.publication.ownHigh,
+      ownHigh: instance.publication.ownHigh,
       confirmed:
         confirmed === undefined
           ? undefined
@@ -1998,13 +2110,19 @@ export class Runtime {
     })
   }
 
+  /** The version the store program records the store holds `docId` at. */
+  #storedVersion(docId: DocId): string | undefined {
+    const phase = this.#storeHandle?.getState().docs.get(docId)
+    return phase === undefined ? undefined : confirmedVersion(phase)
+  }
+
   /**
-   * Withdraw the right to author `entry`: another seat of its storage writes
+   * Withdraw the right to author `instance`: another seat of its storage writes
    * it. Its context's refusal answers `refusal` from now on, so authored
    * writes throw it and `writeRefusal` reports it. The first refusal stands.
    */
-  #refuse(entry: InterpretEntry, refusal: WriterRefusedError): void {
-    const { seat } = entry.refusals
+  #refuse(instance: InterpretInstance, refusal: WriterRefusedError): void {
+    const { seat } = instance.refusals
     if (seat() === undefined) seat.set(refusal)
   }
 
@@ -2028,8 +2146,9 @@ export class Runtime {
    *    owes finds nothing new, and its confirmation reopens the gate, since
    *    the rebuilt version reaches `ownHigh` or lies on another lineage.
    *
-   * Stops at the read if the document is destroyed meanwhile, so a delete
-   * that runs after the read is not undone by what follows.
+   * Stops at the read if the instance it began with is no longer current (a
+   * destroy, or a destroy and create, meanwhile), so a delete that runs after
+   * the read is not undone by what follows.
    */
   async #rebuild(
     store: Store,
@@ -2037,19 +2156,20 @@ export class Runtime {
     refusal: WriterRefusedError,
     dispatch: (msg: StoreInput) => void,
   ): Promise<void> {
-    const entry = this.#docCache.get(docId)
-    if (entry?.mode !== "interpret") return
-    this.#refuse(entry, refusal)
+    const instance = this.#current(docId)
+    if (instance?.tier !== "interpret") return
+    const held = currentGen(this.#lifecycle, docId)
+    this.#refuse(instance, refusal)
 
     const entries: StoredEntry[] = []
     for await (const record of store.loadAll(docId)) {
       if (record.kind === "entry") entries.push(record)
     }
-    if (this.#docCache.get(docId) !== entry) return
+    if (currentGen(this.#lifecycle, docId) !== held) return
 
     // A fresh document of the same schema, not a bare replica: its entirety
     // then names every field, so the reset replaces each one this seat wrote.
-    const { bound, readyInfo } = entry
+    const { bound, readyInfo } = instance
     const { substrate: fresh } = beginHydration(
       bound.factory({ peerId: this.peerId, binding: bound.identityBinding }),
       bound.schema,
@@ -2070,45 +2190,47 @@ export class Runtime {
     }
     this.#hooks?.onDocReset?.(docId)
 
-    const readiness = readinessFor(
-      docId,
+    dispatch(
       stored === undefined
-        ? { kind: "empty" }
-        : { kind: "stored", version: stored },
-      CREATE,
+        ? { type: "register", docId }
+        : { type: "hydrated", docId, version: stored },
     )
-    if (readiness.kind === "ready" && readiness.input) dispatch(readiness.input)
   }
 
   /**
-   * The store confirmed a write of `docId`. Called from the `persisted`
-   * effect, which runs with the store model already updated.
+   * The store confirmed a write of `docId`, at `version`. Called from the
+   * `persisted` effect, which carries the version: the store program may
+   * have stopped tracking the document by then (a release in the same
+   * transition).
    *
    * This is also how a rebuilt document's gate reopens: the write `hydrated`
    * owes after a rebuild confirms at once, and the rebuilt version reaches
    * `ownHigh` or lies on another lineage.
    */
-  #confirmed(docId: DocId): void {
-    const entry = this.#docCache.get(docId)
-    if (entry?.mode !== "interpret") return
-    const publication = entry.publication
+  #confirmed(docId: DocId, version: string): void {
+    const instance = this.#current(docId)
+    if (instance?.tier !== "interpret") return
+    const publication = instance.publication
     publication.error = undefined
     // The gate was shut exactly while `ownHigh` was set, so clearing it is
     // the opening. Nothing may have been refused meanwhile; the offers owed
     // are then none, and the signal sends nothing.
-    if (publication.ownHigh !== undefined && this.#gateOpen(entry)) {
+    if (
+      publication.ownHigh !== undefined &&
+      this.#gateOpen(instance, version)
+    ) {
       publication.ownHigh = undefined
       this.#hooks?.onDocPublishable?.(docId)
     }
-    this.#reportPersistence(entry)
+    this.#reportPersistence(instance)
   }
 
   /** A store write of `docId` failed. Only a confirmation opens the gate. */
   #writeFailed(docId: DocId, error: unknown): void {
-    const entry = this.#docCache.get(docId)
-    if (entry?.mode !== "interpret") return
-    entry.publication.error = error
-    this.#reportPersistence(entry)
+    const instance = this.#current(docId)
+    if (instance?.tier !== "interpret") return
+    instance.publication.error = error
+    this.#reportPersistence(instance)
   }
 
   /**
@@ -2116,10 +2238,10 @@ export class Runtime {
    * the drain has not reached yet is unconfirmed too, though the gate has not
    * heard of it: the gate is only asked after a drain.
    */
-  #persisted(entry: InterpretEntry): boolean {
-    if (!this.#usesStore(entry.readyInfo.syncMode)) return true
-    if (this.#dirtyLocalChanges.has(entry.readyInfo.docId)) return false
-    return this.#gateOpen(entry)
+  #persisted(instance: InterpretInstance): boolean {
+    if (!storedOf(this.#lifecycle, instance.readyInfo.syncMode)) return true
+    if (this.#dirtyLocalChanges.has(instance.readyInfo.docId)) return false
+    return this.#gateOpen(instance)
   }
 
   /**
@@ -2127,17 +2249,18 @@ export class Runtime {
    * holds one, since it fails every document's writes, including a document
    * opened afterwards; otherwise the document's own latest write error.
    */
-  #persistenceError(entry: InterpretEntry): unknown | undefined {
-    if (!this.#usesStore(entry.readyInfo.syncMode)) return undefined
-    return this.#storeHandle?.getState().seatLost ?? entry.publication.error
+  #persistenceError(instance: InterpretInstance): unknown | undefined {
+    if (!storedOf(this.#lifecycle, instance.readyInfo.syncMode))
+      return undefined
+    return this.#storeHandle?.getState().seatLost ?? instance.publication.error
   }
 
   /** Tell the persistence term's subscribers, if what it reports moved. */
-  #reportPersistence(entry: InterpretEntry): void {
-    const publication = entry.publication
+  #reportPersistence(instance: InterpretInstance): void {
+    const publication = instance.publication
     const now = {
-      persisted: this.#persisted(entry),
-      error: this.#persistenceError(entry),
+      persisted: this.#persisted(instance),
+      error: this.#persistenceError(instance),
     }
     const before = publication.reported
     if (before.persisted === now.persisted && before.error === now.error) {

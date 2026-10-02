@@ -3,13 +3,13 @@
 > **Package**: `@kyneta/machine`
 > **Role**: Pure state-transition algebra with effect outputs, plus two runtimes that interpret it.
 > **Depends on**: *(none — zero runtime dependencies)*
-> **Depended on by**: `@kyneta/transport`, `@kyneta/websocket-transport`, `@kyneta/sse-transport`, `@kyneta/unix-socket-transport`
+> **Depended on by**: `@kyneta/exchange`, `@kyneta/transport`, `@kyneta/websocket-transport`, `@kyneta/sse-transport`, `@kyneta/unix-socket-transport`
 > **Canonical symbols**: `Program<Msg, Model, Fx>`, `Effect<Msg>`, `Dispatch<Msg>`, `runtime`, `createObservableProgram`, `ObservableHandle<Msg, Model>`, `StateTransition<S>`, `createDispatcher`, `Lease`, `createLease`, `BudgetExhaustedError`
 > **Key invariant(s)**: `Program.update(msg, model)` is pure — given the same inputs it returns the same `[model, ...effects]` and touches nothing else. All I/O happens when a runtime interprets the returned effects.
 
 A library for writing stateful protocol logic as data. You describe how inputs change state and what side-effects should run; a small runtime turns that description into a live, dispatchable thing.
 
-Used by every `@kyneta/exchange` transport package to model connection lifecycles, and by `@kyneta/transport` for channel-directory mechanics. Nothing in Kyneta calls this package directly from application code — it is a shared substrate for the lower-layer protocol packages.
+Used by every `@kyneta/exchange` transport package to model connection lifecycles, by `@kyneta/transport` for channel-directory mechanics, and by `@kyneta/exchange` itself for its session, sync, store, lifecycle and undo programs. Nothing in Kyneta calls this package directly from application code — it is a shared substrate for the lower-layer protocol packages.
 
 ---
 
@@ -105,6 +105,8 @@ Both are defined in `packages/machine/src/machine.ts` (`runtime`, 88 LOC) and `p
 ### Dispatch ordering
 
 Both runtimes queue re-entrant dispatches. An effect that calls `dispatch(msg2)` during its own execution does *not* recursively re-enter `update`; the message is appended to a queue and processed after the current dispatch cycle completes (source: `packages/machine/src/machine.ts` `runtime`, `packages/machine/src/dispatcher.ts` `createDispatcher`). This is required for determinism — without it, the relative ordering of effects from one message vs messages triggered by those effects would depend on stack depth.
+
+A program whose callers need a transition's result synchronously cannot run on either runtime: a queued message has no result to return. `@kyneta/exchange`'s lifecycle program is one — `exchange.get` returns a ref built by the transition, and is reached re-entrantly from the effects of another document's transition. Its shell (`Runtime.#step` in `packages/exchange/src/runtime.ts`) steps it directly, and makes that safe with two properties of the program, not of this package: each step is a transaction (the effects that can fail run before the new model is committed, and nothing before the commit calls out), and every asynchronous completion carries the generation of the instance it was started for, so a nested step that replaces or closes an instance makes the outer step's remaining effects for it, and its late completions, no-ops. A general synchronous runner here would invite programs without those properties.
 
 ### Drain to quiescence and shared leases
 

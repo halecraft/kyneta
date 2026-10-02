@@ -182,7 +182,6 @@ export { composeGate, Governance } from "./governance.js"
 // ---------------------------------------------------------------------------
 
 export type {
-  DocCacheEntry,
   DocReadyInfo,
   RuntimeHooks,
   RuntimeParams,

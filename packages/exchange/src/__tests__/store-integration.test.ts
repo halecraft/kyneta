@@ -556,8 +556,8 @@ describe("transient documents never reach a store", () => {
     // The guard on this phase's own risk. Skipping the delete is only safe
     // when we know the document was never stored, and a document absent from
     // the cache is precisely the case where we know nothing — it may well be
-    // sitting on disk from a previous session. `Exchange.destroy` is
-    // documented as the single public API for removal, so it has to work here.
+    // sitting on disk from a previous session. `Exchange.destroy` promises to
+    // delete what the store holds, so it has to work here.
     const sharedData: InMemoryStoreData = createInMemoryStoreData()
 
     const exchange1 = createExchange({

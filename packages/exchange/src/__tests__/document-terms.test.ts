@@ -6,6 +6,7 @@ import { DocumentClosedError } from "@kyneta/schema"
 import type { PeerIdentityDetails } from "@kyneta/transport"
 import { describe, expect, it } from "vitest"
 import {
+  closedHydration,
   closedTerms,
   type Hydration,
   type Persistence,
@@ -56,6 +57,27 @@ describe("closedTerms: hydration", () => {
       expect(closed.local.hydration).toEqual(expected)
     })
   }
+})
+
+describe("closedHydration", () => {
+  it("fails a pending load with the close error, and keeps an answer given", () => {
+    const failure: Hydration = { status: "failed", error: "disk on fire" }
+    expect(closedHydration({ status: "pending" }, error)).toEqual({
+      status: "failed",
+      error,
+    })
+    expect(closedHydration(loaded, error)).toBe(loaded)
+    expect(closedHydration(failure, error)).toBe(failure)
+  })
+
+  it("is what closedTerms closes hydration with", () => {
+    const failure: Hydration = { status: "failed", error: "disk on fire" }
+    const closed = closedTerms(
+      { hydration: failure, persistence: confirmed },
+      error,
+    )
+    expect(closed.local.hydration).toBe(closedHydration(failure, error))
+  })
 })
 
 describe("closedTerms: persistence", () => {

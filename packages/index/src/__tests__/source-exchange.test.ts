@@ -16,7 +16,7 @@
 // which is what every downstream consumer integrates — reports the wrong one.
 
 import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
-import { Exchange } from "@kyneta/exchange"
+import { createInMemoryStore, Exchange } from "@kyneta/exchange"
 import {
   Defer,
   json,
@@ -203,6 +203,33 @@ describe("suspension is not a membership condition", () => {
     // removed + added for a document whose contents never changed — churn in
     // the UI because the network went quiet.
     expect(emitted).toEqual([])
+  })
+})
+
+describe("unloaded documents", () => {
+  it("an unloaded document leaves the source, and returns when it is opened", async () => {
+    const exchange = new Exchange({
+      principal: "peer",
+      store: createInMemoryStore(),
+    })
+    const [source] = SourceNS.fromExchange(exchange, NoteDoc)
+    const weights = foldDeltas(source)
+    exchange.get("note-1", NoteDoc)
+    await exchange.whenHydrated("note-1")
+    await exchange.flush()
+    expect(weights.get("note-1")).toBe(1)
+
+    exchange.unload("note-1")
+    await exchange.flush()
+    await drain()
+    expect(source.snapshot().has("note-1")).toBe(false)
+    expect(weights.get("note-1")).toBe(0)
+
+    await exchange.open("note-1", NoteDoc)
+    await drain()
+    expect(source.snapshot().has("note-1")).toBe(true)
+    expect(weights.get("note-1")).toBe(1)
+    await exchange.shutdown()
   })
 })
 

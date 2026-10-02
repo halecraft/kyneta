@@ -1,18 +1,15 @@
 // interpret — what `get()` should do about a document, given only local facts.
 //
-// Three separate places in this package decide whether to raise a document to
-// the interpret tier: a caller's `exchange.get()`, the `onEnsureDoc` hook when
-// a peer announces a document we have a schema for, and `registerSchema`'s
-// sweep over deferred documents. They used to apply three different rule sets,
-// which is how a network event ended up able to enter interpretation without
-// passing any of the guards a direct caller had to pass.
+// The lifecycle program (`lifecycle-program.ts`) asks this for every `get`,
+// whichever door it came through: a caller's `get` or `open`, the `onEnsureDoc`
+// hook when a peer announces a document we have a schema for, and
+// `registerSchema`'s sweep over deferred documents. The Exchange asks it too,
+// for a deferred document, against the metadata the synchronizer holds and the
+// Runtime does not.
 //
-// This is the one rule. It reports *facts* about the document; deciding to act
-// against those facts is policy, and policy stays with the caller that holds
-// it (see `#getImpl` in exchange.ts, which is the only door with any).
-//
-// FC/IS: pure classifier here, effects in the callers — the same split
-// `deriveDocStatus` and `planInitialization` use.
+// It reports *facts* about the document; deciding to act against those facts
+// is policy, and policy stays with the caller that holds it (see `#getImpl` in
+// exchange.ts, which is the only door with any).
 
 import type {
   DocMetadata,
@@ -20,23 +17,43 @@ import type {
   ReadCapability,
 } from "@kyneta/schema"
 import { mismatchForInterpretation } from "@kyneta/schema"
+import type { Hydration } from "./document-terms.js"
 
 /**
- * Which tier a document sits in, or `"absent"` when we hold nothing for it.
+ * Which tier a document sits in, `"absent"` when we hold nothing for it,
+ * `"deferred"` when a peer announced it, or `"unloaded"` when it is out of
+ * memory and kept in the store.
  *
- * Note that suspension is not one of these. A suspended document is still in
- * `interpret` — `suspend()` only sets a flag and tells peers to drop it, and
- * leaves the ref and substrate exactly as they were.
+ * Neither suspension nor the load's progress is one of these. A suspended
+ * document is still in `interpret`: `suspend()` only sets a flag and tells
+ * peers to drop it, and leaves the ref and substrate exactly as they were. A
+ * document still loading is in its tier already; `planInterpretation` is told
+ * of the load separately. An unloaded document is `"unloaded"` whichever tier
+ * it had.
  */
-export type DocPhase = "absent" | "interpret" | "replicate" | "deferred"
+export type DocPhase =
+  | "absent"
+  | "interpret"
+  | "replicate"
+  | "deferred"
+  | "unloaded"
+
+/**
+ * Where a document's load stands, or `none` when nothing is loading: a
+ * document that is absent, deferred or unloaded.
+ */
+export type LoadStatus = Hydration | { readonly status: "none" }
 
 /** What `get()` should do about a document, given only local facts. */
 export type InterpretAction =
   | { action: "return-cached" }
   | { action: "create" }
   | { action: "promote"; from: "deferred" | "replicate" }
+  /** Load it again from the store, under the caller's schema. */
+  | { action: "load" }
   | { action: "refuse"; kind: "mismatch"; mismatch: MetadataMismatch }
   | { action: "refuse"; kind: "not-hydrated" }
+  | { action: "refuse"; kind: "load-failed"; error: unknown }
 
 /**
  * Decide what to do about a document, from its phase and what is known of it.
@@ -57,9 +74,9 @@ export type InterpretAction =
  *   too strict (two `bind()` calls over one schema are interchangeable) and
  *   too weak (holding on to an object proves nothing about compatibility).
  *
- * `hydrated` passes that same test and so belongs here: whether a document's
- * stored state has finished loading is a fact about the document, not about
- * who is asking. It only bears on the `replicate` arm — see there.
+ * `hydration` passes that same test and so belongs here: how far a document's
+ * stored state has loaded is a fact about the document, not about who is
+ * asking. It only bears on the `replicate` arm — see there.
  */
 export function planInterpretation(input: {
   phase: DocPhase
@@ -68,13 +85,14 @@ export function planInterpretation(input: {
   /** What is known about the document; `undefined` when nothing is. */
   doc: DocMetadata | undefined
   /**
-   * Whether the document's stored state has finished loading.
+   * How far the document's stored state has loaded.
    *
    * Ignored by every arm but `replicate`. A `deferred` document holds nothing
-   * that a load could preserve, and an `absent` one has nothing to load, so
-   * neither has anything to wait for.
+   * that a load could preserve, an `absent` one has nothing to load, and an
+   * `unloaded` one is held entirely by the store, so none has anything to
+   * wait for.
    */
-  hydrated: boolean
+  hydration: LoadStatus
 }): InterpretAction {
   switch (input.phase) {
     case "absent":
@@ -98,7 +116,7 @@ export function planInterpretation(input: {
       // `SubstrateFactory.upgrade` performs it over the same backing document,
       // so accumulated state carries across rather than being rebuilt.
       //
-      // Hydration is checked before compatibility, and the order matters. A
+      // The load is checked before compatibility, and the order matters. A
       // caller whose document is still loading should be told to wait, not
       // told their schema is wrong — the schema may be perfectly good, and the
       // comparison is against metadata that is still settling.
@@ -107,7 +125,15 @@ export function planInterpretation(input: {
       // stable identity, which is only safe once the document's own history
       // has finished arriving — `SubstrateFactory.createForHydration` in
       // `@kyneta/schema` states that contract and what goes wrong without it.
-      if (!input.hydrated) return { action: "refuse", kind: "not-hydrated" }
+      // A load that failed never finishes arriving, so it refuses for good,
+      // with the load's error.
+      const { hydration } = input
+      if (hydration.status === "pending") {
+        return { action: "refuse", kind: "not-hydrated" }
+      }
+      if (hydration.status === "failed") {
+        return { action: "refuse", kind: "load-failed", error: hydration.error }
+      }
 
       const mismatch =
         input.doc && mismatchForInterpretation(input.reader, input.doc)
@@ -127,6 +153,17 @@ export function planInterpretation(input: {
       return mismatch
         ? { action: "refuse", kind: "mismatch", mismatch }
         : { action: "promote", from: "deferred" }
+    }
+
+    case "unloaded": {
+      // The metadata is our own, recorded when it was held, so a mismatch
+      // refuses on every axis: none of the deferred exception's reasons
+      // applies, since no peer's announcement is involved.
+      const mismatch =
+        input.doc && mismatchForInterpretation(input.reader, input.doc)
+      return mismatch
+        ? { action: "refuse", kind: "mismatch", mismatch }
+        : { action: "load" }
     }
   }
 }

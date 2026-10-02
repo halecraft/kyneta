@@ -239,6 +239,21 @@ export interface ClosedValues {
 }
 
 /**
+ * What a hydration says once its document has closed: `pending` fails with
+ * `error`, and an answer already given stands. Pure. The Runtime closes the
+ * hydration term and the waiters on a document's load through this, so both
+ * report the same error object.
+ */
+export function closedHydration(
+  hydration: Hydration,
+  error: DocumentClosedError,
+): Hydration {
+  return hydration.status === "pending"
+    ? { status: "failed", error }
+    : hydration
+}
+
+/**
  * What a document's terms say once it has closed. Pure.
  *
  * **Closing never invents an answer.** Each term keeps the answer it had, and
@@ -259,10 +274,7 @@ export function closedTerms(
   snapshot: TermsSnapshot,
   error: DocumentClosedError,
 ): ClosedValues {
-  const hydration: Hydration =
-    snapshot.hydration.status === "pending"
-      ? { status: "failed", error }
-      : snapshot.hydration
+  const hydration = closedHydration(snapshot.hydration, error)
   const persistence: Persistence = snapshot.persistence.persisted
     ? snapshot.persistence
     : { persisted: false, error }
@@ -306,10 +318,17 @@ export function closedTerms(
   }
 }
 
-/** Read every term of `terms` as it stands. */
-export function snapshotOf(terms: DocumentTerms): TermsSnapshot {
+/**
+ * Read every term of `terms` as it stands, but for hydration, which the
+ * caller gives: the Runtime knows what a document's load came to, and by the
+ * time it closes the document, its record of the load is already gone.
+ */
+export function snapshotOf(
+  terms: DocumentTerms,
+  hydration: Hydration,
+): TermsSnapshot {
   const local = {
-    hydration: terms.local.hydration(),
+    hydration,
     persistence: terms.local.persistence(),
   }
   const network = terms.network()
@@ -329,14 +348,16 @@ export function snapshotOf(terms: DocumentTerms): TermsSnapshot {
 }
 
 /**
- * Close a document's terms: snapshot them, compute their closed values, and
- * set each term. Every subscriber hears its term move once.
+ * Close a document's terms: snapshot them, with `hydration` as the load's
+ * answer, compute their closed values, and set each term. Every subscriber
+ * hears its term move once.
  */
 export function closeTerms(
   terms: DocumentTerms,
   error: DocumentClosedError,
+  hydration: Hydration,
 ): void {
-  const values = closedTerms(snapshotOf(terms), error)
+  const values = closedTerms(snapshotOf(terms, hydration), error)
   setEach(terms.local, values.local)
   const network = terms.network()
   if (network !== undefined && values.network !== undefined) {

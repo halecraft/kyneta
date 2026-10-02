@@ -41,7 +41,7 @@ import {
 } from "@kyneta/schema"
 import type { DocId } from "@kyneta/transport"
 import type { Exchange } from "../exchange.js"
-import { whenPersisted } from "../persistence.js"
+import { whenPersisted, writeRefusal } from "../persistence.js"
 import { whenHydrated } from "../settle.js"
 import { whenSettled } from "../sync.js"
 import {
@@ -379,18 +379,22 @@ export async function createUndoStack(
   }
 
   /**
-   * A document open here now, with its undo. Read from the Runtime each time:
-   * a promoted document has a new substrate, and a destroyed one is gone. A
-   * part stands only if its document is this when the part is used.
+   * A document open here now and accepting writes, with its undo. Read from
+   * the Runtime each time: a promoted or reloaded document has a new
+   * substrate, and a destroyed one is gone. A part stands only if its
+   * document is this when the part is used. A revert writes natively, below
+   * the document's refusal, so a document that refuses writes (unloading,
+   * closed, another seat's) is not reached at all.
    */
   const interpreted = (docId: DocId) => {
-    const entry = exchange.runtime.getEntry(docId)
-    if (entry?.mode !== "interpret") return undefined
-    const substrate = entry.readyInfo.replica
+    const instance = exchange.runtime.instanceOf(docId)
+    if (instance?.tier !== "interpret") return undefined
+    if (writeRefusal(instance.ref) !== undefined) return undefined
+    const substrate = instance.readyInfo.replica
     const { revertible } = substrate
     if (revertible === undefined) return undefined
-    const ref: object = entry.ref
-    return { ref, readyInfo: entry.readyInfo, substrate, revertible }
+    const ref: object = instance.ref
+    return { ref, readyInfo: instance.readyInfo, substrate, revertible }
   }
 
   // --- Capture ------------------------------------------------------------
@@ -501,7 +505,7 @@ export async function createUndoStack(
    * never created: the part does not stand.
    */
   async function open(part: Part, settle: boolean): Promise<void> {
-    const ref = interpreted(part.docId)?.ref ?? (await openHeld(part))
+    const ref = await openHeld(part)
     if (ref === undefined) return
     try {
       if (settle) await whenSettled(ref)
@@ -516,14 +520,21 @@ export async function createUndoStack(
     attach(part.docId)
   }
 
-  /** The document a part names, through `exchange.open`: `undefined` when
-   *  this exchange does not hold it. */
+  /**
+   * The document a part names, through `exchange.open`, the one door for
+   * every part: it returns a held document, cancels an unload not yet
+   * released, and loads one from the Store. `undefined` when this exchange
+   * does not hold it. The schema is the registered one, or for a document
+   * created on the Runtime before an Exchange wrapped it, the held one's.
+   */
   async function openHeld(part: Part): Promise<object | undefined> {
-    const bound = exchange.capabilities.resolveSchema(
-      part.schemaHash,
-      part.replicaType,
-      part.syncMode,
-    )
+    const held = exchange.runtime.instanceOf(part.docId)
+    const bound =
+      exchange.capabilities.resolveSchema(
+        part.schemaHash,
+        part.replicaType,
+        part.syncMode,
+      ) ?? (held?.tier === "interpret" ? held.bound : undefined)
     if (bound === undefined) {
       throw new Error(
         `undo: no schema is registered for document "${part.docId}" ` +

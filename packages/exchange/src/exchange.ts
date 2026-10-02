@@ -30,6 +30,7 @@ import type {
   DocRef,
   FactoryBuilder,
   Interpret,
+  MetadataMismatch,
   NativeMap,
   ProductSchema,
   Ref,
@@ -55,10 +56,10 @@ import { createCapabilities, DEFAULT_REPLICAS } from "./capabilities.js"
 import { type Peer, registerNetworkTerms, type Sync } from "./document-terms.js"
 import type { Authority, Policy } from "./governance.js"
 import { Governance } from "./governance.js"
-import type { DocPhase } from "./interpret.js"
 import { planInterpretation } from "./interpret.js"
+import type { Intent } from "./lifecycle-program.js"
 import type { ObsSink } from "./observe.js"
-import { CREATE, type Intent, Runtime, type RuntimeParams } from "./runtime.js"
+import { mismatchError, Runtime, type RuntimeParams } from "./runtime.js"
 import { liveSync } from "./sync.js"
 import { derivePeerSettled, Synchronizer } from "./synchronizer.js"
 import type { DocChange, DocInfo, PeerChange } from "./types.js"
@@ -72,17 +73,6 @@ import { validatePrincipal } from "./utils.js"
  * The four possible dispositions when classifying a discovered document.
  */
 export type Disposition = Interpret | Replicate | Defer | Reject
-
-/**
- * A cache entry's phase, or `"absent"` when there is no entry.
- *
- * `DocCacheEntry` and `DocPhase` say the same thing with different words —
- * this bridges them so the classifier can stay in terms of phases without the
- * Runtime's entry shape leaking into it.
- */
-function phaseOf(entry: { mode: DocPhase } | undefined): DocPhase {
-  return entry ? entry.mode : "absent"
-}
 
 /**
  * Call signature for {@link Exchange.get}.
@@ -199,12 +189,6 @@ export type ExchangeNetworkParams = PeerNaming & {
  * second constructor overload: `new Exchange(runtime, networkParams)`.
  */
 export type ExchangeParams = ExchangeNetworkParams & RuntimeParams
-
-// ---------------------------------------------------------------------------
-// Doc cache entry — re-exported from Runtime for backward compatibility
-// ---------------------------------------------------------------------------
-
-export type { DocCacheEntry } from "./runtime.js"
 
 // ---------------------------------------------------------------------------
 // Exchange
@@ -366,6 +350,12 @@ export class Exchange {
       rebuildReplica: (docId, payload) =>
         this.#runtime.rebuildReplica(docId, payload),
       publishable: docId => this.#runtime.publishable(docId),
+      // A peer that serves documents serves the ones it unloaded: a request
+      // for one loads it again.
+      servesUnloaded: () => this.#governance.authority() === "self",
+      onReloadDoc: docId => {
+        this.#runtime.request({ type: "reload", docId })
+      },
       departureTimeout,
       lease: this.#runtime.lease,
 
@@ -384,23 +374,18 @@ export class Exchange {
           syncMode,
         )
         if (resolvedBound) {
-          // Unlike `#getImpl`, this door applies no policy of its own — no
-          // BoundSchema identity check, no local-schema-authoritative
-          // override. It takes the classifier's answer as given.
-          //
-          // `resolveSchema` has already matched the triple, so a compatible
-          // document reaches `create` or `return-cached` exactly as before.
-          // What this closes is the replicate case: creating the document
-          // directly would overwrite a replicate entry's accumulated state.
-          const action = planInterpretation({
-            phase: phaseOf(this.#runtime.getEntry(docId)),
-            reader: metadataOf(resolvedBound),
-            doc: this.#synchronizer.getDocMetadata(docId),
-            hydrated: this.#runtime.hydrated(docId),
-          })
-          if (action.action === "promote") this.#runtime.deleteDeferred(docId)
-          if (action.action !== "refuse") {
-            this.#runtime.createInterpretDoc(docId, resolvedBound, CREATE)
+          // Unlike `#getImpl`, this door applies no policy of its own: no
+          // local-schema-authoritative override. A deferred document the
+          // announced metadata says this schema cannot read is skipped, and
+          // so is whatever the Runtime refuses: a replicate document still
+          // loading, or one this schema cannot read.
+          if (this.#deferredMismatch(docId, resolvedBound) === undefined) {
+            this.#runtime.request({
+              type: "get",
+              docId,
+              bound: resolvedBound,
+              intent: "create",
+            })
           }
           return
         }
@@ -432,7 +417,12 @@ export class Exchange {
 
         switch (result.kind) {
           case "interpret":
-            this.#runtime.createInterpretDoc(docId, result.bound, CREATE)
+            this.#runtime.request({
+              type: "get",
+              docId,
+              bound: result.bound,
+              intent: "create",
+            })
             break
           case "replicate": {
             const boundReplica = this.#capabilities.resolveReplica(
@@ -449,12 +439,14 @@ export class Exchange {
               this.#synchronizer.declareVacant(docId, peer.peerId)
               return
             }
-            this.#replicateDoc(
+            // A document already held is left as it is: first writer wins.
+            this.#runtime.request({
+              type: "replicate",
               docId,
-              boundReplica.factory,
+              replicaFactory: boundReplica.factory,
               syncMode,
               schemaHash,
-            )
+            })
             break
           }
           case "defer":
@@ -473,11 +465,11 @@ export class Exchange {
 
     // ── Wire Runtime hooks → Synchronizer ──
     // The Runtime fires these when local docs become ready, change, or
-    // are dismissed. The Exchange bridges them into the sync graph.
+    // leave. The Exchange bridges them into the sync graph.
     this.#runtime.setHooks({
       // The Runtime's own record, not a copy: a replica the Runtime rebuilds
       // is then the one the Synchronizer syncs from.
-      onDocReady: info => this.#synchronizer.registerDoc(info),
+      onDocReady: (info, state) => this.#synchronizer.registerDoc(info, state),
       onDocInterpreted: (docId, ref) => this.#attachNetwork(docId, ref),
       onDocChangeset: (docId, changeset) => {
         // Observation only: the changeset feed is for readers. What leaves
@@ -491,10 +483,16 @@ export class Exchange {
         this.#synchronizer.notifyPublishable(docId)
       },
       onDocDestroyed: docId => {
-        this.#synchronizer.dismissDocument(docId)
+        this.#synchronizer.leaveDocument(docId, "destroy")
       },
       onDocSuspended: docId => {
-        this.#synchronizer.suspendDocument(docId)
+        this.#synchronizer.leaveDocument(docId, "suspend")
+      },
+      onDocLeaving: (docId, on) => {
+        this.#synchronizer.setLeaving(docId, on)
+      },
+      onDocUnload: (docId, left) => {
+        this.#synchronizer.leaveDocument(docId, "unload", left)
       },
       onDocResumed: docId => {
         this.#synchronizer.resumeDocument(docId)
@@ -508,7 +506,7 @@ export class Exchange {
     // When the network advances a doc's version, the Runtime persists the
     // delta. Local changes reach the store from the Runtime's own drain, not
     // through here. Only the docId crosses: the Runtime resolves the document
-    // from its own cache.
+    // itself.
     this.#synchronizer.onStateAdvanced((docId: DocId) => {
       this.#runtime.onStateAdvanced(docId)
     })
@@ -602,21 +600,11 @@ export class Exchange {
   }
 
   /**
-   * Internal document replication — delegates to the Runtime.
-   */
-  #replicateDoc(
-    docId: DocId,
-    replicaFactory: ReplicaFactoryLike,
-    syncMode: SyncMode,
-    schemaHash: string,
-  ): void {
-    this.#runtime.replicate(docId, replicaFactory, syncMode, schemaHash)
-  }
-
-  /**
    * Defer a document — register it in the synchronizer as deferred
-   * (participates in routing/present but not data exchange) and cache
-   * the deferred state in the Runtime.
+   * (participates in routing/present but not data exchange) and record it
+   * as deferred in the Runtime. A peer's announcement never replaces a
+   * document this Runtime holds or has unloaded, so such a one is left as it
+   * is, here and in the synchronizer.
    */
   #deferDoc(
     docId: DocId,
@@ -624,8 +612,32 @@ export class Exchange {
     syncMode: SyncMode,
     schemaHash: string,
   ): void {
+    const lifecycle = this.#runtime.lifecycleOf(docId)
+    if (lifecycle !== undefined && lifecycle.phase !== "deferred") return
     this.#synchronizer.deferDoc(docId, replicaType, syncMode, schemaHash)
-    this.#runtime.markDeferred(docId)
+    this.#runtime.defer(docId)
+  }
+
+  /**
+   * The axis on which `bound` cannot read the deferred document `docId`, by
+   * the metadata its announcement carried, which the Runtime does not hold.
+   * `undefined` when it can, when nothing was announced, or when the
+   * document is not deferred.
+   */
+  #deferredMismatch(
+    docId: DocId,
+    bound: BoundSchema,
+  ): MetadataMismatch | undefined {
+    if (this.#runtime.lifecycleOf(docId)?.phase !== "deferred") return undefined
+    const action = planInterpretation({
+      phase: "deferred",
+      reader: metadataOf(bound),
+      doc: this.#synchronizer.getDocMetadata(docId),
+      hydration: { status: "none" },
+    })
+    return action.action === "refuse" && action.kind === "mismatch"
+      ? action.mismatch
+      : undefined
   }
 
   // =========================================================================
@@ -705,13 +717,15 @@ export class Exchange {
     // Let a load in flight finish first: a replicate document mid-load would
     // be refused as "still loading". Its failure is not this call's: a load
     // that found nothing (another `open`) or was destroyed has left the
-    // cache, and one whose read failed is still cached, so the wait below
-    // rejects for it.
+    // Runtime, and one whose read failed is still held, so the step below
+    // throws its error (a replica) or the wait below rejects with it.
     await this.#runtime.whenHydrated(docId).catch(() => {})
     const ref = this.#getImpl(docId, bound, "open")
+    // An `open` that can load nothing builds nothing.
+    if (ref === undefined) return undefined
     const held = () => {
-      const entry = this.#runtime.getEntry(docId)
-      return entry?.mode === "interpret" && entry.ref === ref
+      const instance = this.#runtime.instanceOf(docId)
+      return instance?.tier === "interpret" && instance.ref === ref
     }
     try {
       await this.#runtime.whenHydrated(docId)
@@ -729,118 +743,73 @@ export class Exchange {
    * body; the precise return type is supplied by the {@link Get} and
    * {@link Open} call signatures, which the `as never` casts bridge. See
    * {@link Get} for the TS2589 rationale.
+   *
+   * One step of the Runtime's lifecycle, which answers every check but the
+   * one below and throws its refusal. Returns `undefined` for an `open` that
+   * can load nothing.
    */
   #getImpl(docId: DocId, bound: BoundSchema, kind: Intent["kind"]): unknown {
-    let wasDeferred = false
-    // Check Runtime cache first
-    const cached = this.#runtime.getEntry(docId)
+    // Note what is *not* checked here: suspension.
+    //
+    // `get()` on a suspended document returns the ref and leaves it
+    // suspended — not "re-hydrates", not "resumes". `suspend()` only sets a
+    // flag and tells peers to drop the document; the ref and substrate are
+    // untouched, so reading locally was always well-defined.
+    //
+    // Resuming here would mean an unrelated read silently re-entering the
+    // sync graph and restarting traffic peers can observe. Returning without
+    // resuming keeps a property worth relying on: **`get()` never takes a
+    // suspended document into the sync graph**, whether it promotes or loads
+    // it; only `resume()` does. A standalone `Runtime` behaves the same.
 
-    if (cached) {
-      // Note what is *not* checked here: suspension.
+    const mismatch = this.#deferredMismatch(docId, bound)
+    if (mismatch !== undefined) {
+      // The one policy this door holds, and the only place it is true.
       //
-      // `get()` on a suspended document returns the ref and leaves it
-      // suspended — not "re-hydrates", not "resumes". `suspend()` only sets a
-      // flag and tells peers to drop the document; the ref and substrate are
-      // untouched, so reading locally was always well-defined.
+      // A deferred document got here because a *peer* announced it. If we
+      // refused on a schema disagreement, any peer could break a local
+      // `get()` simply by announcing a document under a colliding docId with
+      // a different schema. So on the interpretation axis the local schema
+      // stays authoritative: promote anyway, and say so.
       //
-      // Resuming here would mean an unrelated read silently re-entering the
-      // sync graph and restarting traffic peers can observe. Returning without
-      // resuming keeps a property worth relying on — **`get()` never changes
-      // sync-graph membership**; only `resume()` does — and matches what a
-      // standalone `Runtime` has always done.
-
-      const action = planInterpretation({
-        phase: cached.mode,
-        reader: metadataOf(bound),
-        // A document the synchronizer knows nothing about is one we made
-        // ourselves, and its shape is the `BoundSchema` we made it with,
-        // which carries the three `DocMetadata` fields and so *is* that
-        // shape. Without it the classifier has nothing to compare a
-        // local-only document against.
-        doc:
-          this.#synchronizer.getDocMetadata(docId) ??
-          (cached.mode === "interpret" ? cached.bound : undefined),
-        hydrated: this.#runtime.hydrated(docId),
-      })
-
-      if (action.action === "return-cached") {
-        // Through the Runtime, so a `get` of a document an `open` is loading
-        // keeps it.
-        return this.#runtime.createInterpretDoc(
-          docId,
-          bound,
-          kind === "create" ? CREATE : { kind, wasDeferred: false },
-        )
+      // Only that axis. A replicaType or syncMode disagreement is about
+      // whether bytes can be exchanged at all, and no amount of local intent
+      // makes an undecodable format decodable — those refusals stand.
+      //
+      // And only for a deferred document. Both phases can arrive from a
+      // peer's announcement, so provenance is not the distinction — what is
+      // at stake is. A deferred document holds *nothing*, so overriding
+      // materialises an empty one under the local schema. A replicate
+      // document holds accumulated bytes, and overriding there reinterprets
+      // them under a shape their writer did not use. That answer would be
+      // wrong and silent, so the Runtime refuses it like any other axis.
+      if (mismatch.axis !== "schemaHash") {
+        throw mismatchError(docId, mismatch, "discovered")
       }
-
-      if (action.action === "refuse") {
-        if (action.kind === "not-hydrated") {
-          throw new Error(
-            `Document '${docId}' is still loading from storage. ` +
-              `Await exchange.whenHydrated('${docId}') before calling get() ` +
-              `— promoting a document mid-load would lose part of it.`,
-          )
-        }
-
-        // The one policy this door holds, and the only place it is true.
-        //
-        // A deferred document got here because a *peer* announced it. If we
-        // refused on a schema disagreement, any peer could break a local
-        // `get()` simply by announcing a document under a colliding docId with
-        // a different schema. So on the interpretation axis the local schema
-        // stays authoritative: promote anyway, and say so.
-        //
-        // Only that axis. A replicaType or syncMode disagreement is about
-        // whether bytes can be exchanged at all, and no amount of local intent
-        // makes an undecodable format decodable — those refusals stand.
-        //
-        // And only for a deferred document. Both phases can arrive from a
-        // peer's announcement, so provenance is not the distinction — what is
-        // at stake is. A deferred document holds *nothing*, so overriding
-        // materialises an empty one under the local schema. A replicate
-        // document holds accumulated bytes, and overriding there reinterprets
-        // them under a shape their writer did not use. That answer would be
-        // wrong and silent, so refuse it like any other axis.
-        if (
-          cached.mode !== "deferred" ||
-          action.mismatch.axis !== "schemaHash"
-        ) {
-          throw new Error(
-            `Document '${docId}' cannot be interpreted with this schema: ` +
-              `${action.mismatch.axis} disagrees (local ${action.mismatch.local} ` +
-              `vs discovered ${action.mismatch.remote}).`,
-          )
-        }
-        console.warn(
-          `[exchange] Promoting deferred doc "${docId}": local schemaHash "${bound.schemaHash}" ` +
-            `differs from discovery schemaHash "${action.mismatch.remote}". ` +
-            `Local schema is authoritative, but this indicates protocol disagreement.`,
-        )
-      }
-
-      if (cached.mode === "deferred") {
-        // Delete deferred entry and fall through to normal get() creation.
-        // registerDoc() → doc-ensure handles the deferred→promoted transition
-        // in the synchronizer model.
-        wasDeferred = this.#runtime.deleteDeferred(docId) !== undefined
-      }
+      console.warn(
+        `[exchange] Promoting deferred doc "${docId}": local schemaHash "${bound.schemaHash}" ` +
+          `differs from discovery schemaHash "${mismatch.remote}". ` +
+          `Local schema is authoritative, but this indicates protocol disagreement.`,
+      )
     }
 
-    // Auto-register this schema's capabilities. registerSchema is idempotent
-    // (upserts into the registry), so repeated get() calls with the same
-    // BoundSchema are safe.
-    //
-    // Reentrancy note: registerSchema scans deferred docs and may re-enter
-    // get() for matching docs. This is safe because inner get() calls operate
-    // on *different* docIds (the deferred docs being promoted), so there is
-    // no infinite recursion or cache corruption.
-    this.registerSchema(bound)
+    const before = this.#runtime.lifecycleOf(docId)
+    const interpreted =
+      before !== undefined &&
+      before.phase !== "deferred" &&
+      before.spec.tier === "interpret"
+    const ref = this.#runtime.createInterpretDoc(docId, bound, kind)
 
-    return this.#runtime.createInterpretDoc(
-      docId,
-      bound,
-      kind === "create" ? CREATE : { kind, wasDeferred },
-    )
+    // Auto-register this schema's capabilities, unless the document was
+    // interpreted already. registerSchema is idempotent (upserts into the
+    // registry), so repeated get() calls with the same BoundSchema are safe.
+    //
+    // After the step, not before: registerSchema's sweep promotes deferred
+    // documents this schema can read, and must not reach this one. Before the
+    // step it would find it still deferred and promote it with intent
+    // `create`, which an `open` of it does not have.
+    if (!interpreted) this.registerSchema(bound)
+    return ref
   }
 
   /**
@@ -888,11 +857,9 @@ export class Exchange {
     syncMode?: SyncMode,
     schemaHash?: string,
   ): void {
-    // Handle deferred promotion or throw on duplicate
-    const cached = this.#runtime.getEntry(docId)
-    if (cached?.mode === "deferred") {
-      // Promote deferred → replicate
-      this.#runtime.deleteDeferred(docId)
+    // A deferred document is promoted with the factory its announcement
+    // names. One already held is the Runtime's to refuse.
+    if (this.#runtime.lifecycleOf(docId)?.phase === "deferred") {
       const metadata = this.#synchronizer.getDocMetadata(docId)
       if (!metadata) {
         throw new Error(
@@ -912,11 +879,6 @@ export class Exchange {
       replicaFactory = bound.factory
       syncMode = metadata.syncMode
       schemaHash = metadata.schemaHash
-    } else if (cached) {
-      throw new Error(
-        `Document '${docId}' is already registered. ` +
-          `Cannot call exchange.replicate() on an existing document.`,
-      )
     }
 
     if (!replicaFactory || !syncMode || !schemaHash) {
@@ -926,14 +888,14 @@ export class Exchange {
       )
     }
 
-    this.#replicateDoc(docId, replicaFactory, syncMode, schemaHash)
+    this.#runtime.replicate(docId, replicaFactory, syncMode, schemaHash)
   }
 
   /**
    * Check if a document exists in the exchange.
    *
    * Returns `true` for documents registered via `get()` (interpret mode)
-   * or `replicate()` (replicate mode).
+   * or `replicate()` (replicate mode), deferred ones, and unloaded ones.
    *
    * @param docId - The document ID
    * @returns true if the document exists
@@ -1022,7 +984,7 @@ export class Exchange {
   }
 
   /**
-   * All document IDs currently in interpret mode.
+   * All document IDs held in memory in interpret mode.
    *
    * Returns a snapshot — the set is not live. Call again to get
    * the current state.
@@ -1034,27 +996,28 @@ export class Exchange {
   /**
    * Schema hash for a document, if it exists.
    *
-   * For interpreted docs, reads from the cached BoundSchema.
+   * For interpreted docs, reads from the instance's BoundSchema.
    * For replicate/deferred docs, reads from the synchronizer model.
    * Returns `undefined` if the document is not known.
    */
   getDocSchemaHash(docId: DocId): string | undefined {
-    const cached = this.#runtime.getEntry(docId)
-    if (!cached) return undefined
-    if (cached.mode === "interpret") return cached.bound.schemaHash
+    if (!this.#runtime.has(docId)) return undefined
     // For replicate/deferred, the schema hash lives in the synchronizer model.
-    const metadata = this.#synchronizer.getDocMetadata(docId)
-    return metadata?.schemaHash
+    return (
+      this.#runtime.getDocSchemaHash(docId) ??
+      this.#synchronizer.getDocMetadata(docId)?.schemaHash
+    )
   }
 
   /**
    * Destroy a document — remove it locally, broadcast `dismiss` to
    * all peers, and delete from the store. A `get` afterwards creates a
    * fresh document, and `open` resolves `undefined`, even while the delete
-   * is in flight.
+   * is in flight. An unloaded document is deleted from the store too.
    *
-   * This is the single public API for document removal. For bulk
-   * teardown without per-doc notification, use `reset()` or `shutdown()`.
+   * To release a document's memory and keep it stored, use `unload`. For
+   * bulk teardown without per-doc notification, use `reset()` or
+   * `shutdown()`.
    *
    * @param docId - The ID of the document to destroy
    */
@@ -1065,12 +1028,12 @@ export class Exchange {
   /**
    * Suspend a document — leave the sync graph but keep all local state.
    *
-   * The document remains in `#docCache` and the store, and `exchange.has()`
-   * still returns `true`. The sync model removes the document and
-   * broadcasts a wire `dismiss` message to peers. Call `resume()` to
-   * re-enter the sync graph.
+   * The document remains in the Runtime and the store, and `exchange.has()`
+   * still returns `true`. Peers are sent `dismiss`, and the document is not
+   * announced again, even when it is promoted or loaded, until `resume()`
+   * re-enters the sync graph.
    *
-   * Cannot suspend deferred docs (they have no sync participation).
+   * Cannot suspend a deferred, unloading or unloaded document.
    *
    * @param docId - The ID of the document to suspend
    */
@@ -1089,6 +1052,33 @@ export class Exchange {
    */
   resume(docId: DocId): void {
     this.#runtime.resume(docId)
+  }
+
+  /**
+   * Unload a document: release its memory and keep it in the store. `get`
+   * or `open` loads it again, in the tier it had, suspended if it was.
+   *
+   * At once, its writes are refused with `DocumentClosedError` (reason
+   * `"unloaded"`); it still sends peers every write made before the unload,
+   * and takes nothing in. Once the store holds all of it, its ref closes (a
+   * ref you hold reads its last value) and it leaves the sync graph; then
+   * its native document is released. Opening it before the store holds all
+   * of it cancels the unload and returns the same ref; opening it after
+   * loads it again.
+   *
+   * While unloaded, `exchange.documents` shows it as `unloaded`, and peers
+   * are not told of it. A peer that asks for it loads it again only where
+   * this exchange's `Policy.authority` is `"self"`, and the first such
+   * request logs an `unloaded-doc-reloaded` warning.
+   *
+   * Throws for a document not held, still loading, whose load failed, or not
+   * stored (no store, or a transient sync mode), since unloading it would
+   * lose its data. Does nothing for one already unloading or unloaded.
+   *
+   * @param docId - The ID of the document to unload
+   */
+  unload(docId: DocId): void {
+    this.#runtime.unload(docId)
   }
 
   /**
@@ -1114,15 +1104,16 @@ export class Exchange {
     // `resolveSchema` matched through `supportedHashes`, and the gap showed up
     // as promotion depending on *when* a schema was registered: before the
     // peer's `present` and the document was interpreted, after and it stayed
-    // deferred forever, because this sweep is the only thing that ever
-    // re-examines a deferred document and by then it has already run.
+    // deferred forever, because nothing else re-examines a deferred document
+    // no door names, and by then it has already run.
     //
     // Keep the iteration to deferred documents only. It is tempting, once a
     // shared law is in play, to widen this to replicate entries as well —
     // don't. This sweep is blanket: registering one schema would promote every
     // matching replicate document at once, and a relay that registered a
     // schema to interpret *one* document would silently acquire full
-    // substrates for all of them.
+    // substrates for all of them. Unloaded documents are not deferred, so the
+    // sweep never loads one back into memory.
     const reader = metadataOf(bound)
     for (const docId of this.#runtime.deferred) {
       const metadata = this.#synchronizer.getDocMetadata(docId)
@@ -1134,15 +1125,13 @@ export class Exchange {
         phase: "deferred",
         reader,
         doc: metadata,
-        // Ignored for a deferred document, which holds nothing a load could
-        // preserve. Passed because the classifier takes it for every phase.
-        hydrated: true,
+        // A deferred document holds nothing a load could preserve.
+        hydration: { status: "none" },
       })
       if (action.action === "refuse") continue
-      // Safe: Runtime.deleteDeferred removes from cache, then
-      // createInterpretDoc inserts the new entry.
-      this.#runtime.deleteDeferred(docId)
-      this.#runtime.createInterpretDoc(docId, bound, CREATE)
+      // One step, which promotes the deferred entry in place. A refusal is
+      // skipped, as this sweep skips the classifier's.
+      this.#runtime.request({ type: "get", docId, bound, intent: "create" })
     }
   }
 

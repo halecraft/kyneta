@@ -12,6 +12,8 @@ import {
   createSyncUpdate,
   hasReconciled,
   initSync,
+  type LeaveAs,
+  planLeave,
   reconciledMatching,
   type SyncEffect,
   type SyncModel,
@@ -30,6 +32,7 @@ const carol = { peerId: "carol", principal: "carol", type: "user" as const }
 function makeUpdate(params?: {
   canShare?: (docId: string, peer: any) => boolean
   canAccept?: (docId: string, peer: any) => boolean
+  servesUnloaded?: () => boolean
 }): SyncUpdate {
   return createSyncUpdate(params)
 }
@@ -74,6 +77,7 @@ function ensureDoc(
     schemaHash?: string
     supportedHashes?: readonly string[]
     historyFree?: boolean
+    suspended?: boolean
   },
 ): [SyncModel, SyncEffect[]] {
   return applyUpdate(
@@ -88,6 +92,7 @@ function ensureDoc(
       syncMode: opts?.syncMode ?? SYNC_COLLABORATIVE,
       schemaHash: opts?.schemaHash ?? "abc123",
       supportedHashes: opts?.supportedHashes,
+      suspended: opts?.suspended ?? false,
     },
     model,
   )
@@ -2239,10 +2244,10 @@ describe("sync-program", () => {
   })
 
   // -----------------------------------------------------------------------
-  // sync/doc-dismiss
+  // sync/doc-leave
   // -----------------------------------------------------------------------
-  describe("sync/doc-dismiss", () => {
-    it("removes document and broadcasts dismiss", () => {
+  describe("sync/doc-leave", () => {
+    it("as destroy: removes the document, broadcasts dismiss, then doc-left", () => {
       const update = makeUpdate()
       let model = initSync(alice)
       ;[model] = addPeer(update, model, "bob", bob)
@@ -2251,11 +2256,12 @@ describe("sync-program", () => {
 
       const [m2, effects] = applyUpdate(
         update,
-        { type: "sync/doc-dismiss", docId: "doc-1" },
+        { type: "sync/doc-leave", docId: "doc-1", as: "destroy" },
         model,
       )
 
       expect(m2.documents.has("doc-1")).toBe(false)
+      expect(effects.map(e => e.type)).toEqual(["send-to-peers", "doc-left"])
 
       const sends = effectsOfType(effects, "send-to-peers")
       expect(sends.length).toBe(1)
@@ -2525,6 +2531,7 @@ describe("sync-program", () => {
         historyFree: false,
         syncMode: SYNC_COLLABORATIVE,
         schemaHash: "abc123",
+        suspended: false,
       })
       drive({
         type: "sync/doc-defer",
@@ -2543,7 +2550,10 @@ describe("sync-program", () => {
         changed: true,
         held: true,
       })
-      drive({ type: "sync/doc-dismiss", docId: VETOED_DOC })
+      drive({ type: "sync/doc-unloading", docId: VETOED_DOC, leaving: true })
+      drive({ type: "sync/doc-unloading", docId: VETOED_DOC, leaving: false })
+      drive({ type: "sync/doc-leave", docId: VETOED_DOC, as: "unload" })
+      drive({ type: "sync/doc-leave", docId: VETOED_DOC, as: "destroy" })
       drive({
         type: "sync/message-received",
         from: "carol",
@@ -2824,33 +2834,24 @@ describe("vacant + reconciliation latch", () => {
     })
   })
 
-  describe("clear lifecycle (suspend vs dismiss)", () => {
-    it("retains the latch on a doc-suspended dismiss but clears it on a true removal", () => {
+  describe("clear lifecycle (suspend vs unload vs destroy)", () => {
+    it("retains the latch on a suspend, and clears it on an unload or a destroy", () => {
       const { update, model } = setup()
       const m = markSynced(update, model, "bob")
       expect(hasReconciled(m, "doc-1")).toBe(true)
 
-      const [suspended] = applyUpdate(
-        update,
-        {
-          type: "sync/doc-dismiss",
-          docId: "doc-1",
-          event: { type: "doc-suspended", docId: "doc-1" },
-        },
-        m,
-      )
-      expect(hasReconciled(suspended, "doc-1")).toBe(true)
-
-      const [removed] = applyUpdate(
-        update,
-        {
-          type: "sync/doc-dismiss",
-          docId: "doc-1",
-          event: { type: "doc-removed", docId: "doc-1" },
-        },
-        m,
-      )
-      expect(hasReconciled(removed, "doc-1")).toBe(false)
+      for (const [as, kept] of [
+        ["suspend", true],
+        ["unload", false],
+        ["destroy", false],
+      ] as const) {
+        const [left] = applyUpdate(
+          update,
+          { type: "sync/doc-leave", docId: "doc-1", as },
+          m,
+        )
+        expect(hasReconciled(left, "doc-1")).toBe(kept)
+      }
     })
   })
 })
@@ -2959,5 +2960,287 @@ describe("sync/doc-imported across a lineage", () => {
     const { update, model } = answered()
     const [, effects] = applyUpdate(update, imported("refused"), model)
     expect(effects.map(e => e.type)).toEqual(["diagnostic"])
+  })
+})
+
+describe("leaving the sync graph", () => {
+  /** Alice holds doc-1, and bob has asked for it and been answered. */
+  function held(update = makeUpdate(), opts?: { suspended?: boolean }) {
+    let model = initSync(alice)
+    ;[model] = addPeer(update, model, "bob", bob)
+    ;[model] = ensureDoc(update, model, "doc-1", opts)
+    ;[model] = receiveMessage(update, model, "bob", {
+      type: "interest",
+      docId: "doc-1",
+      version: "b1",
+    })
+    ;[model] = reportSent(update, model, "doc-1", "v1", "bob")
+    return model
+  }
+  const leave = (as: LeaveAs, metadata?: object) =>
+    ({
+      type: "sync/doc-leave",
+      docId: "doc-1",
+      as,
+      ...(metadata === undefined ? {} : { metadata }),
+    }) as Parameters<SyncUpdate>[0]
+  const metadata = {
+    replicaType: ["test", 0, 0],
+    syncMode: SYNC_COLLABORATIVE,
+    schemaHash: "abc123",
+  }
+  const present = {
+    type: "present",
+    docs: [
+      {
+        docId: "doc-1",
+        replicaType: ["test", 0, 0],
+        syncMode: SYNC_COLLABORATIVE,
+        schemaHash: "abc123",
+      },
+    ],
+  }
+
+  it("planLeave decides membership for every way of leaving, from every mode", () => {
+    const modes = [
+      "interpret",
+      "replicate",
+      "deferred",
+      "unloaded",
+      "absent",
+    ] as const
+    for (const mode of modes) {
+      const dismiss = mode !== "absent" && mode !== "unloaded"
+      expect(planLeave("suspend", mode)).toEqual({
+        syncEntry: "delete",
+        dismiss,
+        clearLatch: false,
+        event: "doc-suspended",
+      })
+      expect(planLeave("unload", mode)).toEqual({
+        syncEntry: "unloaded",
+        dismiss,
+        clearLatch: true,
+        event: "doc-unloaded",
+      })
+      expect(planLeave("destroy", mode)).toEqual({
+        syncEntry: "delete",
+        dismiss,
+        clearLatch: true,
+        event: "doc-removed",
+      })
+    }
+  })
+
+  it("dismisses, then doc-left, and forgets every peer's state of the document", () => {
+    const update = makeUpdate()
+    for (const as of ["suspend", "unload", "destroy"] as const) {
+      const model = held(update)
+      expect(model.peers.get("bob")?.docSyncStates.has("doc-1")).toBe(true)
+      const [next, effects] = applyUpdate(update, leave(as), model)
+      expect(effects.map(e => e.type)).toEqual(["send-to-peers", "doc-left"])
+      expect(next.peers.get("bob")?.docSyncStates.has("doc-1")).toBe(false)
+      expect(next.pendingPeerSyncDocIds).toContain("doc-1")
+    }
+  })
+
+  it("as unload, keeps an unloaded entry that records whether it was suspended", () => {
+    const update = makeUpdate()
+    const [unloaded] = applyUpdate(update, leave("unload"), held(update))
+    expect(unloaded.documents.get("doc-1")).toMatchObject({
+      mode: "unloaded",
+      suspended: false,
+      schemaHash: "abc123",
+    })
+    expect(unloaded.pendingDocEvents).toContainEqual({
+      type: "doc-unloaded",
+      docId: "doc-1",
+    })
+  })
+
+  it("as unload of a suspended (absent) document, builds the entry from the metadata, and sends no dismiss", () => {
+    const update = makeUpdate()
+    let model = initSync(alice)
+    ;[model] = addPeer(update, model, "bob", bob)
+    const [next, effects] = applyUpdate(
+      update,
+      leave("unload", metadata),
+      model,
+    )
+    expect(effects.map(e => e.type)).toEqual(["doc-left"])
+    expect(next.documents.get("doc-1")).toMatchObject({
+      mode: "unloaded",
+      suspended: true,
+      schemaHash: "abc123",
+    })
+  })
+
+  it("as destroy from unloaded, sends no dismiss, removes the entry and records doc-removed", () => {
+    const update = makeUpdate()
+    const [unloaded] = applyUpdate(update, leave("unload"), held(update))
+    const [next, effects] = applyUpdate(update, leave("destroy"), {
+      ...unloaded,
+      pendingDocEvents: [],
+    })
+    expect(effects.map(e => e.type)).toEqual(["doc-left"])
+    expect(next.documents.has("doc-1")).toBe(false)
+    expect(next.pendingDocEvents).toEqual([
+      { type: "doc-removed", docId: "doc-1" },
+    ])
+  })
+
+  it("records no event for a document nothing knows, and still reports doc-left", () => {
+    const update = makeUpdate()
+    const [next, effects] = applyUpdate(
+      update,
+      leave("destroy"),
+      initSync(alice),
+    )
+    expect(effects).toEqual([{ type: "doc-left", docId: "doc-1" }])
+    expect(next.pendingDocEvents).toEqual([])
+  })
+
+  it("a suspended doc-ensure creates no entry, sends nothing, and removes an unloaded one", () => {
+    const update = makeUpdate()
+    let model = initSync(alice)
+    ;[model] = addPeer(update, model, "bob", bob)
+    const [none, sent] = ensureDoc(update, model, "doc-1", { suspended: true })
+    expect(sent).toEqual([])
+    expect(none.documents.has("doc-1")).toBe(false)
+
+    const [unloaded] = applyUpdate(update, leave("unload"), held(update))
+    const [loaded, effects] = ensureDoc(update, unloaded, "doc-1", {
+      suspended: true,
+    })
+    expect(effects).toEqual([])
+    expect(loaded.documents.has("doc-1")).toBe(false)
+  })
+
+  it("an unloaded document is not announced to a peer that becomes available", () => {
+    const update = makeUpdate()
+    const [unloaded] = applyUpdate(update, leave("unload"), held(update))
+    const [, effects] = addPeer(update, unloaded, "carol", carol)
+    expect(effects).toEqual([])
+  })
+
+  it("an unloaded document is loaded again by the first request where this peer serves, once", () => {
+    const update = makeUpdate({ servesUnloaded: () => true })
+    const [unloaded] = applyUpdate(update, leave("unload"), held(update))
+
+    const [asked, effects] = receiveMessage(update, unloaded, "bob", present)
+    expect(effects.map(e => e.type)).toEqual(["diagnostic", "reload-doc"])
+    expect(effectsOfType(effects, "diagnostic")[0]).toMatchObject({
+      code: "unloaded-doc-reloaded",
+      severity: "warning",
+      peer: "bob",
+      docId: "doc-1",
+    })
+    const [, again] = receiveMessage(update, asked, "bob", {
+      type: "interest",
+      docId: "doc-1",
+      version: "b1",
+    })
+    expect(again).toEqual([])
+
+    const [, byInterest] = receiveMessage(update, unloaded, "bob", {
+      type: "interest",
+      docId: "doc-1",
+      version: "b1",
+    })
+    expect(byInterest.map(e => e.type)).toEqual(["diagnostic", "reload-doc"])
+  })
+
+  it("an unloaded document stays unloaded where this peer does not serve, or when it was suspended", () => {
+    const quiet = makeUpdate()
+    const [unloaded] = applyUpdate(quiet, leave("unload"), held(quiet))
+    expect(receiveMessage(quiet, unloaded, "bob", present)[1]).toEqual([])
+
+    const serving = makeUpdate({ servesUnloaded: () => true })
+    let model = initSync(alice)
+    ;[model] = addPeer(serving, model, "bob", bob)
+    ;[model] = applyUpdate(serving, leave("unload", metadata), model)
+    expect(receiveMessage(serving, model, "bob", present)[1]).toEqual([])
+  })
+
+  describe("while leaving", () => {
+    const leaving = (update: SyncUpdate) =>
+      applyUpdate(
+        update,
+        { type: "sync/doc-unloading", docId: "doc-1", leaving: true },
+        held(update),
+      )[0]
+
+    it("imports no offer and accepts none", () => {
+      const update = makeUpdate()
+      const [, effects] = receiveMessage(update, leaving(update), "bob", {
+        type: "offer",
+        docId: "doc-1",
+        payload: { kind: "entirety", encoding: "json", data: "{}" },
+        version: "b2",
+      })
+      expect(effects).toEqual([])
+    })
+
+    it("answers an interest without asking in turn", () => {
+      const update = makeUpdate()
+      const [, effects] = receiveMessage(update, leaving(update), "bob", {
+        type: "interest",
+        docId: "doc-1",
+        version: "b2",
+        reciprocate: true,
+      })
+      expect(effectsOfType(effects, "send-offers")).toHaveLength(1)
+      expect(effectsOfType(effects, "send-to-peer")).toEqual([])
+    })
+
+    it("sends no interest on a present or a reset, and still pushes", () => {
+      const update = makeUpdate()
+      const model = leaving(update)
+      expect(receiveMessage(update, model, "bob", present)[1]).toEqual([])
+      const [, reset] = applyUpdate(
+        update,
+        { type: "sync/doc-reset", docId: "doc-1", version: "v2" },
+        model,
+      )
+      expect(reset).toEqual([])
+      const [, pushed] = applyUpdate(
+        update,
+        { type: "sync/doc-advanced", docId: "doc-1", version: "v2" },
+        model,
+      )
+      expect(effectsOfType(pushed, "send-offers")).toHaveLength(1)
+    })
+
+    it("asks every available peer again when the unload is cancelled, and only then", () => {
+      const update = makeUpdate()
+      const model = leaving(update)
+      const [resumed, effects] = applyUpdate(
+        update,
+        { type: "sync/doc-unloading", docId: "doc-1", leaving: false },
+        model,
+      )
+      expect(effectsOfType(effects, "send-to-peer")).toMatchObject([
+        { to: "bob", message: { type: "interest", docId: "doc-1" } },
+      ])
+      expect(resumed.documents.get("doc-1")).not.toHaveProperty("leaving")
+      const [, again] = applyUpdate(
+        update,
+        { type: "sync/doc-unloading", docId: "doc-1", leaving: false },
+        resumed,
+      )
+      expect(again).toEqual([])
+    })
+  })
+
+  it("a document destroyed and created again pushes only after the peer's interest", () => {
+    const update = makeUpdate()
+    const [destroyed] = applyUpdate(update, leave("destroy"), held(update))
+    const [created] = ensureDoc(update, destroyed, "doc-1")
+    const [, pushes] = applyUpdate(
+      update,
+      { type: "sync/doc-advanced", docId: "doc-1", version: "v2" },
+      created,
+    )
+    expect(effectsOfType(pushes, "send-offers")).toEqual([])
   })
 })

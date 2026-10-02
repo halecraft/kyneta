@@ -14,15 +14,17 @@ import {
 import { yjs } from "@kyneta/yjs-schema"
 import { describe, expect, it } from "vitest"
 import type { Exchange } from "../exchange.js"
-import { whenPersisted } from "../persistence.js"
+import { whenPersisted, writeRefusal } from "../persistence.js"
 import {
   createInMemoryStore,
   createInMemoryStoreData,
   type InMemoryStoreData,
 } from "../store/in-memory-store.js"
+import type { Store } from "../store/store.js"
 import { UndoDoc } from "../undo/schema.js"
 import { createUndoStack } from "../undo/stack.js"
 import { drain, exchangesPerTest } from "./exchanges.js"
+import { wrapStore } from "./wrap-store.js"
 
 const Card = Schema.struct({ text: Schema.text() })
 const Places = Schema.struct({ place: Schema.string(), note: Schema.text() })
@@ -379,8 +381,8 @@ describe("a stored undo stack", () => {
     const step = stack.top("undo")
     if (step === undefined) throw new Error("no step")
     const undoDoc: any = first.get("undo", UndoDoc)
-    const revertible = first.runtime.getEntry("card")
-    if (revertible?.mode !== "interpret") throw new Error("card not open")
+    const revertible = first.runtime.instanceOf("card")
+    if (revertible?.tier !== "interpret") throw new Error("card not open")
     const position = revertible.readyInfo.replica.revertible?.position()
     if (position === undefined) throw new Error("not revertible")
     batch(undoDoc, (d: any) =>
@@ -413,8 +415,8 @@ describe("a stored undo stack", () => {
     await drain()
     const lower = stack.top("undo", ["card"])
     if (lower === undefined) throw new Error("no step on card")
-    const entry = first.runtime.getEntry("card")
-    if (entry?.mode !== "interpret") throw new Error("card not open")
+    const entry = first.runtime.instanceOf("card")
+    if (entry?.tier !== "interpret") throw new Error("card not open")
     const position = entry.readyInfo.replica.revertible?.position()
     if (position === undefined) throw new Error("not revertible")
     // The note is written and stored, then the process dies.
@@ -452,8 +454,8 @@ describe("a stored undo stack", () => {
     const undoDoc: any = first.get("undo", UndoDoc)
     const top = stack.top("undo")
     if (top === undefined) throw new Error("no step")
-    const entry = first.runtime.getEntry("card")
-    if (entry?.mode !== "interpret") throw new Error("card not open")
+    const entry = first.runtime.instanceOf("card")
+    if (entry?.tier !== "interpret") throw new Error("card not open")
     const revertible = entry.readyInfo.replica.revertible
     if (revertible === undefined) throw new Error("not revertible")
     const position = revertible.position()
@@ -485,5 +487,124 @@ describe("a stored undo stack", () => {
     // The recovered step is redoable, and the one below it still undoes.
     expect(await again.redo()).toBe(true)
     expect(b.card.text()).toBe("hello")
+  })
+})
+
+describe("an undo of a document leaving memory", () => {
+  /**
+   * A store whose appends of `docId` wait until `release` while held, and
+   * which runs `onAppend` before an append of the undo document: the stack's
+   * own record, so the stack is never held.
+   */
+  function holding(docId: string) {
+    const inner = createInMemoryStore()
+    let held: Promise<void> | undefined
+    let release = (): void => {}
+    let onAppend: (() => void) | undefined
+    const store: Store = wrapStore(inner, {
+      append: async (id, record, options) => {
+        if (id === docId) await held
+        if (id === "undo") {
+          const once = onAppend
+          onAppend = undefined
+          once?.()
+        }
+        return inner.append(id, record, options)
+      },
+    })
+    return {
+      store,
+      hold() {
+        held = new Promise(resolve => {
+          release = resolve
+        })
+      },
+      release: () => release(),
+      beforeNote(fn: () => void) {
+        onAppend = fn
+      },
+    }
+  }
+
+  /** `card` and `places`, each written and stored, and a stack over them. */
+  async function written(exchange: Exchange) {
+    const { card, places } = open(exchange)
+    card.text.insert(0, "kept")
+    places.place.set("kept")
+    await exchange.flush()
+    return { card, places, stack: await stackOn(exchange) }
+  }
+
+  it("cancels an unload still in flight, and reverts", async () => {
+    const gate = holding("card")
+    const exchange = createExchange({
+      schemas: [CardDoc, PlacesDoc],
+      store: gate.store,
+    })
+    const { card, stack } = await written(exchange)
+    stack.gesture(() => card.text.insert(4, "!"))
+    gate.hold()
+    exchange.unload("card")
+    try {
+      expect(await stack.undo()).toBe(true)
+      expect(exchange.runtime.lifecycleOf("card")?.phase).toBe("ready")
+      expect(card.text()).toBe("kept")
+      expect(writeRefusal(card)).toBeUndefined()
+    } finally {
+      gate.release()
+      stack.dispose()
+    }
+  })
+
+  it("loads an unloaded document again, and reverts the new instance", async () => {
+    const exchange = createExchange({
+      schemas: [CardDoc, PlacesDoc],
+      store: createInMemoryStore(),
+    })
+    const { card, stack } = await written(exchange)
+    stack.gesture(() => card.text.insert(4, "!"))
+    exchange.unload("card")
+    await exchange.flush()
+    expect(exchange.runtime.lifecycleOf("card")?.phase).toBe("unloaded")
+
+    expect(await stack.undo()).toBe(true)
+    const again: any = exchange.get("card", CardDoc)
+    expect(again).not.toBe(card)
+    expect(again.text()).toBe("kept")
+    expect(writeRefusal(card)).toBeDefined()
+    stack.dispose()
+  })
+
+  it("skips the part of a document unloaded between the open and the revert, and reverts the rest", async () => {
+    const gate = holding("card")
+    const exchange = createExchange({
+      schemas: [CardDoc, PlacesDoc],
+      store: gate.store,
+    })
+    const { card, places, stack } = await written(exchange)
+    // The card's write is held, so its unload stays in memory, unloading,
+    // through the revert.
+    gate.hold()
+    stack.gesture(() => {
+      card.text.insert(4, "!")
+      places.place.set("moved")
+    })
+    await drain()
+    // The note is stored after the open and before the revert.
+    gate.beforeNote(() => exchange.unload("card"))
+    try {
+      expect(await stack.undo()).toBe(true)
+      expect(exchange.runtime.lifecycleOf("card")?.phase).toBe("unloading")
+      expect(places.place()).toBe("kept")
+      expect(card.text()).toBe("kept!")
+    } finally {
+      gate.release()
+      stack.dispose()
+    }
+    await exchange.flush()
+    expect(exchange.runtime.lifecycleOf("card")?.phase).toBe("unloaded")
+    const reloaded: any = exchange.get("card", CardDoc)
+    await exchange.whenHydrated("card")
+    expect(reloaded.text()).toBe("kept!")
   })
 })

@@ -1,6 +1,6 @@
 // interpret.test.ts — the phase classifier, as a truth table.
 //
-// Six rules, six tests, no Exchange and no Runtime. The classifier holds no
+// One test per rule, no Exchange and no Runtime. The classifier holds no
 // policy, so what is interesting here is what it *refuses*: the one place
 // callers legitimately differ lives in `#getImpl`, and is tested there against
 // a real Exchange because that is the only place it is true.
@@ -29,7 +29,7 @@ describe("planInterpretation", () => {
         phase: "absent",
         reader,
         doc: undefined,
-        hydrated: true,
+        hydration: { status: "none" },
       }),
     ).toEqual({
       action: "create",
@@ -42,7 +42,7 @@ describe("planInterpretation", () => {
         phase: "interpret",
         reader,
         doc,
-        hydrated: true,
+        hydration: { status: "loaded" },
       }),
     ).toEqual({
       action: "return-cached",
@@ -53,7 +53,12 @@ describe("planInterpretation", () => {
     // The caller supplies the one thing a replicate document lacks — a
     // schema — so the transition is one this peer has the information to make.
     expect(
-      planInterpretation({ phase: "replicate", reader, doc, hydrated: true }),
+      planInterpretation({
+        phase: "replicate",
+        reader,
+        doc,
+        hydration: { status: "loaded" },
+      }),
     ).toEqual({ action: "promote", from: "replicate" })
   })
 
@@ -62,8 +67,36 @@ describe("planInterpretation", () => {
     // be told to wait rather than told their schema is wrong — so this asserts
     // `not-hydrated` for a reader that would otherwise be a clean match.
     expect(
-      planInterpretation({ phase: "replicate", reader, doc, hydrated: false }),
+      planInterpretation({
+        phase: "replicate",
+        reader,
+        doc,
+        hydration: { status: "pending" },
+      }),
     ).toEqual({ action: "refuse", kind: "not-hydrated" })
+  })
+
+  it("refuses a replicate document whose load failed, with its error", () => {
+    const error = new Error("disk unreadable")
+    expect(
+      planInterpretation({
+        phase: "replicate",
+        reader,
+        doc,
+        hydration: { status: "failed", error },
+      }),
+    ).toEqual({ action: "refuse", kind: "load-failed", error })
+  })
+
+  it("promotes a replicate document with nothing to load", () => {
+    expect(
+      planInterpretation({
+        phase: "replicate",
+        reader,
+        doc,
+        hydration: { status: "none" },
+      }),
+    ).toEqual({ action: "promote", from: "replicate" })
   })
 
   it("refuses a replicate document on each mismatched axis", () => {
@@ -76,7 +109,7 @@ describe("planInterpretation", () => {
         phase: "replicate",
         reader,
         doc: docMeta,
-        hydrated: true,
+        hydration: { status: "loaded" },
       })
       expect(action).toMatchObject({ action: "refuse", kind: "mismatch" })
       expect(
@@ -93,7 +126,7 @@ describe("planInterpretation", () => {
         phase: "deferred",
         reader,
         doc,
-        hydrated: true,
+        hydration: { status: "none" },
       }),
     ).toEqual({
       action: "promote",
@@ -109,7 +142,7 @@ describe("planInterpretation", () => {
         phase: "deferred",
         reader,
         doc: undefined,
-        hydrated: true,
+        hydration: { status: "none" },
       }),
     ).toEqual({ action: "promote", from: "deferred" })
   })
@@ -131,9 +164,41 @@ describe("planInterpretation", () => {
         phase: "deferred",
         reader,
         doc: { ...doc, ...override },
-        hydrated: true,
+        hydration: { status: "none" },
       })
       expect(action).toMatchObject({
+        action: "refuse",
+        kind: "mismatch",
+        mismatch: { axis },
+      })
+    }
+  })
+
+  it("loads an unloaded document the reader can interpret", () => {
+    expect(
+      planInterpretation({
+        phase: "unloaded",
+        reader,
+        doc,
+        hydration: { status: "none" },
+      }),
+    ).toEqual({ action: "load" })
+  })
+
+  it("refuses an unloaded document on any axis, schemaHash included", () => {
+    // Its metadata is our own record, so no deferred exception applies.
+    for (const [override, axis] of [
+      [{ replicaType: ["loro", 1, 0] }, "replicaType"],
+      [{ schemaHash: "h2" }, "schemaHash"],
+    ] as Array<[Partial<DocMetadata>, string]>) {
+      expect(
+        planInterpretation({
+          phase: "unloaded",
+          reader,
+          doc: { ...doc, ...override },
+          hydration: { status: "none" },
+        }),
+      ).toMatchObject({
         action: "refuse",
         kind: "mismatch",
         mismatch: { axis },

@@ -2,6 +2,7 @@
 // (no Exchange, no network transports) with stores and the tick clock.
 
 import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
+import { CHANGEFEED } from "@kyneta/changefeed"
 import { loro } from "@kyneta/loro-schema"
 import {
   applyChanges,
@@ -16,8 +17,8 @@ import {
 } from "@kyneta/schema"
 import { describe, expect, it, vi } from "vitest"
 import { Exchange } from "../exchange.js"
-import { CREATE, Runtime, readinessFor } from "../runtime.js"
-import { hydrated, whenHydrated } from "../settle.js"
+import { Runtime } from "../runtime.js"
+import { hydrated, hydratedFeed, whenHydrated } from "../settle.js"
 import {
   createInMemoryStore,
   createInMemoryStoreData,
@@ -411,8 +412,8 @@ describe("Runtime.get and replicate-mode documents", () => {
     )
 
     // Accumulate through the replica, as a relay would from the wire.
-    const before = runtime.getEntry("todo-1")
-    if (before?.mode !== "replicate") throw new Error("expected replicate")
+    const before = runtime.instanceOf("todo-1")
+    if (before?.tier !== "replicate") throw new Error("expected replicate")
     const source = runtime.get("source-doc", TodoDoc) as DocRef<
       typeof TodoSchema
     >
@@ -420,18 +421,20 @@ describe("Runtime.get and replicate-mode documents", () => {
       d.title.set("relayed")
     })
     const payload = (
-      runtime.getEntry("source-doc") as { readyInfo: { replica: any } }
+      runtime.instanceOf("source-doc") as { readyInfo: { replica: any } }
     ).readyInfo.replica.exportEntirety()
     before.readyInfo.replica.merge(payload)
     const versionBefore = before.readyInfo.replica.version().serialize()
 
     const doc = runtime.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
 
-    expect(runtime.getEntry("todo-1")?.mode).toBe("interpret")
+    expect(runtime.instanceOf("todo-1")?.tier).toBe("interpret")
     expect(doc.title()).toBe("relayed")
     // History carries across too: a promotion that restarted the log would
     // publish a regressed version to the sync graph.
-    const after = runtime.getEntry("todo-1") as { readyInfo: { replica: any } }
+    const after = runtime.instanceOf("todo-1") as {
+      readyInfo: { replica: any }
+    }
     expect(after.readyInfo.replica.version().serialize()).toBe(versionBefore)
 
     runtime.shutdown()
@@ -453,9 +456,11 @@ describe("Runtime.get and replicate-mode documents", () => {
 
     runtime.get("todo-1", TodoDoc)
 
-    const entry = runtime.getEntry("todo-1")
-    expect(entry?.mode).toBe("interpret")
-    expect(entry?.mode === "interpret" && entry.suspended).toBe(true)
+    const entry = runtime.lifecycleOf("todo-1")
+    expect(entry).toMatchObject({
+      spec: { tier: "interpret" },
+      suspended: true,
+    })
 
     runtime.shutdown()
   })
@@ -568,40 +573,8 @@ describe("Runtime.get and replicate-mode documents", () => {
 })
 
 // ---------------------------------------------------------------------------
-// Becoming ready — one step, for every creation path
+// Closing while loading — generations and instance waiters
 // ---------------------------------------------------------------------------
-
-describe("readinessFor", () => {
-  const OPEN = { kind: "open", wasDeferred: false } as const
-  it.each([
-    [
-      { kind: "stored", version: "L:3" } as const,
-      CREATE,
-      {
-        kind: "ready",
-        input: { type: "hydrated", docId: "d", version: "L:3" },
-      },
-    ],
-    [
-      { kind: "stored", version: "L:3" } as const,
-      OPEN,
-      {
-        kind: "ready",
-        input: { type: "hydrated", docId: "d", version: "L:3" },
-      },
-    ],
-    [
-      { kind: "empty" } as const,
-      CREATE,
-      { kind: "ready", input: { type: "register", docId: "d" } },
-    ],
-    [{ kind: "empty" } as const, OPEN, { kind: "absent" }],
-    [{ kind: "none" } as const, CREATE, { kind: "ready", input: null }],
-    [{ kind: "none" } as const, OPEN, { kind: "absent" }],
-  ])("%j, %j", (outcome, intent, expected) => {
-    expect(readinessFor("d", outcome, intent)).toEqual(expected)
-  })
-})
 
 describe("a document destroyed while it loads", () => {
   it("is not registered, not written, and its waiters reject", async () => {
@@ -614,6 +587,7 @@ describe("a document destroyed while it loads", () => {
     await exchange.flush()
 
     expect(exchange.documents.has("todo-1")).toBe(false)
+    const errors: unknown[] = []
     for (const wait of [loaded, loadedById]) {
       const error = await wait.then(
         () => undefined,
@@ -621,7 +595,10 @@ describe("a document destroyed while it loads", () => {
       )
       expect(error).toBeInstanceOf(DocumentClosedError)
       expect((error as DocumentClosedError).reason).toBe("destroyed")
+      errors.push(error)
     }
+    // The hydration term and the instance's waiters close through one value.
+    expect(errors[0]).toBe(errors[1])
     expect(hydrated(doc)).toBe(false)
     expect(await collectAll(store.loadAll("todo-1"))).toEqual([])
     await exchange.shutdown()
@@ -691,8 +668,8 @@ describe("writing to a stored plain document before it loads", () => {
     const doc = runtime.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
     await whenHydrated(doc)
     const replica = () =>
-      (runtime.getEntry("todo-1") as { readyInfo: { replica: any } }).readyInfo
-        .replica
+      (runtime.instanceOf("todo-1") as { readyInfo: { replica: any } })
+        .readyInfo.replica
     const lineage = replica().version().lineage
 
     doc.done.set(true)
@@ -728,5 +705,219 @@ describe("writing to a stored plain document before it loads", () => {
     await whenHydrated(doc)
     expect(doc.title()).toBe("while loading")
     await runtime.shutdown()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The lifecycle program's shell — each step a transaction
+// ---------------------------------------------------------------------------
+
+describe("the lifecycle shell", () => {
+  /** A store whose reads of `currentMeta` wait until `release` is called. */
+  function heldLoad(): {
+    store: ReturnType<typeof wrapStore>
+    release: () => void
+  } {
+    const inner = createInMemoryStore()
+    let release = (): void => {}
+    const gate = new Promise<void>(resolve => {
+      release = resolve
+    })
+    const store = wrapStore(inner, {
+      currentMeta: async docId => {
+        await gate
+        return inner.currentMeta(docId)
+      },
+    })
+    return { store, release }
+  }
+
+  it("a get whose build throws leaves nothing behind", () => {
+    const runtime = new Runtime()
+    const broken = {
+      ...TodoDoc,
+      factory: () => {
+        throw new Error("no factory")
+      },
+    } as unknown as typeof TodoDoc
+
+    expect(() => runtime.get("todo-1", broken)).toThrow("no factory")
+    expect(runtime.has("todo-1")).toBe(false)
+    expect(runtime.lifecycleOf("todo-1")).toBeUndefined()
+    // The generation it was issued was never committed, nor used.
+    const doc = runtime.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
+    doc.title.set("after")
+    expect(doc.title()).toBe("after")
+    expect(runtime.lifecycleOf("todo-1")).toMatchObject({ phase: "ready" })
+
+    runtime.shutdown()
+  })
+
+  it("a promotion that fails its origin check commits nothing, and the replica stays usable", () => {
+    const runtime = new Runtime()
+    const { factory, syncMode } = json.replica()
+    // A replica this factory did not produce: `upgrade` refuses it before it
+    // takes it.
+    const foreign = Object.assign(Object.create(factory), {
+      createEmpty: () => Object.create(factory.createEmpty()),
+    })
+    runtime.replicate("todo-1", foreign, syncMode, TodoDoc.schemaHash)
+    const before = runtime.lifecycleOf("todo-1")
+
+    expect(() => runtime.get("todo-1", TodoDoc)).toThrow(
+      "requires a replica produced by",
+    )
+    expect(runtime.lifecycleOf("todo-1")).toBe(before)
+    const instance = runtime.instanceOf("todo-1")
+    expect(instance?.tier).toBe("replicate")
+    expect(() => instance?.readyInfo.replica.version()).not.toThrow()
+
+    runtime.shutdown()
+  })
+
+  it("refuses a replicate document whose load failed with the load's error", async () => {
+    const failing = wrapStore(createInMemoryStore(), {
+      currentMeta: async () => {
+        throw new Error("disk unreadable")
+      },
+    })
+    const runtime = new Runtime({ store: failing, onStoreError: () => {} })
+    const { factory, syncMode } = json.replica()
+    runtime.replicate("todo-1", factory, syncMode, TodoDoc.schemaHash)
+    await expect(runtime.whenHydrated("todo-1")).rejects.toThrow(
+      "disk unreadable",
+    )
+
+    expect(runtime.hydrated("todo-1")).toBe(false)
+    expect(() => runtime.get("todo-1", TodoDoc)).toThrow("disk unreadable")
+    await runtime.shutdown()
+  })
+
+  it("refuses to replicate a document it holds, in either tier", () => {
+    const runtime = new Runtime()
+    const { factory, syncMode } = json.replica()
+    runtime.get("doc-a", TodoDoc)
+    runtime.replicate("doc-b", factory, syncMode, TodoDoc.schemaHash)
+    for (const docId of ["doc-a", "doc-b"]) {
+      expect(() =>
+        runtime.replicate(docId, factory, syncMode, TodoDoc.schemaHash),
+      ).toThrow("already registered")
+    }
+    expect(runtime.instanceOf("doc-a")?.tier).toBe("interpret")
+    runtime.shutdown()
+  })
+
+  it("says whether a document it cannot suspend is absent or deferred", () => {
+    const runtime = new Runtime()
+    runtime.defer("deferred")
+    expect(() => runtime.suspend("nope")).toThrow("does not exist")
+    expect(() => runtime.suspend("deferred")).toThrow(
+      "Cannot suspend deferred document",
+    )
+    expect(() => runtime.resume("deferred")).toThrow("not suspended")
+    runtime.shutdown()
+  })
+
+  it("a deferral never replaces a held document", () => {
+    const runtime = new Runtime()
+    const doc = runtime.get("todo-1", TodoDoc)
+    runtime.defer("todo-1")
+    expect(runtime.instanceOf("todo-1")?.tier).toBe("interpret")
+    expect(runtime.get("todo-1", TodoDoc)).toBe(doc)
+    expect(runtime.deferred.size).toBe(0)
+    runtime.shutdown()
+  })
+
+  it("a step that only registers a document wakes no hydration waiter", async () => {
+    const runtime = new Runtime({ store: createInMemoryStore() })
+    const doc = runtime.get("todo-1", TodoDoc)
+    await whenHydrated(doc)
+    let woken = 0
+    hydratedFeed(doc)[CHANGEFEED].subscribe(() => {
+      woken++
+    })
+
+    const exchange = new Exchange(runtime, { principal: "alice" })
+    expect(runtime.lifecycleOf("todo-1")).toMatchObject({ registered: true })
+    expect(woken).toBe(0)
+    await exchange.shutdown()
+  })
+
+  it("a hydration subscriber that writes on load finds the document wired", async () => {
+    const LoroTodo = loro.bind(TodoSchema)
+    const storage = createInMemoryStoreData()
+    const first = new Runtime({
+      store: createInMemoryStore({ sharedData: storage }),
+    })
+    const written = first.get("todo-1", LoroTodo) as DocRef<typeof TodoSchema>
+    await whenHydrated(written)
+    written.done.set(true)
+    await first.shutdown()
+
+    const runtime = new Runtime({
+      store: createInMemoryStore({ sharedData: storage }),
+    })
+    const advanced = vi.fn()
+    runtime.setHooks({ onDocAdvanced: advanced })
+    const doc = runtime.get("todo-1", LoroTodo) as DocRef<typeof TodoSchema>
+    hydratedFeed(doc)[CHANGEFEED].subscribe(() => {
+      if (hydrated(doc)) doc.title.set("on load")
+    })
+    await whenHydrated(doc)
+    await runtime.flush()
+    // Wired before the subscriber heard: its write left like any other.
+    expect(advanced).toHaveBeenCalledWith("todo-1")
+    await runtime.shutdown()
+
+    const reader = new Runtime({
+      store: createInMemoryStore({ sharedData: storage }),
+    })
+    const reloaded = reader.get("todo-1", LoroTodo) as DocRef<typeof TodoSchema>
+    await whenHydrated(reloaded)
+    expect(reloaded.title()).toBe("on load")
+    expect(reloaded.done()).toBe(true)
+    await reader.shutdown()
+  })
+
+  it("a standalone Runtime wrapped mid-load announces nothing until the load finishes", async () => {
+    const { store, release } = heldLoad()
+    const runtime = new Runtime({ store })
+    const doc = runtime.get("todo-1", TodoDoc)
+    const exchange = new Exchange(runtime, { principal: "alice" })
+
+    expect(exchange.documents.has("todo-1")).toBe(false)
+    release()
+    await whenHydrated(doc)
+    expect(exchange.documents.has("todo-1")).toBe(true)
+    await exchange.shutdown()
+  })
+
+  it("a get whose document is destroyed while it registers returns the closed ref", () => {
+    const runtime = new Runtime()
+    runtime.setHooks({ onDocReady: info => runtime.destroy(info.docId) })
+
+    const doc = runtime.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
+    expect(runtime.has("todo-1")).toBe(false)
+    expect(doc.title()).toBe("")
+    expect(() => doc.title.set("after")).toThrow(DocumentClosedError)
+    runtime.shutdown()
+  })
+
+  it("a get reached from onDocReady while another document registers returns its ref", () => {
+    const runtime = new Runtime()
+    let inner: unknown
+    runtime.setHooks({
+      onDocReady: info => {
+        if (info.docId === "outer") inner = runtime.get("inner", TodoDoc)
+      },
+    })
+    const outer = runtime.get("outer", TodoDoc)
+
+    const held = runtime.instanceOf("outer")
+    expect(held?.tier === "interpret" && held.ref).toBe(outer)
+    expect(inner).toBeDefined()
+    expect(runtime.get("inner", TodoDoc)).toBe(inner)
+    expect(runtime.documentIds()).toEqual(new Set(["outer", "inner"]))
+    runtime.shutdown()
   })
 })

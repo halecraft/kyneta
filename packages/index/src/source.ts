@@ -394,7 +394,7 @@ const defaultMapping: SourceMapping = {
  * it — see `isTrackable`.
  */
 type DocInfo = {
-  readonly mode: "interpret" | "replicate" | "deferred"
+  readonly mode: "interpret" | "replicate" | "deferred" | "unloaded"
   readonly suspended: boolean
 }
 
@@ -431,7 +431,9 @@ function isTrackable(
   //
   // This clause does not stop deferred documents being promoted —
   // `registerSchema` below has already done that by the time we run. It
-  // stops a *replicate* document being upgraded.
+  // stops a *replicate* document being upgraded, and an *unloaded* one being
+  // loaded again: its content is not in memory, and indexing it would undo
+  // the unload. Its rows leave until something opens it.
   if (info.mode !== "interpret") return false
 
   // There is deliberately no `info.suspended` check here. Suspension is
@@ -439,7 +441,8 @@ function isTrackable(
   // interpreted, still in `documents()`, still holding a live readable ref. If
   // it decided membership, `exchange.suspend(docId)` would delete a row from
   // every view built on this source and `resume` would put it back — churn
-  // because the network went quiet. `remove()` and `destroy()` are the exits.
+  // because the network went quiet. `remove()`, `destroy()` and `unload()`
+  // are the exits.
 
   // `supportsHash` rather than string equality, because a schema is defined to
   // read its own ancestor shapes; comparing for equality would drop the very

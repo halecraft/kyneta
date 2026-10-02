@@ -1,16 +1,16 @@
 # @kyneta/exchange — Technical Reference
 
 > **Package**: `@kyneta/exchange`
-> **Role**: Substrate-agnostic document sync runtime. Orchestrates channel topology, document convergence, and persistence above any transport and any `@kyneta/schema` substrate — via two pure TEA programs (session + sync), a Synchronizer shell that owns the serialized dispatch queue, a **Runtime** (the local imperative shell: documents + store + lease + clock), and an **Exchange** façade (the network shell: transports + peers + governance) that composes a Runtime.
+> **Role**: Substrate-agnostic document sync runtime. Orchestrates channel topology, document convergence, and persistence above any transport and any `@kyneta/schema` substrate — via pure programs (session and sync, held by a Synchronizer shell that owns the serialized dispatch queue; store and lifecycle, held by a **Runtime**, the local imperative shell: documents + store + lease + clock), and an **Exchange** façade (the network shell: transports + peers + governance) that composes a Runtime.
 > **Depends on**: `@kyneta/schema` (peer), `@kyneta/changefeed` (peer), `@kyneta/transport` (direct)
 > **Depended on by**: `@kyneta/react` (peer), `@kyneta/leveldb-store`, `@kyneta/indexeddb-store`, `@kyneta/sqlite-store`, `@kyneta/postgres-store`, `@kyneta/prisma-store`, `@kyneta/sql-store-core`, application code, every transport package (dev)
-> **Canonical symbols**: `Exchange`, `ExchangeParams`, `Runtime`, `RuntimeParams`, `RuntimeHooks`, `DocReadyInfo`, `Synchronizer`, `SessionModel`, `SessionInput`, `SessionEffect`, `SyncModel`, `SyncInput`, `SyncEffect`, `updateSession`, `updateSync`, `Governance`, `Policy`, `composeGate`, `GatePredicate`, `EpochBoundaryPredicate`, `Line`, `LineProtocol`, `Capabilities`, `ReplicaLike`, `ReplicaFactoryLike`, `ReplicaKey`, `DEFAULT_REPLICAS`, `Interpret`, `Replicate`, `Defer`, `Reject`, `Disposition`, `PeerNaming`, `PeerChange`, `DocChange`, `DocInfo`, `PeerState`, `PeerSyncState`, `PeerDocSyncState`, `Connectivity`, `deriveConnectivity`, `Store`, `StoreRecord`, `StoreMeta`, `DocMetadata`, `whenPeer`, `sync` (helper), `SyncMode`, `SYNC_COLLABORATIVE`, `SYNC_AUTHORITATIVE`, `SYNC_EPHEMERAL`, `requiresBidirectionalSync`, `BindingTarget`, `createBindingTarget`
+> **Canonical symbols**: `Exchange`, `ExchangeParams`, `Runtime`, `RuntimeParams`, `RuntimeHooks`, `DocReadyInfo`, `lifecycleProgram`, `Lifecycle`, `Synchronizer`, `SessionModel`, `SessionInput`, `SessionEffect`, `SyncModel`, `SyncInput`, `SyncEffect`, `createSessionUpdate`, `createSyncUpdate`, `planLeave`, `Governance`, `Policy`, `composeGate`, `GatePredicate`, `EpochBoundaryPredicate`, `Line`, `LineProtocol`, `Capabilities`, `ReplicaLike`, `ReplicaFactoryLike`, `ReplicaKey`, `DEFAULT_REPLICAS`, `Interpret`, `Replicate`, `Defer`, `Reject`, `Disposition`, `PeerNaming`, `PeerChange`, `DocChange`, `DocInfo`, `PeerState`, `PeerSyncState`, `PeerDocSyncState`, `Connectivity`, `deriveConnectivity`, `Store`, `StoreRecord`, `StoreMeta`, `DocMetadata`, `whenPeer`, `sync` (helper), `SyncMode`, `SYNC_COLLABORATIVE`, `SYNC_AUTHORITATIVE`, `SYNC_EPHEMERAL`, `requiresBidirectionalSync`, `BindingTarget`, `createBindingTarget`
 > **Key invariant(s)**:
 > 1. The exchange never inspects `SubstratePayload` contents. Payloads are opaque blobs carried by `offer` messages; only the substrate produces and consumes them.
 > 2. The session program never sees documents. The sync program never sees channels, transports, or connection state. They share a single dispatch queue and communicate exclusively through `sync-event` effects the shell forwards.
 > 3. Every reactive output — `exchange.peers`, `exchange.documents`, per-doc ready state — drains at quiescence in snapshot-then-clear order.
-> 4. **FC/IS boundary:** The `Runtime` is the local imperative shell (document cache, store, hydration, lease, tick clock). The `Exchange` is the network shell (transports, synchronizer, peers). The `Runtime` can be used standalone for local-first apps without any network. Substrates are pure math; the clock (`setInterval`) lives in the Runtime, not in substrates.
-> 5. **Runtime hooks bridge local→network:** The Runtime fires `onDocReady`, `onDocChangeset`, `onDocAdvanced`, `onDocDestroyed`, `onDocSuspended`, `onDocResumed`. The Exchange wires these into the Synchronizer, and `onDocInterpreted` attaches each interpreted ref's network terms (`sync()`, its authority, the peer settle term; see [Document readiness](#document-readiness--a-conjunction-over-layers)). `setHooks` backfills both for documents that exist already, so a standalone Runtime wrapped later (`new Exchange(runtime, params)`) gives its documents the same capabilities as ones created through `exchange.get()`. A standalone Runtime (no Exchange) leaves them unset — docs work fully without a network. Changesets feed observation only; a local change leaves the process through `onDocAdvanced`, which the Runtime fires from the substrate's local-update signal, and from a compaction that took in records another instance stored. It is named for an advance, not a local write: both are ways the replica moves without the network. `onDocReady` hands the Synchronizer the Runtime's own `DocReadyInfo` record, which the Synchronizer reads and never replaces: it asks the Runtime to rebuild a replica (`rebuildReplica`). Two calls run the other way: `rebuildReplica`, and `Runtime.onStateAdvanced(docId)`, which the Exchange invokes when the network advanced a document's version. That call carries a `docId` and nothing else — the Runtime resolves the document from its own cache, so the network shell never needs to hold local bookkeeping in order to make the call.
+> 4. **FC/IS boundary:** The `Runtime` is the local imperative shell (each document's lifecycle and live objects, store, hydration, lease, tick clock). The `Exchange` is the network shell (transports, synchronizer, peers). The `Runtime` can be used standalone for local-first apps without any network. Substrates are pure math; the clock (`setInterval`) lives in the Runtime, not in substrates.
+> 5. **Runtime hooks bridge local→network:** The Runtime fires `onDocReady`, `onDocChangeset`, `onDocAdvanced`, `onDocDestroyed`, `onDocSuspended`, `onDocResumed`. The Exchange wires these into the Synchronizer, and `onDocInterpreted` attaches each interpreted ref's network terms (`sync()`, its authority, the peer settle term; see [Document readiness](#document-readiness--a-conjunction-over-layers)). `setHooks` backfills both for documents that exist already (`onDocReady` only for those that have loaded), so a standalone Runtime wrapped later (`new Exchange(runtime, params)`) gives its documents the same capabilities as ones created through `exchange.get()`. A standalone Runtime (no Exchange) leaves them unset — docs work fully without a network. Changesets feed observation only; a local change leaves the process through `onDocAdvanced`, which the Runtime fires from the substrate's local-update signal, and from a compaction that took in records another instance stored. It is named for an advance, not a local write: both are ways the replica moves without the network. `onDocReady` hands the Synchronizer the Runtime's own `DocReadyInfo` record, which the Synchronizer reads and never replaces: it asks the Runtime to rebuild a replica (`rebuildReplica`). Two calls run the other way: `rebuildReplica`, and `Runtime.onStateAdvanced(docId)`, which the Exchange invokes when the network advanced a document's version. That call carries a `docId` and nothing else — the Runtime resolves the document's current instance itself, so the network shell never needs to hold local bookkeeping in order to make the call.
 
 A document-sync runtime for arbitrary substrates. Hands back an `Exchange` instance that accepts a schema binding (`Todo = loro.bind(...)`), returns typed document refs (`exchange.get("doc1", Todo)`), routes their changes over any registered transport, and exposes `ReactiveMap`s of peers and documents for observation.
 
@@ -20,7 +20,9 @@ Imported by applications to construct the top-level sync graph; by `@kyneta/reac
 
 ## Questions this document answers
 
-- What is the difference between session and sync, and why are they split? → [Two programs, one shell](#two-programs-one-shell)
+- What is the difference between session and sync, and why are they split? → [Four programs, two shells](#four-programs-two-shells)
+- How does a document load, become ready and close, and what is a generation? → [How a document becomes ready](#how-a-document-becomes-ready)
+- How do I take a document out of memory and keep it stored, and what reaches peers meanwhile? → [Suspend, unload, destroy](#suspend-unload-destroy)
 - How does a local mutation become a wire `offer`? → [The local-write path](#the-local-write-path)
 - Why does a local write reach peers only once it is stored? → [Store-first](#store-first)
 - What does `exchange.get(docId, bound)` actually do? → [`exchange.get` — phase in, action out](#exchangeget--phase-in-action-out)
@@ -49,7 +51,11 @@ Imported by applications to construct the top-level sync graph; by `@kyneta/reac
 | Dispatch cycle | One inbound input → update → effects executed → (possibly) more inputs queued from `sync-event` effects → update again → … → quiescence. Notifications accumulate throughout, deliver once on drain. | An event-loop tick |
 | Quiescence | The state after one dispatch cycle completes: session queue empty, sync queue empty, no pending `sync-event`s. Notifications drain here. | Async settlement |
 | `DocReadyInfo` | The one record of a registered document: its replica and replica factory (the variance-safe `-Like` interfaces from `@kyneta/schema`, so no `Replica<any>`), the mode, sync mode and schema hash, discriminated by mode so an interpreted document's `replica` is its `Substrate`. Owned by the Runtime, which is the only one to replace its replica; the Synchronizer holds the same object, read-only. Never seen by the programs. | A document's sync state — that is `DocEntry`, in the sync program's model |
-| Phase | Which tier a document sits in: `deferred` (announced by a peer, nothing held), `replicate` (a bare `Replica`, no schema), or `interpret` (substrate + `Ref<S>`). `planInterpretation` (`src/interpret.ts`) classifies on it. Not a fixed classification: `interpret` is reachable from both other phases via `get()`, and the reverse is not reachable at all. | **Suspension** — an orthogonal flag about sync-graph membership, not a fourth phase. A suspended document is still in interpret phase. |
+| Phase (`DocPhase`) | Which tier a document sits in: `deferred` (announced by a peer, nothing held), `replicate` (a bare `Replica`, no schema), `interpret` (substrate + `Ref<S>`), or `unloaded` (out of memory, kept in the store). `planInterpretation` (`src/interpret.ts`) classifies on it. Not a fixed classification: `interpret` is reachable from every other phase via `get()`. The reverse is reachable only for a stored document, by `unload`, which takes it out of memory; loading it again restores the tier it had. | **Suspension** — an orthogonal flag about sync-graph membership, not a phase. A suspended document is still in interpret phase, and an unloaded one keeps the flag. The lifecycle's phases, which say where a held document's load and unload stand. |
+| Lifecycle phase | Where the lifecycle program (`src/lifecycle-program.ts`) has a document: `deferred`, `loading`, `ready` (loaded, or nothing to load), `failed` (its load failed), `unloading` (leaving memory) or `unloaded` (kept in the store, no instance); absent is no entry. Each held phase records the `BuildSpec` that built its instance, and so its tier. See [How a document becomes ready](#how-a-document-becomes-ready). | The tier (`DocPhase`) |
+| Generation | The number the lifecycle model issues each instance of a document (a create, a load, a promotion), never reused. A completion carries it, so one that returns for an instance no longer current is ignored. | A version — a generation names an instance in this process, not a state of the document |
+| `Instance` | The Runtime's live objects for one generation: replica, ref, refusals, publication record, wiring and the callbacks observing the values the model decides of it (its load, its unloading refusal). What a pure model cannot hold. `Runtime.instanceOf(docId)` returns the current one. | The document's lifecycle (`Runtime.lifecycleOf`), which is data |
+| `Refusal` | Why the lifecycle program refused a request (`not-hydrated`, `load-failed`, `mismatch`, `not-held`, `not-suspended`, `already-held`, `not-stored`, `unloading`). Data: each door decides whether to throw it (`refusalError`) or skip it. | An error — `refusalError` makes one |
 | `Disposition` vs `InterpretAction` | `Disposition` (`Interpret \| Replicate \| Defer \| Reject`) decides which tier a *newly discovered* document should enter. `InterpretAction` decides how an *existing* document is raised to interpret. | Each other — adjacent, and neither supersedes the other. |
 | `ReactiveMap<K, V, C>` | From `@kyneta/changefeed` — a callable changefeed over a `ReadonlyMap<K, V>` with lifted accessors. | A plain `Map` — this fires the changefeed |
 | `Policy` | Interface with gate predicates (`canShare`, `canAccept`, `canConnect`, `canReset`) and document handlers (`resolve`). Multiple policies register into one `Governance`. | An HTTP middleware, an authorization system |
@@ -72,7 +78,7 @@ Imported by applications to construct the top-level sync graph; by `@kyneta/reac
 | `ready` latch | Monotonic doc-level readiness — `sync(doc).ready` flips `true` on first reconciliation (`synced` or `vacant`) and never regresses. Backed by the `reconciledIdentities` accumulator. | `PeerSyncState[]` (volatile); a web `readyState` (connection lifecycle) |
 | `present` / `interest` / `offer` / `accept` / `dismiss` / `vacant` | The six sync messages from `@kyneta/transport`. `present` carries `syncMode: SyncMode` per doc entry; `accept` says which of an offerer's versions the receiver now holds; `vacant` is the terminal negative ack to interest. | Lifecycle messages (`establish`, `depart`) |
 | `ourVersionTheyHold` / `theirVersionWeHold` | The two versions `PeerDocSyncState` keeps per peer and document, independent of its `status`: the latest of *our* versions the peer holds (from its `accept`s and interests; what compaction trims to), and the latest of *its* versions we have applied (what our interests quote back as `since`). | One `lastKnownVersion` — the field they replace, which mixed the two |
-| Departure | A peer leaving the sync graph. Explicit (`depart` message), channel-drop + expired grace timer, or `destroy()` on a local doc. | Disconnection — channel drop without grace-timer expiry is *disconnection*, not departure |
+| Departure | A peer leaving the sync graph. Explicit (`depart` message), or channel-drop + expired grace timer. | Disconnection — channel drop without grace-timer expiry is *disconnection*, not departure. A *document* leaving the sync graph (`suspend`, `unload`, `destroy`), which is `planLeave`'s |
 | Lineage boundary | A merge that discards local state and adopts an incoming entirety — triggered when a remote peer advances past our version via `advance(to)` / compaction, **or** when the incoming version's explicit `Version.lineage` differs from ours (e.g. a writer restart with no persisted store mints a fresh `PlainVersion` lineage). Gated by `Policy.canReset`. | `reset` on a durable log |
 | `Line` | A reliable bidirectional message stream between two peers, implemented as two authoritative documents (one per direction) with automatic seqno + ack pruning. | A socket, a channel, a queue |
 | `LineProtocol` | The reified schema pair + topic from `Line.protocol(opts)`. Exposes `sender(exchange, peerId)`, `claimReceiver(exchange, peerId)`, `manager(exchange, peerId)` (client), addressed by the remote seat, and `listen(exchange)` (server). | `Line` — `LineProtocol` *creates* `Line` capabilities |
@@ -88,14 +94,17 @@ Imported by applications to construct the top-level sync graph; by `@kyneta/reac
 
 **Thesis**: split the problem along the axis of orthogonal failure modes. Connection topology fails one way (channels drop, peers come and go); document convergence fails another (merges conflict, versions diverge, storage is behind). Solve each with its own pure program, hold both in one shell that owns dispatch ordering, and let the shell — not the programs — know about transports, storage, refs, and callbacks.
 
-Four layers:
+Layers:
 
 | Layer | Kind | Source | Role |
 |-------|------|--------|------|
 | `Exchange` | Class (façade) | `src/exchange.ts` | Public API: `get`, `destroy`, `suspend`, `resume`, `addTransport`, `removeTransport`, `peers`, `documents`. Owns `Synchronizer`, `Governance`, `Capabilities`, `AnyTransport[]`, and a `Runtime`, which owns the `Store`. |
-| `Synchronizer` | Class (shell) | `src/synchronizer.ts` | The imperative shell. Owns the dispatch queue, the map of registered documents (the Runtime's `DocReadyInfo` records, read-only), the transport adapters, the reactive-collection handles. Runs both programs, interprets effects. |
+| `Synchronizer` | Class (shell) | `src/synchronizer.ts` | The network shell. Owns the dispatch queue, the map of registered documents (the Runtime's `DocReadyInfo` records, read-only), the transport adapters, the reactive-collection handles. Runs the session and sync programs, interprets effects. |
 | Session program | Pure `Program` | `src/session-program.ts` | Channel topology + peer identity + departure. No document knowledge. |
 | Sync program | Pure `Program` | `src/sync-program.ts` | Document convergence + merge-strategy dispatch + ready state. No channel knowledge. |
+| `Runtime` | Class (shell) | `src/runtime.ts` | The local shell. Holds each document's instances by generation, the store, the lease and the tick clock. Runs the store and lifecycle programs, interprets effects. |
+| Store program | Pure `Program` | `src/store/store-program.ts` | Which write each document owes, and from what base. |
+| Lifecycle program | Pure `Program` | `src/lifecycle-program.ts` | Each document's tier, load, registration and generation; every door's request and every load's completion. |
 
 Plus cross-cutting facilities:
 
@@ -123,38 +132,26 @@ Plus cross-cutting facilities:
 
 ---
 
-## Two programs, one shell
+## Four programs, two shells
 
-Source: `src/session-program.ts`, `src/sync-program.ts`, `src/synchronizer.ts`.
+Source: `src/session-program.ts`, `src/sync-program.ts`, `src/synchronizer.ts`; `src/store/store-program.ts`, `src/lifecycle-program.ts`, `src/runtime.ts`.
 
-The session and sync programs are pure values of type `Program<Input, Model, Effect>` from `@kyneta/machine`. Each owns its own state and its own message vocabulary.
+Every stateful protocol in the package is a pure value of type `Program<Input, Model, Effect>` from `@kyneta/machine`: its own state and message vocabulary, a pure `update(input, model) → [model, ...effects]` tested as a table, and effects that are data. A shell executes them.
 
-```
-Session program                              Sync program
-───────────────                              ────────────
-SessionModel                                 SyncModel
-├─ identity: PeerIdentityDetails             ├─ identity: PeerIdentityDetails
-├─ channels: Map<ChannelId, ChannelEntry>    ├─ documents: Map<DocId, DocEntry>
-├─ peers: Map<PeerId, SessionPeer>           ├─ peers: Map<PeerId, SyncPeerState>
-└─ departureTimeout: number                  └─ subscriptions: …
+| Program | Source | States | Shell | Run by |
+|---|---|---|---|---|
+| Session | `src/session-program.ts` | Channel topology, the establish handshake, peer identity, departure. | `Synchronizer` | `createObservableProgram`, behind the outer coordinator |
+| Sync | `src/sync-program.ts` | Document convergence: `present`, `interest`, `offer`, `accept`, `dismiss`, `vacant`, per-peer sync state, sync-mode dispatch. | `Synchronizer` | `createObservableProgram`, behind the outer coordinator |
+| Store | `src/store/store-program.ts` | Which write each document owes the store, and from what base. | `Runtime` | `createObservableProgram` |
+| Lifecycle | `src/lifecycle-program.ts` | Each document's tier, load, registration and generation. | `Runtime` | `Runtime.#step`, synchronously, as a transaction |
 
-SessionInput                                 SyncInput
-├─ sess/channel-added                        ├─ sync/doc-ensure
-├─ sess/channel-establish                    ├─ sync/doc-destroy
-├─ sess/channel-removed                      ├─ sync/doc-suspend / resume
-├─ sess/message-received (LifecycleMsg)      ├─ sync/peer-available / unavailable / departed
-└─ sess/departure-timer-expired              ├─ sync/message-received (SyncMsg)
-                                             └─ sync/doc-advanced
+The undo program (`src/undo/undo-program.ts`) has the same shape, with its own shell ([Undo stacks](#undo-stacks)).
 
-SessionEffect                                SyncEffect
-├─ send (LifecycleMsg)                       ├─ send-to-peer (SyncMsg)
-├─ reject-channel                            ├─ send-to-peers (SyncMsg × Peer[])
-├─ start-departure-timer                     ├─ ensure-doc (callback)
-├─ cancel-departure-timer                    └─ import-doc-data (payload → substrate)
-└─ sync-event (SyncInput)  ─────────────────►┘ drained into sync program's queue
-```
+The Synchronizer holds the session and sync programs on one dispatch queue (below). The Runtime holds the store and lifecycle programs: the lifecycle's `store` effects are store-program inputs, which the Runtime dispatches. The lifecycle program alone is not run on a `@kyneta/machine` runtime, because its doors must return a ref from inside a nested step, which a queued dispatch cannot; see [How a document becomes ready](#how-a-document-becomes-ready).
 
-Neither program calls the other. Neither program imports the other. The *only* coupling is the `sync-event` effect: when the session program needs the sync program to hear about a topology change (peer available, peer unavailable, peer departed), it emits a `sync-event` effect whose payload is a `SyncInput`. The shell drains pending `sync-event` effects into the sync program's pending-input queue in the **same dispatch cycle** — so topology changes and the sync state they imply are always co-applied, not interleaved.
+### Session and sync: one queue
+
+The session program models channels and peers; the sync program models documents. Neither calls the other. Neither imports the other. The *only* coupling is the `sync-event` effect: when the session program needs the sync program to hear about a topology change (peer available, peer unavailable, peer departed), it emits a `sync-event` effect whose payload is a `SyncInput`. The shell drains pending `sync-event` effects into the sync program's pending-input queue in the **same dispatch cycle** — so topology changes and the sync state they imply are always co-applied, not interleaved.
 
 The keys in `SessionModel.channels` are minted by the Synchronizer via `TransportContext.mintChannelId` (a private per-instance counter, reset on `Synchronizer.reset()`). The invariant: **`channelId` is unique across every transport this synchronizer owns**. The transport package's `ChannelDirectory` is a pure tracking structure that accepts the caller-supplied id; it does not mint. Pushing id issuance to the synchronizer is what lets a relay hub or multi-bridge client work — see `jj:plooolsx` for the regression that motivated the move.
 
@@ -186,8 +183,8 @@ There is no longer a "second world" of accumulator drains outside the algebra �
 
 ### What the programs are NOT
 
-- **Not aware of each other.** Neither can import the other's types without crossing a layer. The `sync-event` effect's payload is `SyncInput` because that's how its union is declared in `session-program.ts`, but the session program does not call the sync program's `update` function.
-- **Not aware of substrates.** Neither program imports from `@kyneta/schema`'s substrate module beyond type re-exports. The substrate's `exportSince` / `merge` are called by the shell on behalf of the sync program's effects.
+- **Not aware of each other.** The session and sync programs cannot import each other's types without crossing a layer. The `sync-event` effect's payload is `SyncInput` because that's how its union is declared in `session-program.ts`, but the session program does not call the sync program's `update` function. The lifecycle program names store-program inputs in its `store` effects, and never runs the store program.
+- **Not aware of substrates.** No program calls a substrate. The substrate's `exportSince` / `merge` are called by the shell on behalf of the sync program's effects. The lifecycle program carries a `BoundSchema` or a replica factory as a value in a `build` effect, and the Runtime builds.
 - **Not asynchronous.** `update` is synchronous and pure. All I/O happens in the shell's effect interpretation.
 
 ---
@@ -229,6 +226,7 @@ Per peer and document the sync model keeps a `status`, three versions, and `offe
 | an offer reported sent | kept | kept | := the version the offer carried | kept | cleared |
 | version check finds no gap | `synced` | kept | kept | := the peer's stated version | kept |
 | peer's channel returns | kept | cleared | cleared | kept | cleared |
+| our document leaves the sync graph | the whole record is forgotten | | | | |
 
 - **`theirVersionWeHold` is quoted back as an interest's `since`.** It is always a version the peer minted, which matters where versions are private: the ephemeral substrate's is an install counter, and a reconnecting peer that quoted its own counter used to be answered with the whole document.
 - **`ourVersionTheyHold` is what compaction trims to.** Nothing else tells an offer's sender which of its versions a receiver holds, because a peer that only reads never offers anything back; before `accept`, the record of such a peer stayed at its handshake and `compact` trimmed nothing. An interest's `since` names one of our versions, so it wins over the peer's own `version`.
@@ -236,6 +234,7 @@ Per peer and document the sync model keeps a `status`, three versions, and `offe
 - **`offerOwed` is an offer the shell has not reported sent**, with `since`, where it starts. A push records it only if none is owed, since within a connection a baseline only grows and the earliest starting point covers every later one. When a withheld document may leave again, `sync/doc-publishable` re-emits each owed offer from its `since`. Any offer reported sent clears it: every offer exports our live state from a version the peer holds, so it carries whatever an earlier owed one would have.
 - **An interest clears the baseline** until its answer is reported sent, so no push reaches the peer from a version it may not hold; the answer exports our live state, which carries anything a push would. The interest's own version is where the answer starts, not the baseline: a history-free peer's version is its private counter, not one of ours, and a baseline set to it would make every push a whole document. When a peer offers us its version, it holds that version, so its baseline joins it (`#senderWillHold`, computed by the shell from the value the `import-doc-data` effect carries): a push after an import sends its sender only what it lacks, never its own import back. After a reset the baseline is the offered version alone; a history-free document's versions do not join across replicas, so an import leaves it unchanged. A peer whose baseline is unknown, one that has just come back or whose interest has not been answered, is not pushed to; the answer to its interest catches it up.
 - **A reconnecting peer's holding is forgotten**, because it may have restarted without its state. Its interest restates it.
+- **A document leaving the sync graph forgets every peer's record of it**, however it leaves (`suspend`, `unload`, `destroy`; `forgetPeerStates`). What holds the id next (the same document resumed or loaded again, or a new one created under the id) starts from each peer's interest: a baseline kept from before could start a push from a version the new instance never held, and a `synced` kept would read as settled before any peer had answered it.
 - **`leastCommonVersion` counts every peer we push to** (`pending` or `synced`) whose holding is known, filtered by `cohort`. Leaving out a `pending` peer could trim past what it holds.
 - **`leastCommonVersion` is met with our own version.** A peer's first interest carries no cursor, so its holding is recorded as its whole version, including its own operations we do not hold yet, and until its `accept` arrives it is concurrent with ours (Yjs, Loro) or ahead of it (plain). Starting the meet from our own version keeps what the peer holds of ours and drops what we lack, so the least common version is always at or below ours, and always a version our replica can place. A meet can only lower it.
 
@@ -255,7 +254,7 @@ Per peer and document the sync model keeps a `status`, three versions, and `offe
 
 **Warn/error-only — it never gates.** The peer's `syncEffect` is emitted unchanged, so an incompatible peer remains observable and enters the sync graph (data simply will not converge). This deliberately avoids inventing a "visible-but-inert" peer state — the per-doc schema-hash mismatch path (`sync-program.ts`) already establishes the precedent of *skipping work*, never withholding the peer, so the frozen `SyncRef`/`peerStates` surface is untouched. `PROTOCOL_VERSION` is `(2, 0)`, the first real major: 2.0 added `accept` and removed `offer.reciprocate`, so a 1.x peer neither acknowledges what it applies nor understands being told. Such a peer gets the error diagnostic and still enters the sync graph; refusing to sync with it remains a separate decision.
 
-Both programs emit one unified `diagnostic` effect carrying a structured `Diagnostic` (`src/types.ts`) — a discriminated union keyed on `code` (`self-connection`, `protocol-skew`, `protocol-mismatch`, `replica-type-mismatch`, `schema-hash-mismatch`, `sync-mode-mismatch`, `lineage-collision`) with `severity`, `message`, `peer`, and — per variant — `local`/`remote` and `docId`. **No optionals:** each cause carries exactly its fields, and deferred causes (`store-error`, `wire-reassembly`) become new variants, never new optionals on the existing ones. The shell maps `severity` to `console.error`/`console.warn` for both programs. `code` is the programmatic `kind` the planned structured `onProtocolWarning` callback (jj:wkwskqsy) would expose. This folds in the former `SyncEffect` `{ type: "warning" }` (schema-hash / replica-type / syncMode mismatches), now `severity: "error"` since they prevent convergence. Context: jj:nztkqwpm.
+Both programs emit one unified `diagnostic` effect carrying a structured `Diagnostic` (`src/types.ts`) — a discriminated union keyed on `code` (`self-connection`, `protocol-skew`, `protocol-mismatch`, `replica-type-mismatch`, `schema-hash-mismatch`, `sync-mode-mismatch`, `lineage-collision`, `unloaded-doc-reloaded`) with `severity`, `message`, `peer`, and — per variant — `local`/`remote` and `docId`. **No optionals:** each cause carries exactly its fields, and deferred causes (`store-error`, `wire-reassembly`) become new variants, never new optionals on the existing ones. The shell maps `severity` to `console.error`/`console.warn` for both programs. `code` is the programmatic `kind` the planned structured `onProtocolWarning` callback (jj:wkwskqsy) would expose. This folds in the former `SyncEffect` `{ type: "warning" }` (schema-hash / replica-type / syncMode mismatches), now `severity: "error"` since they prevent convergence. Context: jj:nztkqwpm.
 
 ### Sync-mode dispatch
 
@@ -297,9 +296,11 @@ When a peer announces an unknown doc, four checks run in order:
 
 For *known* docs (already registered), all three metadata fields — `replicaType`, `syncMode`, `schemaHash` — are validated against the local entry via `mismatchForSync` from `@kyneta/schema`. Any mismatch skips sync, surfacing a structured `diagnostic` (`code: "replica-type-mismatch" | "schema-hash-mismatch" | "sync-mode-mismatch"`, `severity: "error"`, carrying `peer`/`docId`/`local`/`remote`) logged via `console.error`. The axis→code translation is the layer boundary: `@kyneta/schema` names the axes, the exchange names the diagnostics.
 
+**A known document this peer has unloaded** (`DocEntry.mode: "unloaded"`) keeps its metadata, so a peer's `present` is checked against it like any other. After the check, a `present` or an `interest` for it loads it again only where this peer serves the documents it holds: the sync program's `servesUnloaded()`, which the Exchange answers with `Policy.authority === "self"`. The first such request marks the entry `reloading`, emits `reload-doc` (the Exchange steps the Runtime's `reload`, an `open` from the document's own spec) and an `unloaded-doc-reloaded` diagnostic (`severity: "warning"`, naming the peer); every later one does nothing. The request is not answered then: once loaded, the document announces itself and sends its own interest, and the peer's interest follows. A suspended unloaded document answers no peer, and neither does any unloaded document on a peer that does not serve, which is what keeps a client's closed cards closed: every reconnect brings a host's `present` for each.
+
 `supportedHashes` admits heterogeneous-schema sync: two peers with different migrated schema versions can sync if their `supportedHashes` sets overlap. Note that this — *intersection*, symmetric — is the sync question. Deciding whether a *local schema can interpret a given document* is a different, directional question (`mismatchForInterpretation`, membership), and the two are deliberately separate functions. See §"The two laws over `supportedHashes`" in `packages/schema/TECHNICAL.md`.
 
-**Every site that asks the interpretation question now asks it the same way**, and that invariant is worth stating because the bug it rules out is invisible from any single call site. `resolveSchema` (on `present`) and `registerSchema`'s deferred sweep (when a schema is registered later) are two entries to one question. They used to disagree — `resolveSchema` matched through `supportedHashes`, the sweep compared hashes for equality — so whether a deferred document was ever promoted depended on *when* its schema was registered. Register before the peer's `present` and the document was interpreted; register after and it stayed deferred permanently, because the sweep is the only thing that ever re-examines a deferred document and it had already run.
+**Every site that asks the interpretation question now asks it the same way**, and that invariant is worth stating because the bug it rules out is invisible from any single call site. `resolveSchema` (on `present`) and `registerSchema`'s deferred sweep (when a schema is registered later) are two entries to one question. They used to disagree — `resolveSchema` matched through `supportedHashes`, the sweep compared hashes for equality — so whether a deferred document was ever promoted depended on *when* its schema was registered. Register before the peer's `present` and the document was interpreted; register after and it stayed deferred permanently, because the sweep is the only thing besides a door naming the document that ever re-examines a deferred one, and it had already run.
 
 ---
 
@@ -339,7 +340,7 @@ Each capability handle's `close()` decrements the reference count. The underlyin
 
 ## `exchange.get` — phase in, action out
 
-Source: `src/interpret.ts` → `planInterpretation`; `src/exchange.ts` → `Exchange.get`.
+Source: `src/interpret.ts` → `planInterpretation`; `src/lifecycle-program.ts` → the `get` row; `src/exchange.ts` → `Exchange.get`, `#getImpl`.
 
 ```
 exchange.get<S>(docId: DocId, bound: BoundSchema<S>): Ref<S>
@@ -353,16 +354,19 @@ determines *whether* it does anything at all. Suspension participates in neither
 |-------|--------|
 | absent | Create the document, register with `Store[]`, broadcast `present`, return a fresh `Ref<S>`. |
 | interpret | Return the existing `Ref<S>`. No substrate reconstruction. |
-
 | deferred | Promote to interpret; send `interest` to the peer that presented; run sync. |
 | replicate | Promote to interpret over the *same* accumulated state — see below. |
+| unloaded | Load it again from `Store[]` under the caller's schema, suspended if it was, and return a new `Ref<S>`. |
+
+A document still unloading answers by its stage: before the store holds everything, `get()` cancels the unload and answers as for its tier; after, as for `unloaded` ([Suspend, unload, destroy](#suspend-unload-destroy)).
 
 Reconcilability is `mismatchForInterpretation` (`@kyneta/schema`) over the three
 axes a document is identified by: `replicaType`, `syncMode`, `schemaHash`. Every
 phase that holds a document is checked against it, including `interpret` — being
 already open is not an exemption. For a document no peer has announced, the
 document's own metadata is the `BoundSchema` it was created with, which carries
-those same three fields. A
+those same three fields; for an unloaded one, the metadata recorded when it was
+held, refused on all three. A
 disagreement on the first two is refused outright — they decide whether bytes
 can be exchanged at all, and no local intent makes an undecodable format
 decodable. A `schemaHash` disagreement on a *deferred* document is the one
@@ -371,8 +375,18 @@ exception: `get()` promotes anyway and warns. That is defensive, not permissive
 a local `get()` by announcing a colliding `docId`. It is written at `#getImpl`
 rather than in the classifier, because it is the only door that holds it.
 
+**The Runtime answers every door.** `get`, `open`, `onEnsureDoc` and
+`registerSchema`'s sweep each step one `get` request through the lifecycle
+program, whose `get` row asks `planInterpretation` with the phase, the metadata
+the Runtime recorded for the document, and where its load stands ([How a
+document becomes ready](#how-a-document-becomes-ready)). The Exchange's
+`#getImpl` keeps only the deferred policy above, checked against the metadata
+the synchronizer holds, which the Runtime does not; every other refusal, and
+its message (`refusalError`), is the Runtime's. `get` and `open` throw a
+refusal; `onEnsureDoc` and the sweep skip it.
+
 **Totality is over *phase*.** `get()` never refuses a document for being
-deferred, interpreted, or suspended. It still throws for an incoherent
+deferred, interpreted, suspended, unloading or unloaded. It still throws for an incoherent
 *request* — a schema that cannot read what is there — and that is about the
 arguments, not the document's state.
 
@@ -382,7 +396,7 @@ migration chain reaches the document's shape can read it. Both are accepted.
 
 ### `exchange.open` — `get`, never creating
 
-Source: `src/exchange.ts` → `open`, `#getImpl`; `src/runtime.ts` → `Intent`, `readinessFor`, `#becomeReady`.
+Source: `src/exchange.ts` → `open`, `#openImpl`, `#getImpl`; `src/lifecycle-program.ts` → `Intent`, the `get` row, `finishLoad`.
 
 ```
 exchange.open<S>(docId: DocId, bound: BoundSchema<S>): Promise<Ref<S> | undefined>
@@ -390,13 +404,13 @@ exchange.open<S>(docId: DocId, bound: BoundSchema<S>): Promise<Ref<S> | undefine
 
 `get` answers "give me this document" and may create it. `open` answers "give me this document if it is here": open, replicated, or in the Store. It never creates, writes or announces one, and resolves `undefined` instead. An undo stack opens the documents its steps name this way, so an undo never brings a destroyed document back.
 
-**It is `get` with another intent, through the same load**, not a Store read followed by a `get`. `#getImpl` takes the intent's kind; the created entry carries an `Intent` (`create`, or `open` with `wasDeferred`); `#becomeReady` decides from what the load found (`readinessFor`, see [How a document becomes ready](#how-a-document-becomes-ready)). An `open` whose load finds nothing takes the entry out again before anything registers, writes or announces it. There is no gap between a check and a `get` for a destroy to fall into: a destroy while `open` loads closes the document like any destroy, and the `open` rejects with its `DocumentClosedError`.
+**It is `get` with another intent, through the same load**, not a Store read followed by a `get`. `#getImpl` steps a `get` request with the intent's kind; the loading document records an `Intent` (`create`, or `open` with `replaced`); `finishLoad` decides from what the load found (see [How a document becomes ready](#how-a-document-becomes-ready)). An `open` whose load finds nothing is closed in the step that records it, before anything registers, writes or announces it. An `open` that can load nothing at all (no store, or a transient document) builds nothing, and resolves `undefined` at once. There is no gap between a check and a `get` for a destroy to fall into: a destroy while `open` loads closes the document like any destroy, and the `open` rejects with its `DocumentClosedError`.
 
 - **A destroyed document is not held**, including while its delete is in flight: the Runtime orders a load after the delete ([One document's store calls, in order](#one-documents-store-calls-in-order)).
-- **A deferred document** opens if the Store holds it. Otherwise it stays deferred: the deferred entry holds nothing, so `wasDeferred` alone puts it back, in the same step as the eviction.
-- **A `get` while an `open` loads** makes the entry `create`: the `get` caller holds that ref.
+- **A deferred document** opens if the Store holds it. Otherwise it stays deferred: the deferred entry holds nothing, so `intent.replaced` alone puts it back, in the same step as the close.
+- **A `get` while an `open` loads** makes the intent `create`: the `get` caller holds that ref.
 - **A failed read rejects**; it is not an absent document. A schema that cannot read the document throws, as with `get`.
-- **While `open` loads**, the document is in the Runtime's cache like any loading document (`exchange.has` is true), but not in `exchange.documents`, which it joins only when ready.
+- **While `open` loads**, the Runtime holds the document like any loading one (`exchange.has` is true), but it is not in `exchange.documents`, which it joins only when ready.
 
 ### Promoting a replicate document
 
@@ -427,12 +441,15 @@ Three preconditions, and together they are the whole contract:
    document's own history is still arriving is that collision. A caller that
    gets `Document '…' is still loading` should `await exchange.whenHydrated(docId)`
    — the docId-keyed accessor exists because a replicate document has no ref
-   for the ref-keyed `whenHydrated` to take.
+   for the ref-keyed `whenHydrated` to take. A replica whose load *failed* never
+   finishes arriving, so `get` throws the load's error instead.
 
 **The cost is that promotion is one-way.** There is no `demote()`, so a peer
 that promotes a document it was only relaying keeps the full substrate for the
 rest of the process. That is why it happens only where a caller named both a
-`docId` and a `BoundSchema`.
+`docId` and a `BoundSchema`. The one way back is `unload`, for a stored
+document: it leaves memory altogether, and a `replicate` loads it again as a
+replica.
 
 **No blanket path promotes, and that asymmetry is the safety property.**
 `registerSchema`'s deferred sweep and the `onEnsureDoc` network route both
@@ -449,33 +466,68 @@ reads `doc.title()`, writes `batch(doc, d => d.title("new"))`, subscribes
 `subscribe(doc, changeset => …)`. Everything downstream of `get` is identical
 regardless of which case fired.
 
-**This table describes `Exchange.get()`.** `Runtime.get()` differs in two ways,
-and a standalone-`Runtime` reader should know both: it has no `deferred` phase
-at all (deferral is a sync-graph concept), and it enforces the `BoundSchema`
-identity check itself rather than inheriting it.
+**This table describes `Exchange.get()`.** `Runtime.get()` is the same step
+without the Exchange's deferred policy: a standalone Runtime holds a deferred
+document only if something called `defer`, since deferral is a sync-graph
+concept, and promotes it whatever the announcement said.
 
-### Suspend vs destroy
+### Suspend, unload, destroy
 
 | Intention | API | Behaviour |
 |-----------|-----|-----------|
-| Leave sync graph, keep local state | `exchange.suspend(docId)` | Sends `dismiss`. **Stays in `exchange.documents`**, as `{ mode: "interpret", suspended: true }`. State remains in `Store`. `exchange.get(docId)` still returns the ref — **without** resuming. |
+| Leave sync graph, keep local state | `exchange.suspend(docId)` | Sends `dismiss`. **Stays in `exchange.documents`**, as `{ mode: "interpret", suspended: true }`. State remains in memory and in `Store`. `exchange.get(docId)` still returns the ref — **without** resuming. |
+| Leave memory, keep the stored document | `exchange.unload(docId)` | Once the store holds all of it: closes the document, sends `dismiss`, and releases its native document. **Stays in `exchange.documents`**, as `{ mode: "unloaded", suspended }`. `get` or `open` loads it again from `Store`, in the tier it had, suspended if it was. |
 | Permanent removal | `exchange.destroy(docId)` | Sends `dismiss`. Closes the document and releases its native document. Removes from `exchange.documents`, from `Store`, from all peers' views. Fresh `get` constructs a new doc, even while the delete is in flight; `open` resolves `undefined`. |
 
-The two exist because "I'm done with this doc" has two distinct flavours — intent to resume (`suspend`) and intent to erase (`destroy`). They differ in what leaves the `Store` and the exchange's document map.
+"I'm done with this doc" has three flavours: intent to resume (`suspend`), intent to open again later (`unload`), and intent to erase (`destroy`). They differ in what leaves memory, the `Store` and the exchange's document map.
 
-**A destroyed document is closed** (`Runtime.#evict`, in order): its wiring is undone; its terms close ([Closing never invents an answer](#closing-never-invents-an-answer)); its replica is disposed, which releases the native document (`ReplicaLike.dispose`, `@kyneta/schema` TECHNICAL.md §Release); then the cache entry goes. `reset()` and `shutdown()` close every document the same way, with reason `"disposed"` rather than `"destroyed"`. A ref the application still holds afterwards:
+**A destroyed document is closed and disposed** (the lifecycle's `close` and `dispose` effects, `Runtime.#close` and `#dispose`, in order): its wiring is undone; its terms close ([Closing never invents an answer](#closing-never-invents-an-answer)); the observers of its load are told; then its replica is disposed, which releases the native document (`ReplicaLike.dispose`, `@kyneta/schema` TECHNICAL.md §Release), and the instance goes. `reset()` and `shutdown()` close every document the same way, with reason `"disposed"` rather than `"destroyed"`. A ref the application still holds afterwards:
 
 - reads its last value: σ is not released;
 - throws `DocumentClosedError` on an authored write, on `unwrap`/`[NATIVE]`, on the sync functions (`version`, `exportEntirety`, `exportSince`, `merge`), and on a position, devtools history or undo record made before the close;
 - reports the `DocumentClosedError` through `writeRefusal`, and `writeRefusalFeed` subscribers hear the close;
 - keeps reachable only σ, its trie and subscribers, and its closed terms: not the native document, the Runtime or the Exchange. Once the application lets go of its refs, the document is collected.
 
+**An unload has three moments**, and each ends one thing:
+
+1. **`unload`** ends the ref's writes. The lifecycle commits `unloading` (stage `storing`), and the owner's refusal is derived from that phase (`unloadingOf`), so an authored write throws `DocumentClosedError` (reason `"unloaded"`) from then on. Then, in order: `drain` commits what the native document holds uncommitted and requests persistence and a push for it; `leaving` puts the sync entry in its leaving state (`sync/doc-unloading`), in which it still sends (pushes, owed offers, answers to interests) and takes nothing in (no import, no `accept`, no interest on a `present`, a reciprocal interest or a reset); `state-advanced` requests a write; and `release` asks the store program to report when it holds everything.
+2. **`released`** ends the ref. The store program emits it once the document's phase is `storedEntirely` (see [The store-program](#the-store-program)), after the `persisted` of the same write, so store-first's own path has already sent the offers held back for the last writes ([Store-first](#store-first)). The lifecycle closes the instance (its terms keep the answers they had, readiness and peer states included) and then leaves the sync graph (`leave` → `onDocUnload` → `leaveDocument(docId, "unload", left)`), which sends `dismiss` and clears the readiness latch.
+3. **`left`** ends the memory. The Synchronizer lets go of the record once everything queued before the leave has read it, and calls `left`; the lifecycle disposes the replica and records `unloaded`, with the `BuildSpec` that loads it again (`from: "hydration"` for an interpreted document) and `suspended`.
+
+A document that was never registered (a standalone Runtime) has no sync graph to leave: `released` closes, disposes and records `unloaded` at once.
+
+**Why the write before the release.** Changes merged from peers reach the store program only at the Synchronizer's next quiet point (`emit-state-advanced`), so a release from `idle` could fire before them, and the stored document would miss what this replica took in. The `state-advanced` the unload requests is a write that reads the replica when it starts. A write always completes after the current synchronous cascade, so every merge queued before `leaving` is in the replica by then, and the release waits for that write. A write with nothing new touches no store.
+
+**Why the document leaves only once the store holds everything.** Leaving drops what is owed: `handleDocPublishable` returns nothing for a document the sync model no longer holds. Store-first holds back every offer carrying an own write until the store confirms it, and the confirmation (`persisted` → `#confirmed` → `onDocPublishable` → `sync/doc-publishable`) precedes `released` in the store program's transition. The Synchronizer processes its input first in, first out, so even when it is busy and the leave is queued, the owed offers are queued ahead of it. A peer therefore receives every write made before `unload` without the unloading peer opening the document again. Leaving any earlier (dismissing at `unload`) would strand those writes; staying fully in the sync graph until `released` would let merges keep joining the store queue, so a document peers keep writing might never be released. A leaving document takes nothing in, so its store queue only shrinks.
+
+**A document never leaves memory while the store could lose it.** Only an `idle` phase without failures is `storedEntirely`: `unwritten` holds nothing confirmed, a phase with failures has a retry scheduled, and after `seat-lost` nothing more can be stored. A document whose writes keep failing stays in memory, unloading, and `flush()` resolves without waiting for it.
+
+**Two windows for a door.**
+
+- **Before `released`** (stage `storing`): `get` or `open` cancels the unload and is answered as for a ready document, returning the same ref. The store program keeps tracking it (`keep`), the leaving state is cleared, which asks every peer again for what was ignored meanwhile, and the derived refusal lifts with the phase. A cancelled unload registers the way a load does, so one begun before an Exchange set hooks is registered then. A promotion of an unloading replica is a cancel followed by the promotion, in one step. `suspend` and `resume` refuse `unloading`, so the flag a cancel restores is the flag the unload began with; `replicate` refuses `already-held`, since a refusal commits nothing and could not also cancel.
+- **After `released`** (stage `leaving`, and `unloaded`): the store holds everything, so a door loads a new instance from it, under a new generation. The departing instance, already closed, is disposed at its own `left` (`LifecycleModel.departing`). Its leave was queued before the new load began, and a load completes asynchronously, so its `doc-left` runs before the new instance registers.
+
+**A release is an offer.** A door called from a `persisted` listener can cancel the unload in the very store transition that emitted `released`, its `keep` queued behind it. The lifecycle then finds the document `ready` and hands the release back with `store { type: "hydrated", version }`, so the store program tracks it again from the version it holds, and any write since is owed from there. Ignoring it would leave the document untracked, and every later write unstored.
+
+**`planLeave`, one way to leave the sync graph.** `suspend`, `unload` and `destroy` are one input, `sync/doc-leave { docId, as, metadata? }`, and one pure function decides it from `as` and the document's sync mode (`"absent"` for a suspended document, which has no entry):
+
+| `as` | sync entry | `dismiss` | readiness latch | event |
+|---|---|---|---|---|
+| `suspend` | deleted | unless absent or unloaded | kept, for `resume` | `doc-suspended` |
+| `unload` | `unloaded`, with the document's metadata and `suspended` | unless absent or unloaded | cleared | `doc-unloaded` |
+| `destroy` | deleted | unless absent or unloaded | cleared | `doc-removed` |
+
+Its effects are `dismiss` (when it applies), then `doc-left`, at which the Synchronizer lets go of the record it captured at `leaveDocument` (unless suspending), only if it is still the same object: a record a later registration put under the id stays. Every leave forgets the per-peer state ([What each side knows about the other](#what-each-side-knows-about-the-other)). Clearing the latch on unload is what makes the next load start unsettled, settled only once a peer answers it; a ref held across the unload keeps the readiness it had because its instance closed at `released`, before the leave. A leave for a document neither the sync model nor the Synchronizer knows records no event.
+
+**An unloaded document** is a phase of its own, not a deferred one: it is never announced, `registerSchema`'s sweep (over deferred documents only) never promotes it, and its metadata is our own record, so a `get` whose schema cannot read it refuses on every axis (`planInterpretation`'s `unloaded` arm), without the deferred exception. `destroy` deletes it from the store. A peer's request loads it again only where this peer serves ([Document classification on `present`](#document-classification-on-present)). An `open` or a reload that finds it deleted from the store (another seat destroyed it) removes it everywhere: the load's intent recorded `replaced: "unloaded"`, so the not-held rule removes the entry and emits `notify destroyed`, whose leave as `destroy` removes the `unloaded` sync entry.
+
 ### What `suspend` is NOT
 
 - **Not a disconnect.** Other docs in the same exchange continue syncing.
-- **Not destructive.** Local state is preserved — `suspend` sets a flag and sends `dismiss`; the ref and substrate are untouched. `get(docId)` therefore keeps working and returns the same ref, but it does **not** un-suspend: only `resume` re-enters the sync graph. That separation is deliberate, so an unrelated read can never restart traffic peers observe — **`get()` never changes sync-graph membership.**
+- **Not destructive.** Local state is preserved — `suspend` sets a flag and sends `dismiss`; the ref and substrate are untouched. `get(docId)` therefore keeps working and returns the same ref, but it does **not** un-suspend: only `resume` re-enters the sync graph. That separation is deliberate, so an unrelated read can never restart traffic peers observe: **`get()` never takes a suspended document into the sync graph.** That includes a `get` that promotes a suspended replica, or loads a suspended document that was unloaded: a suspended instance registers without being announced (`register` carries `suspended`, and `handleDocEnsure` records the event and keeps no sync entry).
 - **Not a removal.** The document stays in `exchange.documents` with `suspended: true` — which is what that field is for, and what makes `doc-suspended` / `doc-resumed` meaningful events. `destroy` is what takes a document out of the map. Reading the suspend row as "it left the exchange" is the mistake to avoid: `@kyneta/index` once filtered suspended documents out of exchange-backed sources on that belief, which made pausing sync delete rows from every derived view.
-- **Not idempotent with `destroy`.** Suspending a destroyed doc is a no-op; destroying a suspended doc completes the destruction.
+- **Not a memory release.** That is `unload`, which a suspended document can also do: it then leaves no sync entry to dismiss, and loads again suspended.
+- **Not a way around `destroy`.** Suspending a destroyed doc throws, since it does not exist; destroying a suspended doc completes the destruction.
 
 ---
 
@@ -511,7 +563,7 @@ Two live peers never share a seat, so a second channel for a connected seat is o
 
 A **durable seat** is an identity together with the lifetime of the storage that proves it. Each half of the invariant has its own mechanism:
 
-- **(2) holds by store-first.** An own operation leaves the process only once the store has confirmed it ([Store-first](#store-first)). So a Runtime that hydrates a document from the storage and then claims the seat (`beginHydration` → `adopt()`, in `#becomeReady`) holds every operation ever issued under it. **Reuse is sound only because of store-first**: without it, a crashed writer's unconfirmed operation could be on a peer but not in the storage, and the next holder would reissue its address.
+- **(2) holds by store-first.** An own operation leaves the process only once the store has confirmed it ([Store-first](#store-first)). So a Runtime that hydrates a document from the storage and then claims the seat (`beginHydration` → `adopt()`, the load's `adopt` effect) holds every operation ever issued under it. **Reuse is sound only because of store-first**: without it, a crashed writer's unconfirmed operation could be on a peer but not in the storage, and the next holder would reissue its address.
 - **(1) needs exclusivity per storage.** Several writers can open one storage at once: tabs, server processes, Runtimes over one `sharedData`. So the storage keeps a **pool** of seats in its store-wide metadata (`store_meta`, key `seats`, beside the format marker), and each open store holds one seat exclusively for its lifetime. Deleting the database deletes the ids that vouched for its history; a pool kept anywhere else (such as `localStorage`) would vouch for history held in a different place.
 
 **The seat model.** Ids are seats, and holding a seat's lock is sitting in it. The pool is every seat the storage has issued. A writer sits in the oldest free seat, and adds a seat only when all are taken. Nobody can sit in an occupied seat, and the platform clears a seat when its holder dies. Which writer sat there last does not matter: reuse is safe for any writer that hydrates first. A single-tab user keeps one seat across reloads, and the pool never exceeds the peak number of writers open at once (a reload that overlaps its predecessor counts twice).
@@ -562,13 +614,13 @@ The translation is a hash, `peerNumber` from `@kyneta/schema` (53 bits for Yjs, 
 
 Because a CRDT addresses operations by `(peer, counter)` and the counter restarts at zero on a fresh document, a peer that claims an identity with stored history before loading that history writes to addresses the history already occupies. The merge deduplicates by address and one of the two operations is silently dropped. A session seat has no stored history, but a durable seat has.
 
-So a **store-backed document claims its substrate identity after hydration, not at construction**. `Runtime.createInterpretDoc` takes `beginHydration` from `@kyneta/schema` when a store is configured and calls the returned `adopt()` once the load resolves — before `registerDoc`, so peers never see the transient identity in an announcement. Without a store there is nothing to import and identity is claimed immediately.
+So a **store-backed document claims its substrate identity after hydration, not at construction**. The Runtime builds it with `beginHydration` from `@kyneta/schema` when a store is configured, and calls the returned `adopt()` once the load resolves (the `adopt` effect) — before `register`, so peers never see the transient identity in an announcement. Without a store there is nothing to import and identity is claimed immediately.
 
 One consequence worth knowing: a document written to *before* it has hydrated contributes its early operations under a transient identity, which shows up as one extra version-vector entry that never grows. Waiting for the document to settle avoids it, which the readiness layer already asks for on independent grounds. See §"Peer identity and when a substrate may claim it" in `packages/schema/TECHNICAL.md` for the rule and which backends need it.
 
 ## Serialized documents: one writer seat per storage
 
-Source: `src/store/seats.ts` → `planWriter`, `WriterRefusedError`; `src/runtime.ts` → `#becomeReady`, `#authored`, `#rebuild`; `src/persistence.ts` → `writeRefusal`; `src/sync-program.ts` → `handleDocReset`.
+Source: `src/store/seats.ts` → `planWriter`, `WriterRefusedError`; `src/runtime.ts` → `#adopt`, `#authored`, `#rebuild`; `src/persistence.ts` → `writeRefusal`; `src/sync-program.ts` → `handleDocReset`.
 
 A serialized document (`writerModel: "serialized"`: every `json.bind` document) has one identity, its **lineage**, minted by its first authored write, and every write extends it at `(lineage, n + 1)`. Seats give each CRDT writer an identity of its own; they do nothing here, because any writer extends the same lineage. Two seats over one storage that both write one plain document store two different operations at one position, and the next load keeps one of them. Across the network that is already out of contract (see "Plain lineage vectors" below): two peers authoring one authoritative document is misuse, settled by the reset machinery. The storage is new ground: several seats of one deployment share it, tabs of a browser profile or processes of a server fleet.
 
@@ -576,8 +628,8 @@ A serialized document (`writerModel: "serialized"`: every `json.bind` document) 
 
 - **It only takes permission away.** It never makes a Runtime a writer, and decides only between seats that share a storage, which are the same deployment in the same role. A server and its clients never share one. Who may write across the network stays with governance (`canAccept`, `Authority`).
 - **Authorship claims the document, not loading.** The store write carrying a seat's first own operation (`WriteOptions.authored`, set by `#authored` while the document has own writes unconfirmed, `ownHigh`) records the seat as the writer if none is, and is refused (`WriterRefusedError`) if another is. A seat that only reads, or only persists what the network sends, never claims: claiming on load would make a reader tab own a document it never writes, and make a fleet's writer whichever process loaded first.
-- **Loading reads the claim.** `#hydrate` reads `store.writerOf(docId)`. If another seat writes the document, `#becomeReady` sets the entry's seat refusal after `adopt` (`#refuse`), and authored writes throw synchronously from then on. The document still receives and persists what the network sends. A document promoted from a relay is refused the same way: the writer read when the replica loaded stays on the cache entry.
-- **The refusal is the Runtime's, not the substrate's.** Each interpreted entry builds its owner refusal as `firstDefined(seat, network)`, two `settableFeed`s, and passes it to `createRef` as `refusal`. The document's context answers `firstDefined(substrate's, owner's)` (`@kyneta/schema` TECHNICAL.md §Refusal), which `prepare` throws for every authored op. `WriterRefusedError` extends `WriteRefusal`. `#authored` asks whether the seat refusal is set. A closed document needs no owner answer: its substrate's slot answers `DocumentClosedError` first, and `#evict` empties the network refusal, letting go of whatever filled it.
+- **Loading reads the claim.** `#hydrate` reads `store.writerOf(docId)`. If another seat writes the document, the `adopt` effect sets its seat refusal (`#refuse`), before the store program hears of the load, and authored writes throw synchronously from then on. The document still receives and persists what the network sends. A document promoted from a relay is refused the same way: the lifecycle model keeps the writer read when the replica loaded, and the promotion's `adopt` carries it.
+- **The refusal is the Runtime's, not the substrate's.** Each interpreted instance builds its owner refusal as `firstDefined(seat, network)`, two `settableFeed`s, and passes it to `createRef` as `refusal`. The document's context answers `firstDefined(substrate's, owner's)` (`@kyneta/schema` TECHNICAL.md §Refusal), which `prepare` throws for every authored op. `WriterRefusedError` extends `WriteRefusal`. `#authored` asks whether the seat refusal is set. A closed document needs no owner answer: its substrate's slot answers `DocumentClosedError` first, and closing empties the network refusal, letting go of whatever filled it.
 - **A lost race never leaves the process.** When two seats both loaded an unclaimed document and both wrote, the loser's store write is refused. Under [store-first](#store-first) nothing of it was sent. The executor maps `WriterRefusedError` to the store-program input `writer-refused`, never to `write-failed`, which would retry a write that is not this seat's to make. The program stops tracking the document, owed write included, emits `store-error` once and a `rebuild` effect. `#rebuild`:
   1. refuses further authored writes;
   2. reads the store and takes it into a fresh document of the same schema, toward the latest stored lineage. Not into the live replica, which, when both seats extended one lineage from one position, reaches the winner's version and would skip its entries as held. Not into a bare replica, whose entirety omits fields at their defaults, which the reset would then keep;
@@ -693,7 +745,7 @@ The document may leave the process when `ownHigh` is unset, when the confirmed v
 
 **Two kinds of document need no gate.**
 
-- Writes made before `adopt()`. A stored CRDT document writes under a throwaway id until hydration claims the real one, and nothing else will ever write under it. These writes happen before `#becomeReady` wires the local-update signal, so the gate never sees them.
+- Writes made before `adopt()`. A stored CRDT document writes under a throwaway id until hydration claims the real one, and nothing else will ever write under it. These writes happen before the `wire` effect subscribes the local-update signal, so the gate never sees them.
 - Replicate-mode documents make no operations of their own; `publishable` answers `true` for them, as for any document without a store.
 
 **Announcements need not lag.** `interest` and `present` carry `DocEntry.version`, which includes unconfirmed own operations. A peer's own operations held back, announced, then dropped by a crash, and a new session writing something else under the same identity: Yjs, Loro and plain all converge. No peer ever held the dropped operations, so a version that claimed them misled no peer about what to send.
@@ -782,6 +834,8 @@ A document can reach a peer four ways, and **all four consult `canShare`**:
 | Answer a request | `handleInterest` → `handleInterestForKnownDoc` | `send-offers` with one recipient |
 
 The first three filter recipients through `filterPeersByShare`. The fourth is a single-peer check inside `handleInterest`.
+
+**An unloaded document is never announced**: `buildPresent` skips its entry, so a peer that becomes available is not told of it, and it has no instance to push or relay from. **A leaving document still sends** (pushes, owed offers, and answers to interests) and takes nothing in: see [Suspend, unload, destroy](#suspend-unload-destroy).
 
 The last three carry content, and all three become one `send-offers` effect. Its executor asks the Runtime's publish gate immediately before exporting, so with a store none of them sends while the document has own writes the store has not confirmed; see [Store-first](#store-first). The re-send when the gate opens, `sync/doc-publishable`, filters its recipients through `canShare` too.
 
@@ -904,9 +958,9 @@ store core.
 
 ### Closing never invents an answer
 
-Source: `src/document-terms.ts` → `snapshotOf`, `closedTerms`, `closeTerms`; `src/runtime.ts` → `#evict`.
+Source: `src/document-terms.ts` → `snapshotOf`, `closedHydration`, `closedTerms`, `closeTerms`; `src/runtime.ts` → `#close`.
 
-When a document closes (destroyed, reset, shut down), `#evict` reads each term's value (`TermsSnapshot`), computes the closed values with one pure function, `closedTerms(snapshot, error)`, and sets each term. Each term keeps the answer it had; a term still pending closes as failed with the `DocumentClosedError`:
+When a document closes (destroyed, reset, shut down, or an `open` that found nothing), the Runtime's `#close` reads each term's value (`TermsSnapshot`), taking hydration from the lifecycle (the model no longer holds the document, so the term cannot read it), computes the closed values with one pure function, `closedTerms(snapshot, error)`, and sets each term. Each term keeps the answer it had; a term still pending closes as failed with the `DocumentClosedError`:
 
 | Term | At the close | Closed |
 |---|---|---|
@@ -920,7 +974,7 @@ When a document closes (destroyed, reset, shut down), `#evict` reads each term's
 
 `settableFeed` notifies on `set` and drops the live feed, with its closure over the Runtime or the Exchange. So a feed or a wait obtained before the close follows it with no second notification path: a pending `whenHydrated` or `whenPersisted` settles by the table, and a pending `whenSettled` lets go of the Synchronizer's wait and asks the closed source, which rejects. `whenSettled` after the close resolves only if the peer term had settled, with the `via` it would have had; otherwise it rejects. Resolving `{ via: "local" }` instead would let `initialize` conclude "empty" for a document the authority never answered for, the negative verdict the next section forbids. A never-synced, empty, closed document keeps `docStatus` at `"pending"`.
 
-`#evict` also fails the entry's hydration latch with the same error while it is pending, for waiters `Runtime.whenHydrated(docId)` attached to it.
+`#close` closes the hydration once, with `closedHydration`, which `closedTerms` also uses, and tells the instance's waiters that same value: `Runtime.whenHydrated(docId)` rejects with the error `whenHydrated(ref)` rejects with.
 
 ### One predicate, one wait
 
@@ -991,8 +1045,10 @@ opened it, from replying "I do not have this" and inviting the client to seed
 over it? Two independent mechanisms.
 
 First, a document with a store does not enter the sync graph until it has
-hydrated — `#register` runs in `#becomeReady`, after the load completes, so a
-server never announces a half-loaded document. See
+hydrated — its `register` effect comes from the load's end (`finishLoad`), so a
+server never announces a half-loaded document. That holds for a standalone
+Runtime wrapped by an Exchange too: `setHooks` registers only documents that
+have loaded, and one still loading registers when it finishes. See
 [How a document becomes ready](#how-a-document-becomes-ready).
 
 Second, the default disposition for an unrecognised document is `defer`, not
@@ -1050,7 +1106,7 @@ the store to settle and then for the transports to drain, so it resolves after
 the offers the store's confirmations released have gone out; a store that keeps
 failing holds up neither.
 
-The per-document latch is a different mechanism from the `Store.initialize?()`
+The per-document hydration term is a different mechanism from the `Store.initialize?()`
 lifecycle hook rejected in "Async-factory pattern" below. That hook was about
 store *construction*; this is about one document's load completing, and it does
 not gate the executor.
@@ -1074,29 +1130,89 @@ A Store need not finish one call before a later one starts: a pooled backend (Po
 The Runtime therefore never holds the Store it is given: its constructor wraps it once in `serialStore`, which runs each document's calls one at a time, in the order they were made (different documents run at once). A failed call rejects its caller and does not stop the queue. A `loadAll` holds the queue for its whole iteration. `idle()` resolves when every queue is empty; `#quiesce` awaits it, so `flush` counts a delete as pending work, and `close()` awaits it too, so `shutdown` waits for deletes. Store backends order nothing themselves.
 
 - **It cannot deadlock, by construction.** A queued step is one Store call, and a Store call never calls back into the Runtime, so no call waits for one queued after it. A queue of *operations* (`#hydrate`, `#persist`, `#compact` …) would deadlock the first time one operation ran another of the same document (`#persist`'s compact arm calls `#compact`), and avoiding that would be a rule kept by discipline.
-- **Ordering calls, not operations, is enough**, for two reasons. Every write is one Store call: `storeWrite` takes a `Prepared` (`whole` by `compact`, `delta` by `append`, or `none`), so a write is never split around a `delete`. And every sequence of several reads checks the document again before acting on what it read: `#becomeReady` fails a load whose entry was destroyed meanwhile, `#compact` throws "document not held" after its read and before its write, and `#rebuild` stops at its read. A `delete` that runs between a read and the write depending on it is caught there.
+- **Ordering calls, not operations, is enough**, for two reasons. Every write is one Store call: `storeWrite` takes a `Prepared` (`whole` by `compact`, `delta` by `append`, or `none`), so a write is never split around a `delete`. And every sequence of several reads checks the document's generation again before acting on what it read: the lifecycle program ignores a load whose instance is no longer current, `#compact` throws "document not held" after its read and before its write, and `#rebuild` stops at its read. A `delete` that runs between a read and the write depending on it is caught there.
 
 ### How a document becomes ready
 
-Source: `src/runtime.ts` → `#createInterpretDoc`, `#hydrate`, `#becomeReady`, `readinessFor`.
+Source: `src/lifecycle-program.ts` → `lifecycleProgram`, `finishLoad`; `src/runtime.ts` → `#step`, `#build`, `#execute`, `#hydrate`.
 
-An interpreted document is made one of two ways (`#createInterpretDoc`): by `beginHydration` when its own history is about to load from the store, which defers claiming identity to `adopt`; otherwise by `upgradeReplica` of the relay's replica (a promotion) or of an empty one, which claims at once and closes the replica. A document's ref is returned at once; loading from the store runs afterwards. `#hydrate` only gathers: it reads the store and returns a `LoadOutcome` — `stored` with the version the store holds, `empty`, or `none` when nothing was loaded (no store, a transient document, or a promotion whose replica already loaded). `#becomeReady` is **the one place a document becomes ready**, for every creation path, and runs in a fixed order:
+A document's lifecycle in the Runtime is one pure program, `lifecycleProgram: Program<LifecycleInput, LifecycleModel, LifecycleEffect>`. Its `update` answers every request a door makes and every completion it started (a load's, a release's, a leave's), in every phase, refusals included. The Runtime is its shell: it keeps the model, holds each instance's live objects (`Instance`: replica, ref, refusals, publication record, wiring, observers) by generation, and executes the effects. `lifecycle-program.test.ts` steps every input in every phase, and fails to compile when a phase or an input is added without a sample.
 
-1. If the cache no longer holds this entry (destroyed, or destroyed and created again, while it loaded), nothing happens: `#evict` already failed the latch with the close error. Otherwise the dismissed document would be registered with the Synchronizer again.
-2. What was loaded decides: `readinessFor(docId, outcome, intent)`, pure.
+**Phases.** One entry per document id; absent is no entry.
 
-   | outcome | `create` (`get`) | `open` |
-   |---|---|---|
-   | `stored` | `hydrated` to the store program | the same |
-   | `empty` | `register` | absent |
-   | `none` | nothing to tell | absent |
+| Phase | Means |
+|---|---|
+| `deferred` | A peer announced it; this Runtime holds nothing. |
+| `loading` | Built, and loading from the store. Its `Intent` is `create` (`get`) or `open`, which records in `replaced` whether it replaced a deferred entry. |
+| `ready` | Loaded, or had nothing to load. Records the writer the store recorded, and whether `onDocReady` has fired (`registered`). |
+| `failed` | Its load failed. Held, never registered, its writes refused. |
+| `unloading` | Leaving memory, its writes refused. Stage `storing`: waiting for the store to hold everything. Stage `leaving`: released and closed, leaving the sync graph. |
+| `unloaded` | Out of memory, kept in the store. No instance and no generation; records the `BuildSpec` that loads it again, and whether it is suspended. |
 
-   An absent document is taken out again (`#evict`), and marked deferred if it was, in this one step; its latch fails ("not held here"), and nothing is registered, written or announced. With no store, or for a transient document, a document that is not open is not held. See [`exchange.open`](#exchangeopen--get-never-creating).
-3. `adopt()` claims the peer identity (Yjs, Loro) and lifts plain's loading refusal, before anyone is told the document has loaded — a listener that writes the moment it is told finds the document writable. A serialized document whose stored writer is another seat of the storage is refused instead (its seat refusal is set, `#refuse`), and such a listener's write throws; see [Serialized documents: one writer seat per storage](#serialized-documents-one-writer-seat-per-storage).
-4. The latch resolves `loaded`.
-5. `#register` publishes the document to the sync graph, and an interpreted document is wired (`#wire`): its local-update signal marks it dirty for the drain (see [The local-write path](#the-local-write-path)), and its changesets go to the observation hook. `#evict`, which `destroy`, `shutdown` and `reset` go through, unwires it first, so a ref that outlives its document cannot reach whatever is created under its id next.
+Every held phase (`loading`, `ready`, `failed`, `unloading`: `isHeld`) records its generation, the `BuildSpec` that built its instance, and whether it is suspended. The spec says the tier (`spec.tier`) and the metadata (`metadataOfSpec`: replica type, sync mode, schema hash), so neither is stored twice. Suspension is a flag, not a phase: it says whether the document is in the sync graph, not which tier holds it, so it survives promotion and an unload. Instances a door replaced while they left the sync graph are `departing`, disposed at their `left`.
 
-A failed load only marks the latch `failed`: its state is unknown, so the document is not registered, announced or given a stable identity.
+**Transitions.** Requests come from doors; completions from the loads the program started.
+
+| Input | absent | deferred | loading | ready | failed | unloading | unloaded |
+|---|---|---|---|---|---|---|---|
+| `get`, `create` | build; load, or finish at once | the same | interpret: an `open` becomes `create`; replica: refuse `not-hydrated` | interpret: nothing; replica: promote | interpret: nothing; replica: refuse `load-failed` | `storing`: cancel, then as `ready`; `leaving`: as `unloaded` | build from the store, `suspended` carried |
+| `get`, `open` | stored: build and load; otherwise nothing | the same, `replaced: "deferred"` | interpret: nothing; replica: refuse `not-hydrated` | as `create` | as `create` | as `create`, `replaced: "unloaded"` | as `create`, `replaced: "unloaded"` |
+| `replicate` | build a replica; load, or finish at once | the same | refuse `already-held` | refuse `already-held` | refuse `already-held` | refuse `already-held` | replica: build from the store; interpret: refuse `already-held` |
+| `defer` | `deferred` | nothing | nothing | nothing | nothing | nothing | nothing |
+| `destroy` | delete from the store | delete from the store | close; delete if stored | close; delete if stored | close; delete if stored | close (unless closed); delete | delete from the store |
+| `suspend`, `resume` | refuse `not-held` | refuse `not-held` | set the flag | set the flag | set the flag | refuse `unloading` | refuse `not-held` |
+| `unload` | refuse `not-held` | refuse `not-held` | refuse `not-hydrated` | stored: `unloading`; otherwise refuse `not-stored` | refuse `load-failed` | nothing | nothing |
+| `reload` | nothing | nothing | nothing | nothing | nothing | nothing | as `get`, `open`, from its own spec |
+| `hooked` | — | — | registers when loaded | `register`, once | never registers | never registers | — |
+| `close-all` | — | removed | close | close | close | close (unless closed) | removed |
+| `loaded` | ignored | ignored | `finishLoad` | ignored | ignored | ignored | ignored |
+| `load-failed` | ignored | ignored | `failed` | ignored | ignored | ignored | ignored |
+| `released` | ignored | ignored | ignored | hand back (`hydrated`) | ignored | `storing`: close, then leave; never registered: close, dispose, `unloaded` | ignored |
+| `left` | dispose a departing instance | the same | the same | the same | the same | `leaving`: dispose, `unloaded` | the same as absent |
+
+"Close" in this table is `close` then `dispose`, except where an unload separates them: `released` closes, and `left` disposes. A schema that cannot read a held or unloaded document refuses `mismatch` (`planInterpretation`, see [`exchange.get`](#exchangeget--phase-in-action-out)). A completion whose generation is not current is ignored in every phase. `destroy` always ends with `onDocDestroyed`; `suspend` on a suspended document does nothing, and `resume` on one that is not refuses `not-suspended`. The unload's rows are explained in [Suspend, unload, destroy](#suspend-unload-destroy).
+
+**A load's end** (`finishLoad`). One helper for every way a load ends, including having nothing to load (no store, a transient document, or a promotion whose replica already loaded). `#hydrate` only gathers: it reads the store and returns a `LoadOutcome`, `stored` with the version the store holds, `empty`, or `none`.
+
+| outcome | `create` | `open` |
+|---|---|---|
+| `stored` | ready; `hydrated` to the store program | the same |
+| `empty` | ready; `register` to the store program | closed, "not held here" |
+| `none` | ready; nothing to tell | closed, "not held here" |
+
+An `open` that found nothing closes and disposes its instance in the same step that puts back the deferred entry it replaced, or removes the entry: nothing was registered, written or announced. One that replaced an unloaded entry also emits `notify destroyed`, since the store no longer holds the document. See [`exchange.open`](#exchangeopen--get-never-creating). A document that is ready runs, in order:
+
+1. `adopt` claims the peer identity (Yjs, Loro) and lifts plain's loading refusal. A serialized document whose stored writer is another seat of the storage is refused instead (its seat refusal is set, `#refuse`); see [Serialized documents: one writer seat per storage](#serialized-documents-one-writer-seat-per-storage).
+2. `store` tells the store program what the store holds. `hydrated` and `register` each start a write, so this comes after `adopt`: the seat refusal is set before any write starts, and `#authored` never treats a document another seat writes as this seat's to claim.
+3. `register` publishes the document to the sync graph (`onDocReady`), once an Exchange has set hooks. It carries `suspended`, and a suspended document registers without being announced. A cancelled unload registers by the same rule (`registration`).
+4. `wire` (`#wire`) subscribes its local-update signal, which marks it dirty for the drain (see [The local-write path](#the-local-write-path)), and sends its changesets to the observation hook.
+
+`adopt` and `wire` are an interpreted document's: a replica claims no identity and makes no writes of its own. A failed load is only recorded: its state is unknown, so the document is not registered, announced or given a stable identity.
+
+**Generations.** Each instance (a create, a load, a promotion) is issued a generation from the model's `nextGen`, which is never reused. A completion carries the generation its load was started for, and `update` ignores one that is not current: a load that returns after its document was destroyed, created again, closed or promoted changes nothing. Every effect after the commit names the generation it acts on; the executor looks the instance up once and skips the effect if it is gone. `#compact` and `#rebuild` record the generation when they start to read, and stop if it changed. No method compares entries by identity.
+
+**A step is a transaction** (`Runtime.#step`):
+
+1. `update` computes the next model and the effects. Those that can fail (`refuse`, `build`) lead the list.
+2. A refusal is returned, and nothing is committed.
+3. Each `build` constructs its instance: the factory, `beginHydration` (to load into) or `upgradeReplica` (an empty replica, or the promoted one), the ref, refusals, publication record and local terms. A throw disposes what the step built and propagates: nothing is committed, and the generation is never used.
+4. The model is committed, and the built instances join `#instances`. A promotion's build took the promoted replica, so that instance leaves without being disposed.
+5. The remaining effects run in order. `interpreted` comes first, firing `onDocInterpreted`, so the network terms attach before the document can register.
+6. The observers of each document whose observed values changed are told (below).
+
+**Nothing between `update` and the commit calls out of the Runtime.** A build calls only constructors; `onDocInterpreted` is an effect after the commit. So no door can step in between, a failed `get` leaves nothing behind, and no generation is issued twice.
+
+**The one limit: a promotion's build is transactional up to `upgradeReplica`'s take.** `createRef` needs the substrate, so it cannot run first. Every check that depends on the input runs before the take: the factory, the replica's origin (`upgrade` checks it before it takes), and the schema's fit, which `update` already decided. After the take only a bug can throw. Should one, nothing is committed, and the model records a ready replica over a closed one, whose every use throws `DocumentClosedError`: loud, not silent. Recovering would mean unloading the consumed instance, which needs the store to hold everything the replica held, and a failed build cannot assure that.
+
+**Why synchronous, and why nesting is safe.** Both `@kyneta/machine` runtimes queue a re-entrant dispatch, and a door reached from inside an effect (`onDocReady` → `onEnsureDoc` → `get`) must return its ref. So the Runtime steps the program directly. A nested step runs against the committed model; an outer effect it made stale finds no instance under its generation and is skipped. A `get` returns the ref its own step built, so one whose document a nested step destroyed returns that closed ref, not nothing.
+
+**Refusals are data.** `update` answers the facts, and each door decides what a refusal means. `get`, `open`, `replicate`, `suspend` and `resume` throw `refusalError(refusal)`, the one place a refusal becomes a message. `onEnsureDoc` and `registerSchema`'s sweep step the same requests (`Runtime.request`) and skip a refusal: "first writer wins" for a peer's announcement is the door's choice, not a row of the table.
+
+**Observers belong to the instance; the phase belongs to the model.** Callbacks are not data. An instance's observers follow the values the model decides of it (`Observed`: its hydration, and its unloading refusal): `whenHydrated(docId)`, the hydration term's subscribers and the unloading refusal's. After a step's effects run, the shell compares each named document's `Observed` before and after, by value (`status`, and `error` and the refusal by identity), and tells the current instance's observers when it changed. So a subscriber hears `loaded` once the document is adopted, registered and wired: one that writes on the signal finds it writable, and its write leaves like any other. A step that only registers a document wakes nobody. `close` fixes the unloading refusal at its closing value, closes the hydration once (`closedHydration`: pending fails with the close error, an answer given stands), passes it to `closeTerms`, and tells every observer the same values, so `whenHydrated(ref)` and `whenHydrated(docId)` reject with one error object. An observer that re-read the model after a close would find the id absent, read "nothing to load", and resolve.
+
+**The unloading refusal is derived from the phase.** The owner's refusal is `firstDefined(unloading, seat, network)`. `unloading` is a feed over the model: `DocumentClosedError("unloaded")` while `unloadingOf(model, docId, gen)`: the instance is current and `unloading`. An instance that stops being current is closed, and closing fixes its refusal at its closing value, which an unload keeps until the replica is disposed. The phase is the one record: a cancel changes it, and the refusal lifts with it, so there is no on/off pair of effects to keep matched.
+
+`hydrated(docId)` reads the model: `true` for a ready document or one with nothing to load, `false` while it loads and after it failed, the same answer `hydrated(ref)` gives.
 
 **A store in a format the replica cannot read is a failed read.** `#hydrate` compares the stored meta's `replicaType` with the replica factory's (`replicaTypesCompatible`) before loading any record. An incompatible store is treated like one that threw: it could not answer, and the load fails. Reading it anyway would misparse it — the case when plain's payloads gained their log positions and its replica type moved to `["plain", 2, 0]`.
 
@@ -1199,13 +1315,18 @@ Persistence is driven by a pure Mealy machine: `Program<StoreInput, StoreModel, 
 | `destroy` | `exchange.destroy(docId)` called |
 | `write-succeeded` | Store `.append()` or `.compact()` resolved successfully |
 | `write-failed` | Store `.append()` or `.compact()` rejected |
+| `writer-refused` | A write was refused: another seat of the storage writes the serialized document |
+| `seat-lost` | A write found the store's seat claimed by another writer |
+| `release` | `exchange.unload(docId)`: report `released` once the store holds all of the document. Carries the unload's generation |
+| `keep` | An unload cancelled before its release |
 
 **Effect vocabulary:**
 
 | Effect | Executed by shell |
 |--------|-------------------|
 | `persist` | Cancels the document's retry timer, reads the replica, builds the records for its `write`, and writes them to the store (a compaction reads the store first) |
-| `persisted` | The store holds the document at `version`. Opens the publish gate if the version reaches the document's own writes, and clears its recorded error ([Store-first](#store-first)) |
+| `persisted` | The store holds the document at `version`. Opens the publish gate if the version reaches the document's own writes, and clears its recorded error ([Store-first](#store-first)). `#confirmed` takes the version from the effect, since the store program may no longer track the document by the time it runs (a release in the same transition) |
+| `released` | The store holds all of the document, at `version`, and the program stopped tracking it. Steps the lifecycle's `released`, with the generation the `release` carried |
 | `retry` | A write failed and none is owed. Starts a timer for `afterMs` that dispatches `state-advanced` |
 | `persist-delete` | Cancels the retry timer, and calls `store.delete(docId)` on each registered store |
 | `store-error` | Records a failed write's error for the document, and calls the `onStoreError` callback |
@@ -1218,18 +1339,18 @@ Persistence is driven by a pure Mealy machine: `Program<StoreInput, StoreModel, 
 2. `#accumulateSyncNotification` adds each `docId` to a `Set<DocId>` (`#dirtyStateAdvanced`). The set deduplicates: multiple state advances for the same doc within a single dispatch cycle coalesce into one callback.
 3. At quiescence, `#drainPending` calls `#drainStateAdvanced`, which snapshots the dirty set, clears it, and fires each registered listener once per doc.
 4. The Exchange's listener forwards the `docId` to `Runtime.onStateAdvanced`, which dispatches `{ type: 'state-advanced', docId }` into the store-program and does nothing else.
-5. The store-program decides which write, if any, to start, and emits a `persist` effect naming it. The Runtime's executor resolves the replica from its own `#docCache`, builds the records, calls the stores, and feeds back `write-succeeded` or `write-failed`.
+5. The store-program decides which write, if any, to start, and emits a `persist` effect naming it. The Runtime's executor resolves the replica from the document's current instance, builds the records, calls the stores, and feeds back `write-succeeded` or `write-failed`.
 
-**Transient documents are never offered to a store.** A document whose `SyncMode` carries `durability: "transient"` — today that is anything bound through `ephemeral` — is never registered, never hydrated, and never deleted. `Runtime` decides this once, in `#usesStores(syncMode)`, and every storage decision consults it: which substrate to build, whether to hydrate on creation, and whether to dispatch a delete on `destroy`.
+**Transient documents are never offered to a store.** A document whose `SyncMode` carries `durability: "transient"` — today that is anything bound through `ephemeral` — is never registered, never hydrated, and never deleted. One predicate decides this, `storedOf(model, syncMode)` in the lifecycle program, and every storage decision consults it: which substrate to build, whether to hydrate on creation, whether to dispatch a delete on `destroy`, and, in the Runtime, whether the persistence term and the publish gate wait for the store.
 
-Those decisions have to agree. Every readiness latch starts `pending` and is resolved only by `#becomeReady`, so a document that is set up to hydrate and then never does stays `pending` forever — `whenSettled` never returns and `docStatus` never leaves `pending`. That is why the rule is one predicate rather than a condition repeated at each site.
+Those decisions have to agree. A document built to hydrate is `loading` until its load completes, so a document that is set up to hydrate and then never does stays `pending` forever — `whenSettled` never returns and `docStatus` never leaves `pending`. That is why the rule is one predicate rather than a condition repeated at each site.
 
 The rule is *declared*, read off the type, rather than emergent. Previously nothing told the store a document was transient: it simply could not persist updates, because the ephemeral substrate always returned `null` from `exportSince`. That kept later writes off disk by accident and did nothing about the creation-time write — and it would have reversed silently the day a transient substrate learned delta export. **That day came.** The substrate now produces deltas, the accident is gone, and the declared rule carried the behaviour across unchanged: `store-integration.test.ts` asserts the contract rather than the mechanism and did not need touching.
 
 Two asymmetries in the same area, both deliberate:
 
 - **`compact` needs no guard.** The store-program returns unchanged for a document it does not know, and a transient document is never registered, so it is never known. The safety is the store-program's rather than the runtime's.
-- **The store-program's `destroy` case still emits `persist-delete` unconditionally**, where its `compact` case guards on `!existing`. Making them symmetric would break deleting a document that is on disk but was not opened this session — the contract `Exchange.destroy` advertises. `Runtime.destroy` filters on the *cache entry* instead, and treats "no entry" and "deferred" as "we do not know enough to skip".
+- **The store-program's `destroy` case still emits `persist-delete` unconditionally**, where its `compact` case guards on `!existing`. Making them symmetric would break deleting a document that is on disk but was not opened this session — the contract `Exchange.destroy` advertises. The lifecycle's `destroy` row filters on the document's lifecycle instead, and treats "no entry" and "deferred" as "we do not know enough to skip".
 
 **Per-doc phase tracking.** Each document tracked by the store-program is in one of three phases:
 
@@ -1237,9 +1358,9 @@ Two asymmetries in the same area, both deliberate:
 |-------|-------|
 | `unwritten` | The store has never acknowledged anything for this document. Reached when its first write failed. |
 | `idle` | A version is confirmed, and named. Ready for the next write. |
+| `writing` | I/O in flight, with a `revertTo` and at most one write `owed` after it. |
 
 Both settled phases carry `failures`, the count of writes that have failed in a row, which sets the next retry's delay; a success clears it.
-| `writing` | I/O in flight, with a `revertTo` and at most one write `owed` after it. |
 
 `unwritten` and `idle` are the two *settled* phases — nothing in flight — and `writing` carries one of them as `revertTo`: where to fall back if this write fails. Storing the fallback rather than deriving it is what keeps `writing` a single phase. The alternative, a separate status for "writing with nothing behind it", would fall silently out of every `status === "writing"` check, including the one that acknowledges a *successful* write — leaving the document mid-write forever and hanging every `flush()`.
 
@@ -1282,6 +1403,8 @@ Recovery takes one of two shapes, and which one depends on whether anything was 
 | the document's first (`register`) | `unwritten` | a fresh `register` carrying the whole document |
 
 The second exists because a delta is defined relative to a version the store acknowledged, and a first write has none. Without the distinction there is nothing to recompute from, and the document would stay unpersisted until the process restarted — which is what `version: ""` used to cause, by making "no confirmed version" indistinguishable from "a confirmed version" at the type level.
+
+**A release waits until the store holds everything.** `release` records the unload's generation in `releasing`, and `keep` deletes it. After every transition one check (`releaseStored`) emits `released`, with the recorded generation and the confirmed version, for each releasing document whose phase is `storedEntirely`, and drops the document from `docs` and `releasing`. That one check is every path to a release: at once from `idle`, at the end of a write chain, and when a retry finally succeeds. `released` comes after the transition's own effects, so a write's `persisted` is acted on first. Only `idle` without `failures` is `storedEntirely`: `unwritten` holds nothing confirmed, a phase with failures has a retry scheduled, and a writing one has something in flight or owed. A `writer-refused` on a releasing document rebuilds as for any document, and the rebuild's `hydrated` lets the check release it; `destroy` drops the record; `seat-lost` is terminal and releases nothing, so the document stays in memory, unloading, and `persistenceError` reports the `SeatLostError`. The program only echoes the generation: the lifecycle tells a stale `released` by the rule it applies to every completion, and hands back one it does not take ([Suspend, unload, destroy](#suspend-unload-destroy)). `withDoc` keeps the rest of the model, so `releasing` survives every transition.
 
 **A refused writer is not a failed write either.** A `WriterRefusedError` becomes `writer-refused`, which stops tracking the one document and asks the executor to `rebuild` it; see [Serialized documents: one writer seat per storage](#serialized-documents-one-writer-seat-per-storage).
 
@@ -1331,13 +1454,12 @@ Registration happens in three places:
 
 | Who | What | When |
 |-----|------|------|
-| Exchange constructor | `DEFAULT_REPLICAS` → plain + LWW | Always |
-| `exchange.registerReplica(replicaBound)` | Additional replica types | App startup (Loro/Yjs on the server tier, for instance) |
-| `exchange.get(docId, bound)` | Auto-registers `bound.schemaHash → bound` | On first use |
+| Exchange constructor | `ExchangeParams.replicas`, `DEFAULT_REPLICAS` unless given (Loro/Yjs on the server tier, for instance), and `ExchangeParams.schemas` | Always |
+| `exchange.registerSchema(bound)` | Auto-registers `bound.schemaHash → bound` | Any time; `exchange.get(docId, bound)` calls it on first use |
 
-On incoming `present`, the sync program's `handlePresent` queries `Capabilities.findSchema(replicaType, syncMode, schemaHash)`. If found, the doc auto-resolves to `Interpret(bound)`. If only the replica is registered (not this specific schema hash), the doc qualifies as `Replicate` — the conduit tier. If neither, the exchange consults `resolve` or defaults.
+On incoming `present` for an unknown document, the sync program emits `ensure-doc`, and the Exchange's `onEnsureDoc` hook asks `Capabilities.resolveSchema(schemaHash, replicaType, syncMode)`. If found, the doc auto-resolves to `Interpret(bound)`. Otherwise the exchange consults `resolve`; a `Replicate()` answer is served by the registered replica factory for the document's replica type and sync mode (`Capabilities.resolveReplica`), the conduit tier. With no answer, a supported replica type is deferred, and an unsupported one is declared vacant ([Document classification on `present`](#document-classification-on-present)).
 
-This is how a routing server with `DEFAULT_REPLICAS + loroReplicaFactory` can relay Loro documents for any schema without ever *interpreting* one: all it needs is the replica factory, not the schema.
+This is how a routing server with `DEFAULT_REPLICAS + loroReplicaFactory` and a `resolve` that answers `Replicate()` can relay Loro documents for any schema without ever *interpreting* one: all it needs is the replica factory, not the schema.
 
 ---
 
@@ -1428,7 +1550,7 @@ stack.top("undo", ["card:x"])                                // the step that un
 - **The stack lives in a serialized document** (`UndoDoc`, `json.bind`), so the Store stores, syncs and compacts it, and the one-writer rule of [Serialized documents](#serialized-documents-one-writer-seat-per-storage) guarantees one runtime pops a stack: per tab or per device is only which document id the app gives it. Without a Store the stack lasts the session. Every transition is a pure function of the stored stack (`pushStep` and `moveStep`, each `bounded`, clearing through `clearDependents`; the lists are read through `listOf`, `touches` and `topStep`, over regions: `regionOf`, `regionUnion`, `regionsOverlap`), and is written as Kyneta ops: `stackOps(at, before, after)` takes each list's shortest edit (`diffSequence`) and replaces the note if it changed, and `applyChanges` writes them in one batch. So a write to the undo document is as large as what changed: pushing a step inserts that step, and a revert rewrites only the steps whose records its remap changed. The undo document is compacted every `COMPACT_EVERY` (200) writes, which bounds its log.
 - **Every revert's remap rewrites the records left**, in the step being undone (`revertStep` from `@kyneta/schema`) and in both lists, in the same write that moves the step. Records always name live identities; nothing global is kept.
 - **A step nothing of which still stands is dropped silently**, and the step `topStep` takes next for the same `docs` is tried.
-- **A part stands only if its document is held here**: open, or in the Store. The stack opens a step's documents with `exchange.open`, never `get`, so an undo never creates a document, and a part whose document is not open when it is used (destroyed, here or by another runtime on the Store, before or during the undo) does not stand. No lifecycle event is needed: a stack names only documents its own runtime wrote, and with a Store those are all in it (own writes are stored before they are published); without one, the stack lasts the session. A destroyed document's parts stay in the stored stack until an undo meets them, bounded by `depth`, like any step that stopped standing.
+- **A part stands only if its document is held here**: open, or in the Store. The stack opens a step's documents with `exchange.open`, never `get`, so an undo never creates a document, and a part whose document is not open when it is used (destroyed, here or by another runtime on the Store, before or during the undo) does not stand. No lifecycle event is needed: a stack names only documents its own runtime wrote, and with a Store those are all in it (own writes are stored before they are published); without one, the stack lasts the session. A destroyed document's parts stay in the stored stack until an undo meets them, bounded by `depth`, like any step that stopped standing. **Every part goes through the door, and stands only while its document accepts writes.** The stack opens each part's document with `exchange.open`, never by reading the Runtime's instance, so a held document is returned, an unload not yet released is cancelled, and an unloaded document is loaded again from the Store. When the part is used, it stands only if its document's `writeRefusal` is unset: a revert writes natively, below the refusal, so a document that refuses writes (unloading, closed, another seat's) must not be reached at all, and its part is skipped like a destroyed document's while the rest of the step reverts.
 
 ### Crash safety: the write-ahead note
 
@@ -1499,16 +1621,19 @@ For durability guarantees, use the `cohort` predicate to prevent compaction past
 
 | Type | File | Role |
 |------|------|------|
-| `Exchange` | `src/exchange.ts` | Public façade. Constructor, `get`, `destroy`, `suspend`, `resume`, `addTransport`, `removeTransport`, `peers`, `documents`, `registerReplica`, `registerPolicy`. |
+| `Exchange` | `src/exchange.ts` | Public façade. Constructor, `get`, `open`, `replicate`, `destroy`, `suspend`, `resume`, `unload`, `addTransport`, `removeTransport`, `peers`, `documents`, `registerSchema`, `register`. |
 | `ExchangeParams` | `src/exchange.ts` | Constructor options: `principal`, `type`, `transports`, `store`, `schemas`, `replicas`, `departureTimeout`, the local concerns (`lease`, `tickInterval`, `onStoreError`), and one initial `Policy` (`resolve`, `canShare`, `canAccept`, …). |
 | `PeerNaming` | `src/exchange.ts` | `{ principal, type? }`: who an Exchange says it is. Its seat comes from the Runtime. |
 | `Disposition` | `src/exchange.ts` | `Interpret \| Replicate \| Defer \| Reject`. |
 | `Synchronizer` | `src/synchronizer.ts` | Shell class. Public only for `@kyneta/react`'s internal use; applications never construct one. |
 | `DocReadyInfo` | `src/runtime.ts` | The one record of a registered document, owned by the Runtime and read by the Synchronizer. |
+| `Instance` | `src/runtime.ts` | One generation's live objects. `Runtime.instanceOf(docId)` returns the current one. Not exported from the package. |
+| `lifecycleProgram` / `LifecycleModel` / `LifecycleInput` / `LifecycleEffect` / `Lifecycle` / `Refusal` | `src/lifecycle-program.ts` | Lifecycle-program state + algebra. `Runtime.lifecycleOf(docId)` returns a document's `Lifecycle`. |
 | `SessionModel` / `SessionInput` / `SessionEffect` | `src/session-program.ts` | Session-program state + algebra. |
-| `updateSession` | `src/session-program.ts` | Pure `(input, model) → [model, ...effects]`. |
+| `createSessionUpdate` | `src/session-program.ts` | Makes the pure `(input, model) → [model, ...effects]` from its predicates. |
 | `SyncModel` / `SyncInput` / `SyncEffect` / `DocEntry` / `SyncPeerState` / `PeerDocSyncState` | `src/sync-program.ts` | Sync-program state + algebra. |
-| `updateSync` | `src/sync-program.ts` | Pure `(input, model) → [model, ...effects]`. |
+| `createSyncUpdate` | `src/sync-program.ts` | Makes the pure `(input, model) → [model, ...effects]` from `canShare`, `canAccept` and `servesUnloaded`. |
+| `planLeave` | `src/sync-program.ts` | Pure: how our document leaves the sync graph, for `suspend`, `unload` or `destroy`. |
 | `Policy` / `GatePredicate` / `EpochBoundaryPredicate` | `src/governance.ts` | Policy interface and predicate shapes. |
 | `Governance` / `composeGate` | `src/governance.ts` | Composer class + pure composition function. |
 | `Capabilities` / `ReplicaKey` / `DEFAULT_REPLICAS` / `createCapabilities` | `src/capabilities.ts` | Replica + schema registry. |
@@ -1525,10 +1650,12 @@ For durability guarantees, use the `cohort` predicate to prevent compaction past
 | File | Role |
 |------|------|
 | `src/index.ts` | Public barrel. Re-exports `bind` / `json` / `ephemeral` / `SyncMode` / `SYNC_COLLABORATIVE` / `SYNC_AUTHORITATIVE` / `SYNC_EPHEMERAL` / `requiresBidirectionalSync` from `@kyneta/schema`; exports exchange-specific types. |
-| `src/exchange.ts` | `Exchange` class, `ExchangeParams`, disposition types, `phaseOf`, principal validation, `registerReplica`, `registerPolicy`, reactive-collection wiring. |
+| `src/exchange.ts` | `Exchange` class, `ExchangeParams`, disposition types, the deferred policy (`#deferredMismatch`), principal validation, `registerSchema`, `register`, reactive-collection wiring. |
+| `src/runtime.ts` | `Runtime`, the local shell: `#step` (a lifecycle step as a transaction), `#build`, the effect executors (`#execute`, `#close`, `#dispose`), `Instance` and its observers, the derived unloading refusal, `refusalError`, `#hydrate`, the store program's executor, the publish gate, the tick clock. |
+| `src/lifecycle-program.ts` | Pure lifecycle program: `Lifecycle`, `LifecycleModel`, `LifecycleInput`, `LifecycleEffect`, `Refusal`, `Intent`, `BuildSpec`, `finishLoad`, the unload's rows (`unload`, `released`, `left`, `cancel`, `loadAgain`), and the queries (`isHeld`, `phaseOf`, `currentGen`, `hydrationOf`, `deferredIds`, `storedOf`, `metadataOfSpec`, `unloadingOf`, which the Runtime asks too). |
 | `src/synchronizer.ts` | Shell. Dispatch queue, registered-document map, effect interpreter, emit methods (`#emitPeerSyncChanges`, `#emitStateAdvanced`, `#emitDocEvents`, `#emitPeerEvents`), `declareVacant` / `hasReconciled` / `reconciledMatching` / `connectivity` / `awaitReconciliation`, transport + storage integration. |
-| `src/session-program.ts` | Pure session program: `SessionModel`, inputs, effects, `updateSession`, transition collapse. |
-| `src/sync-program.ts` | Pure sync program: `SyncModel`, `DocEntry`, inputs, effects, `updateSync`, per-message handlers. |
+| `src/session-program.ts` | Pure session program: `SessionModel`, inputs, effects, `createSessionUpdate`, transition collapse. |
+| `src/sync-program.ts` | Pure sync program: `SyncModel`, `DocEntry`, inputs, effects, `createSyncUpdate`, per-message handlers, and `planLeave`, how our document leaves the sync graph. |
 | `src/governance.ts` | `Policy`, `GatePredicate`, `EpochBoundaryPredicate`, `Governance`, `composeGate`. |
 | `src/capabilities.ts` | `Capabilities`, `ReplicaKey`, `ReplicaEntry`, `DEFAULT_REPLICAS`, `createCapabilities`. |
 | `src/line.ts` | `Line`, `LineProtocol`, envelope schema, ack-based pruning. |
@@ -1537,19 +1664,19 @@ For durability guarantees, use the `cohort` predicate to prevent compaction past
 | `src/undo/schema.ts` | `UndoSchema`, `UndoDoc`: the document an undo stack lives in; `Part`, `Step`, `Note`. |
 | `src/undo/undo-program.ts` | `undoProgram`: an undo stack's decisions, pure. |
 | `src/undo/stack.ts` | `createUndoStack`: the shell; `pushStep` and `moveStep`, the stack's transitions, each kept to `depth` by `bounded`, clearing what builds on a step through `clearDependents`; `topStep`, the step a request takes, the newest that nothing after it overlaps; the regions both read (`regionOf`); and `stackOps`, the ops that write one. |
-| `src/interpret.ts` | Pure phase classifier: `DocPhase`, `InterpretAction`, `planInterpretation`. The one rule all three interpretation doors consult. |
+| `src/interpret.ts` | Pure phase classifier: `DocPhase`, `LoadStatus`, `InterpretAction`, `planInterpretation`. The rule the lifecycle program's `get` row consults, for every door, and the Exchange's deferred policy. |
 | `src/sync.ts` | `sync(doc)`, `whenSettled`, and `liveSync`, a document's live sync handle and `SyncSource`. |
-| `src/document-terms.ts` | `DocumentTerms`, the one per-document record: `documentKey`, `termsOf`, `registerLocalTerms`, `registerNetworkTerms`, and closing (`snapshotOf`, `closedTerms`, `closeTerms`). |
+| `src/document-terms.ts` | `DocumentTerms`, the one per-document record: `documentKey`, `termsOf`, `registerLocalTerms`, `registerNetworkTerms`, and closing (`snapshotOf`, `closedHydration`, `closedTerms`, `closeTerms`). |
 | `src/settle.ts` | `settled`, `settledFeed`, `settledWith`, `hydrated`, `hydratedFeed`, `hydrationError`, `whenHydrated`. |
 | `src/persistence.ts` | `persisted`, `persistedFeed`, `persistenceError`, `whenPersisted`, `writeRefusal`, `writeRefusalFeed`. |
 | `src/doc-meta.ts` | `docSyncMode`, `writerModelOf`, `authorityFor`. |
 | `src/types.ts` | `DocChange`, `DocInfo`, `PeerChange`, `PeerDocSyncState`, `PeerState`, `PeerSyncState`, `Connectivity`. |
-| `src/observe.ts` | — | DevTools observation protocol (`ObsEvent`), bus (`createObservationBus`), and pure effect/msg/changeset/frame mappers. Experimental. |
+| `src/observe.ts` | DevTools observation protocol (`ObsEvent`), bus (`createObservationBus`), and pure effect/msg/changeset/frame mappers. Experimental. |
 | `src/utils.ts` | `validatePrincipal`. |
-| `src/store/` | — | `Store` interface, in-memory implementation, the store program, shared utilities (`validateAppend` in `store.ts`), seats and the seat pool (`seats.ts`), the open plan every backend runs (`store-open.ts`), and `serialStore`, which orders one document's calls (`serial-store.ts`). |
-| `src/transport/` | — | Transport-manager glue. |
-| `src/testing/` | — | Test-only helpers exported from `@kyneta/exchange/testing`. |
-| `src/__tests__/` | — | Full dispatch-loop, governance, capabilities, line, seats, storage, compaction, classification, and end-to-end tests. |
+| `src/store/` | `Store` interface, in-memory implementation, the store program, shared utilities (`validateAppend` in `store.ts`), seats and the seat pool (`seats.ts`), the open plan every backend runs (`store-open.ts`), and `serialStore`, which orders one document's calls (`serial-store.ts`). |
+| `src/transport/` | Transport-manager glue. |
+| `src/testing/` | Test-only helpers exported from `@kyneta/exchange/testing`. |
+| `src/__tests__/` | Full dispatch-loop, governance, capabilities, line, seats, storage, compaction, classification, and end-to-end tests. |
 
 ## Observation bus (experimental)
 
@@ -1598,9 +1725,11 @@ Product rationale (why a bus, why renderers are deferred): `PRODUCT.md`.
 
 ## Testing
 
-Tests use real `BridgeTransport` pairs from `@kyneta/bridge-transport` for multi-peer scenarios and in-memory stores for persistence. There are no mocks — the `@kyneta/machine` runtime interprets pure programs against real effects. Per-test exchanges are fully torn down via `await exchange.close()`.
+Tests use real `BridgeTransport` pairs from `@kyneta/bridge-transport` for multi-peer scenarios and in-memory stores for persistence, and a `ScriptedPeer` (`__tests__/scripted-peer.ts`) where a test must send or observe exactly what crosses the wire. Stores are wrapped rather than mocked (`__tests__/wrap-store.ts`: `gated` holds or fails a store method). Per-test exchanges come from `exchangesPerTest()` (`__tests__/exchanges.ts`), which shuts each down after its test.
 
-The `line.test.ts` file alone runs ~50 scenarios including relay topology, hub-and-spoke, and one-way flow — validating that `Line`'s durability surface works end-to-end through real transports.
+The pure programs are tested as tables, with no shell: `lifecycle-program.test.ts` steps every input in every lifecycle phase, and fails to compile when a phase or an input lacks a sample; `sync-program.test.ts` and `store/__tests__/store-program.test.ts` do the same for their programs. `unload.test.ts` and `unload-sync.test.ts` run an unload end to end: its three moments, the doors in each window, and its order against store-first, over a bridge and a hub.
+
+The `line-*.test.ts` files cover relay topology, hub-and-spoke and one-way flow, validating that `Line`'s durability surface works end-to-end through real transports.
 
 **Run tests**: `cd packages/exchange && pnpm exec vitest run`
 

@@ -244,8 +244,9 @@ describe("a standalone Runtime compacts", () => {
 
     await runtime.compact("doc")
     expect(kinds(storage)).toEqual(["meta", "entry"])
-    const replica = (runtime.getEntry("doc") as { readyInfo: { replica: any } })
-      .readyInfo.replica
+    const replica = (
+      runtime.instanceOf("doc") as { readyInfo: { replica: any } }
+    ).readyInfo.replica
     expect(replica.baseVersion().serialize()).toBe(
       replica.version().serialize(),
     )
@@ -258,8 +259,9 @@ describe("a standalone Runtime compacts", () => {
     append(doc, "one")
     append(doc, "two")
     await runtime.compact("doc")
-    const replica = (runtime.getEntry("doc") as { readyInfo: { replica: any } })
-      .readyInfo.replica
+    const replica = (
+      runtime.instanceOf("doc") as { readyInfo: { replica: any } }
+    ).readyInfo.replica
     expect(replica.baseVersion().serialize()).toBe(
       replica.version().serialize(),
     )

@@ -2,7 +2,9 @@
 //
 // The sync program handles the document-exchange vocabulary: present,
 // interest, offer, dismiss. It tracks per-peer document sync states
-// and manages sync protocol dispatch.
+// and manages sync protocol dispatch. Every way our own document leaves the
+// sync graph (suspend, unload, destroy) is one input, `sync/doc-leave`,
+// decided by `planLeave`.
 //
 // Key invariant: the sync program never sees channels, transports, or
 // connection state. It speaks only in terms of peers and documents.
@@ -48,9 +50,6 @@ import type { Diagnostic, DocChange, PeerDocSyncState } from "./types.js"
 export type DocEntry = {
   docId: DocId
 
-  /** Document participation mode — interpret (full stack), replicate (headless), or deferred (routing only). */
-  mode: "interpret" | "replicate" | "deferred"
-
   /** Serialized version from replica.version().serialize() */
   version: string
 
@@ -73,6 +72,49 @@ export type DocEntry = {
    * holds no replica and imports nothing.
    */
   historyFree?: boolean
+} & (
+  | {
+      /** Held in memory: interpret (full stack) or replicate (headless). */
+      mode: "interpret" | "replicate"
+      /**
+       * Unloading: it sends what it owes and takes nothing in, until it
+       * leaves or the unload is cancelled (`sync/doc-unloading`).
+       */
+      leaving?: true
+    }
+  /** Announced by a peer; we hold nothing of it (routing only). */
+  | { mode: "deferred" }
+  | {
+      /**
+       * Out of memory and kept in the store. Never announced; a peer's
+       * `present` is still checked against its metadata.
+       */
+      mode: "unloaded"
+      /** Suspended when it left: it answers no peer, and loads suspended. */
+      suspended: boolean
+      /** A peer's request has asked for it to load (`reload-doc`). */
+      reloading?: true
+    }
+)
+
+/** Whether `entry` is held here and leaving: see {@link DocEntry}. */
+function isLeaving(entry: DocEntry): boolean {
+  return (
+    (entry.mode === "interpret" || entry.mode === "replicate") &&
+    entry.leaving === true
+  )
+}
+
+/** How our own document leaves the sync graph. */
+export type LeaveAs = "suspend" | "unload" | "destroy"
+
+/** What an `unloaded` entry keeps when the sync model holds no entry to
+ *  keep it from: the metadata of a suspended document. */
+export type LeaveMetadata = {
+  readonly replicaType: ReplicaType
+  readonly syncMode: SyncMode
+  readonly schemaHash: string
+  readonly supportedHashes?: readonly string[]
 }
 
 export type SyncPeerState = {
@@ -128,8 +170,9 @@ export type SyncModel = {
    * peer leaving `model.peers`. Mirrors `@kyneta/schema`'s
    * `populated`/`populated` set, lifted to the sync layer.
    *
-   * Cleared only on *our* doc removal (`handleDocDismiss`, but not for a
-   * suspend) and `initSync` — never by an inbound `dismiss`.
+   * Cleared only when *our* document leaves the sync graph other than by
+   * suspending (`planLeave`), and by `initSync`; never by an inbound
+   * `dismiss`.
    */
   reconciledIdentities: Map<DocId, Map<PeerId, PeerIdentityDetails>>
 }
@@ -162,6 +205,11 @@ export type SyncInput =
       schemaHash: string
       supportedHashes?: readonly string[]
       /**
+       * Out of the sync graph: record `event` and hold no entry, so nothing
+       * announces it. An entry left over (`unloaded`) is removed.
+       */
+      suspended: boolean
+      /**
        * Optional shell-detected doc-event to append to pendingDocEvents
        * atomically with this input. Used by the synchronizer to fold the
        * doc-event queue and the sync-model update into a single drain
@@ -190,7 +238,18 @@ export type SyncInput =
    * we hold of theirs no longer stands.
    */
   | { type: "sync/doc-reset"; docId: DocId; version: string }
-  | { type: "sync/doc-dismiss"; docId: DocId; event?: DocChange }
+  /** Start or stop leaving: see {@link DocEntry}'s `leaving`. */
+  | { type: "sync/doc-unloading"; docId: DocId; leaving: boolean }
+  /**
+   * Our document leaves the sync graph, as `planLeave` decides for `as`.
+   * `metadata` is the shell's record of it, absent when the shell holds none.
+   */
+  | {
+      type: "sync/doc-leave"
+      docId: DocId
+      as: LeaveAs
+      metadata?: LeaveMetadata
+    }
   | {
       type: "sync/doc-imported"
       docId: DocId
@@ -278,6 +337,7 @@ type SyncDiagnostic = Extract<
       | "schema-hash-mismatch"
       | "sync-mode-mismatch"
       | "lineage-collision"
+      | "unloaded-doc-reloaded"
   }
 >
 
@@ -418,6 +478,10 @@ export type SyncEffect =
       supportedHashes?: readonly string[]
     }
   | { type: "emit-doc-events"; events: readonly DocChange[] }
+  /** A leave is done: the shell lets go of the document's record. */
+  | { type: "doc-left"; docId: DocId }
+  /** A peer asked for an unloaded document this peer serves: load it. */
+  | { type: "reload-doc"; docId: DocId }
   | { type: "emit-ready-state-changes"; docIds: readonly DocId[] }
   | { type: "emit-state-advanced"; docIds: readonly DocId[] }
   | ({ type: "diagnostic" } & SyncDiagnostic)
@@ -785,7 +849,7 @@ function announceDoc(
 /**
  * Build a present effect for a set of doc IDs to a single peer.
  * Used by handlePeerAvailable to announce all docs to a newly
- * available peer.
+ * available peer. An unloaded document is never announced.
  */
 function buildPresent(
   docIds: DocId[],
@@ -796,7 +860,7 @@ function buildPresent(
   const docs: PresentMsg["docs"] = docIds
     .map(docId => {
       const entry = model.documents.get(docId)
-      if (!entry) return null
+      if (!entry || entry.mode === "unloaded") return null
       return {
         docId,
         replicaType: entry.replicaType,
@@ -836,8 +900,13 @@ function buildInterestResponse(
   })
 
   // Concurrent writers need to hear each other, so ask for the peer's state
-  // in turn. `reciprocate: false` on the way back stops the loop.
-  if (requiresBidirectionalSync(docEntry.syncMode) && message.reciprocate) {
+  // in turn. `reciprocate: false` on the way back stops the loop. A leaving
+  // document takes nothing in, so it asks for nothing.
+  if (
+    requiresBidirectionalSync(docEntry.syncMode) &&
+    message.reciprocate &&
+    !isLeaving(docEntry)
+  ) {
     effects.push(interestTo(model, fromPeerId, message.docId, docEntry, false))
   }
 
@@ -898,11 +967,17 @@ type SyncPredicate = (docId: DocId, peer: PeerIdentityDetails) => boolean
 type CreateSyncUpdateParams = {
   canShare: SyncPredicate
   canAccept: SyncPredicate
+  /**
+   * Whether this peer serves the documents it has unloaded: a peer's request
+   * for one loads it again. The Exchange answers `authority === "self"`.
+   */
+  servesUnloaded: () => boolean
 }
 
 const defaultParams: CreateSyncUpdateParams = {
   canShare: () => true,
   canAccept: () => true,
+  servesUnloaded: () => false,
 }
 
 /**
@@ -912,11 +987,15 @@ const defaultParams: CreateSyncUpdateParams = {
  * The `canShare` and `canAccept` predicates control information flow:
  * - `canShare`: gates all outbound messages (present, push, relay)
  * - `canAccept`: gates inbound data import (offers)
+ * - `servesUnloaded`: whether a peer's request loads an unloaded document
  */
 export function createSyncUpdate(
   params: Partial<CreateSyncUpdateParams> = {},
 ): SyncUpdate {
-  const { canShare, canAccept } = { ...defaultParams, ...params }
+  const { canShare, canAccept, servesUnloaded } = {
+    ...defaultParams,
+    ...params,
+  }
 
   return function update(
     input: SyncInput,
@@ -941,6 +1020,7 @@ export function createSyncUpdate(
           model,
           canShare,
           canAccept,
+          servesUnloaded,
         )
       case "sync/doc-ensure":
         return handleDocEnsure(input, model, canShare)
@@ -950,8 +1030,10 @@ export function createSyncUpdate(
         return handleDocAdvanced(input, model, canShare)
       case "sync/doc-reset":
         return handleDocReset(input, model, canShare)
-      case "sync/doc-dismiss":
-        return handleDocDismiss(input, model, canShare)
+      case "sync/doc-unloading":
+        return handleDocUnloading(input, model, canShare)
+      case "sync/doc-leave":
+        return handleDocLeave(input, model, canShare)
       case "sync/doc-imported":
         return handleDocImported(input, model, canShare)
       case "sync/peer-synced":
@@ -987,12 +1069,13 @@ function handleMessageReceived(
   model: SyncModel,
   canShare: SyncPredicate,
   canAccept: SyncPredicate,
+  servesUnloaded: () => boolean,
 ): [SyncModel, ...SyncEffect[]] {
   switch (message.type) {
     case "present":
-      return handlePresent(from, message, model, canShare)
+      return handlePresent(from, message, model, canShare, servesUnloaded)
     case "interest":
-      return handleInterest(from, message, model, canShare)
+      return handleInterest(from, message, model, canShare, servesUnloaded)
     case "offer":
       return handleOffer(from, message, model, canShare, canAccept)
     case "accept":
@@ -1132,10 +1215,24 @@ function handleDocEnsure(
   canShare: SyncPredicate,
 ): [SyncModel, ...SyncEffect[]] {
   const existing = model.documents.get(msg.docId)
+  const pendingDocEvents = msg.event
+    ? [...model.pendingDocEvents, msg.event]
+    : model.pendingDocEvents
+
+  // A suspended document is out of the sync graph, so it has no entry: the
+  // event is recorded, nothing is announced, and an entry left over (an
+  // `unloaded` one, for a suspended document loaded again) goes.
+  if (msg.suspended) {
+    if (existing === undefined) return [{ ...model, pendingDocEvents }]
+    const documents = new Map(model.documents)
+    documents.delete(msg.docId)
+    return [{ ...model, documents, pendingDocEvents }]
+  }
+
   // Idempotent for an unchanged document: ensuring the same one twice at the
-  // same mode must not re-announce it. Any genuine mode change — `deferred →
-  // X`, or `replicate → interpret` — falls through to the path below, which
-  // rewrites the entry and sends `present` + `interest`.
+  // same mode must not re-announce it. Any genuine mode change (`deferred →
+  // X`, `unloaded → X`, or `replicate → interpret`) falls through to the path
+  // below, which rewrites the entry and sends `present` + `interest`.
   //
   // Re-announcing after a promotion is correct rather than noise. The
   // document's triple does not change, since compatibility was the
@@ -1163,13 +1260,7 @@ function handleDocEnsure(
   // We send both present (so peers learn we have the doc) and interest
   // (so peers send us their state). This is essential for docs created
   // via onDocDiscovered — the local doc is empty and needs to pull data.
-  const updatedModel: SyncModel = {
-    ...model,
-    documents,
-    pendingDocEvents: msg.event
-      ? [...model.pendingDocEvents, msg.event]
-      : model.pendingDocEvents,
-  }
+  const updatedModel: SyncModel = { ...model, documents, pendingDocEvents }
   const { peerIds, present } = announceDoc(
     msg.docId,
     msg.replicaType,
@@ -1253,7 +1344,8 @@ function handleDocAdvanced(
  * may have discarded operations a peer sent, and our next interest would
  * quote `theirVersionWeHold`, claiming them, so the peer would answer from
  * past them. Clearing it makes each interest quote only our version, and the
- * peer answers with everything we lack.
+ * peer answers with everything we lack. A leaving document asks nothing: it
+ * takes nothing in, and a cancelled unload asks every peer again.
  */
 function handleDocReset(
   msg: Extract<SyncInput, { type: "sync/doc-reset" }>,
@@ -1261,7 +1353,9 @@ function handleDocReset(
   canShare: SyncPredicate,
 ): [SyncModel, ...SyncEffect[]] {
   const docEntry = model.documents.get(msg.docId)
-  if (!docEntry) return [model]
+  if (docEntry?.mode !== "interpret" && docEntry?.mode !== "replicate") {
+    return [model]
+  }
   const entry: DocEntry = { ...docEntry, version: msg.version }
   const documents = new Map(model.documents)
   documents.set(msg.docId, entry)
@@ -1273,6 +1367,7 @@ function handleDocReset(
       theirVersionWeHold: undefined,
     })
   }
+  if (isLeaving(entry)) return [next]
   const asked = filterPeersByShare(
     model,
     getSyncedPeers(model, msg.docId),
@@ -1285,45 +1380,175 @@ function handleDocReset(
   ]
 }
 
-function handleDocDismiss(
-  msg: Extract<SyncInput, { type: "sync/doc-dismiss" }>,
+/**
+ * Start or stop leaving. Stopping (a cancelled unload) asks every available
+ * peer again, since the offers ignored meanwhile were not taken in. On an
+ * entry that is not leaving, stopping does nothing.
+ */
+function handleDocUnloading(
+  msg: Extract<SyncInput, { type: "sync/doc-unloading" }>,
   model: SyncModel,
   canShare: SyncPredicate,
 ): [SyncModel, ...SyncEffect[]] {
+  const entry = model.documents.get(msg.docId)
+  if (entry?.mode !== "interpret" && entry?.mode !== "replicate") {
+    return [model]
+  }
+  if (msg.leaving === isLeaving(entry)) return [model]
   const documents = new Map(model.documents)
-  documents.delete(msg.docId)
+  if (msg.leaving) {
+    documents.set(msg.docId, { ...entry, leaving: true })
+    return [{ ...model, documents }]
+  }
+  const { leaving: _leaving, ...rest } = entry
+  const resumed: DocEntry = rest
+  documents.set(msg.docId, resumed)
+  const next: SyncModel = { ...model, documents }
+  const reciprocate = requiresBidirectionalSync(resumed.syncMode)
+  const asked = filterPeersByShare(
+    next,
+    getAvailablePeers(next),
+    msg.docId,
+    canShare,
+  )
+  return [
+    next,
+    ...asked.map(peerId =>
+      interestTo(next, peerId, msg.docId, resumed, reciprocate),
+    ),
+  ]
+}
 
-  // Broadcast dismiss to all available peers (filtered by canShare)
-  const allPeers = getAvailablePeers(model)
-  const peerIds = filterPeersByShare(model, allPeers, msg.docId, canShare)
+/** How a document leaves the sync graph, by how, and the mode it leaves from. */
+export type LeavePlan = {
+  /** `unloaded`: an entry stays, so a peer's request is still answered. */
+  readonly syncEntry: "delete" | "unloaded"
+  /** Whether peers are told: not when none holds it from us, because it is
+   *  already out of the sync graph (absent: suspended) or unloaded. */
+  readonly dismiss: boolean
+  /** Whether the readiness latch clears: unless suspending, so the next
+   *  instance starts unsettled. A suspended document keeps it for `resume`. */
+  readonly clearLatch: boolean
+  readonly event: DocChange["type"]
+}
 
-  // `suspendDocument` and `dismissDocument` BOTH dispatch this input,
-  // differing only in `event` (`doc-suspended` vs `doc-removed`). Clear the
-  // readiness latch only on a true removal: suspend keeps the runtime/data
-  // alive (the latch must survive resume), whereas dismiss deletes it.
-  const reconciledIdentities =
-    msg.event?.type === "doc-suspended"
-      ? model.reconciledIdentities
-      : clearReconciled(model.reconciledIdentities, msg.docId)
+/** Decide how our document leaves the sync graph. Pure. */
+export function planLeave(
+  as: LeaveAs,
+  mode: DocEntry["mode"] | "absent",
+): LeavePlan {
+  const dismiss = mode !== "absent" && mode !== "unloaded"
+  switch (as) {
+    case "suspend":
+      return {
+        syncEntry: "delete",
+        dismiss,
+        clearLatch: false,
+        event: "doc-suspended",
+      }
+    case "unload":
+      return {
+        syncEntry: "unloaded",
+        dismiss,
+        clearLatch: true,
+        event: "doc-unloaded",
+      }
+    case "destroy":
+      return {
+        syncEntry: "delete",
+        dismiss,
+        clearLatch: true,
+        event: "doc-removed",
+      }
+  }
+}
 
-  const nextModel: SyncModel = {
+/**
+ * Forget what every peer is recorded to hold of `docId`, and queue the
+ * document for a peer-sync change if any peer had a record. Whatever holds
+ * the id next starts from each peer's interest.
+ */
+function forgetPeerStates(model: SyncModel, docId: DocId): SyncModel {
+  let peers: Map<PeerId, SyncPeerState> | undefined
+  for (const [peerId, peerState] of model.peers) {
+    if (!peerState.docSyncStates.has(docId)) continue
+    peers ??= new Map(model.peers)
+    const docSyncStates = new Map(peerState.docSyncStates)
+    docSyncStates.delete(docId)
+    peers.set(peerId, { ...peerState, docSyncStates })
+  }
+  if (peers === undefined) return model
+  return {
     ...model,
-    documents,
-    reconciledIdentities,
-    pendingDocEvents: msg.event
-      ? [...model.pendingDocEvents, msg.event]
-      : model.pendingDocEvents,
+    peers,
+    pendingPeerSyncDocIds: appendUniqueDocId(
+      model.pendingPeerSyncDocIds,
+      docId,
+    ),
+  }
+}
+
+/**
+ * Our document leaves the sync graph, as {@link planLeave} decides. The
+ * effects, in order: `dismiss` to every peer that may hear of it, then
+ * `doc-left`, so the shell lets go of its record only after everything queued
+ * before the leave has read it. A document neither side knows records no
+ * event.
+ */
+function handleDocLeave(
+  msg: Extract<SyncInput, { type: "sync/doc-leave" }>,
+  model: SyncModel,
+  canShare: SyncPredicate,
+): [SyncModel, ...SyncEffect[]] {
+  const { docId } = msg
+  const existing = model.documents.get(docId)
+  const plan = planLeave(msg.as, existing?.mode ?? "absent")
+
+  const documents = new Map(model.documents)
+  const kept = existing ?? msg.metadata
+  if (plan.syncEntry === "unloaded" && kept !== undefined) {
+    const entry: DocEntry = {
+      docId,
+      mode: "unloaded",
+      version: existing?.version ?? "",
+      replicaType: kept.replicaType,
+      syncMode: kept.syncMode,
+      schemaHash: kept.schemaHash,
+      // A document with no entry was out of the sync graph: suspended.
+      suspended:
+        existing === undefined ||
+        (existing.mode === "unloaded" && existing.suspended),
+    }
+    if (kept.supportedHashes) entry.supportedHashes = kept.supportedHashes
+    documents.set(docId, entry)
+  } else {
+    documents.delete(docId)
   }
 
-  if (peerIds.length === 0) return [nextModel]
-
-  return [
-    nextModel,
+  const known = existing !== undefined || msg.metadata !== undefined
+  const next = forgetPeerStates(
     {
-      type: "send-to-peers",
-      to: peerIds,
-      message: { type: "dismiss", docId: msg.docId },
+      ...model,
+      documents,
+      reconciledIdentities: plan.clearLatch
+        ? clearReconciled(model.reconciledIdentities, docId)
+        : model.reconciledIdentities,
+      pendingDocEvents: known
+        ? [...model.pendingDocEvents, { type: plan.event, docId }]
+        : model.pendingDocEvents,
     },
+    docId,
+  )
+
+  const left: SyncEffect = { type: "doc-left", docId }
+  const peerIds = plan.dismiss
+    ? filterPeersByShare(model, getAvailablePeers(model), docId, canShare)
+    : []
+  if (peerIds.length === 0) return [next, left]
+  return [
+    next,
+    { type: "send-to-peers", to: peerIds, message: { type: "dismiss", docId } },
+    left,
   ]
 }
 
@@ -1486,7 +1711,7 @@ function handlePeerSynced(
   model: SyncModel,
 ): [SyncModel, ...SyncEffect[]] {
   const docEntry = model.documents.get(msg.docId)
-  if (!docEntry) return [model]
+  if (!docEntry || docEntry.mode === "unloaded") return [model]
 
   return [
     setPeerDocState(model, msg.peerId, msg.docId, {
@@ -1567,10 +1792,12 @@ function handlePresent(
   message: PresentMsg,
   model: SyncModel,
   canShare: SyncPredicate,
+  servesUnloaded: () => boolean,
 ): [SyncModel, ...SyncEffect[]] {
   const peerState = model.peers.get(from)
   if (!peerState) return [model]
 
+  let next = model
   const effects: SyncEffect[] = []
 
   for (const {
@@ -1623,8 +1850,20 @@ function handlePresent(
         })
         continue
       }
-      // Deferred docs participate in routing but don't request data
-      if (docEntry.mode === "deferred") continue
+      // A deferred document holds nothing to ask for, and a leaving one takes
+      // nothing in.
+      if (docEntry.mode === "deferred" || isLeaving(docEntry)) continue
+      if (docEntry.mode === "unloaded") {
+        const [reloaded, ...reload] = reloadOnDemand(
+          next,
+          from,
+          docEntry,
+          servesUnloaded,
+        )
+        next = reloaded
+        effects.push(...reload)
+        continue
+      }
 
       // Compatible — send interest with our version. Concurrent writers
       // need to hear each other, so ask for the reciprocal interest.
@@ -1652,7 +1891,41 @@ function handlePresent(
     }
   }
 
-  return [model, ...effects]
+  return [next, ...effects]
+}
+
+/**
+ * A peer asked for a document we have unloaded. Where this peer serves its
+ * unloaded documents, the first such request loads it (`reload-doc`), and is
+ * reported: a server unloading a document still in use pays a load for it.
+ * Every other request does nothing, and so does any request for a suspended
+ * one, which answers no peer. The peer's interest is not answered now: once
+ * loaded, the document announces itself and asks the peer, and the peer's own
+ * interest follows.
+ */
+function reloadOnDemand(
+  model: SyncModel,
+  from: PeerId,
+  entry: Extract<DocEntry, { mode: "unloaded" }>,
+  servesUnloaded: () => boolean,
+): [SyncModel, ...SyncEffect[]] {
+  if (entry.reloading || entry.suspended || !servesUnloaded()) return [model]
+  const documents = new Map(model.documents)
+  documents.set(entry.docId, { ...entry, reloading: true })
+  return [
+    { ...model, documents },
+    {
+      type: "diagnostic",
+      code: "unloaded-doc-reloaded",
+      severity: "warning",
+      peer: from,
+      docId: entry.docId,
+      message:
+        `[exchange] peer '${from}' asked for unloaded doc '${entry.docId}' — ` +
+        `loading it again`,
+    },
+    { type: "reload-doc", docId: entry.docId },
+  ]
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -1664,6 +1937,7 @@ function handleInterest(
   message: InterestMsg,
   model: SyncModel,
   canShare: SyncPredicate,
+  servesUnloaded: () => boolean,
 ): [SyncModel, ...SyncEffect[]] {
   const peerState = model.peers.get(from)
   if (!peerState) return [model]
@@ -1692,6 +1966,9 @@ function handleInterest(
   const docEntry = model.documents.get(message.docId)
   if (!docEntry) return [model]
   if (docEntry.mode === "deferred") return [model]
+  if (docEntry.mode === "unloaded") {
+    return reloadOnDemand(model, from, docEntry, servesUnloaded)
+  }
 
   // Known doc — respond based on sync protocol and update peer sync state
   return handleInterestForKnownDoc(from, message, docEntry, model)
@@ -1768,9 +2045,12 @@ function handleOffer(
   const peerState = model.peers.get(from)
   if (!peerState) return [model]
 
+  // Only a document held in memory and not leaving takes anything in.
   const docEntry = model.documents.get(message.docId)
-  if (!docEntry) return [model]
-  if (docEntry.mode === "deferred") return [model]
+  if (docEntry?.mode !== "interpret" && docEntry?.mode !== "replicate") {
+    return [model]
+  }
+  if (isLeaving(docEntry)) return [model]
 
   // Check canAccept — reject silently if the peer isn't allowed. A refused
   // offer is not imported, so it is not accepted either: the sender's record
@@ -1868,8 +2148,9 @@ function handleVacant(
   model: SyncModel,
 ): [SyncModel, ...SyncEffect[]] {
   if (!model.peers.has(from)) return [model]
-  // Early-return if we don't track the doc — there is nothing to reconcile.
-  if (!model.documents.has(message.docId)) return [model]
+  // Nothing to reconcile for a doc we do not track, or hold unloaded.
+  const entry = model.documents.get(message.docId)
+  if (entry === undefined || entry.mode === "unloaded") return [model]
 
   // Fold the terminal state through the single fold point.
   return [

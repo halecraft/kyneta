@@ -69,6 +69,7 @@ export type DiagnosticCode =
   | "schema-hash-mismatch"
   | "sync-mode-mismatch"
   | "lineage-collision"
+  | "unloaded-doc-reloaded"
 
 interface DiagnosticCore {
   readonly severity: "error" | "warning"
@@ -105,6 +106,12 @@ export type Diagnostic =
           | "schema-hash-mismatch"
           | "sync-mode-mismatch"
           | "lineage-collision"
+        readonly docId: DocId
+      })
+  /** A peer asked for a document this peer had unloaded, so it loaded again. */
+  | (DiagnosticCore &
+      PeerScoped & {
+        readonly code: "unloaded-doc-reloaded"
         readonly docId: DocId
       })
 
@@ -180,7 +187,10 @@ export type PeerState = {
  * peer's full connection state).
  */
 export type DocInfo = {
-  mode: "interpret" | "replicate" | "deferred"
+  /** `unloaded`: out of memory and kept in the store; `get` or `open` loads it. */
+  mode: "interpret" | "replicate" | "deferred" | "unloaded"
+  /** Out of the sync graph. An unloaded document keeps the flag it had, and
+   *  loads with it. */
   suspended: boolean
 }
 
@@ -197,12 +207,15 @@ export type DocInfo = {
  * - `doc-removed`: a document was dismissed or deleted from the sync graph.
  * - `doc-deferred`: a document was tracked in deferred mode (routing
  *   participation only, no local replica).
- * - `doc-promoted`: a deferred document was promoted to interpret or
- *   replicate mode (e.g. via `exchange.get()` on a deferred doc).
+ * - `doc-promoted`: a document was raised to interpret or replicate mode:
+ *   a deferred one, a replicate one given a schema, or an unloaded one loaded
+ *   again.
  * - `doc-suspended`: a document left the sync graph but its runtime
  *   was preserved for later resumption.
  * - `doc-resumed`: a previously suspended document re-entered the
  *   sync graph with its surviving runtime.
+ * - `doc-unloaded`: a document left memory and the sync graph, and is kept
+ *   in the store.
  */
 export interface DocChange extends ChangeBase {
   readonly type:
@@ -212,6 +225,7 @@ export interface DocChange extends ChangeBase {
     | "doc-promoted"
     | "doc-suspended"
     | "doc-resumed"
+    | "doc-unloaded"
   readonly docId: DocId
 }
 

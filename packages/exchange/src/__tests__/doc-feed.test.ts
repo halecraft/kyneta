@@ -734,12 +734,16 @@ describe("exchange.documents after interleaved events", () => {
     // it: the map a rebuild from scratch makes.
     const rebuilt = new Map<string, DocInfo>()
     for (const docId of ["one", "two", "three", "relayed", "remote"]) {
-      const entry = alice.runtime.getEntry(docId)
+      const entry = alice.runtime.lifecycleOf(docId)
       if (entry === undefined) continue
-      rebuilt.set(docId, {
-        mode: entry.mode,
-        suspended: entry.mode !== "deferred" && entry.suspended === true,
-      })
+      rebuilt.set(
+        docId,
+        entry.phase === "deferred"
+          ? { mode: "deferred", suspended: false }
+          : entry.phase === "unloaded"
+            ? { mode: "unloaded", suspended: entry.suspended }
+            : { mode: entry.spec.tier, suspended: entry.suspended },
+      )
     }
     expect(new Map(alice.documents)).toEqual(rebuilt)
     expect(rebuilt.get("remote")?.mode).toBe("deferred")

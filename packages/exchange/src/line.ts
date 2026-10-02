@@ -859,7 +859,7 @@ export class Line<SendMsg, RecvMsg>
         //    Incoming Line docs whose schema hash matches will auto-resolve
         //    in onEnsureDoc step 1, bypassing resolve.
         //    If any deferred docs match, registerSchema auto-promotes them
-        //    synchronously (adds to #docCache), but the documents feed
+        //    synchronously (the Runtime holds them), but the documents feed
         //    fires at quiescence — so the subscription above won't see
         //    them yet. Step 3b scans existing docs to catch them.
         exchange.registerSchema(clientBound)
