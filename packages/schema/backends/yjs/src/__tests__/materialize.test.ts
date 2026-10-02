@@ -1,21 +1,10 @@
-// materialize — Tests for materializeYjsShadow.
-//
-// Validates that the Yjs→PlainState materialization produces correct
-// plain JS objects for all supported schema types: text, scalar,
-// sequence, nested struct, and empty documents.
-//
-// Yjs does not support counter, tree, or movableList — those are skipped.
-
-import type { ProductSchema, SchemaBinding } from "@kyneta/schema"
 import {
   BACKING_DOC,
   batch,
   createDoc,
-  deriveSchemaBinding,
-  KIND,
+  identityBindingOf,
   RawPath,
   Schema,
-  type SchemaNode,
   SUBSTRATE,
 } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
@@ -26,13 +15,6 @@ import { createYjsResolver, materializeYjsShadow } from "../materialize.js"
 // ===========================================================================
 // Helpers
 // ===========================================================================
-
-function trivialBinding(schema: SchemaNode): SchemaBinding {
-  if (schema[KIND] === "product") {
-    return deriveSchemaBinding(schema as ProductSchema, {})
-  }
-  return { forward: new Map(), inverse: new Map() }
-}
 
 function getYDoc(docRef: unknown): Y.Doc {
   const substrate = (docRef as any)[SUBSTRATE]
@@ -86,7 +68,7 @@ describe("materializeYjsShadow", () => {
     })
 
     const yDoc = getYDoc(doc)
-    const binding = trivialBinding(TextSchema)
+    const binding = identityBindingOf(TextSchema)
     const result = materializeYjsShadow(yDoc, TextSchema, binding)
 
     expect(result).toEqual({ title: "hello" })
@@ -101,7 +83,7 @@ describe("materializeYjsShadow", () => {
     })
 
     const yDoc = getYDoc(doc)
-    const binding = trivialBinding(ScalarSchema)
+    const binding = identityBindingOf(ScalarSchema)
     const result = materializeYjsShadow(yDoc, ScalarSchema, binding)
 
     expect(result).toEqual({ name: "Alice", age: 30, active: true })
@@ -116,7 +98,7 @@ describe("materializeYjsShadow", () => {
     batch(doc, (d: any) => d.items.push("gamma"))
 
     const yDoc = getYDoc(doc)
-    const binding = trivialBinding(SequenceSchema)
+    const binding = identityBindingOf(SequenceSchema)
     const result = materializeYjsShadow(yDoc, SequenceSchema, binding)
 
     expect(result).toEqual({ items: ["alpha", "beta", "gamma"] })
@@ -130,7 +112,7 @@ describe("materializeYjsShadow", () => {
     })
 
     const yDoc = getYDoc(doc)
-    const binding = trivialBinding(NestedSchema)
+    const binding = identityBindingOf(NestedSchema)
     const result = materializeYjsShadow(yDoc, NestedSchema, binding)
 
     expect(result).toEqual({
@@ -142,7 +124,7 @@ describe("materializeYjsShadow", () => {
     const doc = createDoc(yjs.bind(FullSchema))
 
     const yDoc = getYDoc(doc)
-    const binding = trivialBinding(FullSchema)
+    const binding = identityBindingOf(FullSchema)
     const result = materializeYjsShadow(yDoc, FullSchema, binding)
 
     expect(result).toEqual({
@@ -160,7 +142,7 @@ describe("materializeYjsShadow", () => {
     })
 
     const yDoc = getYDoc(doc)
-    const binding = trivialBinding(TextSchema)
+    const binding = identityBindingOf(TextSchema)
     const result = materializeYjsShadow(yDoc, TextSchema, binding)
 
     // Keys should be the raw field name "title", not an identity hash
@@ -186,7 +168,7 @@ describe("materializeYjsShadow", () => {
     batch(doc, (d: any) => d.tags.push("urgent"))
 
     const yDoc = getYDoc(doc)
-    const binding = trivialBinding(FullSchema)
+    const binding = identityBindingOf(FullSchema)
     const result = materializeYjsShadow(yDoc, FullSchema, binding)
 
     expect(result).toEqual({
@@ -221,7 +203,7 @@ describe("materializeYjsShadow", () => {
     })
     const doc = createDoc(yjs.bind(schema))
     const yDoc = getYDoc(doc)
-    const binding = trivialBinding(schema)
+    const binding = identityBindingOf(schema)
     const result = materializeYjsShadow(yDoc, schema, binding)
     expect(result).toEqual({ settings: { theme: null } })
   })
@@ -244,7 +226,7 @@ describe("createYjsResolver.resolveHasKey", () => {
     const resolver = createYjsResolver(
       () => getYDoc(doc).getMap("root"),
       schema,
-      trivialBinding(schema),
+      identityBindingOf(schema),
     )
     for (const field of ["peers", "blob"]) {
       const path = RawPath.empty.field(field)

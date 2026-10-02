@@ -51,7 +51,6 @@ import type {
   MergeOptions,
   Path,
   PositionCapable,
-  ProductSchema,
   Reader,
   RecordInverseFn,
   Releasable,
@@ -77,10 +76,10 @@ import {
   DEVTOOLS_HISTORY,
   type DevtoolsHistory,
   type DevtoolsHistorySummary,
-  deriveSchemaBinding,
   fieldAbsPath,
   findOpaqueBoundary,
   freezePayload,
+  identityBindingOf,
   invert,
   KIND,
   noDigest,
@@ -643,50 +642,6 @@ function yjsSubstrateOver(
 }
 
 // ---------------------------------------------------------------------------
-// yjsSubstrateFactory — SubstrateFactory<YjsVersion>
-// ---------------------------------------------------------------------------
-
-/**
- * Factory for constructing Yjs-backed substrates.
- *
- * - `create(schema)` — creates a fresh Y.Doc with empty containers
- *   matching the schema structure. No seed data — initial content
- *   should be applied via `batch()` after construction.
- * - `fromEntirety(payload, schema)` — creates a Y.Doc from an entirety
- *   payload, returns a substrate.
- * - `parseVersion(serialized)` — deserializes a YjsVersion.
- *
- * Uses trivialBinding for identity-keying: every path maps to
- * `deriveIdentity(path, 1)` (generation 1, no renames).
- */
-
-/**
- * Compute a trivial SchemaBinding for a schema with no migration history.
- * Every product field maps to `deriveIdentity(path, 1)`.
- */
-function trivialBinding(schema: SchemaNode): SchemaBinding {
-  if (schema[KIND] === "product") {
-    return deriveSchemaBinding(schema as ProductSchema, {})
-  }
-  return { forward: new Map(), inverse: new Map() }
-}
-// ---------------------------------------------------------------------------
-// yjsReplicaFactory — ReplicaFactory<YjsVersion>
-// ---------------------------------------------------------------------------
-
-/**
- * Schema-free replica factory for Yjs substrates.
- *
- * Constructs headless `Replica<YjsVersion>` instances backed by bare
- * `Y.Doc`s — no schema walking, no container initialization, no
- * Reader, no event bridge, no changefeed. Just the CRDT runtime
- * with version tracking and export/merge.
- *
- * Used by conduit participants (stores, routing servers)
- * that need to accumulate state, compute per-peer deltas, and compact
- * storage without ever interpreting document fields.
- */
-// ---------------------------------------------------------------------------
 // DevTools history capability (pull) — version/op summary.
 // ---------------------------------------------------------------------------
 
@@ -752,11 +707,12 @@ function yjsReplication(doc: () => Y.Doc) {
 const replicaSlots = new WeakMap<Replica<YjsVersion>, () => Releasable<Y.Doc>>()
 
 /**
- * A headless replica that owns `doc`: its `dispose` destroys it, and
- * `advance` destroys the document it projects away from.
+ * A headless replica over a fresh `Y.Doc` it owns, with a default, random
+ * clientID until `upgrade` claims one: its `dispose` destroys the document,
+ * and `advance` destroys the one it projects away from.
  */
-export function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
-  let slot = releasable(doc, destroyYDoc)
+export function createYjsReplica(): Replica<YjsVersion> {
+  let slot = releasable(new Y.Doc(), destroyYDoc)
   let currentBase: YjsVersion = YjsVersion.empty
 
   const replica = {
@@ -826,66 +782,58 @@ export function takeReplicaDoc(replica: Replica<YjsVersion>): Y.Doc {
   return slotOf().take()
 }
 
+/**
+ * Schema-free replica factory for Yjs: headless replicas over bare `Y.Doc`s,
+ * with no schema walking, no container initialization, no reader, no event
+ * bridge and no changefeed. What conduit participants (stores, routing
+ * servers) use to accumulate state, compute per-peer deltas, and compact
+ * storage without interpreting document fields.
+ */
 export const yjsReplicaFactory: ReplicaFactory<YjsVersion> = {
   replicaType: ["yjs", 2, 0] as const,
   historyFree: false,
+  createEmpty: createYjsReplica,
+  parseVersion: YjsVersion.parse,
+}
 
-  createEmpty(): Replica<YjsVersion> {
-    return createYjsReplica(new Y.Doc())
-  },
+// ---------------------------------------------------------------------------
+// yjsUpgrade — how a Y.Doc gains a schema
+// ---------------------------------------------------------------------------
 
-  fromEntirety(payload: SubstratePayload): Replica<YjsVersion> {
-    const replica = this.createEmpty()
-    replica.merge(payload)
-    return replica
-  },
-
-  parseVersion(serialized: string): YjsVersion {
-    return YjsVersion.parse(serialized)
-  },
+/**
+ * A substrate over `doc`, which it now owns, for `schema` keyed by
+ * `binding`. Claims `clientId` first, if given; a substrate built for
+ * hydration claims it later, at `adopt`.
+ *
+ * Every factory gives a document a schema through this, so the standalone
+ * and the peer-bound factories cannot drift apart. `ensureContainers` briefly
+ * swaps in `STRUCTURAL_YJS_CLIENT_ID` and restores whatever id is current, so
+ * structural ops are byte-identical across peers and dedupe on merge, whether
+ * or not identity was claimed first.
+ */
+export function yjsUpgrade(
+  doc: Y.Doc,
+  schema: SchemaNode,
+  binding: SchemaBinding,
+  clientId?: number,
+): Substrate<YjsVersion> & HasBackingDoc<Y.Doc> {
+  if (clientId !== undefined) doc.clientID = clientId
+  ensureContainers(doc, schema, binding)
+  return ownedYjsSubstrate(doc, schema, binding)
 }
 
 // ---------------------------------------------------------------------------
 // yjsSubstrateFactory — SubstrateFactory<YjsVersion>
 // ---------------------------------------------------------------------------
 
+/**
+ * The standalone Yjs factory: no peer identity of its own (each document
+ * keeps Yjs's random clientID), and containers keyed by the schema's own
+ * identity binding (`identityBindingOf`), as `yjs.bind` keys them. Build with
+ * `createSubstrate` and `substrateFromEntirety` (`@kyneta/schema`).
+ */
 export const yjsSubstrateFactory: SubstrateFactory<YjsVersion> = {
   replica: yjsReplicaFactory,
-
-  createReplica(): Replica<YjsVersion> {
-    // Default random clientID — safe for hydration (no local writes).
-    return createYjsReplica(new Y.Doc())
-  },
-
-  upgrade(
-    replica: Replica<YjsVersion>,
-    schema: SchemaNode,
-  ): Substrate<YjsVersion> {
-    const doc = takeReplicaDoc(replica)
-    const binding = trivialBinding(schema)
-    // No identity injection for the standalone factory (no peerId).
-    ensureContainers(doc, schema, binding)
-    return ownedYjsSubstrate(doc, schema, binding)
-  },
-
-  create(schema: SchemaNode): Substrate<YjsVersion> {
-    const doc = new Y.Doc()
-    const binding = trivialBinding(schema)
-    ensureContainers(doc, schema, binding)
-    return ownedYjsSubstrate(doc, schema, binding)
-  },
-
-  fromEntirety(
-    payload: SubstratePayload,
-    schema: SchemaNode,
-  ): Substrate<YjsVersion> {
-    // Two-phase path: createReplica → merge → upgrade
-    const replica = this.createReplica()
-    replica.merge(payload)
-    return this.upgrade(replica, schema)
-  },
-
-  parseVersion(serialized: string): YjsVersion {
-    return YjsVersion.parse(serialized)
-  },
+  upgrade: (replica, schema) =>
+    yjsUpgrade(takeReplicaDoc(replica), schema, identityBindingOf(schema)),
 }

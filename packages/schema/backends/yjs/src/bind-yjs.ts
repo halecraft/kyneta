@@ -24,13 +24,8 @@
 
 import type {
   BindingTarget,
-  HasBackingDoc,
-  Replica,
   SchemaBinding,
-  Schema as SchemaNode,
-  Substrate,
   SubstrateFactory,
-  SubstratePayload,
 } from "@kyneta/schema"
 import {
   BACKING_DOC,
@@ -40,14 +35,8 @@ import {
 } from "@kyneta/schema"
 import * as Y from "yjs"
 import type { YjsNativeMap } from "./native-map.js"
-import { ensureContainers } from "./populate.js"
-import {
-  createYjsReplica,
-  ownedYjsSubstrate,
-  takeReplicaDoc,
-  yjsReplicaFactory,
-} from "./substrate.js"
-import { YjsVersion } from "./version.js"
+import { takeReplicaDoc, yjsReplicaFactory, yjsUpgrade } from "./substrate.js"
+import type { YjsVersion } from "./version.js"
 
 // ---------------------------------------------------------------------------
 // Peer id → Yjs clientID
@@ -79,51 +68,20 @@ function createYjsFactory(
 ): SubstrateFactory<YjsVersion> {
   const numericClientId = yjsClientId(peerId)
 
-  // Every construction below is this, differing only in where the Y.Doc comes
-  // from and whether identity is claimed now or later. Sharing the body keeps
-  // that one difference visible as an argument instead of something a reader
-  // has to find by diffing three near-identical functions.
-  //
-  // Note that `ensureContainers` briefly swaps in STRUCTURAL_YJS_CLIENT_ID and
-  // restores whatever id is current, so structural ops are byte-identical
-  // across peers and dedupe on merge. That is why a freshly built document has
-  // no operations under the peer's *own* id — and it composes with either
-  // choice below without caring which was made.
-  const buildSubstrate = (
-    doc: Y.Doc,
-    schema: SchemaNode,
-    claimIdentity: boolean,
-  ): Substrate<YjsVersion> & HasBackingDoc<Y.Doc> => {
-    if (claimIdentity) doc.clientID = numericClientId
-    ensureContainers(doc, schema, binding)
-    return ownedYjsSubstrate(doc, schema, binding)
-  }
-
+  // Both constructions give a document a schema through `yjsUpgrade`, and
+  // differ only in when identity is claimed. Its structural ops are written
+  // under STRUCTURAL_YJS_CLIENT_ID either way, so a freshly built document has
+  // no operations under the peer's *own* id.
   return {
     replica: yjsReplicaFactory,
 
-    createReplica(): Replica<YjsVersion> {
-      // Default random clientID — safe for hydration (no local writes).
-      // Identity is set at upgrade() time, after hydration.
-      return createYjsReplica(new Y.Doc())
-    },
+    // Claims identity now: the replica has already taken in any history, so
+    // the clock for our id is wherever that history left it, and writes
+    // continue from there rather than colliding with it.
+    upgrade: (replica, schema) =>
+      yjsUpgrade(takeReplicaDoc(replica), schema, binding, numericClientId),
 
-    upgrade(
-      replica: Replica<YjsVersion>,
-      schema: SchemaNode,
-    ): Substrate<YjsVersion> {
-      // Claim identity now: this is the two-phase path, so any import has
-      // already happened and the clock for our id is wherever that history
-      // left it. Writes continue from there rather than colliding with it.
-      return buildSubstrate(takeReplicaDoc(replica), schema, true)
-    },
-
-    create(schema: SchemaNode): Substrate<YjsVersion> {
-      // Fresh doc, nothing to import — claiming immediately is safe.
-      return buildSubstrate(new Y.Doc(), schema, true)
-    },
-
-    createForHydration(schema: SchemaNode) {
+    createForHydration(schema) {
       // Identity is deferred to `adopt` below. See the contract note on
       // SubstrateFactory.createForHydration for why claiming a clientID before
       // importing that clientID's own history silently drops an operation.
@@ -137,7 +95,7 @@ function createYjsFactory(
       // The cost of deferring: anything written during the import stays
       // attributed to the throwaway id — one extra version-vector entry that
       // never grows again, which is far cheaper than a lost operation.
-      const substrate = buildSubstrate(new Y.Doc(), schema, false)
+      const substrate = yjsUpgrade(new Y.Doc(), schema, binding)
       return {
         substrate,
         // Through the substrate, which reads the document through its slot.
@@ -145,22 +103,6 @@ function createYjsFactory(
           substrate[BACKING_DOC].clientID = numericClientId
         },
       }
-    },
-
-    fromEntirety(
-      payload: SubstratePayload,
-      schema: SchemaNode,
-    ): Substrate<YjsVersion> {
-      // Two-phase path: createReplica → merge → upgrade
-      // Identity is set at upgrade() time, after hydration —
-      // avoids Yjs clientID conflict detection.
-      const replica = this.createReplica()
-      replica.merge(payload)
-      return this.upgrade(replica, schema)
-    },
-
-    parseVersion(serialized: string): YjsVersion {
-      return YjsVersion.parse(serialized)
     },
   }
 }

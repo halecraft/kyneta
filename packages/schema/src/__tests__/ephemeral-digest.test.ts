@@ -13,7 +13,13 @@
 
 import { describe, expect, it } from "vitest"
 import { digestToHex } from "../hash.js"
-import { batch, createRef, Schema } from "../index.js"
+import {
+  batch,
+  createRef,
+  createSubstrate,
+  replicaFromEntirety,
+  Schema,
+} from "../index.js"
 import {
   ephemeralReplicaFactory,
   ephemeralSubstrateFactory,
@@ -87,8 +93,8 @@ describe("the digest covers what replicates, and nothing else", () => {
     const Plain = Schema.struct({ presence: Schema.string() })
     const Decaying = Schema.struct({ presence: Schema.string().decay(1000) })
 
-    const a = ephemeralSubstrateFactory.create(Plain)
-    const b = ephemeralSubstrateFactory.create(Decaying)
+    const a = createSubstrate(ephemeralSubstrateFactory, Plain)
+    const b = createSubstrate(ephemeralSubstrateFactory, Decaying)
     const da: any = createRef(Plain, a)
     const db: any = createRef(Decaying, b)
 
@@ -104,7 +110,7 @@ describe("the digest covers what replicates, and nothing else", () => {
     // equality assertion above while reporting agreement between peers that
     // hold nothing alike.
     const S = Schema.struct({ presence: Schema.string() })
-    const substrate = ephemeralSubstrateFactory.create(S)
+    const substrate = createSubstrate(ephemeralSubstrateFactory, S)
     const doc: any = createRef(S, substrate)
 
     const before = stateTreeDigest(
@@ -141,23 +147,24 @@ describe("every replica of the format answers the digest", () => {
     )
 
   it("a headless replica and a substrate holding the same tree agree", () => {
-    const substrate = ephemeralSubstrateFactory.create(S)
+    const substrate = createSubstrate(ephemeralSubstrateFactory, S)
     batch(createRef(S, substrate) as any, (d: any) => {
       d.peers.set("alice", "here")
       d.peers.set("bob", "away")
     })
-    const replica = ephemeralReplicaFactory.fromEntirety(
+    const replica = replicaFromEntirety(
+      ephemeralReplicaFactory,
       substrate.exportEntirety(),
     )
     expect(replica.digest()).toBe(substrate.digest())
   })
 
   it("the cached digest is never stale, on a substrate or a headless replica", () => {
-    const writer = ephemeralSubstrateFactory.create(S)
+    const writer = createSubstrate(ephemeralSubstrateFactory, S)
     const write = (key: string, value: string) =>
       batch(createRef(S, writer) as any, (d: any) => d.peers.set(key, value))
     write("alice", "here")
-    const substrate = ephemeralSubstrateFactory.create(S)
+    const substrate = createSubstrate(ephemeralSubstrateFactory, S)
     const replica = ephemeralReplicaFactory.createEmpty()
     const doc: any = createRef(S, substrate)
 

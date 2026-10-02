@@ -671,28 +671,12 @@ export function createStateReplica(): Replica<StateVersion> {
 export const ephemeralReplicaFactory: ReplicaFactory<StateVersion> = {
   replicaType: ["ephemeral", 1, 0] as const,
   historyFree: true,
-
-  createEmpty(): Replica<StateVersion> {
-    return createStateReplica()
-  },
-
-  fromEntirety(payload: SubstratePayload): Replica<StateVersion> {
-    const replica = this.createEmpty()
-    replica.merge(payload)
-    return replica
-  },
-
-  parseVersion(serialized: string): StateVersion {
-    return StateVersion.parse(serialized)
-  },
+  createEmpty: createStateReplica,
+  parseVersion: StateVersion.parse,
 }
 
 export const ephemeralSubstrateFactory: SubstrateFactory<StateVersion> = {
   replica: ephemeralReplicaFactory,
-
-  createReplica(): Replica<StateVersion> {
-    return createStateReplica()
-  },
 
   upgrade(
     replica: Replica<StateVersion>,
@@ -710,21 +694,5 @@ export const ephemeralSubstrateFactory: SubstrateFactory<StateVersion> = {
       decodeTree(replica.exportEntirety().data as string),
       schema,
     )
-  },
-
-  create(schema: SchemaNode): Substrate<StateVersion> {
-    return this.upgrade(this.createReplica(), schema)
-  },
-
-  fromEntirety(
-    payload: SubstratePayload,
-    schema: SchemaNode,
-  ): Substrate<StateVersion> {
-    const replica = this.replica.fromEntirety(payload)
-    return this.upgrade(replica, schema)
-  },
-
-  parseVersion(serialized: string): StateVersion {
-    return StateVersion.parse(serialized)
   },
 }

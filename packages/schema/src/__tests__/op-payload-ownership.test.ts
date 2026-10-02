@@ -32,6 +32,7 @@ import {
   batch,
   createDoc,
   createRef,
+  createSubstrate,
   ephemeral,
   json,
   plainSubstrateFactory,
@@ -435,7 +436,7 @@ describe("every write copies the values it is handed", () => {
   })
 
   function kindsDoc() {
-    const substrate = plainSubstrateFactory.create(Kinds)
+    const substrate = createSubstrate(plainSubstrateFactory, Kinds)
     const doc: any = createRef(Kinds, substrate)
     const ops: Op[] = []
     subscribe(doc, (cs: any) => ops.push(...cs.changes))

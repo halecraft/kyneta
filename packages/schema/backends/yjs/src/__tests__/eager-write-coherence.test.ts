@@ -20,6 +20,7 @@ import {
   applyChanges,
   batch,
   createRef,
+  createSubstrate,
   mapChange,
   own,
   RawPath,
@@ -39,13 +40,13 @@ import { createYjsSubstrate, yjsSubstrateFactory } from "../substrate.js"
 // ---------------------------------------------------------------------------
 
 function build<S extends ReturnType<typeof Schema.struct>>(schema: S) {
-  const substrate = yjsSubstrateFactory.create(schema)
+  const substrate = createSubstrate(yjsSubstrateFactory, schema)
   const doc = createRef(schema, substrate) as any
   return { substrate, doc }
 }
 
-// Unbound variant — bypasses the trivialBinding that identity-keys
-// product fields, so raw-name `materializeYjsShadow(doc, schema)` /
+// Unbound variant — bypasses the identity binding that keys product
+// fields (`identityBindingOf`), so raw-name `materializeYjsShadow(doc, schema)` /
 // `rootMap.get(name)` calls in tests round-trip with the substrate.
 function buildUnbound<S extends ReturnType<typeof Schema.struct>>(
   schema: S,

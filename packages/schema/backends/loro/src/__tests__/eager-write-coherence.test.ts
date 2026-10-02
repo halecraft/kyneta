@@ -24,6 +24,7 @@ import {
   applyChanges,
   batch,
   createRef,
+  createSubstrate,
   mapChange,
   own,
   RawPath,
@@ -46,13 +47,13 @@ import {
 // ---------------------------------------------------------------------------
 
 function build<S extends ReturnType<typeof Schema.struct>>(schema: S) {
-  const substrate = loroSubstrateFactory.create(schema)
+  const substrate = createSubstrate(loroSubstrateFactory, schema)
   const doc = createRef(schema, substrate) as any
   return { substrate, doc }
 }
 
-// `loroSubstrateFactory.create` derives a trivialBinding that
-// identity-keys every product field — useful in production but
+// `loroSubstrateFactory` keys containers by the schema's identity
+// binding (`identityBindingOf`), which identity-keys every product field — useful in production but
 // makes raw-name materialise/inspect calls in tests fragile. The
 // unbound variant constructs the substrate without a binding so
 // `materializeLoroShadow(doc, schema)` round-trips with the same

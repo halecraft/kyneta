@@ -4,6 +4,7 @@
 import {
   batch,
   createRef,
+  createSubstrate,
   type Revertible,
   Schema,
   unwrap,
@@ -22,9 +23,10 @@ const peers = new WeakMap<object, string>()
 let next = 0
 
 function build(peerId: string): UndoPeer {
-  const substrate = bound
-    .factory({ peerId, binding: bound.identityBinding })
-    .create(UndoFixture)
+  const substrate = createSubstrate(
+    bound.factory({ peerId, binding: bound.identityBinding }),
+    UndoFixture,
+  )
   const doc = createRef(UndoFixture, substrate)
   peers.set(doc, peerId)
   return { substrate, doc }
@@ -102,9 +104,10 @@ describe("loro undo of a tree", () => {
   }
 
   it("a node moved, then deleted, comes back where it was before the move", () => {
-    const substrate = outline
-      .factory({ peerId: "tree", binding: outline.identityBinding })
-      .create(Outline)
+    const substrate = createSubstrate(
+      outline.factory({ peerId: "tree", binding: outline.identityBinding }),
+      Outline,
+    )
     const doc: any = createRef(Outline, substrate)
     const revertible = substrate.revertible
     if (revertible === undefined) throw new Error("not revertible")

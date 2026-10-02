@@ -24,6 +24,7 @@ import {
   type Side,
 } from "../position.js"
 import { Schema } from "../schema.js"
+import { createSubstrate } from "../substrate.js"
 import { plainSubstrateFactory } from "../substrates/plain.js"
 import {
   type PositionTestEnv,
@@ -342,12 +343,18 @@ describe("hasPosition on real refs", () => {
   })
 
   it("text ref from plain substrate has [POSITION] capability", () => {
-    const doc = createRef(DocSchema, plainSubstrateFactory.create(DocSchema))
+    const doc = createRef(
+      DocSchema,
+      createSubstrate(plainSubstrateFactory, DocSchema),
+    )
     expect(hasPosition(doc.title)).toBe(true)
   })
 
   it("non-text ref does not have [POSITION]", () => {
-    const doc = createRef(DocSchema, plainSubstrateFactory.create(DocSchema))
+    const doc = createRef(
+      DocSchema,
+      createSubstrate(plainSubstrateFactory, DocSchema),
+    )
     expect(hasPosition(doc.count)).toBe(false)
   })
 
@@ -359,7 +366,10 @@ describe("hasPosition on real refs", () => {
   })
 
   it("[POSITION].createPosition produces a working PlainPosition", () => {
-    const doc = createRef(DocSchema, plainSubstrateFactory.create(DocSchema))
+    const doc = createRef(
+      DocSchema,
+      createSubstrate(plainSubstrateFactory, DocSchema),
+    )
     batch(doc, (d: any) => {
       d.title.insert(0, "hello")
     })

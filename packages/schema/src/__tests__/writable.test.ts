@@ -13,6 +13,7 @@ import {
   batch,
   buildWritableContext,
   createRef,
+  createSubstrate,
   exportSince,
   hasTransact,
   invert,
@@ -23,6 +24,7 @@ import {
   replaceChange,
   Schema,
   subscribe,
+  substrateFromEntirety,
   TRANSACT,
 } from "../index.js"
 import { contextOver, refOver } from "./stack.js"
@@ -938,12 +940,16 @@ describe("writable: the batch lifecycle", () => {
 
   it("a merge inside a batch() body is its own changeset, delivered first", () => {
     const S = Schema.struct({ a: Schema.string(), b: Schema.string() })
-    const peer = plainSubstrateFactory.create(S)
+    const peer = createSubstrate(plainSubstrateFactory, S)
     const peerDoc = createRef(S, peer)
     batch(peerDoc, d => d.a.set("seed"))
     // The local document starts where the peer is, so what arrives in the
     // batch body below is a delta, not the whole document.
-    const local = plainSubstrateFactory.fromEntirety(peer.exportEntirety(), S)
+    const local = substrateFromEntirety(
+      plainSubstrateFactory,
+      peer.exportEntirety(),
+      S,
+    )
     const v0 = peer.version()
     batch(peerDoc, d => d.b.set("remote"))
     const delta = exportSince(peerDoc, v0) as SubstratePayload

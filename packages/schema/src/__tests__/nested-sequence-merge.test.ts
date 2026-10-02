@@ -4,14 +4,19 @@
 // runs, so the addressing stage finds the nested list's addresses under the
 // same key a local write would.
 import { describe, expect, it } from "vitest"
-import { createRef, plainSubstrateFactory, Schema } from "../index.js"
+import {
+  createRef,
+  createSubstrate,
+  plainSubstrateFactory,
+  Schema,
+} from "../index.js"
 
 const ListDoc = Schema.struct({
   items: Schema.list(Schema.struct({ tags: Schema.list(Schema.string()) })),
 })
 
 function peer() {
-  const substrate = plainSubstrateFactory.create(ListDoc)
+  const substrate = createSubstrate(plainSubstrateFactory, ListDoc)
   return { substrate, doc: createRef(ListDoc, substrate) as any }
 }
 

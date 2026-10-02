@@ -7,7 +7,7 @@
 // directly. Both are announced through ctx.announce, with a struct's map
 // event split into field writes by expandProductMapChanges.
 
-import { batch, createRef, unwrap } from "@kyneta/schema"
+import { batch, createRef, createSubstrate, unwrap } from "@kyneta/schema"
 import {
   type DeliveryDoc,
   DeliveryFixture,
@@ -30,7 +30,7 @@ function createLoroEnv(): DeliveryTestEnv {
     binding: bound.identityBinding,
   })
 
-  const substrateA = factoryA.create(DeliveryFixture)
+  const substrateA = createSubstrate(factoryA, DeliveryFixture)
   // `createRef` is deliberately untyped ("opaque — cast at call site"), so
   // this annotation is the one place the fixture's type is asserted. Keeping it
   // here rather than on DeliveryTestEnv means the shared suite is checked.
@@ -42,7 +42,7 @@ function createLoroEnv(): DeliveryTestEnv {
       // Seed B from A first so both peers agree on container identity before
       // the remote write. Without it the merge carries container creation as
       // well as the write — a noisier payload that tests something else.
-      const substrateB = factoryB.create(DeliveryFixture)
+      const substrateB = createSubstrate(factoryB, DeliveryFixture)
       substrateB.merge(substrateA.exportEntirety(), { origin: "sync" })
 
       const docB: DeliveryDoc = createRef(DeliveryFixture, substrateB)

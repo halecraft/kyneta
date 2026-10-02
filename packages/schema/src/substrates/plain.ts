@@ -7,7 +7,8 @@
 // A plain replica is its core: a base state, the op log retained after it, the
 // base offset, and a `PlainClock`. The substrate is that core plus σ and a
 // changefeed. `buildUpgrade` hands the replica's history to the substrate, so
-// `create`, `fromEntirety` and promotion from a headless replica all keep it.
+// `createSubstrate`, `substrateFromEntirety` and promotion from a headless
+// replica all keep it.
 //
 // The core reads state through a `materialize` callback: the substrate passes
 // `() => cell.current`, and the headless replica replays base + log on demand.
@@ -967,8 +968,12 @@ function adoptable(
   const loading = settableFeed<WriteRefusal | undefined>(
     new DocumentLoadingError(),
   )
+  const substrate = buildUpgrade(replica, schema, loading)
+  // The substrate copied the history and shares the frozen state, so the
+  // replica is a temporary (`upgradeReplica` in `../substrate.ts`).
+  replica.dispose("disposed")
   return {
-    substrate: buildUpgrade(replica, schema, loading),
+    substrate,
     adopt: () => {
       if (loading() !== undefined) loading.set(undefined)
     },
@@ -1031,14 +1036,6 @@ export const plainReplicaFactory: ReplicaFactory<PlainVersion> = {
     return createPlainReplica(createPlainClock(DEFAULT_LINEAGE))
   },
 
-  fromEntirety(payload: SubstratePayload): Replica<PlainVersion> {
-    // Starts from nothing and becomes the document at the payload's position,
-    // so the replica's version is the sender's.
-    const replica = this.createEmpty()
-    replica.resetFromEntirety(payload)
-    return replica
-  },
-
   parseVersion(serialized: string): PlainVersion {
     if (serialized === "") {
       throw new Error(`Invalid PlainVersion value: (empty string)`)
@@ -1064,47 +1061,19 @@ export const plainReplicaFactory: ReplicaFactory<PlainVersion> = {
  * Factory for constructing plain JS object substrates. Every construction is
  * `upgrade` of a replica, so none of them restarts history.
  *
- * - `createReplica()` → bare replica (empty doc)
  * - `upgrade(replica, schema)` → full substrate over the replica's state and log
- * - `create(schema)` = `upgrade(createReplica(), schema)`
- * - `createForHydration(schema)` — the same, refusing authored writes with
- *   `DocumentLoadingError` until `adopt()` says the document's stored history
- *   has loaded
- * - `fromEntirety(payload, schema)` = `upgrade(replica.fromEntirety(payload), schema)`
- * - `parseVersion(serialized)` — deserialize a PlainVersion
+ * - `createForHydration(schema)` — over an empty replica, refusing authored
+ *   writes with `DocumentLoadingError` until `adopt()` says the document's
+ *   stored history has loaded
  */
 export const plainSubstrateFactory: SubstrateFactory<PlainVersion> = {
-  createReplica(): Replica<PlainVersion> {
-    return plainReplicaFactory.createEmpty()
-  },
+  replica: plainReplicaFactory,
 
-  upgrade(
-    replica: Replica<PlainVersion>,
-    schema: SchemaNode,
-  ): Substrate<PlainVersion> {
-    return buildUpgrade(replica, schema)
-  },
-
-  create(schema: SchemaNode): Substrate<PlainVersion> {
-    return this.upgrade(this.createReplica(), schema)
-  },
+  upgrade: (replica, schema) => buildUpgrade(replica, schema),
 
   createForHydration(schema: SchemaNode) {
     // A plain document's identity is its lineage, and authoring is what mints
     // it. It may author once its history has loaded (`adopt`).
-    return adoptable(this.createReplica(), schema)
+    return adoptable(plainReplicaFactory.createEmpty(), schema)
   },
-
-  fromEntirety(
-    payload: SubstratePayload,
-    schema: SchemaNode,
-  ): Substrate<PlainVersion> {
-    return this.upgrade(plainReplicaFactory.fromEntirety(payload), schema)
-  },
-
-  parseVersion(serialized: string): PlainVersion {
-    return plainReplicaFactory.parseVersion(serialized)
-  },
-
-  replica: plainReplicaFactory,
 }

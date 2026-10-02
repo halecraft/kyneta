@@ -66,7 +66,8 @@ import type { WritableContext } from "./writable-context.js"
  * the concrete type they know they created.
  *
  * Exported from the barrel for substrate packages (`@kyneta/loro-schema`,
- * `@kyneta/yjs-schema`) that need it in their `upgrade()` methods.
+ * `@kyneta/yjs-schema`) that reach a substrate's document through it, as
+ * `createForHydration`'s `adopt` does.
  * Not part of the public API.
  *
  * Context: jj:smmulzkm (two-phase substrate construction)
@@ -338,7 +339,7 @@ export function planAdvance(input: {
  *   For Loro/Yjs: the set difference of operations.
  *
  * Routing table:
- *   exportEntirety() → SubstratePayload { kind: "entirety" } → factory.fromEntirety() or replica.merge()
+ *   exportEntirety() → SubstratePayload { kind: "entirety" } → replicaFromEntirety() or replica.merge()
  *   exportSince(v)   → SubstratePayload { kind: "since" }    → replica.merge()
  *
  * The `encoding` hint tells the transport layer whether the data is
@@ -443,7 +444,7 @@ export interface ReplicaLike {
 
   /**
    * Self-sufficient payload — everything needed to construct an
-   * equivalent replica from nothing via `ReplicaFactory.fromEntirety()`.
+   * equivalent replica from nothing via `replicaFromEntirety()`.
    *
    * For Plain: JSON-serialized store (a state image).
    * For Loro/Yjs: the complete oplog.
@@ -797,7 +798,7 @@ export interface SubstratePrepare {
  * - `merge(payload)` absorbs a payload into a live substrate using
  *   native merge semantics, preserving ref identity and firing the
  *   changefeed. This is the normal sync path.
- * - `factory.fromEntirety(payload, schema)` constructs a NEW substrate
+ * - `substrateFromEntirety(factory, payload, schema)` constructs a NEW substrate
  *   for cold-start scenarios (SSR, first load, schema migration).
  *   No continuity with any prior instance.
  */
@@ -1256,6 +1257,10 @@ export function mismatchForSync(
 /**
  * The minimal replica-factory contract — what the synchronizer needs.
  *
+ * A factory holds what varies by backend: its format, how to make an empty
+ * replica, and how to read a version. What follows from those is a function
+ * over the factory, the same for every backend (`replicaFromEntirety`).
+ *
  * Named after the `-Like` convention: a structural interface that
  * {@link ReplicaFactory} satisfies.
  */
@@ -1275,17 +1280,13 @@ export interface ReplicaFactoryLike {
    */
   readonly historyFree: boolean
 
-  /** Create a fresh, empty replica. No schema needed. */
-  createEmpty(): ReplicaLike
-
   /**
-   * Construct a replica from a self-sufficient payload.
-   *
-   * The payload must have been produced by `exportEntirety()` on a
-   * compatible replica or substrate. No schema needed — the payload
-   * is self-describing for replication purposes.
+   * Create a fresh, empty replica: no schema, no identity, no structural
+   * initialization. It has no write surface, so it can import stored history
+   * without anything being written ahead of it. A CRDT replica's document
+   * has a default, random identity until `upgrade` claims one.
    */
-  fromEntirety(payload: SubstratePayload): ReplicaLike
+  createEmpty(): ReplicaLike
 
   /** Deserialize a version from its string representation. */
   parseVersion(serialized: string): Version
@@ -1296,60 +1297,51 @@ export interface ReplicaFactoryLike {
 // ---------------------------------------------------------------------------
 
 /**
- * Factory for constructing replicas without a schema.
+ * Factory for constructing replicas without a schema: what conduit
+ * participants (storage adapters, routing servers) need. Its replicas
+ * support versioning and export/import, but not schema-driven
+ * interpretation.
  *
  * Extends {@link ReplicaFactoryLike} with concrete version types.
- *
- * This is the minimal factory needed by conduit participants (storage
- * adapters, routing servers). It constructs headless replicas that
- * support replication operations but not schema-driven interpretation.
- *
- * For Loro: `createEmpty()` creates a bare `LoroDoc()` — no schema
- * walking, no container initialization. `fromSnapshot()` creates a
- * `LoroDoc()` and imports the payload. Both return replicas that
- * support `version()`, `exportEntirety()`, `exportSince()`, and
- * `merge()` but NOT `store`, `prepare`, `afterBatch`, `runBatch?`, or `context()`.
- *
- * For Plain: `createEmpty()` creates a fresh store with an empty op log.
- * `fromEntirety()` parses the JSON state image into a store.
  */
 export interface ReplicaFactory<V extends Version = Version>
   extends ReplicaFactoryLike {
-  /** Identifies the binary format this factory produces and consumes. */
-  readonly replicaType: ReplicaType
-
   /** Create a fresh, empty replica. No schema needed. */
   createEmpty(): Replica<V>
 
-  /**
-   * Construct a replica from a self-sufficient payload.
-   *
-   * The payload must have been produced by `exportEntirety()` on a
-   * compatible replica or substrate. No schema needed — the payload
-   * is self-describing for replication purposes.
-   */
-  fromEntirety(payload: SubstratePayload): Replica<V>
-
   /** Deserialize a version from its string representation. */
   parseVersion(serialized: string): V
+}
+
+/**
+ * A replica that is the document `payload` holds: empty, then reset to it.
+ * `payload` must be an entirety from a compatible replica or substrate.
+ *
+ * A reset means "become this document": plain adopts the payload's lineage
+ * and position, so the replica is at the sender's version, not at count 1,
+ * and the other formats merge, which is their absorption across any boundary.
+ */
+export function replicaFromEntirety<V extends Version>(
+  factory: ReplicaFactory<V>,
+  payload: SubstratePayload,
+): Replica<V>
+export function replicaFromEntirety(
+  factory: ReplicaFactoryLike,
+  payload: SubstratePayload,
+): ReplicaLike
+export function replicaFromEntirety(
+  factory: ReplicaFactoryLike,
+  payload: SubstratePayload,
+): ReplicaLike {
+  const replica = factory.createEmpty()
+  replica.resetFromEntirety(payload)
+  return replica
 }
 
 // ---------------------------------------------------------------------------
 // SubstrateFactory<V> — schema-aware construction
 // ---------------------------------------------------------------------------
 
-/**
- * Factory for constructing substrates from schemas.
- *
- * This is the full factory needed by interpreter participants (clients,
- * application servers). It constructs substrates that support both
- * schema-driven interpretation AND replication.
- *
- * Every SubstrateFactory provides a `replica` accessor that returns
- * the corresponding `ReplicaFactory` — the schema-free subset. This
- * enables conduit participants to receive just the `ReplicaFactory`
- * without depending on the schema infrastructure.
- */
 /**
  * A substrate, plus the obligation that comes with it.
  *
@@ -1369,52 +1361,29 @@ export type HydrationHandle<V extends Version = Version> = {
 }
 
 /**
- * Build a substrate for a caller that is about to import this peer's own
- * history, and receive the obligation to call `adopt` afterwards.
+ * Factory for constructing substrates from schemas: what interpreter
+ * participants (clients, application servers) need.
  *
- * Falls back to `create()` plus a no-op `adopt` for backends that declare no
- * {@link SubstrateFactory.createForHydration}. That default lives here rather
- * than at the call site because it is a statement about the substrate
- * contract — *claiming immediately is safe when nothing will be imported* —
- * not a convenience for one consumer.
+ * It holds what a backend decides: its replica factory, how a replica gains
+ * a schema (`upgrade`), and, where claiming identity must wait for an import,
+ * how to build for hydration. Making a document from nothing, from an
+ * entirety or from a replica in hand is a function over the factory, the same
+ * for every backend: {@link createSubstrate}, {@link substrateFromEntirety},
+ * {@link upgradeReplica}, {@link beginHydration}.
  */
-export function beginHydration<V extends Version>(
-  factory: SubstrateFactory<V>,
-  schema: SchemaNode,
-): HydrationHandle<V> {
-  return (
-    factory.createForHydration?.(schema) ?? {
-      substrate: factory.create(schema),
-      adopt: NOOP_ADOPT,
-    }
-  )
-}
-
-const NOOP_ADOPT = (): void => {}
-
 export interface SubstrateFactory<V extends Version = Version> {
   /**
-   * Create a bare replica with no schema, no identity, no structural
-   * initialization. A replica has no write surface, so it can import stored
-   * history without anything being written ahead of it.
-   *
-   * The backing CRDT document (Y.Doc, LoroDoc) is created with a
-   * default/random identity. For Plain/LWW, the backing store is
-   * an empty `PlainState`.
-   *
-   * Use `upgrade(replica, schema)` after hydration to transition
-   * the replica into a full Substrate.
-   *
-   * Context: jj:smmulzkm (two-phase substrate construction)
+   * The schema-free replication factory: what a conduit participant (storage
+   * adapter, routing server) receives, without the schema infrastructure.
    */
-  createReplica(): Replica<V>
+  readonly replica: ReplicaFactory<V>
 
   /**
-   * Transition a hydrated replica into a full Substrate.
+   * Transition a replica into a full Substrate.
    *
    * The factory has the peerId (from the FactoryBuilder closure) and
-   * knows the concrete backing document type (because it produced the
-   * replica via `createReplica()`). The upgrade:
+   * knows the concrete backing document type (because its `replica` factory
+   * made the replica). The upgrade:
    *
    * 1. Sets peer identity on the underlying CRDT document (identity
    *    must be set **after** hydration to avoid Yjs clientID conflict
@@ -1438,38 +1407,22 @@ export interface SubstrateFactory<V extends Version = Version> {
    * uses. Plain shares the replica's frozen state and copies its history, and
    * the ephemeral substrate reads the replica's entirety, so neither takes
    * anything: disposing the replica afterwards empties only its own slot.
+   * {@link upgradeReplica} relies on it, closing the replica it upgraded.
    *
    * Step 1 above is why that transition has a precondition. Identity is
    * claimed here immediately, assuming any import has already finished —
-   * which holds for two-phase construction, where `createReplica` hydrates
-   * first. Promoting a document whose load is still in flight breaks that
-   * assumption and loses operations to the collision
+   * which holds for two-phase construction, where the replica takes in its
+   * history first. Promoting a document whose load is still in flight breaks
+   * that assumption and loses operations to the collision
    * {@link SubstrateFactory.createForHydration} describes, so the exchange
    * refuses until loading completes. That refusal is required by this
    * ordering, not caution about it.
    *
-   * @param replica - A replica previously created by `createReplica()`
-   *   on this factory (or a compatible one).
+   * @param replica - A replica made by this factory's `replica` (or a
+   *   compatible one).
    * @param schema - The root schema for the document.
-   *
-   * Context: jj:smmulzkm (two-phase substrate construction)
    */
   upgrade(replica: Replica<V>, schema: SchemaNode): Substrate<V>
-
-  /**
-   * Create a fresh substrate from a schema, ready to use.
-   *
-   * Convenience that composes `upgrade(createReplica(), schema)`.
-   * Useful for tests and standalone scripts that don't need the
-   * two-phase lifecycle. Store starts with Zero.structural defaults.
-   *
-   * **Claims this peer's identity immediately**, which is correct as long as
-   * the caller is not about to import operations this same peer authored
-   * earlier. A caller that *is* — a document being hydrated from storage —
-   * must use {@link SubstrateFactory.createForHydration} instead; see the
-   * note there for why the order matters.
-   */
-  create(schema: SchemaNode): Substrate<V>
 
   /**
    * Create a substrate for a caller that is about to import this peer's own
@@ -1477,8 +1430,8 @@ export interface SubstrateFactory<V extends Version = Version> {
    *
    * **Optional.** Implement it when claiming identity, or writing, on an
    * empty document would be unsafe once that document imports what it held
-   * earlier. {@link beginHydration} supplies `create()` plus a no-op for
-   * backends that leave it out.
+   * earlier. {@link beginHydration} supplies {@link createSubstrate} plus a
+   * no-op for backends that leave it out.
    *
    * Whether it is unsafe follows from how the backend addresses operations.
    * Where an address is `(peer, counter)` and the counter restarts at zero on
@@ -1505,37 +1458,82 @@ export interface SubstrateFactory<V extends Version = Version> {
    * substrate's: it passes its refusal to `createRef`.
    */
   createForHydration?(schema: SchemaNode): HydrationHandle<V>
-
-  /**
-   * Construct a new substrate from a self-sufficient payload.
-   *
-   * The payload must have been produced by `exportEntirety()` on a
-   * compatible substrate. This always creates a NEW substrate — it
-   * does not mutate an existing one.
-   *
-   * This is the entry point for cold-start construction: SSR hydration,
-   * reconnection past log compaction, etc. For live absorption into an
-   * existing replica, use `replica.merge()` instead.
-   *
-   * For PlainSubstrate: `upgrade(replica.fromEntirety(payload), schema)`.
-   * For LoroSubstrate: LoroDoc.fromSnapshot(bytes).
-   */
-  fromEntirety(payload: SubstratePayload, schema: SchemaNode): Substrate<V>
-
-  /** Deserialize a version from its string representation. */
-  parseVersion(serialized: string): V
-
-  /**
-   * The schema-free replication factory.
-   *
-   * Returns a `ReplicaFactory` that constructs headless replicas
-   * without requiring a schema. Used by conduit participants (storage
-   * adapters, routing servers) that handle replication but don't
-   * interpret document state.
-   *
-   * The returned factory constructs `Replica<V>` instances — not
-   * full `Substrate<V>` instances. Replicas support versioning and
-   * export/import but not the prepare/flush pipeline or changefeed.
-   */
-  replica: ReplicaFactory<V>
 }
+
+/**
+ * `factory.upgrade(replica, schema)`, after which `replica` is closed: the
+ * substrate took or copied what it held (`upgrade` takes what it does not
+ * copy), so the replica is a temporary, and disposing it frees nothing the
+ * substrate uses.
+ */
+export function upgradeReplica<V extends Version>(
+  factory: SubstrateFactory<V>,
+  replica: Replica<V>,
+  schema: SchemaNode,
+): Substrate<V> {
+  const substrate = factory.upgrade(replica, schema)
+  replica.dispose("disposed")
+  return substrate
+}
+
+/**
+ * A fresh substrate from a schema, ready to use: an empty replica, upgraded.
+ * Its store starts with `Zero.structural` defaults.
+ *
+ * **Claims this peer's identity immediately**, which is correct as long as
+ * the caller is not about to import operations this same peer authored
+ * earlier. A caller that *is* — a document being hydrated from storage —
+ * must use {@link beginHydration} instead; see
+ * {@link SubstrateFactory.createForHydration} for why the order matters.
+ */
+export function createSubstrate<V extends Version>(
+  factory: SubstrateFactory<V>,
+  schema: SchemaNode,
+): Substrate<V> {
+  return upgradeReplica(factory, factory.replica.createEmpty(), schema)
+}
+
+/**
+ * A new substrate that is the document `payload` holds: a cold start (SSR
+ * hydration, reconnection past log compaction). `payload` must be an
+ * entirety from a compatible substrate. For live absorption into an existing
+ * replica, use `replica.merge()` instead.
+ *
+ * The replica takes the history in before `upgrade` claims identity, so the
+ * peer's counter resumes past what it holds rather than colliding with it.
+ */
+export function substrateFromEntirety<V extends Version>(
+  factory: SubstrateFactory<V>,
+  payload: SubstratePayload,
+  schema: SchemaNode,
+): Substrate<V> {
+  return upgradeReplica(
+    factory,
+    replicaFromEntirety(factory.replica, payload),
+    schema,
+  )
+}
+
+/**
+ * Build a substrate for a caller that is about to import this peer's own
+ * history, and receive the obligation to call `adopt` afterwards.
+ *
+ * Falls back to {@link createSubstrate} plus a no-op `adopt` for backends that
+ * declare no {@link SubstrateFactory.createForHydration}. That default lives
+ * here rather than at the call site because it is a statement about the
+ * substrate contract — *claiming immediately is safe when nothing will be
+ * imported* — not a convenience for one consumer.
+ */
+export function beginHydration<V extends Version>(
+  factory: SubstrateFactory<V>,
+  schema: SchemaNode,
+): HydrationHandle<V> {
+  return (
+    factory.createForHydration?.(schema) ?? {
+      substrate: createSubstrate(factory, schema),
+      adopt: NOOP_ADOPT,
+    }
+  )
+}
+
+const NOOP_ADOPT = (): void => {}

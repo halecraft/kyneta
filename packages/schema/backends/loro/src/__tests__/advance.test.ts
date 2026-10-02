@@ -5,6 +5,7 @@
 import {
   batch,
   createRef,
+  createSubstrate,
   planAdvance,
   Schema,
   type Version,
@@ -17,7 +18,7 @@ const bound = loro.bind(Schema.struct({ title: Schema.text() }))
 /** A live substrate for `peerId`, and its ref. */
 function live(peerId: string) {
   const factory = bound.factory({ peerId, binding: bound.identityBinding })
-  const substrate = factory.create(bound.schema)
+  const substrate = createSubstrate(factory, bound.schema)
   return { factory, substrate, doc: createRef(bound.schema, substrate) }
 }
 

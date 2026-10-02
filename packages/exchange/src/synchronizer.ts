@@ -409,7 +409,7 @@ export function planImport(facts: ImportFacts): ImportPlan {
   // Nothing of ours is discarded, so the reset policy is not asked.
   if (facts.resetTrigger === "stale-lineage") return "outrank"
   if (!facts.resetPermitted) return "refused"
-  // `resetFromEntirety`/`fromEntirety` take only a self-sufficient state
+  // `resetFromEntirety`/`replicaFromEntirety` take only a self-sufficient state
   // image. The lineage trigger fires regardless of payload shape, so a delta
   // can reach here; the sender's answer to an interest is its whole document.
   if (facts.payloadKind !== "entirety") return "ask-whole"

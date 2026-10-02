@@ -20,6 +20,7 @@ import {
   Schema,
   SYNC_COLLABORATIVE,
   subscribe,
+  substrateFromEntirety,
 } from "../index.js"
 import { RawPath } from "../path.js"
 import { ephemeralSubstrateFactory } from "../substrates/ephemeral.js"
@@ -167,7 +168,8 @@ describe("state substrate tick() decay sweep", () => {
    * moment the field actually expires.
    */
   function makeSubstrate(base: number) {
-    const substrate = ephemeralSubstrateFactory.fromEntirety(
+    const substrate = substrateFromEntirety(
+      ephemeralSubstrateFactory,
       {
         kind: "entirety",
         encoding: "json",
@@ -244,7 +246,8 @@ describe("state substrate tick() decay sweep", () => {
       name: Schema.string(),
     })
 
-    const substrate = ephemeralSubstrateFactory.fromEntirety(
+    const substrate = substrateFromEntirety(
+      ephemeralSubstrateFactory,
       {
         kind: "entirety",
         encoding: "json",
@@ -283,7 +286,8 @@ describe("state substrate tick() decay sweep", () => {
     })
 
     const initialNow = Date.now()
-    const substrate = ephemeralSubstrateFactory.fromEntirety(
+    const substrate = substrateFromEntirety(
+      ephemeralSubstrateFactory,
       {
         kind: "entirety",
         encoding: "json",
@@ -414,7 +418,8 @@ describe("state substrate tick() decay sweep", () => {
       }),
     })
     const base = Date.now()
-    const substrate = ephemeralSubstrateFactory.fromEntirety(
+    const substrate = substrateFromEntirety(
+      ephemeralSubstrateFactory,
       {
         kind: "entirety",
         encoding: "json",

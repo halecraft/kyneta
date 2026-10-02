@@ -148,7 +148,7 @@ export type SchemaBinding = {
  * T0: Additive — no coordination needed.
  * T1a: Identity-preserving rename — no coordination needed.
  * T2: Lossy projection — requires .drop() acknowledgment.
- * T3: Epoch boundary — requires fromEntirety + canReset governance.
+ * T3: Epoch boundary — requires `substrateFromEntirety` + canReset governance.
  */
 export type MigrationTier = "T0" | "T1a" | "T2" | "T3"
 
@@ -954,6 +954,26 @@ export function deriveSchemaBinding(
   deriveBindingRecursive(schema, manifest, prefix, forward, inverse)
 
   return { forward, inverse }
+}
+
+/**
+ * How a schema's fields key their containers: by the identities its
+ * migration chain derives, or by field name at generation 1 without one.
+ * Empty for a non-product schema.
+ *
+ * The one definition, so `bind()` and the standalone CRDT factories key a
+ * schema's containers alike: two documents keyed apart cannot exchange data.
+ */
+export function identityBindingOf(schema: SchemaNode): SchemaBinding {
+  if (schema[KIND] !== "product") {
+    return { forward: new Map(), inverse: new Map() }
+  }
+  const product = schema as ProductSchema
+  const chain = getMigrationChain(product)
+  return deriveSchemaBinding(
+    product,
+    chain === null ? {} : deriveManifest(product, chain),
+  )
 }
 
 function deriveBindingRecursive(

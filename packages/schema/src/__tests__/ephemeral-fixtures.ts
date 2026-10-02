@@ -7,7 +7,12 @@
 //
 // Not a test file: vitest only collects `*.test.ts`.
 
-import { createRef, type Ref, type Schema as SchemaNode } from "../index.js"
+import {
+  createRef,
+  createSubstrate,
+  type Ref,
+  type Schema as SchemaNode,
+} from "../index.js"
 import type { Substrate } from "../substrate.js"
 import {
   ephemeralSubstrateFactory,
@@ -120,7 +125,7 @@ export interface Peer<S extends SchemaNode = SchemaNode> {
 type Replicating = Pick<Peer, "substrate">
 
 export function peerOf<S extends SchemaNode>(schema: S): Peer<S> {
-  const substrate = ephemeralSubstrateFactory.create(schema)
+  const substrate = createSubstrate(ephemeralSubstrateFactory, schema)
   return { substrate, doc: createRef(schema, substrate) as Ref<S> }
 }
 

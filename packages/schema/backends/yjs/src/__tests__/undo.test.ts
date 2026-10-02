@@ -1,6 +1,6 @@
 // undo.test — the Yjs substrate's undo, through the shared suite.
 
-import { createRef, unwrap } from "@kyneta/schema"
+import { createRef, createSubstrate, unwrap } from "@kyneta/schema"
 import {
   UndoFixture,
   type UndoPeer,
@@ -13,9 +13,10 @@ const bound = yjs.bind(UndoFixture)
 let next = 0
 
 function build(peerId: string): UndoPeer {
-  const substrate = bound
-    .factory({ peerId, binding: bound.identityBinding })
-    .create(UndoFixture)
+  const substrate = createSubstrate(
+    bound.factory({ peerId, binding: bound.identityBinding }),
+    UndoFixture,
+  )
   const doc = createRef(UndoFixture, substrate)
   Object.defineProperty(doc, PEER, { value: peerId })
   return { substrate, doc }

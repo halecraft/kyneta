@@ -1078,9 +1078,9 @@ The Runtime therefore never holds the Store it is given: its constructor wraps i
 
 ### How a document becomes ready
 
-Source: `src/runtime.ts` → `#hydrate`, `#becomeReady`, `readinessFor`.
+Source: `src/runtime.ts` → `#createInterpretDoc`, `#hydrate`, `#becomeReady`, `readinessFor`.
 
-A document's ref is returned at once; loading from the store runs afterwards. `#hydrate` only gathers: it reads the store and returns a `LoadOutcome` — `stored` with the version the store holds, `empty`, or `none` when nothing was loaded (no store, a transient document, or a promotion whose replica already loaded). `#becomeReady` is **the one place a document becomes ready**, for every creation path, and runs in a fixed order:
+An interpreted document is made one of two ways (`#createInterpretDoc`): by `beginHydration` when its own history is about to load from the store, which defers claiming identity to `adopt`; otherwise by `upgradeReplica` of the relay's replica (a promotion) or of an empty one, which claims at once and closes the replica. A document's ref is returned at once; loading from the store runs afterwards. `#hydrate` only gathers: it reads the store and returns a `LoadOutcome` — `stored` with the version the store holds, `empty`, or `none` when nothing was loaded (no store, a transient document, or a promotion whose replica already loaded). `#becomeReady` is **the one place a document becomes ready**, for every creation path, and runs in a fixed order:
 
 1. If the cache no longer holds this entry (destroyed, or destroyed and created again, while it loaded), nothing happens: `#evict` already failed the latch with the close error. Otherwise the dismissed document would be registered with the Synchronizer again.
 2. What was loaded decides: `readinessFor(docId, outcome, intent)`, pure.

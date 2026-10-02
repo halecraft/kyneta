@@ -26,7 +26,7 @@
 // no container to push into, so widening is the entire mechanism.
 
 import type { Ref, SchemaNode, Substrate } from "@kyneta/schema"
-import { batch, createRef, Schema } from "@kyneta/schema"
+import { batch, createRef, createSubstrate, Schema } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import { createDoc, loro, loroSubstrateFactory } from "../index.js"
 import type { LoroVersion } from "../version.js"
@@ -76,9 +76,9 @@ function afterMerge(schema: SchemaNode, write: (d: any) => void): unknown {
   // the point of the cast; these tests assert on runtime values anyway.
   const mk = (sub: Substrate<LoroVersion>): any => createRef(schema, sub)
 
-  const subA = loroSubstrateFactory.create(schema)
+  const subA = createSubstrate(loroSubstrateFactory, schema)
   const docA = mk(subA)
-  const subB = loroSubstrateFactory.create(schema)
+  const subB = createSubstrate(loroSubstrateFactory, schema)
   const docB = mk(subB)
   write(docA)
   subB.merge(subA.exportEntirety(), { origin: "sync" })
@@ -140,9 +140,9 @@ describe("writes inside a sum", () => {
   })
 
   it("an interior leaf write replicates via delta", () => {
-    const subA = loroSubstrateFactory.create(StructNullable)
+    const subA = createSubstrate(loroSubstrateFactory, StructNullable)
     const docA = interpretSubstrate(StructNullable, subA)
-    const subB = loroSubstrateFactory.create(StructNullable)
+    const subB = createSubstrate(loroSubstrateFactory, StructNullable)
     const docB = interpretSubstrate(StructNullable, subB)
 
     batch(docA, (d: any) => d.v.set({ from: 1, to: null }))
@@ -206,9 +206,9 @@ describe("whole-value writes at a sum (regression guards)", () => {
   })
 
   it("a whole-value write replicates via delta", () => {
-    const subA = loroSubstrateFactory.create(StructNullable)
+    const subA = createSubstrate(loroSubstrateFactory, StructNullable)
     const docA = interpretSubstrate(StructNullable, subA)
-    const subB = loroSubstrateFactory.create(StructNullable)
+    const subB = createSubstrate(loroSubstrateFactory, StructNullable)
     const docB = interpretSubstrate(StructNullable, subB)
 
     subB.merge(subA.exportEntirety(), { origin: "sync" })

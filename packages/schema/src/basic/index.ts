@@ -56,6 +56,7 @@ import { hasSubstrate, SUBSTRATE } from "../native.js"
 import type { DocRef } from "../ref/schema-ref.js"
 import type { ProductSchema } from "../schema.js"
 import type { SubstratePayload } from "../substrate.js"
+import { createSubstrate, substrateFromEntirety } from "../substrate.js"
 import {
   decodePlainPayload,
   objectToReplaceOps,
@@ -82,7 +83,10 @@ type CreateDoc = <S extends ProductSchema>(
  * `genericCreateDoc(json.bind(schema))`.
  */
 export const createDoc: CreateDoc = (schema =>
-  createRef(schema, plainSubstrateFactory.create(schema))) as CreateDoc
+  createRef(
+    schema,
+    createSubstrate(plainSubstrateFactory, schema),
+  )) as CreateDoc
 
 type CreateDocFromEntirety = <S extends ProductSchema>(
   schema: S,
@@ -101,7 +105,7 @@ export const createDocFromEntirety: CreateDocFromEntirety = ((
 ) =>
   createRef(
     schema,
-    plainSubstrateFactory.fromEntirety(payload, schema),
+    substrateFromEntirety(plainSubstrateFactory, payload, schema),
   )) as CreateDocFromEntirety
 
 // ---------------------------------------------------------------------------

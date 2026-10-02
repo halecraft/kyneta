@@ -16,6 +16,7 @@ import { TRANSACT } from "../ref/write.js"
 import { DocumentClosedError } from "../refusal.js"
 import { Schema } from "../schema.js"
 import {
+  createSubstrate,
   DEVTOOLS_HISTORY,
   hasDevtoolsHistory,
   type RevertibleCommit,
@@ -67,7 +68,7 @@ export function disposeConformance(
   const { factory } = env
 
   const written = () => {
-    const substrate = factory.create(DisposeFixture)
+    const substrate = createSubstrate(factory, DisposeFixture)
     const doc: any = createRef(DisposeFixture, substrate)
     batch(doc, (d: any) => {
       d.name.set("kept")
@@ -187,7 +188,7 @@ export function disposeConformance(
 
     if (env.nativePositions) {
       it("a position made before the close throws DocumentClosedError", () => {
-        const substrate = factory.create(TextFixture)
+        const substrate = createSubstrate(factory, TextFixture)
         const doc: any = createRef(TextFixture, substrate)
         doc.title.insert(0, "hello")
         const position: Position = doc.title[POSITION].createPosition(2, "left")

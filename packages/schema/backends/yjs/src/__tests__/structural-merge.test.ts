@@ -8,13 +8,12 @@
 
 import {
   BACKING_DOC,
+  createSubstrate,
   deriveIdentity,
-  deriveSchemaBinding,
-  KIND,
-  type ProductSchema,
+  identityBindingOf,
   Schema,
-  type SchemaBinding,
   STRUCTURAL_YJS_CLIENT_ID,
+  substrateFromEntirety,
 } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
@@ -25,13 +24,6 @@ import { yjsSubstrateFactory } from "../substrate.js"
 // ===========================================================================
 // Identity-keying helpers
 // ===========================================================================
-
-function trivialBinding(schema: any): SchemaBinding {
-  if (schema[KIND] === "product") {
-    return deriveSchemaBinding(schema as ProductSchema, {})
-  }
-  return { forward: new Map(), inverse: new Map() }
-}
 
 function id(fieldName: string): string {
   return deriveIdentity(fieldName, 1)
@@ -55,7 +47,7 @@ describe("structural merge protocol (Yjs)", () => {
   // ── Core invariant: two peers independently create, sync, no data loss ──
 
   it("two peers independently create same schema, sync, data preserved", () => {
-    const binding = trivialBinding(TestSchema)
+    const binding = identityBindingOf(TestSchema)
 
     // Peer A creates doc and writes text
     const docA = new Y.Doc()
@@ -100,7 +92,7 @@ describe("structural merge protocol (Yjs)", () => {
   })
 
   it("three peers independently create, sync, all converge", () => {
-    const binding = trivialBinding(TestSchema)
+    const binding = identityBindingOf(TestSchema)
 
     const docs = [100, 200, 300].map(cid => {
       const doc = new Y.Doc()
@@ -140,7 +132,7 @@ describe("structural merge protocol (Yjs)", () => {
   // ── Persistence round-trip ──
 
   it("persist → hydrate → data preserved", () => {
-    const binding = trivialBinding(TestSchema)
+    const binding = identityBindingOf(TestSchema)
 
     // Create and write
     const doc1 = new Y.Doc()
@@ -186,8 +178,8 @@ describe("structural merge protocol (Yjs)", () => {
     fields.beta = Schema.number()
     const schemaB = Schema.struct(fields)
 
-    const bindingA = trivialBinding(schemaA)
-    const bindingB = trivialBinding(schemaB)
+    const bindingA = identityBindingOf(schemaA)
+    const bindingB = identityBindingOf(schemaB)
 
     const docA = new Y.Doc()
     ensureContainers(docA, schemaA, bindingA)
@@ -215,8 +207,8 @@ describe("structural merge protocol (Yjs)", () => {
       title: Schema.text(),
     })
 
-    const v1Binding = trivialBinding(v1Schema)
-    const v2Binding = trivialBinding(v2Schema)
+    const v1Binding = identityBindingOf(v1Schema)
+    const v2Binding = identityBindingOf(v2Schema)
 
     // Peer A: create v1, write data, export
     const docA = new Y.Doc()
@@ -266,7 +258,7 @@ describe("structural merge protocol (Yjs)", () => {
   // ── Structural identity is clientID 0 ──
 
   it("ensureContainers uses clientID 0 for structural ops", () => {
-    const binding = trivialBinding(TestSchema)
+    const binding = identityBindingOf(TestSchema)
 
     const doc = new Y.Doc()
     doc.clientID = 999
@@ -281,7 +273,7 @@ describe("structural merge protocol (Yjs)", () => {
   })
 
   it("ensureContainers does not leak caller clientID into structural ops", () => {
-    const binding = trivialBinding(TestSchema)
+    const binding = identityBindingOf(TestSchema)
 
     const doc = new Y.Doc()
     doc.clientID = 777
@@ -297,8 +289,8 @@ describe("structural merge protocol (Yjs)", () => {
   // ── SubstrateFactory integration ──
 
   it("yjsSubstrateFactory.create produces deterministic structural ops", () => {
-    const sub1 = yjsSubstrateFactory.create(TestSchema)
-    const sub2 = yjsSubstrateFactory.create(TestSchema)
+    const sub1 = createSubstrate(yjsSubstrateFactory, TestSchema)
+    const sub2 = createSubstrate(yjsSubstrateFactory, TestSchema)
 
     const state1 = sub1.exportEntirety()
     const state2 = sub2.exportEntirety()
@@ -307,8 +299,8 @@ describe("structural merge protocol (Yjs)", () => {
     expect(state1.data).toEqual(state2.data)
   })
 
-  it("yjsSubstrateFactory.fromEntirety preserves data through round-trip", () => {
-    const sub1 = yjsSubstrateFactory.create(TestSchema)
+  it("substrateFromEntirety(yjsSubstrateFactory) preserves data through round-trip", () => {
+    const sub1 = createSubstrate(yjsSubstrateFactory, TestSchema)
     const doc1 = (sub1 as any)[BACKING_DOC] as Y.Doc
     doc1.transact(() => {
       const root = doc1.getMap("root")
@@ -317,7 +309,7 @@ describe("structural merge protocol (Yjs)", () => {
     })
 
     const payload = sub1.exportEntirety()
-    const sub2 = yjsSubstrateFactory.fromEntirety(payload, TestSchema)
+    const sub2 = substrateFromEntirety(yjsSubstrateFactory, payload, TestSchema)
     const doc2 = (sub2 as any)[BACKING_DOC] as Y.Doc
     const root2 = doc2.getMap("root")
 
@@ -339,8 +331,8 @@ describe("structural merge protocol (Yjs)", () => {
       binding: bound.identityBinding,
     })
 
-    const subA = factoryA.create(TestSchema)
-    const subB = factoryB.create(TestSchema)
+    const subA = createSubstrate(factoryA, TestSchema)
+    const subB = createSubstrate(factoryB, TestSchema)
 
     // Different peerIds but same structural ops
     const stateA = subA.exportEntirety()
@@ -362,8 +354,8 @@ describe("structural merge protocol (Yjs)", () => {
       binding: bound.identityBinding,
     })
 
-    const subA = factoryA.create(TestSchema)
-    const subB = factoryB.create(TestSchema)
+    const subA = createSubstrate(factoryA, TestSchema)
+    const subB = createSubstrate(factoryB, TestSchema)
 
     // Write different data on each peer
     const docA = (subA as any)[BACKING_DOC] as Y.Doc
@@ -402,7 +394,7 @@ describe("structural merge protocol (Yjs)", () => {
   // ── ensureContainers is idempotent ──
 
   it("ensureContainers after hydration preserves existing data", () => {
-    const binding = trivialBinding(TestSchema)
+    const binding = identityBindingOf(TestSchema)
 
     const doc = new Y.Doc()
     doc.clientID = 50

@@ -25,7 +25,7 @@ prototype per schema node and position, so two items of one list share one.
 A method needs its ref: pass `(v) => ref.set(v)`, not `ref.set`.
 
 ```ts
-const substrate = plainSubstrateFactory.create(ProjectSchema)
+const substrate = createSubstrate(plainSubstrateFactory, ProjectSchema)
 const doc: Ref<typeof ProjectSchema> = createRef(ProjectSchema, substrate)
 
 const leaves = createInterpreter<void, string[]>(

@@ -4,13 +4,20 @@
 // changeset holds only that batch's ops, and a transaction a raw listener
 // opens in reaction to ours is announced after ours.
 
-import { batch, createRef, Schema, subscribe, unwrap } from "@kyneta/schema"
+import {
+  batch,
+  createRef,
+  createSubstrate,
+  Schema,
+  subscribe,
+  unwrap,
+} from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import type * as Y from "yjs"
 import { yjsSubstrateFactory } from "../substrate.js"
 
 function build<S extends ReturnType<typeof Schema.struct>>(schema: S) {
-  const substrate = yjsSubstrateFactory.create(schema)
+  const substrate = createSubstrate(yjsSubstrateFactory, schema)
   const doc = createRef(schema, substrate) as any
   const seen: { replay: boolean | undefined; n: number }[] = []
   subscribe(doc, cs => seen.push({ replay: cs.replay, n: cs.changes.length }))

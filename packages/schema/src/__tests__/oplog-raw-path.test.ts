@@ -7,11 +7,13 @@ import { CoordinateTrie } from "../coordinate-trie.js"
 import {
   batch,
   createRef,
+  createSubstrate,
   PlainVersion,
   plainReplicaFactory,
   plainSubstrateFactory,
   Schema,
   type SubstratePayload,
+  substrateFromEntirety,
 } from "../index.js"
 import { type Address, AddressedPath, RawPath } from "../path.js"
 import { decodePlainPayload } from "../substrates/plain.js"
@@ -31,11 +33,11 @@ const TreeDoc = Schema.struct({
 const KEY = "37687726-cafe-4000-8000-000000000001"
 
 function recordDoc() {
-  const substrate = plainSubstrateFactory.create(RecordDoc)
+  const substrate = createSubstrate(plainSubstrateFactory, RecordDoc)
   return { substrate, doc: createRef(RecordDoc, substrate) as any }
 }
 function listDoc() {
-  const substrate = plainSubstrateFactory.create(ListDoc)
+  const substrate = createSubstrate(plainSubstrateFactory, ListDoc)
   return { substrate, doc: createRef(ListDoc, substrate) as any }
 }
 
@@ -65,7 +67,7 @@ function snap(x: {
 
 // Merge a genesis since-delta into a schema-less empty replica. Works only
 // because record/list/set ops carry their own container structure on replay;
-// trees need a seeded [] base, so the tree test uses fromEntirety instead.
+// trees need a seeded [] base, so the tree test uses substrateFromEntirety instead.
 function replayInto(substrate: any, since: unknown) {
   const payload = substrate.exportSince(since)
   expect(payload).not.toBeNull()
@@ -237,11 +239,12 @@ describe("plain op-log: set and tree entry deletes survive export", () => {
     // — a path that descends INTO the node — but the node's entry segment is
     // not a tombstone-able live Address, so `delete(id)` cannot corrupt it.
     // Convergence coverage for the safe path, not a reproduction of the hazard.
-    const substrateA = plainSubstrateFactory.create(TreeDoc)
+    const substrateA = createSubstrate(plainSubstrateFactory, TreeDoc)
     const docA = createRef(TreeDoc, substrateA) as any
     // Seed B from A's genesis so its tree field is a defaulted [] base to
     // replay a TreeChange onto (a from-empty replica has no schema defaults).
-    const substrateB = plainSubstrateFactory.fromEntirety(
+    const substrateB = substrateFromEntirety(
+      plainSubstrateFactory,
       substrateA.exportEntirety(),
       TreeDoc,
     )
@@ -264,7 +267,7 @@ describe("plain op-log: set and tree entry deletes survive export", () => {
     // Sets are leaf-shaped (no nested-into-member path), so the delete logs at
     // the set's own path — safe like the whole-entry map set. The set analog of
     // the tree case above; locks in that this stays convergence-clean.
-    const substrate = plainSubstrateFactory.create(SetDoc)
+    const substrate = createSubstrate(plainSubstrateFactory, SetDoc)
     const doc = createRef(SetDoc, substrate) as any
     batch(doc, (d: any) => {
       d.tags.add("x")

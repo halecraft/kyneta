@@ -27,7 +27,12 @@
 // sets; this is the core-substrate one.
 
 import { describe, expect, expectTypeOf, it } from "vitest"
-import { type BoundSchema, ephemeral, Schema } from "../index.js"
+import {
+  type BoundSchema,
+  createSubstrate,
+  ephemeral,
+  Schema,
+} from "../index.js"
 import { ephemeralSubstrateFactory } from "../substrates/ephemeral.js"
 
 // ===========================================================================
@@ -195,7 +200,7 @@ describe("ephemeral.bind() rejects CRDT schemas", () => {
 describe("createStateSubstrate rejects what bind() would have", () => {
   it("refuses an unrepresentable kind", () => {
     const schema = Schema.struct({ items: Schema.list(Schema.number()) })
-    expect(() => ephemeralSubstrateFactory.create(schema)).toThrow(
+    expect(() => createSubstrate(ephemeralSubstrateFactory, schema)).toThrow(
       /cannot store a sequence/,
     )
   })
@@ -207,7 +212,7 @@ describe("createStateSubstrate rejects what bind() would have", () => {
     const schema = Schema.struct({
       blob: Schema.struct.json({ inner: Schema.string().decay(1000) }),
     })
-    expect(() => ephemeralSubstrateFactory.create(schema)).toThrow(
+    expect(() => createSubstrate(ephemeralSubstrateFactory, schema)).toThrow(
       /decay\(\) cannot be set inside/,
     )
   })
@@ -216,7 +221,9 @@ describe("createStateSubstrate rejects what bind() would have", () => {
     // The escape hatch the rejection messages point at. A wrapped list keeps
     // its sequence API and replicates as one register value.
     const schema = Schema.struct({ tags: Schema.list.json(Schema.string()) })
-    expect(() => ephemeralSubstrateFactory.create(schema)).not.toThrow()
+    expect(() =>
+      createSubstrate(ephemeralSubstrateFactory, schema),
+    ).not.toThrow()
   })
 })
 
@@ -263,14 +270,16 @@ describe("the runtime rule matches the law set", () => {
   for (const { kind, schema } of accepted) {
     it(`accepts ${kind}`, () => {
       const doc = Schema.struct({ v: schema as never })
-      expect(() => ephemeralSubstrateFactory.create(doc)).not.toThrow()
+      expect(() =>
+        createSubstrate(ephemeralSubstrateFactory, doc),
+      ).not.toThrow()
     })
   }
 
   for (const { kind, schema } of rejected) {
     it(`rejects ${kind}`, () => {
       const doc = Schema.struct({ v: schema as never })
-      expect(() => ephemeralSubstrateFactory.create(doc)).toThrow(
+      expect(() => createSubstrate(ephemeralSubstrateFactory, doc)).toThrow(
         /cannot store/,
       )
     })

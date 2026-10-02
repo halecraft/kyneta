@@ -238,7 +238,7 @@ T3 is the explicit "the old CRDT history doesn't make sense under the new schema
 > 1. Quiesce writes on the affected documents.
 > 1. Snapshot the documents' plain state via `unwrap(ref)`.
 > 1. Apply your transform offline.
-> 1. Create fresh substrates from the transformed payloads via `fromEntirety` — a method on the substrate/replica factory object (e.g. `factory.fromEntirety(payload)`), not a standalone export from `@kyneta/schema`.
+> 1. Create fresh substrates from the transformed payloads with `substrateFromEntirety(factory, payload, schema)`, or headless replicas with `replicaFromEntirety(factory, payload)`, both exported from `@kyneta/schema`.
 > 1. Reload all clients.
 
 ### 6.1. Change a field's type (retype)
@@ -313,7 +313,7 @@ The exchange emits a warning effect of the form:
 
 - Two peers on **any combination of T0/T1a versions** sync correctly, as long as one of them carries the other's hash in `supportedHashes`.
 - After a **T2 deployment**, peers still on the pre-T2 schema are cut off from sync until they upgrade.
-- After a **T3 deployment**, every peer is cut off until they upgrade *and* receive a fresh document via your `fromEntirety` reload pipeline.
+- After a **T3 deployment**, every peer is cut off until they upgrade *and* receive a fresh document via your `substrateFromEntirety` reload pipeline.
 
 > **Limit — current backward-walk only inverts root-level `add` / `rename` / `move`.** Other invertible primitives (e.g. `addNullable`, `widenConstraint`) currently halt the walk. The forward state is correct; sync compat with pre-`addNullable` peers is conservatively rejected. If you need that compat, hold the migration until peers upgrade.
 

@@ -18,7 +18,7 @@ import {
   TRANSACT,
   WriteRefusal,
 } from "../index.js"
-import { beginHydration } from "../substrate.js"
+import { beginHydration, createSubstrate } from "../substrate.js"
 import { ephemeralSubstrateFactory } from "../substrates/ephemeral.js"
 import { plainSubstrateFactory } from "../substrates/plain.js"
 
@@ -90,7 +90,7 @@ describe("the owner's refusal", () => {
   })
 
   it("merges and resets still reach a refused document", () => {
-    const source = plainSubstrateFactory.create(schema)
+    const source = createSubstrate(plainSubstrateFactory, schema)
     const writer = createRef(schema, source)
     batch(writer, d => d.title.set("one"))
     const afterOne = source.version()

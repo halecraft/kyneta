@@ -14,7 +14,13 @@
 // almost never produce two equal ones.
 
 import { describe, expect, it } from "vitest"
-import { batch, createRef, type Ref, Schema } from "../index.js"
+import {
+  batch,
+  createRef,
+  createSubstrate,
+  type Ref,
+  Schema,
+} from "../index.js"
 import {
   ephemeralReplicaFactory,
   ephemeralSubstrateFactory,
@@ -498,10 +504,10 @@ describe("a delta carries only what this replica took in", () => {
     // A zero is supplied by the projection, not stored. A fresh substrate
     // holds nothing, so neither an entirety nor a delta can carry a write that
     // never happened.
-    const fresh = ephemeralSubstrateFactory.create(Doc)
+    const fresh = createSubstrate(ephemeralSubstrateFactory, Doc)
     expect(fresh.exportEntirety().data).toBe("{}")
 
-    const substrate = ephemeralSubstrateFactory.create(Doc)
+    const substrate = createSubstrate(ephemeralSubstrateFactory, Doc)
     const doc = createRef(Doc, substrate) as Ref<typeof Doc>
     batch(doc, d => d.name.set("written"))
 

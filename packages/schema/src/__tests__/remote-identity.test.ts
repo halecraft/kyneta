@@ -15,6 +15,7 @@ import {
   merge,
   Schema,
   SUBSTRATE,
+  substrateFromEntirety,
   version,
 } from "../index.js"
 import { RawPath } from "../path.js"
@@ -34,7 +35,8 @@ describe("ephemeral: a merge reprojects only what its join moved", () => {
 
   it("leaves the record and every untouched row as they were", () => {
     const now = Date.now()
-    const substrate = ephemeralSubstrateFactory.fromEntirety(
+    const substrate = substrateFromEntirety(
+      ephemeralSubstrateFactory,
       payload({
         rows: { r0: { x: wire(0, now) }, r1: { x: wire(1, now) } },
       }),
@@ -54,7 +56,8 @@ describe("ephemeral: a merge reprojects only what its join moved", () => {
 
   it("a merge under an expired container makes its other fields reappear", () => {
     const old = Date.now() - 10_000
-    const substrate = ephemeralSubstrateFactory.fromEntirety(
+    const substrate = substrateFromEntirety(
+      ephemeralSubstrateFactory,
       payload({ room: { a: wire(1, old), b: wire(2, old) } }),
       Rows,
     )

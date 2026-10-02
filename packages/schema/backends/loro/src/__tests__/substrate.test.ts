@@ -3,11 +3,13 @@ import {
   BACKING_DOC,
   batch,
   createRef,
+  createSubstrate,
   RawPath,
   type Ref,
   Schema,
   type SchemaNode,
   subscribe,
+  substrateFromEntirety,
   unwrap,
 } from "@kyneta/schema"
 import { defined } from "@kyneta/schema/testing"
@@ -63,7 +65,7 @@ const interpretSubstrate: InterpretSubstrate = (schema, substrate) =>
 
 describe("loroSubstrateFactory.create", () => {
   it("creates a substrate with default values", () => {
-    const substrate = loroSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(loroSubstrateFactory, TestSchema)
     const reader = substrate.reader
 
     // Text defaults to empty string
@@ -75,7 +77,7 @@ describe("loroSubstrateFactory.create", () => {
   })
 
   it("creates a substrate with seed values", () => {
-    const substrate = loroSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(loroSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(TestSchema, substrate)
     batch(doc, d => {
       d.title.insert(0, "Hello")
@@ -88,7 +90,7 @@ describe("loroSubstrateFactory.create", () => {
   })
 
   it("creates a substrate with seed list items", () => {
-    const substrate = loroSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(loroSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(TestSchema, substrate)
     batch(doc, d => {
       d.items.push({ name: "Task 1", done: false })
@@ -114,7 +116,7 @@ describe("loroSubstrateFactory.create", () => {
 
 describe("write round-trip", () => {
   it("text insert via batch() is readable", () => {
-    const substrate = loroSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(loroSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(TestSchema, substrate)
 
     batch(doc, d => d.title.insert(0, "Hi"))
@@ -122,7 +124,7 @@ describe("write round-trip", () => {
   })
 
   it("counter increment via batch() is readable", () => {
-    const substrate = loroSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(loroSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(TestSchema, substrate)
 
     batch(doc, d => d.count.increment(5))
@@ -133,7 +135,7 @@ describe("write round-trip", () => {
   })
 
   it("scalar set via batch() is readable", () => {
-    const substrate = loroSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(loroSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(TestSchema, substrate)
 
     batch(doc, d => d.theme.set("light"))
@@ -143,7 +145,7 @@ describe("write round-trip", () => {
   })
 
   it("bypasses loro-wasm 8-item limit when inserting many items", () => {
-    const substrate = loroSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(loroSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(TestSchema, substrate)
 
     // Create an array of 10 items
@@ -165,7 +167,7 @@ describe("write round-trip", () => {
         messages: Schema.list(Schema.string()),
       }).nullable(),
     })
-    const substrate = loroSubstrateFactory.create(s)
+    const substrate = createSubstrate(loroSubstrateFactory, s)
     const doc = interpretSubstrate(s, substrate) as any
 
     const messages = Array.from({ length: 10 }).map((_, i) => `msg ${i}`)
@@ -185,13 +187,13 @@ describe("write round-trip", () => {
 
 describe("version tracking", () => {
   it("version() returns a LoroVersion", () => {
-    const substrate = loroSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(loroSubstrateFactory, TestSchema)
     const f = substrate.version()
     expect(f).toBeInstanceOf(LoroVersion)
   })
 
   it("version() advances after mutations", () => {
-    const substrate = loroSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(loroSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(TestSchema, substrate)
 
     const v0 = substrate.version()
@@ -207,7 +209,7 @@ describe("version tracking", () => {
   })
 
   it("version() serialize/parse round-trips", () => {
-    const substrate = loroSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(loroSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(TestSchema, substrate)
 
     batch(doc, d => d.title.insert(0, "Hello"))
@@ -224,14 +226,14 @@ describe("version tracking", () => {
 
 describe("export/import snapshot", () => {
   it("exportEntirety returns a binary payload", () => {
-    const substrate = loroSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(loroSubstrateFactory, TestSchema)
     const snapshot = substrate.exportEntirety()
     expect(snapshot.encoding).toBe("binary")
     expect(snapshot.data).toBeInstanceOf(Uint8Array)
   })
 
   it("fromSnapshot reconstructs equivalent state", () => {
-    const substrateA = loroSubstrateFactory.create(TestSchema)
+    const substrateA = createSubstrate(loroSubstrateFactory, TestSchema)
     const docA = interpretSubstrate(TestSchema, substrateA)
     batch(docA, d => {
       d.title.insert(0, "Original")
@@ -243,7 +245,11 @@ describe("export/import snapshot", () => {
     })
 
     const snapshot = substrateA.exportEntirety()
-    const substrateB = loroSubstrateFactory.fromEntirety(snapshot, TestSchema)
+    const substrateB = substrateFromEntirety(
+      loroSubstrateFactory,
+      snapshot,
+      TestSchema,
+    )
 
     const readerB = substrateB.reader
     expect(readerB.read(RawPath.empty.field("title"))).toBe("Original Title")
@@ -252,12 +258,16 @@ describe("export/import snapshot", () => {
   })
 
   it("fromSnapshot creates a new lineage (version independent)", () => {
-    const substrateA = loroSubstrateFactory.create(TestSchema)
+    const substrateA = createSubstrate(loroSubstrateFactory, TestSchema)
     const docA = interpretSubstrate(TestSchema, substrateA)
     batch(docA, d => d.title.insert(0, "Hello"))
 
     const snapshot = substrateA.exportEntirety()
-    const substrateB = loroSubstrateFactory.fromEntirety(snapshot, TestSchema)
+    const substrateB = substrateFromEntirety(
+      loroSubstrateFactory,
+      snapshot,
+      TestSchema,
+    )
 
     // Both substrates have equivalent state
     expect(substrateB.reader.read(RawPath.empty.field("title"))).toBe("Hello")
@@ -270,10 +280,10 @@ describe("export/import snapshot", () => {
 
 describe("delta sync", () => {
   it("exportSince → merge syncs state between substrates", () => {
-    const substrateA = loroSubstrateFactory.create(TestSchema)
+    const substrateA = createSubstrate(loroSubstrateFactory, TestSchema)
     const docA = interpretSubstrate(TestSchema, substrateA)
 
-    const substrateB = loroSubstrateFactory.create(TestSchema)
+    const substrateB = createSubstrate(loroSubstrateFactory, TestSchema)
     const _docB = interpretSubstrate(TestSchema, substrateB)
 
     const sinceVV = substrateB.version()
@@ -300,10 +310,10 @@ describe("delta sync", () => {
 
 describe("concurrent sync", () => {
   it("two substrates with independent mutations converge after sync", () => {
-    const substrateA = loroSubstrateFactory.create(TestSchema)
+    const substrateA = createSubstrate(loroSubstrateFactory, TestSchema)
     const docA = interpretSubstrate(TestSchema, substrateA)
 
-    const substrateB = loroSubstrateFactory.create(TestSchema)
+    const substrateB = createSubstrate(loroSubstrateFactory, TestSchema)
     const docB = interpretSubstrate(TestSchema, substrateB)
 
     // Sync base state
@@ -337,10 +347,10 @@ describe("concurrent sync", () => {
 
 describe("changefeed fires on merge", () => {
   it("subscribe fires when merge is called", () => {
-    const substrateA = loroSubstrateFactory.create(TestSchema)
+    const substrateA = createSubstrate(loroSubstrateFactory, TestSchema)
     const docA = interpretSubstrate(TestSchema, substrateA)
 
-    const substrateB = loroSubstrateFactory.create(TestSchema)
+    const substrateB = createSubstrate(loroSubstrateFactory, TestSchema)
     const docB = interpretSubstrate(TestSchema, substrateB)
 
     const sinceVV = substrateB.version()
@@ -361,10 +371,10 @@ describe("changefeed fires on merge", () => {
   it("nested struct field changefeed fires on merge (todo done toggle)", () => {
     // Replicates: Client A toggles todo.done → syncs to Client B →
     // B's field-level changefeed for `done` should fire so the UI updates.
-    const substrateA = loroSubstrateFactory.create(TestSchema)
+    const substrateA = createSubstrate(loroSubstrateFactory, TestSchema)
     const docA = interpretSubstrate(TestSchema, substrateA)
 
-    const substrateB = loroSubstrateFactory.create(TestSchema)
+    const substrateB = createSubstrate(loroSubstrateFactory, TestSchema)
     const docB = interpretSubstrate(TestSchema, substrateB)
 
     // Both peers add the same item via initial sync
@@ -405,10 +415,10 @@ describe("changefeed fires on merge", () => {
   })
 
   it("multi-key struct update fires per-field changefeeds on merge", () => {
-    const substrateA = loroSubstrateFactory.create(TestSchema)
+    const substrateA = createSubstrate(loroSubstrateFactory, TestSchema)
     const docA = interpretSubstrate(TestSchema, substrateA)
 
-    const substrateB = loroSubstrateFactory.create(TestSchema)
+    const substrateB = createSubstrate(loroSubstrateFactory, TestSchema)
     const docB = interpretSubstrate(TestSchema, substrateB)
 
     // Both peers add the same item via initial sync
@@ -453,10 +463,10 @@ describe("changefeed fires on merge", () => {
   })
 
   it("batchToOps inverts changeToDiff for map changes (round-trip symmetry)", () => {
-    const substrateA = loroSubstrateFactory.create(TestSchema)
+    const substrateA = createSubstrate(loroSubstrateFactory, TestSchema)
     const docA = interpretSubstrate(TestSchema, substrateA)
 
-    const substrateB = loroSubstrateFactory.create(TestSchema)
+    const substrateB = createSubstrate(loroSubstrateFactory, TestSchema)
     const docB = interpretSubstrate(TestSchema, substrateB)
 
     // Add item on A, sync to B
@@ -502,10 +512,10 @@ describe("changefeed fires on merge", () => {
     // Loro fires an event at path ["_props"]. The event bridge must strip
     // the _props prefix so the changefeed path matches the listener at
     // RawPath.empty.field("theme"), not RawPath.empty.field("_props").field("theme").
-    const substrateA = loroSubstrateFactory.create(TestSchema)
+    const substrateA = createSubstrate(loroSubstrateFactory, TestSchema)
     const docA = interpretSubstrate(TestSchema, substrateA)
 
-    const substrateB = loroSubstrateFactory.create(TestSchema)
+    const substrateB = createSubstrate(loroSubstrateFactory, TestSchema)
     const docB = interpretSubstrate(TestSchema, substrateB)
 
     const sinceVV = substrateB.version()
@@ -533,10 +543,10 @@ describe("changefeed fires on merge", () => {
   it("record field changefeed fires on merge (dynamic key insertion)", () => {
     // A record's keys are written at the record, so its map event stays a
     // MapChange there; expandProductMapChanges splits only a struct's.
-    const substrateA = loroSubstrateFactory.create(TestSchema)
+    const substrateA = createSubstrate(loroSubstrateFactory, TestSchema)
     const docA = interpretSubstrate(TestSchema, substrateA)
 
-    const substrateB = loroSubstrateFactory.create(TestSchema)
+    const substrateB = createSubstrate(loroSubstrateFactory, TestSchema)
     const docB = interpretSubstrate(TestSchema, substrateB)
 
     const sinceVV = substrateB.version()
@@ -563,10 +573,10 @@ describe("changefeed fires on merge", () => {
     // root container (no stripping). Both must fire in a single merge.
     // Regression guard: overly aggressive _props stripping could break
     // container paths; missing stripping breaks scalar paths.
-    const substrateA = loroSubstrateFactory.create(TestSchema)
+    const substrateA = createSubstrate(loroSubstrateFactory, TestSchema)
     const docA = interpretSubstrate(TestSchema, substrateA)
 
-    const substrateB = loroSubstrateFactory.create(TestSchema)
+    const substrateB = createSubstrate(loroSubstrateFactory, TestSchema)
     const docB = interpretSubstrate(TestSchema, substrateB)
 
     const sinceVV = substrateB.version()
@@ -603,7 +613,7 @@ describe("outbound: multi-key struct mutation batching", () => {
     // `afterBatch`. This test verifies that the merge doesn't break
     // correctness: setting multiple keys on the same struct in one
     // transaction should produce the correct final state.
-    const substrate = loroSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(loroSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(TestSchema, substrate)
 
     batch(doc, (d: any) => {
@@ -623,10 +633,10 @@ describe("outbound: multi-key struct mutation batching", () => {
   })
 
   it("multi-key struct mutation syncs correctly to another peer", () => {
-    const substrateA = loroSubstrateFactory.create(TestSchema)
+    const substrateA = createSubstrate(loroSubstrateFactory, TestSchema)
     const docA = interpretSubstrate(TestSchema, substrateA)
 
-    const substrateB = loroSubstrateFactory.create(TestSchema)
+    const substrateB = createSubstrate(loroSubstrateFactory, TestSchema)
     const docB = interpretSubstrate(TestSchema, substrateB)
 
     batch(docA, (d: any) => {
@@ -725,7 +735,7 @@ describe("changefeed fires on external local write", () => {
 
 describe("no double-fire on kyneta local writes", () => {
   it("batch() fires the kyneta subscriber exactly once", () => {
-    const substrate = loroSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(loroSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(TestSchema, substrate)
 
     let fireCount = 0
@@ -747,7 +757,7 @@ describe("no double-fire on kyneta local writes", () => {
 
 describe("transaction support", () => {
   it("multi-op transaction via batch() is atomic", () => {
-    const substrate = loroSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(loroSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(TestSchema, substrate)
 
     let fireCount = 0
@@ -778,7 +788,7 @@ describe("transaction support", () => {
 
 describe("nested structure", () => {
   it("push struct into list, read back via navigation", () => {
-    const substrate = loroSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(loroSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(TestSchema, substrate)
 
     batch(doc, d => {
@@ -793,7 +803,7 @@ describe("nested structure", () => {
   })
 
   it("push multiple structs and navigate", () => {
-    const substrate = loroSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(loroSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(TestSchema, substrate)
 
     batch(doc, d => {
@@ -821,10 +831,10 @@ describe("nested structure", () => {
 
 describe("re-entrant write during merge replay", () => {
   it("subscriber's local batch() inside a merge-replay batch lands in Loro", () => {
-    const substrateA = loroSubstrateFactory.create(TestSchema)
+    const substrateA = createSubstrate(loroSubstrateFactory, TestSchema)
     const docA = interpretSubstrate(TestSchema, substrateA)
 
-    const substrateB = loroSubstrateFactory.create(TestSchema)
+    const substrateB = createSubstrate(loroSubstrateFactory, TestSchema)
     const docB = interpretSubstrate(TestSchema, substrateB)
 
     // Seed A and sync to B so both peers start from a common state.
@@ -865,13 +875,13 @@ describe("re-entrant write during merge replay", () => {
 
 describe("parseVersion", () => {
   it("round-trips through factory", () => {
-    const substrate = loroSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(loroSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(TestSchema, substrate)
     batch(doc, d => d.title.insert(0, "Hi"))
 
     const v = substrate.version()
     const serialized = v.serialize()
-    const parsed = loroSubstrateFactory.parseVersion(serialized)
+    const parsed = loroSubstrateFactory.replica.parseVersion(serialized)
     expect(parsed.compare(v)).toBe("equal")
   })
 })
@@ -882,7 +892,7 @@ describe("parseVersion", () => {
 
 describe("origin-free discriminator", () => {
   it("options.origin survives to batch.origin", () => {
-    const substrate = loroSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(loroSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(TestSchema, substrate)
     const native = (substrate as any)[BACKING_DOC] as LoroDoc
 
@@ -900,7 +910,7 @@ describe("origin-free discriminator", () => {
   })
 
   it("raw external commit during own handler is bridged", () => {
-    const substrate = loroSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(loroSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(TestSchema, substrate)
     const native = (substrate as any)[BACKING_DOC] as LoroDoc
 
@@ -926,7 +936,7 @@ describe("origin-free discriminator", () => {
   })
 
   it("external write with any string origin is bridged", () => {
-    const substrate = loroSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(loroSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(TestSchema, substrate)
     const native = (substrate as any)[BACKING_DOC] as LoroDoc
 
@@ -952,7 +962,7 @@ describe("announcements: origin and replay", () => {
     // `import` commits pending ops before it applies the payload, so one
     // merge raises two batches: the commit, then the import. The merge's
     // origin belongs to the import alone.
-    const other = loroSubstrateFactory.create(TestSchema)
+    const other = createSubstrate(loroSubstrateFactory, TestSchema)
     batch(interpretSubstrate(TestSchema, other), d => d.theme.set("remote"))
     const doc = new LoroDoc()
     const substrate = createLoroSubstrate(doc, TestSchema)
@@ -989,7 +999,7 @@ describe("subscribeLocalUpdates", () => {
   }
 
   function remotePayload(): SubstratePayload {
-    const other = loroSubstrateFactory.create(TestSchema)
+    const other = createSubstrate(loroSubstrateFactory, TestSchema)
     batch(interpretSubstrate(TestSchema, other), d => d.theme.set("remote"))
     return other.exportEntirety()
   }

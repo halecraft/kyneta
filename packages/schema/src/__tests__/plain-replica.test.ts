@@ -6,9 +6,11 @@ import {
   BACKING_DOC,
   batch,
   createRef,
+  createSubstrate,
   hasBackingDoc,
   type PlainState,
   plainSubstrateFactory,
+  replicaFromEntirety,
   Schema,
 } from "../index.js"
 
@@ -19,7 +21,7 @@ const Doc = Schema.struct({
 
 /** A source document with `count` batches, one row each. */
 function source(count: number) {
-  const substrate = plainSubstrateFactory.create(Doc)
+  const substrate = createSubstrate(plainSubstrateFactory, Doc)
   const doc = createRef(Doc, substrate)
   for (let i = 0; i < count; i++) {
     batch(doc, (d: any) => d.rows.set(`r${i}`, { n: i }))
@@ -35,7 +37,7 @@ function stateOf(replica: unknown): PlainState {
 describe("the plain replica", () => {
   it("after merge, its materialized state is deeply frozen", () => {
     const { substrate } = source(3)
-    const replica = plainSubstrateFactory.createReplica()
+    const replica = plainSubstrateFactory.replica.createEmpty()
     replica.merge(substrate.exportSince(replica.version()) ?? fail())
     const state = stateOf(replica)
     expect(state).toEqual({
@@ -46,7 +48,7 @@ describe("the plain replica", () => {
 
   it("after adopt, after a partial advance, and after materialize, its state is deeply frozen", () => {
     const { substrate } = source(2)
-    const replica = plainSubstrateFactory.createReplica()
+    const replica = plainSubstrateFactory.replica.createEmpty()
     replica.resetFromEntirety(substrate.exportEntirety())
     expect(isDeeplyFrozen(stateOf(replica))).toBe(true)
 
@@ -66,7 +68,7 @@ describe("the plain replica", () => {
 
   it("a substrate upgraded from it writes without changing its next export", () => {
     const { substrate } = source(2)
-    const replica = plainSubstrateFactory.createReplica()
+    const replica = plainSubstrateFactory.replica.createEmpty()
     replica.merge(substrate.exportSince(replica.version()) ?? fail())
     const exported = replica.exportEntirety()
 
@@ -88,7 +90,7 @@ function fail(): never {
 
 describe("the plain log takes what a batch did", () => {
   it("an aborted batch logs nothing and leaves the version", () => {
-    const substrate = plainSubstrateFactory.create(Doc)
+    const substrate = createSubstrate(plainSubstrateFactory, Doc)
     const doc: any = createRef(Doc, substrate)
     batch(doc, (d: any) => d.title.set("kept"))
     const before = substrate.version()
@@ -103,7 +105,7 @@ describe("the plain log takes what a batch did", () => {
   })
 
   it("a batch that absorbed an inner abort logs only what survived", () => {
-    const substrate = plainSubstrateFactory.create(Doc)
+    const substrate = createSubstrate(plainSubstrateFactory, Doc)
     const doc: any = createRef(Doc, substrate)
     const since = substrate.version()
     batch(doc, (d: any) => {
@@ -118,9 +120,25 @@ describe("the plain log takes what a batch did", () => {
       }
     })
 
-    const peer = plainSubstrateFactory.create(Doc)
+    const peer = createSubstrate(plainSubstrateFactory, Doc)
     peer.merge(substrate.exportSince(since) ?? fail())
     expect(createRef(Doc, peer)()).toEqual(doc())
     expect(doc()).toEqual({ title: "outer", rows: {} })
+  })
+})
+
+describe("replicaFromEntirety on plain", () => {
+  it("is at the sender's version, lineage and position, not at count 1", () => {
+    // A whole document is adopted at its log position: a replica that logged
+    // it as one batch would disagree with the sender on every later delta.
+    const { substrate } = source(3)
+    const replica = replicaFromEntirety(
+      plainSubstrateFactory.replica,
+      substrate.exportEntirety(),
+    )
+    expect(replica.version().serialize()).toBe(substrate.version().serialize())
+    expect(replica.version().lineage).toBe(substrate.version().lineage)
+    const delta = substrate.exportSince(replica.version())
+    expect(delta?.kind).toBe("since")
   })
 })

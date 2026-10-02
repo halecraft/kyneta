@@ -1,11 +1,13 @@
 import {
   batch,
   createRef,
+  createSubstrate,
   deriveIdentity,
   exportEntirety,
   RawPath,
   Schema,
   SYNC_COLLABORATIVE,
+  substrateFromEntirety,
   unwrap,
 } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
@@ -95,7 +97,7 @@ describe("yjs.bind", () => {
       expect(doc.count()).toBe(7)
     })
 
-    it("factory supports fromEntirety", () => {
+    it("a bound factory builds a substrate from an entirety", () => {
       const bound = yjs.bind(SimpleSchema)
       const factory = bound.factory({
         peerId: "peer-1",
@@ -111,7 +113,7 @@ describe("yjs.bind", () => {
       const snapshot = exportEntirety(doc1)
 
       // Restore
-      const substrate2 = factory.fromEntirety(snapshot, SimpleSchema)
+      const substrate2 = substrateFromEntirety(factory, snapshot, SimpleSchema)
       expect(substrate2.reader.read(RawPath.empty.field("title"))).toBe("Snap")
       expect(substrate2.reader.read(RawPath.empty.field("count"))).toBe(42)
     })
@@ -123,10 +125,10 @@ describe("yjs.bind", () => {
         binding: bound.identityBinding,
       })
 
-      const substrate = factory.create(SimpleSchema)
+      const substrate = createSubstrate(factory, SimpleSchema)
       const v = substrate.version()
       const serialized = v.serialize()
-      const parsed = factory.parseVersion(serialized)
+      const parsed = factory.replica.parseVersion(serialized)
       expect(parsed.compare(v)).toBe("equal")
     })
   })
@@ -241,6 +243,6 @@ function createYjsDocFromFactory(
   factory: SubstrateFactory<any>,
   schema: SchemaType,
 ): any {
-  const substrate = factory.create(schema)
+  const substrate = createSubstrate(factory, schema)
   return createRef(schema, substrate)
 }

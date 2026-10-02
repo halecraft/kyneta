@@ -4,18 +4,13 @@
 // plain JS objects for all schema types: text, counter, scalar,
 // sequence, nested struct, and empty documents.
 
-import type {
-  ProductSchema,
-  Ref,
-  SchemaBinding,
-  Substrate,
-} from "@kyneta/schema"
+import type { Ref, Substrate } from "@kyneta/schema"
 import {
   BACKING_DOC,
   batch,
   createRef,
-  deriveSchemaBinding,
-  KIND,
+  createSubstrate,
+  identityBindingOf,
   RawPath,
   Schema,
   type SchemaNode,
@@ -36,13 +31,6 @@ type InterpretSubstrate = <S extends SchemaNode>(
 
 const interpretSubstrate: InterpretSubstrate = (schema, substrate) =>
   createRef(schema, substrate)
-
-function trivialBinding(schema: SchemaNode): SchemaBinding {
-  if (schema[KIND] === "product") {
-    return deriveSchemaBinding(schema as ProductSchema, {})
-  }
-  return { forward: new Map(), inverse: new Map() }
-}
 
 function getLoroDoc(substrate: Substrate<LoroVersion>): LoroDoc {
   return (substrate as any)[BACKING_DOC] as LoroDoc
@@ -94,7 +82,7 @@ const FullSchema = Schema.struct({
 
 describe("materializeLoroShadow", () => {
   it("materializes text fields", () => {
-    const substrate = loroSubstrateFactory.create(TextSchema)
+    const substrate = createSubstrate(loroSubstrateFactory, TextSchema)
     const doc = interpretSubstrate(TextSchema, substrate)
 
     batch(doc, d => {
@@ -102,14 +90,14 @@ describe("materializeLoroShadow", () => {
     })
 
     const loroDoc = getLoroDoc(substrate)
-    const binding = trivialBinding(TextSchema)
+    const binding = identityBindingOf(TextSchema)
     const result = materializeLoroShadow(loroDoc, TextSchema, binding)
 
     expect(result).toEqual({ title: "hello" })
   })
 
   it("materializes counter fields", () => {
-    const substrate = loroSubstrateFactory.create(CounterSchema)
+    const substrate = createSubstrate(loroSubstrateFactory, CounterSchema)
     const doc = interpretSubstrate(CounterSchema, substrate)
 
     batch(doc, d => {
@@ -117,14 +105,14 @@ describe("materializeLoroShadow", () => {
     })
 
     const loroDoc = getLoroDoc(substrate)
-    const binding = trivialBinding(CounterSchema)
+    const binding = identityBindingOf(CounterSchema)
     const result = materializeLoroShadow(loroDoc, CounterSchema, binding)
 
     expect(result).toEqual({ count: 5 })
   })
 
   it("materializes scalar fields", () => {
-    const substrate = loroSubstrateFactory.create(ScalarSchema)
+    const substrate = createSubstrate(loroSubstrateFactory, ScalarSchema)
     const doc = interpretSubstrate(ScalarSchema, substrate)
 
     batch(doc, d => {
@@ -134,14 +122,14 @@ describe("materializeLoroShadow", () => {
     })
 
     const loroDoc = getLoroDoc(substrate)
-    const binding = trivialBinding(ScalarSchema)
+    const binding = identityBindingOf(ScalarSchema)
     const result = materializeLoroShadow(loroDoc, ScalarSchema, binding)
 
     expect(result).toEqual({ name: "Alice", age: 30, active: true })
   })
 
   it("materializes sequence fields", () => {
-    const substrate = loroSubstrateFactory.create(SequenceSchema)
+    const substrate = createSubstrate(loroSubstrateFactory, SequenceSchema)
     const doc = interpretSubstrate(SequenceSchema, substrate)
 
     batch(doc, d => {
@@ -155,14 +143,14 @@ describe("materializeLoroShadow", () => {
     })
 
     const loroDoc = getLoroDoc(substrate)
-    const binding = trivialBinding(SequenceSchema)
+    const binding = identityBindingOf(SequenceSchema)
     const result = materializeLoroShadow(loroDoc, SequenceSchema, binding)
 
     expect(result).toEqual({ items: ["alpha", "beta", "gamma"] })
   })
 
   it("materializes nested struct fields", () => {
-    const substrate = loroSubstrateFactory.create(NestedSchema)
+    const substrate = createSubstrate(loroSubstrateFactory, NestedSchema)
     const doc = interpretSubstrate(NestedSchema, substrate)
 
     batch(doc, d => {
@@ -171,7 +159,7 @@ describe("materializeLoroShadow", () => {
     })
 
     const loroDoc = getLoroDoc(substrate)
-    const binding = trivialBinding(NestedSchema)
+    const binding = identityBindingOf(NestedSchema)
     const result = materializeLoroShadow(loroDoc, NestedSchema, binding)
 
     expect(result).toEqual({
@@ -180,10 +168,10 @@ describe("materializeLoroShadow", () => {
   })
 
   it("materializes empty document to structural zeros", () => {
-    const substrate = loroSubstrateFactory.create(FullSchema)
+    const substrate = createSubstrate(loroSubstrateFactory, FullSchema)
 
     const loroDoc = getLoroDoc(substrate)
-    const binding = trivialBinding(FullSchema)
+    const binding = identityBindingOf(FullSchema)
     const result = materializeLoroShadow(loroDoc, FullSchema, binding)
 
     expect(result).toEqual({
@@ -196,7 +184,7 @@ describe("materializeLoroShadow", () => {
   })
 
   it("uses raw field names, not identity hashes", () => {
-    const substrate = loroSubstrateFactory.create(TextSchema)
+    const substrate = createSubstrate(loroSubstrateFactory, TextSchema)
     const doc = interpretSubstrate(TextSchema, substrate)
 
     batch(doc, d => {
@@ -204,7 +192,7 @@ describe("materializeLoroShadow", () => {
     })
 
     const loroDoc = getLoroDoc(substrate)
-    const binding = trivialBinding(TextSchema)
+    const binding = identityBindingOf(TextSchema)
     const result = materializeLoroShadow(loroDoc, TextSchema, binding)
 
     // Keys should be the raw field name "title", not an identity hash
@@ -218,7 +206,7 @@ describe("materializeLoroShadow", () => {
   })
 
   it("materializes a complex document with multiple field types", () => {
-    const substrate = loroSubstrateFactory.create(FullSchema)
+    const substrate = createSubstrate(loroSubstrateFactory, FullSchema)
     const doc = interpretSubstrate(FullSchema, substrate)
 
     batch(doc, d => {
@@ -236,7 +224,7 @@ describe("materializeLoroShadow", () => {
     })
 
     const loroDoc = getLoroDoc(substrate)
-    const binding = trivialBinding(FullSchema)
+    const binding = identityBindingOf(FullSchema)
     const result = materializeLoroShadow(loroDoc, FullSchema, binding)
 
     expect(result).toEqual({
@@ -249,7 +237,7 @@ describe("materializeLoroShadow", () => {
   })
 
   it("materializes without binding (undefined binding)", () => {
-    const substrate = loroSubstrateFactory.create(TextSchema)
+    const substrate = createSubstrate(loroSubstrateFactory, TextSchema)
     const doc = interpretSubstrate(TextSchema, substrate)
 
     batch(doc, d => {
@@ -272,9 +260,9 @@ describe("materializeLoroShadow", () => {
         theme: Schema.string().nullable(),
       }),
     })
-    const substrate = loroSubstrateFactory.create(schema)
+    const substrate = createSubstrate(loroSubstrateFactory, schema)
     const loroDoc = getLoroDoc(substrate)
-    const binding = trivialBinding(schema)
+    const binding = identityBindingOf(schema)
     const result = materializeLoroShadow(loroDoc, schema, binding)
     expect(result).toEqual({ settings: { theme: null } })
   })
@@ -286,7 +274,7 @@ describe("createLoroResolver.resolveHasKey", () => {
       peers: Schema.record(Schema.number()),
       blob: Schema.record.json(Schema.number()),
     })
-    const substrate = loroSubstrateFactory.create(schema)
+    const substrate = createSubstrate(loroSubstrateFactory, schema)
     const doc = interpretSubstrate(schema, substrate)
     batch(doc, (d: any) => {
       d.peers.set("alice", 1)
@@ -298,7 +286,7 @@ describe("createLoroResolver.resolveHasKey", () => {
     const resolver = createLoroResolver(
       () => getLoroDoc(substrate),
       schema,
-      trivialBinding(schema),
+      identityBindingOf(schema),
     )
     for (const field of ["peers", "blob"]) {
       const path = RawPath.empty.field(field)

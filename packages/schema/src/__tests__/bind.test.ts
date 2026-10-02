@@ -10,9 +10,11 @@
 import { describe, expect, it, vi } from "vitest"
 import { bind, ephemeral, isBoundSchema, json } from "../bind.js"
 import { replaceChange } from "../change.js"
+import { identityBindingOf, Migration } from "../migration.js"
 import { RawPath } from "../path.js"
 import { Schema } from "../schema.js"
 import {
+  createSubstrate,
   SYNC_AUTHORITATIVE,
   SYNC_COLLABORATIVE,
   SYNC_EPHEMERAL,
@@ -64,9 +66,8 @@ describe("bind()", () => {
       peerId: "test-peer-123",
       binding: bound.identityBinding,
     })
-    expect(typeof result.create).toBe("function")
-    expect(typeof result.fromEntirety).toBe("function")
-    expect(typeof result.parseVersion).toBe("function")
+    expect(result.replica).toBe(plainReplicaFactory)
+    expect(typeof result.upgrade).toBe("function")
   })
 })
 
@@ -158,7 +159,7 @@ describe("state binding target", () => {
       peerId: "test-peer",
       binding: bound.identityBinding,
     })
-    const substrate = factory.create(testSchema)
+    const substrate = createSubstrate(factory, testSchema)
 
     expect(substrate.version()).toBeInstanceOf(StateVersion)
   })
@@ -169,7 +170,7 @@ describe("state binding target", () => {
       peerId: "test-peer",
       binding: bound.identityBinding,
     })
-    const substrate = factory.create(testSchema)
+    const substrate = createSubstrate(factory, testSchema)
 
     const versionBefore = substrate.version()
     expect(versionBefore).toBeInstanceOf(StateVersion)
@@ -191,7 +192,7 @@ describe("state binding target", () => {
       peerId: "test-peer",
       binding: bound.identityBinding,
     })
-    const substrate = factory.create(testSchema)
+    const substrate = createSubstrate(factory, testSchema)
 
     const ts0 = (substrate.version() as StateVersion).installSeq
     expect(ts0).toBe(0)
@@ -219,12 +220,12 @@ describe("state binding target", () => {
       binding: bound.identityBinding,
     })
 
-    const source = factory.create(testSchema)
+    const source = createSubstrate(factory, testSchema)
     source
       .context()
       .dispatch(RawPath.empty.field("title"), replaceChange("merged"))
 
-    const target = factory.create(testSchema)
+    const target = createSubstrate(factory, testSchema)
     expect((target.version() as StateVersion).installSeq).toBe(0)
 
     target.merge(source.exportEntirety(), { origin: "sync" })
@@ -244,7 +245,7 @@ describe("state binding target", () => {
       peerId: "test-peer",
       binding: bound.identityBinding,
     })
-    const substrate = factory.create(testSchema)
+    const substrate = createSubstrate(factory, testSchema)
     substrate.context().dispatch(RawPath.empty.field("count"), replaceChange(7))
 
     const delta = substrate.exportSince(substrate.version())
@@ -261,9 +262,33 @@ describe("state binding target", () => {
       peerId: "test-peer",
       binding: bound.identityBinding,
     })
-    const mine = factory.create(testSchema)
-    const theirs = factory.create(testSchema)
+    const mine = createSubstrate(factory, testSchema)
+    const theirs = createSubstrate(factory, testSchema)
 
     expect(mine.exportSince(theirs.version() as StateVersion)).toBeNull()
+  })
+})
+
+describe("identityBindingOf", () => {
+  const entries = (binding: { forward: ReadonlyMap<string, string> }) => [
+    ...binding.forward,
+  ]
+
+  it("is the binding bind() derives, without a migration chain", () => {
+    expect(entries(json.bind(testSchema).identityBinding)).toEqual(
+      entries(identityBindingOf(testSchema)),
+    )
+  })
+
+  it("is the binding bind() derives, through a migration chain", () => {
+    const migrated = Schema.struct({ postalCode: Schema.string() }).migrated(
+      Migration.rename("zip", "postalCode"),
+    )
+    const derived = entries(identityBindingOf(migrated))
+    expect(entries(json.bind(migrated).identityBinding)).toEqual(derived)
+    // The chain moves the identity: a renamed field keeps its ancestor's key,
+    // which a binding from field names alone would not give it.
+    const fresh = Schema.struct({ postalCode: Schema.string() })
+    expect(derived).not.toEqual(entries(identityBindingOf(fresh)))
   })
 })

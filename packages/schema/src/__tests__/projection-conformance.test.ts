@@ -10,7 +10,12 @@ import { createRef } from "../create-doc.js"
 import { applyChanges, batch } from "../facade/batch.js"
 import { RawPath } from "../path.js"
 import { Schema } from "../schema.js"
-import { BACKING_DOC, hasBackingDoc } from "../substrate.js"
+import {
+  BACKING_DOC,
+  createSubstrate,
+  hasBackingDoc,
+  substrateFromEntirety,
+} from "../substrate.js"
 import { ephemeralSubstrateFactory } from "../substrates/ephemeral.js"
 import { projectStateTree, type StateTree } from "../substrates/state-tree.js"
 import {
@@ -47,14 +52,15 @@ const Fixture = Schema.struct({
 const NOW = 1_700_000_000_000
 
 function createEphemeralEnv(): ProjectionTestEnv {
-  const substrate = ephemeralSubstrateFactory.create(Fixture)
+  const substrate = createSubstrate(ephemeralSubstrateFactory, Fixture)
   // Untyped on purpose: the suite exercises the runtime surface, not the
   // type surface.
   const doc = createRef(Fixture, substrate) as any
 
   /** A peer started from this document writes, and its delta is merged. */
   const mergeFromPeer = (write: (peer: any) => void): void => {
-    const peerSubstrate = ephemeralSubstrateFactory.fromEntirety(
+    const peerSubstrate = substrateFromEntirety(
+      ephemeralSubstrateFactory,
       substrate.exportEntirety(),
       Fixture,
     )

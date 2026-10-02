@@ -16,12 +16,14 @@ import {
   batch,
   createDoc,
   createRef,
+  createSubstrate,
   ephemeral,
   mapChange,
   own,
   replaceChange,
   Schema,
   sequenceChange,
+  substrateFromEntirety,
 } from "../index.js"
 import { RawPath } from "../path.js"
 import { ephemeralSubstrateFactory } from "../substrates/ephemeral.js"
@@ -202,7 +204,8 @@ describe("a record decomposes into one tuple per key", () => {
 
 describe("two peers merge a roster without clobbering", () => {
   it("each peer's own key survives the merge", () => {
-    const peerA = ephemeralSubstrateFactory.fromEntirety(
+    const peerA = substrateFromEntirety(
+      ephemeralSubstrateFactory,
       payload({ peers: { alice: wire(1, 100) } }),
       Roster,
     )
@@ -216,7 +219,8 @@ describe("two peers merge a roster without clobbering", () => {
     // local time reads perfectly on this peer — and then nothing ever
     // expires, here or on any peer that later receives this tree. The
     // assertion has to reach past the document.
-    const peerA = ephemeralSubstrateFactory.fromEntirety(
+    const peerA = substrateFromEntirety(
+      ephemeralSubstrateFactory,
       payload({ peers: { alice: wire(1, 100) } }),
       Roster,
     )
@@ -234,7 +238,8 @@ describe("two peers merge a roster without clobbering", () => {
     // one peer lacks is indistinguishable from one it has never seen. This is
     // exactly why deletion has to be represented rather than expressed by
     // omission — see ephemeral-deletion.test.ts for the tombstone that does it.
-    const peerA = ephemeralSubstrateFactory.fromEntirety(
+    const peerA = substrateFromEntirety(
+      ephemeralSubstrateFactory,
       payload({ peers: { alice: wire(1, 100) } }),
       Roster,
     )
@@ -311,7 +316,7 @@ describe("a declared field is not a written key", () => {
   })
 
   it("projects an emptied record as an empty record, not as absent", () => {
-    const substrate = ephemeralSubstrateFactory.create(Roster)
+    const substrate = createSubstrate(ephemeralSubstrateFactory, Roster)
     const d: any = createRef(Roster, substrate)
     batch(d, (w: any) => w.peers.set("alice", 1))
     batch(d, (w: any) => w.peers.delete("alice"))
@@ -343,7 +348,7 @@ describe("an entry missing declared fields reads them as their zeros", () => {
   })
 
   it("after a delta carrying one of its fields", () => {
-    const substrate = ephemeralSubstrateFactory.create(Cursors)
+    const substrate = createSubstrate(ephemeralSubstrateFactory, Cursors)
     substrate.merge({
       kind: "since",
       encoding: "json",

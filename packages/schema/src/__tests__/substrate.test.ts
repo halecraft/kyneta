@@ -4,12 +4,14 @@ import type { Op, Substrate, SubstratePayload } from "../index.js"
 import {
   applyChanges,
   batch,
+  createSubstrate,
   PlainVersion,
   plainReplicaFactory,
   plainSubstrateFactory,
   RawPath,
   reaches,
   replaceChange,
+  replicaFromEntirety,
   replicaTypesCompatible,
   requiresBidirectionalSync,
   Schema,
@@ -17,6 +19,7 @@ import {
   SYNC_COLLABORATIVE,
   SYNC_EPHEMERAL,
   subscribe,
+  substrateFromEntirety,
   Zero,
 } from "../index.js"
 import {
@@ -173,7 +176,7 @@ describe("PlainVersion", () => {
 
   it("round-trip: parseVersion(f.serialize()) compares equal to f", () => {
     const original = new PlainVersion(7, "test")
-    const roundTripped = plainSubstrateFactory.parseVersion(
+    const roundTripped = plainSubstrateFactory.replica.parseVersion(
       original.serialize(),
     )
     expect(roundTripped.compare(original)).toBe("equal")
@@ -182,17 +185,17 @@ describe("PlainVersion", () => {
   })
 
   it("parseVersion handles the new 'lineage:value' format", () => {
-    const v = plainSubstrateFactory.parseVersion("abc123:5")
+    const v = plainSubstrateFactory.replica.parseVersion("abc123:5")
     expect(v.value).toBe(5)
     expect(v.lineage).toBe("abc123")
   })
 
   it("parseVersion rejects invalid input", () => {
-    expect(() => plainSubstrateFactory.parseVersion("5")).toThrow()
-    expect(() => plainSubstrateFactory.parseVersion("abc")).toThrow()
-    expect(() => plainSubstrateFactory.parseVersion("-1")).toThrow()
-    expect(() => plainSubstrateFactory.parseVersion("1.5")).toThrow()
-    expect(() => plainSubstrateFactory.parseVersion("")).toThrow()
+    expect(() => plainSubstrateFactory.replica.parseVersion("5")).toThrow()
+    expect(() => plainSubstrateFactory.replica.parseVersion("abc")).toThrow()
+    expect(() => plainSubstrateFactory.replica.parseVersion("-1")).toThrow()
+    expect(() => plainSubstrateFactory.replica.parseVersion("1.5")).toThrow()
+    expect(() => plainSubstrateFactory.replica.parseVersion("")).toThrow()
   })
 
   it("value getter exposes the raw integer", () => {
@@ -459,7 +462,7 @@ describe("planMerge", () => {
 
 describe("PlainSubstrate lifecycle", () => {
   it("create(schema) then batch() produces a substrate with initial values", () => {
-    const substrate = plainSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(plainSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(substrate)
 
     batch(doc, d => {
@@ -477,13 +480,13 @@ describe("PlainSubstrate lifecycle", () => {
   })
 
   it("create(schema) without seed uses structural defaults", () => {
-    const substrate = plainSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(plainSubstrateFactory, TestSchema)
     const defaults = Zero.structural(TestSchema) as Record<string, unknown>
     expect(snapshotOf(substrate)).toEqual(defaults)
   })
 
   it("version() starts at genesis (value 0, DEFAULT_LINEAGE) for a freshly created substrate", () => {
-    const substrate = plainSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(plainSubstrateFactory, TestSchema)
     const f = substrate.version() as PlainVersion
     // Op-free genesis: structural init does not flush, so a fresh doc is the
     // empty vector ⊥ — value 0, no lineage yet.
@@ -493,7 +496,7 @@ describe("PlainSubstrate lifecycle", () => {
   })
 
   it("version() increments after mutations via the writable context", () => {
-    const substrate = plainSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(plainSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(substrate)
 
     expect(substrate.version().value).toBe(0)
@@ -518,7 +521,7 @@ describe("PlainSubstrate lifecycle", () => {
   })
 
   it("version() does not increment for empty transactions", () => {
-    const substrate = plainSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(plainSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(substrate)
 
     expect(substrate.version().value).toBe(0)
@@ -529,7 +532,7 @@ describe("PlainSubstrate lifecycle", () => {
   })
 
   it("version() is up-to-date inside a subscribe callback (notify-after-commit)", () => {
-    const substrate = plainSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(plainSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(substrate)
 
     expect(substrate.version().value).toBe(0)
@@ -550,7 +553,7 @@ describe("PlainSubstrate lifecycle", () => {
   })
 
   it("delta() returns the just-flushed ops inside a subscribe callback", () => {
-    const substrate = plainSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(plainSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(substrate)
 
     // Track ops retrieved via delta() inside the subscriber
@@ -580,7 +583,7 @@ describe("PlainSubstrate lifecycle", () => {
   })
 
   it("exportEntirety() returns a JSON payload matching the current store state", () => {
-    const substrate = plainSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(plainSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(substrate)
 
     // Set initial values via batch(), then mutate further
@@ -603,7 +606,7 @@ describe("PlainSubstrate lifecycle", () => {
   })
 
   it("exportSince(version) is an empty delta when version is ahead", () => {
-    const substrate = plainSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(plainSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(substrate)
     batch(doc, d => d.count.increment(1))
     const futureVersion = new PlainVersion(
@@ -616,7 +619,7 @@ describe("PlainSubstrate lifecycle", () => {
   it("exportSince(version) is an empty delta, not null, when version matches current version", () => {
     // `null` means "cannot serve", and the caller answers it with the whole
     // document. A peer that is merely current must not get that.
-    const substrate = plainSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(plainSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(substrate)
 
     batch(doc, d => d.count.increment(1))
@@ -625,7 +628,7 @@ describe("PlainSubstrate lifecycle", () => {
   })
 
   it("exportSince(genesis) is the whole document once the log is trimmed past genesis", () => {
-    const source = plainSubstrateFactory.create(TestSchema)
+    const source = createSubstrate(plainSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(source)
     batch(doc, d => d.count.increment(1))
     batch(doc, d => d.count.increment(1))
@@ -639,7 +642,7 @@ describe("PlainSubstrate lifecycle", () => {
   })
 
   it("exportSince(version) returns ops when version is behind", () => {
-    const substrate = plainSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(plainSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(substrate)
 
     batch(doc, d => d.theme.set("light"))
@@ -661,7 +664,7 @@ describe("PlainSubstrate lifecycle", () => {
   })
 
   it("exportSince(partialVersion) returns only the missing ops", () => {
-    const substrate = plainSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(plainSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(substrate)
 
     batch(doc, d => d.title.insert(0, "A"))
@@ -683,8 +686,8 @@ describe("PlainSubstrate lifecycle", () => {
 // ===========================================================================
 
 describe("Round-trip replication", () => {
-  it("snapshot round-trip: exportEntirety → fromEntirety → stores are equal", () => {
-    const substrateA = plainSubstrateFactory.create(TestSchema)
+  it("snapshot round-trip: exportEntirety → substrateFromEntirety → stores are equal", () => {
+    const substrateA = createSubstrate(plainSubstrateFactory, TestSchema)
     const docA = interpretSubstrate(substrateA)
 
     // Set initial values and apply mutations
@@ -699,7 +702,11 @@ describe("Round-trip replication", () => {
     })
 
     const snapshot = substrateA.exportEntirety()
-    const substrateB = plainSubstrateFactory.fromEntirety(snapshot, TestSchema)
+    const substrateB = substrateFromEntirety(
+      plainSubstrateFactory,
+      snapshot,
+      TestSchema,
+    )
 
     // Snapshots should be deeply equal
     const snapA = snapshotOf(substrateA)
@@ -711,8 +718,8 @@ describe("Round-trip replication", () => {
   })
 
   it("delta round-trip: exportSince → merge → stores are equal", () => {
-    // Both substrates start from the same snapshot (via fromEntirety)
-    const substrateA = plainSubstrateFactory.create(TestSchema)
+    // Both substrates start from the same snapshot (via substrateFromEntirety)
+    const substrateA = createSubstrate(plainSubstrateFactory, TestSchema)
     const docA = interpretSubstrate(substrateA)
 
     // Set shared initial state
@@ -722,7 +729,11 @@ describe("Round-trip replication", () => {
 
     // Create B from A's snapshot so they start with the same state
     const snapshot = substrateA.exportEntirety()
-    const substrateB = plainSubstrateFactory.fromEntirety(snapshot, TestSchema)
+    const substrateB = substrateFromEntirety(
+      plainSubstrateFactory,
+      snapshot,
+      TestSchema,
+    )
     interpretSubstrate(substrateB)
 
     const f0 = substrateA.version()
@@ -745,10 +756,10 @@ describe("Round-trip replication", () => {
   })
 
   it("merge with origin 'sync' — changefeed fires with origin 'sync'", () => {
-    const substrateA = plainSubstrateFactory.create(TestSchema)
+    const substrateA = createSubstrate(plainSubstrateFactory, TestSchema)
     const docA = interpretSubstrate(substrateA)
 
-    const substrateB = plainSubstrateFactory.create(TestSchema)
+    const substrateB = createSubstrate(plainSubstrateFactory, TestSchema)
     const docB = interpretSubstrate(substrateB)
 
     const f0 = substrateA.version()
@@ -772,10 +783,10 @@ describe("Round-trip replication", () => {
   })
 
   it("merge increments the version", () => {
-    const substrateA = plainSubstrateFactory.create(TestSchema)
+    const substrateA = createSubstrate(plainSubstrateFactory, TestSchema)
     const docA = interpretSubstrate(substrateA)
 
-    const substrateB = plainSubstrateFactory.create(TestSchema)
+    const substrateB = createSubstrate(plainSubstrateFactory, TestSchema)
     interpretSubstrate(substrateB) // wire up the interpreter tree
 
     const f0 = substrateA.version()
@@ -798,7 +809,7 @@ describe("Round-trip replication", () => {
   })
 
   it("merge with empty ops does not increment the version", () => {
-    const substrate = plainSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(plainSubstrateFactory, TestSchema)
     interpretSubstrate(substrate)
 
     const emptyPayload: SubstratePayload = {
@@ -819,7 +830,7 @@ describe("Round-trip replication", () => {
 describe("merge with entirety payload (PlainSubstrate)", () => {
   /** A substrate with two authored batches: position 2 on a REAL lineage. */
   function authored() {
-    const substrate = plainSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(plainSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(substrate)
     batch(doc, d => d.title.insert(0, "Original"))
     batch(doc, d => d.count.increment(5))
@@ -857,7 +868,7 @@ describe("merge with entirety payload (PlainSubstrate)", () => {
   })
 
   it("takes the sender's lineage from genesis, never a fresh one (absorb ≠ author)", () => {
-    const substrate = plainSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(plainSubstrateFactory, TestSchema)
     expect((substrate.version() as PlainVersion).lineage).toBe(DEFAULT_LINEAGE)
 
     // Only local authorship mints a lineage. Absorbing a peer's state must
@@ -898,7 +909,7 @@ describe("merge with entirety payload (PlainSubstrate)", () => {
   })
 
   it("a whole document at genesis position changes nothing", () => {
-    const substrate = plainSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(plainSubstrateFactory, TestSchema)
     interpretSubstrate(substrate)
 
     substrate.merge(entiretyAt({}, 0))
@@ -922,7 +933,7 @@ describe("merge with entirety payload (PlainReplica)", () => {
   })
 
   it("continues from an adopted whole document with the sender's later deltas", () => {
-    const source = plainSubstrateFactory.create(TestSchema)
+    const source = createSubstrate(plainSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(source)
     batch(doc, d => d.title.insert(0, "Start"))
 
@@ -937,7 +948,7 @@ describe("merge with entirety payload (PlainReplica)", () => {
   })
 
   it("applies nothing from a delta that starts past it, so it does not reach the offer", () => {
-    const source = plainSubstrateFactory.create(TestSchema)
+    const source = createSubstrate(plainSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(source)
     batch(doc, d => d.title.insert(0, "A"))
     const afterFirst = source.version()
@@ -951,7 +962,7 @@ describe("merge with entirety payload (PlainReplica)", () => {
   })
 
   it("takes a redelivered delta once", () => {
-    const source = plainSubstrateFactory.create(TestSchema)
+    const source = createSubstrate(plainSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(source)
     const genesis = new PlainVersion(0, DEFAULT_LINEAGE)
     const replica = plainReplicaFactory.createEmpty()
@@ -978,8 +989,8 @@ describe("merge with entirety payload (PlainReplica)", () => {
 // ===========================================================================
 
 describe("Lineage boundaries", () => {
-  it("fromEntirety creates a fresh lineage: version > 0, store matches source", () => {
-    const substrateA = plainSubstrateFactory.create(TestSchema)
+  it("substrateFromEntirety creates a fresh lineage: version > 0, store matches source", () => {
+    const substrateA = createSubstrate(plainSubstrateFactory, TestSchema)
     const docA = interpretSubstrate(substrateA)
 
     // Set initial values and apply several mutations to advance the version
@@ -996,9 +1007,13 @@ describe("Lineage boundaries", () => {
 
     // Export snapshot and create a new substrate
     const snapshot = substrateA.exportEntirety()
-    const substrateB = plainSubstrateFactory.fromEntirety(snapshot, TestSchema)
+    const substrateB = substrateFromEntirety(
+      plainSubstrateFactory,
+      snapshot,
+      TestSchema,
+    )
 
-    // fromEntirety takes the document at the source's position
+    // substrateFromEntirety takes the document at the source's position
     expect(substrateB.version().compare(substrateA.version())).toBe("equal")
 
     // But the snapshot matches the source's current state
@@ -1011,7 +1026,7 @@ describe("Lineage boundaries", () => {
   })
 
   it("new lineage substrate is fully functional: can mutate, version, export", () => {
-    const substrateA = plainSubstrateFactory.create(TestSchema)
+    const substrateA = createSubstrate(plainSubstrateFactory, TestSchema)
     const docA = interpretSubstrate(substrateA)
     batch(docA, d => {
       d.title.insert(0, "Source")
@@ -1020,10 +1035,14 @@ describe("Lineage boundaries", () => {
 
     // Create new substrate from snapshot
     const snapshot = substrateA.exportEntirety()
-    const substrateB = plainSubstrateFactory.fromEntirety(snapshot, TestSchema)
+    const substrateB = substrateFromEntirety(
+      plainSubstrateFactory,
+      snapshot,
+      TestSchema,
+    )
     const docB = interpretSubstrate(substrateB)
 
-    // fromEntirety takes the document at the source's position
+    // substrateFromEntirety takes the document at the source's position
     const vAfterSnapshot = substrateB.version().value
     expect(substrateB.version().compare(substrateA.version())).toBe("equal")
 
@@ -1049,7 +1068,7 @@ describe("Lineage boundaries", () => {
   })
 
   it("old and new lineage substrates are independent", () => {
-    const substrateA = plainSubstrateFactory.create(TestSchema)
+    const substrateA = createSubstrate(plainSubstrateFactory, TestSchema)
     const docA = interpretSubstrate(substrateA)
     batch(docA, d => {
       d.title.insert(0, "Shared")
@@ -1058,7 +1077,11 @@ describe("Lineage boundaries", () => {
 
     // Snapshot and create B
     const snapshot = substrateA.exportEntirety()
-    const substrateB = plainSubstrateFactory.fromEntirety(snapshot, TestSchema)
+    const substrateB = substrateFromEntirety(
+      plainSubstrateFactory,
+      snapshot,
+      TestSchema,
+    )
     const docB = interpretSubstrate(substrateB)
 
     // Mutate A — should not affect B
@@ -1079,7 +1102,7 @@ describe("Lineage boundaries", () => {
 
 describe("context() caching", () => {
   it("context() returns the same WritableContext on repeated calls", () => {
-    const substrate = plainSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(plainSubstrateFactory, TestSchema)
     const ctx1 = substrate.context()
     const ctx2 = substrate.context()
     expect(ctx1).toBe(ctx2)
@@ -1139,7 +1162,7 @@ describe("PlainReplica.advance()", () => {
 
   it("advance to current version (full projection) clears the log", () => {
     const replica = plainReplicaFactory.createEmpty()
-    const source = plainSubstrateFactory.create(TestSchema)
+    const source = createSubstrate(plainSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(source)
 
     batch(doc, d => d.title.insert(0, "Hello"))
@@ -1177,7 +1200,7 @@ describe("PlainReplica.advance()", () => {
 
   it("partial trim: advance to midpoint preserves remaining ops", () => {
     const replica = plainReplicaFactory.createEmpty()
-    const source = plainSubstrateFactory.create(TestSchema)
+    const source = createSubstrate(plainSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(source)
 
     batch(doc, d => d.title.insert(0, "A"))
@@ -1217,7 +1240,7 @@ describe("PlainReplica.advance()", () => {
 
   it("advance preserves ongoing operation — new ops can be appended after advance", () => {
     const replica = plainReplicaFactory.createEmpty()
-    const source = plainSubstrateFactory.create(TestSchema)
+    const source = createSubstrate(plainSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(source)
 
     batch(doc, d => d.title.insert(0, "Before"))
@@ -1246,7 +1269,7 @@ describe("PlainReplica.advance()", () => {
 
   it("advance precondition: target beyond current version throws", () => {
     const replica = plainReplicaFactory.createEmpty()
-    const source = plainSubstrateFactory.create(TestSchema)
+    const source = createSubstrate(plainSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(source)
     batch(doc, d => d.title.insert(0, "A"))
     // Replica adopts source's REAL lineage and its single authored batch.
@@ -1262,7 +1285,7 @@ describe("PlainReplica.advance()", () => {
 
   it("exportSince returns null for versions behind the base after advance", () => {
     const replica = plainReplicaFactory.createEmpty()
-    const source = plainSubstrateFactory.create(TestSchema)
+    const source = createSubstrate(plainSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(source)
 
     batch(doc, d => d.title.insert(0, "A"))
@@ -1303,7 +1326,7 @@ describe("PlainReplica.advance()", () => {
 
   it("round-trip: advance → exportEntirety → new replica has correct state", () => {
     const replica = plainReplicaFactory.createEmpty()
-    const source = plainSubstrateFactory.create(TestSchema)
+    const source = createSubstrate(plainSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(source)
 
     batch(doc, d => d.title.insert(0, "Test"))
@@ -1318,7 +1341,7 @@ describe("PlainReplica.advance()", () => {
 
     // Create a new replica from the trimmed entirety
     const entirety = replica.exportEntirety()
-    const replica2 = plainReplicaFactory.fromEntirety(entirety)
+    const replica2 = replicaFromEntirety(plainReplicaFactory, entirety)
 
     const snap = wholeState(replica2.exportEntirety())
     expect(snap.title).toBe("Test")
@@ -1328,7 +1351,7 @@ describe("PlainReplica.advance()", () => {
 
 describe("PlainSubstrate.advance()", () => {
   it("substrate advance works: base moves, changefeed + reader still function", () => {
-    const substrate = plainSubstrateFactory.create(TestSchema)
+    const substrate = createSubstrate(plainSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(substrate)
 
     batch(doc, d => d.title.insert(0, "Hello"))
@@ -1461,12 +1484,12 @@ describe("lineage-aware merge", () => {
 })
 
 // ---------------------------------------------------------------------------
-// Plain construction keeps history — upgrade, fromEntirety, replica cache
+// Plain construction keeps history — upgrade, substrateFromEntirety, replica cache
 // ---------------------------------------------------------------------------
 
 /** A source substrate with `n` authored batches, and its genesis version. */
 function sourceWithBatches(n: number) {
-  const source = plainSubstrateFactory.create(TestSchema)
+  const source = createSubstrate(plainSubstrateFactory, TestSchema)
   const doc = interpretSubstrate(source)
   const genesis = source.version()
   for (let i = 0; i < n; i++) batch(doc, d => d.count.increment(1))
@@ -1522,23 +1545,34 @@ describe("plain upgrade keeps history", () => {
   })
 })
 
-describe("plain fromEntirety", () => {
+describe("plain substrateFromEntirety", () => {
   it("keeps genesis for a genesis payload", () => {
-    const payload = plainSubstrateFactory.create(TestSchema).exportEntirety()
-    const substrate = plainSubstrateFactory.fromEntirety(payload, TestSchema)
+    const payload = createSubstrate(
+      plainSubstrateFactory,
+      TestSchema,
+    ).exportEntirety()
+    const substrate = substrateFromEntirety(
+      plainSubstrateFactory,
+      payload,
+      TestSchema,
+    )
     expect(substrate.version().lineage).toBe(DEFAULT_LINEAGE)
     expect(substrate.version().serialize()).toBe(
-      plainReplicaFactory.fromEntirety(payload).version().serialize(),
+      replicaFromEntirety(plainReplicaFactory, payload).version().serialize(),
     )
   })
 
   it("adopts the payload's REAL lineage", () => {
     const { source } = sourceWithBatches(1)
     const payload = source.exportEntirety()
-    const substrate = plainSubstrateFactory.fromEntirety(payload, TestSchema)
+    const substrate = substrateFromEntirety(
+      plainSubstrateFactory,
+      payload,
+      TestSchema,
+    )
     expect(substrate.version().lineage).toBe(source.version().lineage)
     expect(substrate.version().serialize()).toBe(
-      plainReplicaFactory.fromEntirety(payload).version().serialize(),
+      replicaFromEntirety(plainReplicaFactory, payload).version().serialize(),
     )
   })
 })
@@ -1546,7 +1580,7 @@ describe("plain fromEntirety", () => {
 describe("plain merge announces after taking the ops in", () => {
   it("delivers one replayed changeset per sender batch and matches the sender", () => {
     const { source, doc: sourceDoc } = sourceWithBatches(1)
-    const target = plainSubstrateFactory.create(TestSchema)
+    const target = createSubstrate(plainSubstrateFactory, TestSchema)
     const doc = interpretSubstrate(target)
     target.merge(source.exportEntirety())
     const adopted = source.version()
@@ -1572,7 +1606,7 @@ describe("plain merge announces after taking the ops in", () => {
 describe("plain replica materialization", () => {
   it("reflects merge, advance and reset without corrupting its base", () => {
     const S = Schema.struct({ items: Schema.list(Schema.number()) })
-    const source = plainSubstrateFactory.create(S)
+    const source = createSubstrate(plainSubstrateFactory, S)
     const doc = refOver(S, source.context())
     const genesis = source.version()
     batch(doc, d => d.items.push(1))

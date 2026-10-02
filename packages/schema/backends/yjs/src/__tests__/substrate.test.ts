@@ -2,6 +2,7 @@ import {
   batch,
   createDoc,
   createRef,
+  createSubstrate,
   exportEntirety,
   exportSince,
   hasSubstrate,
@@ -10,6 +11,7 @@ import {
   Schema,
   SUBSTRATE,
   subscribe,
+  substrateFromEntirety,
   unwrap,
   version,
 } from "@kyneta/schema"
@@ -77,7 +79,7 @@ describe("YjsSubstrate", () => {
 
   describe("factory create", () => {
     it("creates a substrate with empty containers", () => {
-      const substrate = yjsSubstrateFactory.create(SimpleSchema)
+      const substrate = createSubstrate(yjsSubstrateFactory, SimpleSchema)
       expect(substrate.reader.read(RawPath.empty.field("title"))).toBe("")
       // Plain scalars return structural zeros
       expect(substrate.reader.read(RawPath.empty.field("count"))).toBe(0)
@@ -552,7 +554,9 @@ describe("YjsSubstrate", () => {
         count: Schema.counter(),
       })
 
-      expect(() => yjsSubstrateFactory.create(CounterSchema)).toThrow("counter")
+      expect(() => createSubstrate(yjsSubstrateFactory, CounterSchema)).toThrow(
+        "counter",
+      )
     })
 
     it("movableList throws clear error at construction", () => {
@@ -560,7 +564,9 @@ describe("YjsSubstrate", () => {
         items: Schema.movableList(Schema.string()),
       })
 
-      expect(() => yjsSubstrateFactory.create(MovableSchema)).toThrow("movable")
+      expect(() => createSubstrate(yjsSubstrateFactory, MovableSchema)).toThrow(
+        "movable",
+      )
     })
 
     it("tree throws clear error at construction", () => {
@@ -568,18 +574,21 @@ describe("YjsSubstrate", () => {
         tree: Schema.tree(Schema.struct({ label: Schema.string() })),
       })
 
-      expect(() => yjsSubstrateFactory.create(TreeSchema)).toThrow("tree")
+      expect(() => createSubstrate(yjsSubstrateFactory, TreeSchema)).toThrow(
+        "tree",
+      )
     })
   })
 
   // -------------------------------------------------------------------------
-  // fromEntirety
+  // substrateFromEntirety
   // -------------------------------------------------------------------------
 
-  describe("fromEntirety", () => {
+  describe("substrateFromEntirety", () => {
     it("rejects non-binary payloads", () => {
       expect(() =>
-        yjsSubstrateFactory.fromEntirety(
+        substrateFromEntirety(
+          yjsSubstrateFactory,
           { kind: "entirety", encoding: "json", data: "{}" },
           SimpleSchema,
         ),
@@ -609,10 +618,10 @@ describe("YjsSubstrate", () => {
 
   describe("parseVersion", () => {
     it("round-trips through factory.parseVersion", () => {
-      const substrate = yjsSubstrateFactory.create(SimpleSchema)
+      const substrate = createSubstrate(yjsSubstrateFactory, SimpleSchema)
       const v = substrate.version()
       const serialized = v.serialize()
-      const parsed = yjsSubstrateFactory.parseVersion(serialized)
+      const parsed = yjsSubstrateFactory.replica.parseVersion(serialized)
       expect(parsed.compare(v)).toBe("equal")
     })
   })

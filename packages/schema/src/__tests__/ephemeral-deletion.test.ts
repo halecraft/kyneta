@@ -24,6 +24,7 @@ import {
   mapChange,
   own,
   Schema,
+  substrateFromEntirety,
 } from "../index.js"
 import { RawPath } from "../path.js"
 import { ephemeralSubstrateFactory } from "../substrates/ephemeral.js"
@@ -143,7 +144,8 @@ describe("a delete converges", () => {
     // Asserted through the substrate, not just the tree builder: local reads
     // come from a separate shadow, so a tree-level pass can coexist with a
     // document that still shows the key.
-    const peerA = ephemeralSubstrateFactory.fromEntirety(
+    const peerA = substrateFromEntirety(
+      ephemeralSubstrateFactory,
       payload({ peers: { alice: wire(1, 100), bob: wire(2, 100) } }),
       Roster,
     )
@@ -315,7 +317,8 @@ describe("deleting an entry whose value is a container", () => {
 
     // Every leaf beneath `alice` is tombstoned, so the whole entry drops out
     // of the projection — not an empty `{}` where she used to be.
-    const peerA = ephemeralSubstrateFactory.fromEntirety(
+    const peerA = substrateFromEntirety(
+      ephemeralSubstrateFactory,
       payload({
         peers: { alice: { x: wire(1, 100) }, bob: { x: wire(5, 100) } },
       }),
@@ -325,7 +328,8 @@ describe("deleting an entry whose value is a container", () => {
     expect(peerA.reader.read(peersPath)).toEqual({ bob: { x: 5 } })
 
     // An empty record is NOT a deleted one: it still projects as `{}`.
-    const empty = ephemeralSubstrateFactory.fromEntirety(
+    const empty = substrateFromEntirety(
+      ephemeralSubstrateFactory,
       payload({ peers: {} }),
       Cursors,
     )
@@ -616,13 +620,14 @@ describe("what a delete leaves behind", () => {
 // ---------------------------------------------------------------------------
 
 describe("a delete survives being loaded from a payload", () => {
-  // `fromEntirety(payload, schema)` is what `createDoc(bound, payload)` and an
+  // `substrateFromEntirety(factory, payload, schema)` is what `createDoc(bound, payload)` and an
   // exchange promotion both reach. It read the payload with `JSON.parse`,
   // taking the wire's tombstone marker for the install ordinal, so every
   // delete came back as a live `null` — which then beat the tombstone on
   // every peer, because live beats tombstone on a tie.
   const loaded = () =>
-    ephemeralSubstrateFactory.fromEntirety(
+    substrateFromEntirety(
+      ephemeralSubstrateFactory,
       payload({ peers: { alice: wire(null, 200, true), bob: wire(2, 100) } }),
       Roster,
     )
@@ -632,7 +637,8 @@ describe("a delete survives being loaded from a payload", () => {
   })
 
   it("does not resurrect on a peer it is shipped to", () => {
-    const holder = ephemeralSubstrateFactory.fromEntirety(
+    const holder = substrateFromEntirety(
+      ephemeralSubstrateFactory,
       payload({ peers: { alice: wire(1, 100), bob: wire(2, 100) } }),
       Roster,
     )

@@ -219,7 +219,7 @@ describe("createDoc", () => {
 })
 
 // ===========================================================================
-// createDoc with payload (fromEntirety)
+// createDoc with payload (substrateFromEntirety)
 // ===========================================================================
 
 describe("root document replacement", () => {

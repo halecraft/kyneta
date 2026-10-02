@@ -16,6 +16,7 @@ import {
   json,
   plainReplicaFactory,
   type ReplicaFactoryLike,
+  replicaFromEntirety,
   Schema,
   type Version,
   version,
@@ -189,7 +190,10 @@ describe("takeStoredEntries (plain)", () => {
     const oldEntries = writeEntries(old, ["old"])
     const live = plainDoc(2_000)
     live.log.insert(0, "live")
-    const replica = plainReplicaFactory.fromEntirety(exportEntirety(live))
+    const replica = replicaFromEntirety(
+      plainReplicaFactory,
+      exportEntirety(live),
+    )
 
     const { untaken } = takeStoredEntries(
       replica,
@@ -206,7 +210,10 @@ describe("takeStoredEntries (plain)", () => {
     // not cross for it: that is the network's to decide.
     const live = plainDoc(1_000)
     live.log.insert(0, "live")
-    const replica = plainReplicaFactory.fromEntirety(exportEntirety(live))
+    const replica = replicaFromEntirety(
+      plainReplicaFactory,
+      exportEntirety(live),
+    )
     const later = plainDoc(2_000)
     const laterEntries = writeEntries(later, ["later"])
 

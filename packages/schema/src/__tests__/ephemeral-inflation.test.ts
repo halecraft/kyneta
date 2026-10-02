@@ -31,6 +31,7 @@ import { own } from "../change.js"
 import {
   batch,
   createRef,
+  createSubstrate,
   mapChange,
   replaceChange,
   Schema,
@@ -399,8 +400,8 @@ describe("a write is stamped at or above every horizon over it", () => {
       rooms: Schema.record(Schema.record(Schema.number())),
     })
     const now = vi.spyOn(Date, "now")
-    const a = { substrate: ephemeralSubstrateFactory.create(Rooms) }
-    const b = { substrate: ephemeralSubstrateFactory.create(Rooms) }
+    const a = { substrate: createSubstrate(ephemeralSubstrateFactory, Rooms) }
+    const b = { substrate: createSubstrate(ephemeralSubstrateFactory, Rooms) }
     const docA: any = createRef(Rooms, a.substrate)
     const docB: any = createRef(Rooms, b.substrate)
 

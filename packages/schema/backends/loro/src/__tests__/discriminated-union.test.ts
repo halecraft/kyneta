@@ -1,7 +1,7 @@
 // discriminated-union — integration tests for sums on the Loro substrate.
 
 import type { Ref, SchemaNode, Substrate } from "@kyneta/schema"
-import { batch, createRef, Schema } from "@kyneta/schema"
+import { batch, createRef, createSubstrate, Schema } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import { createDoc, loro, loroSubstrateFactory } from "../index.js"
 import type { LoroVersion } from "../version.js"
@@ -104,9 +104,9 @@ describe("discriminated union on Loro substrate", () => {
   })
 
   it("two-peer sync via delta", () => {
-    const substrateA = loroSubstrateFactory.create(DocSchema)
+    const substrateA = createSubstrate(loroSubstrateFactory, DocSchema)
     const docA = interpretSubstrate(DocSchema, substrateA)
-    const substrateB = loroSubstrateFactory.create(DocSchema)
+    const substrateB = createSubstrate(loroSubstrateFactory, DocSchema)
     const docB = interpretSubstrate(DocSchema, substrateB)
 
     substrateB.merge(substrateA.exportEntirety(), { origin: "sync" })

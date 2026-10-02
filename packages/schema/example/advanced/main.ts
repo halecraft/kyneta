@@ -20,6 +20,7 @@ import {
   batch,
   createInterpreter,
   createRef,
+  createSubstrate,
   describe,
   hasRecursiveChangefeed,
   hasTransact,
@@ -84,14 +85,14 @@ section(2, "Constructing createDoc by Hand")
 log(`
     In the basic example, createDoc is a black box. Here we open it up.
 
-    Step 1: plainSubstrateFactory.create(schema)   → substrate
-    Step 2: createRef(schema, substrate)           → the document's root ref
+    Step 1: createSubstrate(plainSubstrateFactory, schema)  → substrate
+    Step 2: createRef(schema, substrate)                     → the document's root ref
 
     createRef makes the root ref over the substrate's writable context.
     Every other ref is made when you navigate to it.
 `)
 
-const substrate = plainSubstrateFactory.create(ProjectSchema)
+const substrate = createSubstrate(plainSubstrateFactory, ProjectSchema)
 
 const doc: Ref<typeof ProjectSchema> = createRef(ProjectSchema, substrate)
 
@@ -311,7 +312,7 @@ section(9, "A Replica That Receives Ops")
 {
   const replicaDoc = createRef(
     ProjectSchema,
-    plainSubstrateFactory.create(ProjectSchema),
+    createSubstrate(plainSubstrateFactory, ProjectSchema),
   ) as Ref<typeof ProjectSchema>
 
   const events: string[] = []
@@ -356,11 +357,11 @@ log(`
 {
   const docA: Ref<typeof ProjectSchema> = createRef(
     ProjectSchema,
-    plainSubstrateFactory.create(ProjectSchema),
+    createSubstrate(plainSubstrateFactory, ProjectSchema),
   )
   const docB: Ref<typeof ProjectSchema> = createRef(
     ProjectSchema,
-    plainSubstrateFactory.create(ProjectSchema),
+    createSubstrate(plainSubstrateFactory, ProjectSchema),
   )
 
   const syncOps = batch(docA, d => {

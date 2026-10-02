@@ -47,7 +47,7 @@ describe("a PeerID wider than 53 bits", () => {
       peerId: "peer-reader",
       binding: bound.identityBinding,
     })
-    const parsed = factory.parseVersion(version(b).serialize())
+    const parsed = factory.replica.parseVersion(version(b).serialize())
     expect(parsed.compare(version(a))).toBe("equal")
     expect(parsed.compare(version(b))).toBe("equal")
   })

@@ -66,7 +66,7 @@ describe("loro release", () => {
   })
 
   it("a replica passed to upgrade frees nothing when disposed, and the substrate frees the document once", () => {
-    const replica = loroSubstrateFactory.createReplica()
+    const replica = loroSubstrateFactory.replica.createEmpty()
     const native = unwrapReplica(replica)
     const frees = countFrees(native)
     const substrate = loroSubstrateFactory.upgrade(replica, schema)

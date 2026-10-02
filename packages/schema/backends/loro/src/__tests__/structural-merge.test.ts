@@ -8,12 +8,10 @@
 // Context: jj:ptyzqoul (structural merge protocol)
 
 import {
+  createSubstrate,
   deriveIdentity,
-  deriveSchemaBinding,
-  KIND,
-  type ProductSchema,
+  identityBindingOf,
   Schema,
-  type SchemaBinding,
 } from "@kyneta/schema"
 import { LoroDoc } from "loro-crdt"
 import { describe, expect, it } from "vitest"
@@ -24,13 +22,6 @@ import { ensureLoroContainers, loroSubstrateFactory } from "../substrate.js"
 // ===========================================================================
 // Helpers
 // ===========================================================================
-
-function trivialBinding(schema: any): SchemaBinding {
-  if (schema[KIND] === "product") {
-    return deriveSchemaBinding(schema as ProductSchema, {})
-  }
-  return { forward: new Map(), inverse: new Map() }
-}
 
 /** Shortcut to get identity hash for a field name (trivial binding, generation 1) */
 function id(fieldName: string): string {
@@ -55,7 +46,7 @@ describe("structural merge protocol (Loro)", () => {
   // ── Container creation is idempotent ──
 
   it("two peers independently create same schema — containers are identical", () => {
-    const binding = trivialBinding(TestSchema)
+    const binding = identityBindingOf(TestSchema)
 
     const docA = new LoroDoc()
     ensureLoroContainers(docA, TestSchema, binding)
@@ -80,7 +71,7 @@ describe("structural merge protocol (Loro)", () => {
   })
 
   it("container creation is idempotent — calling twice doesn't conflict", () => {
-    const binding = trivialBinding(TestSchema)
+    const binding = identityBindingOf(TestSchema)
 
     const doc = new LoroDoc()
     ensureLoroContainers(doc, TestSchema, binding)
@@ -98,7 +89,7 @@ describe("structural merge protocol (Loro)", () => {
   // ── Idempotent container creation preserves existing data ──
 
   it("calling ensureLoroContainers after manual writes preserves existing data", () => {
-    const binding = trivialBinding(TestSchema)
+    const binding = identityBindingOf(TestSchema)
 
     const doc = new LoroDoc()
     // Set a non-default value first (using identity-keyed key)
@@ -131,8 +122,8 @@ describe("structural merge protocol (Loro)", () => {
     fields.beta = Schema.number()
     const schemaB = Schema.struct(fields)
 
-    const bindingA = trivialBinding(schemaA)
-    const bindingB = trivialBinding(schemaB)
+    const bindingA = identityBindingOf(schemaA)
+    const bindingB = identityBindingOf(schemaB)
 
     const docA = new LoroDoc()
     ensureLoroContainers(docA, schemaA, bindingA)
@@ -157,7 +148,7 @@ describe("structural merge protocol (Loro)", () => {
   // ── Persistence round-trip ──
 
   it("persist → hydrate → data preserved", () => {
-    const binding = trivialBinding(TestSchema)
+    const binding = identityBindingOf(TestSchema)
 
     const doc1 = new LoroDoc()
     ensureLoroContainers(doc1, TestSchema, binding)
@@ -180,8 +171,8 @@ describe("structural merge protocol (Loro)", () => {
   // ── Factory integration ──
 
   it("loroSubstrateFactory.create and independent create merge cleanly", () => {
-    const sub1 = loroSubstrateFactory.create(TestSchema)
-    const sub2 = loroSubstrateFactory.create(TestSchema)
+    const sub1 = createSubstrate(loroSubstrateFactory, TestSchema)
+    const sub2 = createSubstrate(loroSubstrateFactory, TestSchema)
 
     // Both substrates exist and have the same structure
     const state1 = sub1.exportEntirety()
@@ -204,8 +195,8 @@ describe("structural merge protocol (Loro)", () => {
       binding: bound.identityBinding,
     })
 
-    const subA = factoryA.create(TestSchema)
-    const subB = factoryB.create(TestSchema)
+    const subA = createSubstrate(factoryA, TestSchema)
+    const subB = createSubstrate(factoryB, TestSchema)
 
     // Cross-merge — should not throw
     const stateA = subA.exportEntirety()

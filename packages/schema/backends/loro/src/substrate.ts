@@ -53,11 +53,11 @@ import {
   DEVTOOLS_HISTORY,
   type DevtoolsHistory,
   type DevtoolsHistorySummary,
-  deriveSchemaBinding,
   fieldAbsPath,
   findOpaqueBoundary,
   freezePayload,
   type HasBackingDoc,
+  identityBindingOf,
   invert,
   isJsonBoundary,
   isMapSchema,
@@ -73,7 +73,6 @@ import {
   noDigest,
   type Path,
   type PositionCapable,
-  type ProductSchema,
   payloadBytes,
   plainReader,
   planAdvance,
@@ -103,6 +102,7 @@ import type {
   LoroDoc as LoroDocType,
   LoroEventBatch,
   LoroMap,
+  PeerID,
   Value,
 } from "loro-crdt"
 import { Cursor, LoroDoc } from "loro-crdt"
@@ -855,22 +855,6 @@ function subscribeBridge(
 }
 
 // ---------------------------------------------------------------------------
-// loroReplicaFactory — ReplicaFactory<LoroVersion>
-// ---------------------------------------------------------------------------
-
-/**
- * Schema-free replica factory for Loro substrates.
- *
- * Constructs headless `Replica<LoroVersion>` instances backed by bare
- * `LoroDoc`s — no schema walking, no container initialization, no
- * Reader, no event bridge, no changefeed. Just the CRDT runtime
- * with version tracking and export/import.
- *
- * Used by conduit participants (stores, routing servers)
- * that need to accumulate state, compute per-peer deltas, and compact
- * storage without ever interpreting document fields.
- */
-// ---------------------------------------------------------------------------
 // DevTools history capability (pull) — version/op summary + safe time-travel
 // ---------------------------------------------------------------------------
 
@@ -947,11 +931,12 @@ const replicaSlots = new WeakMap<
 >()
 
 /**
- * A headless replica that owns `doc`: its `dispose` frees it, and `advance`
- * frees the document it trims away from.
+ * A headless replica over a fresh `LoroDoc` it owns, with a default, random
+ * PeerID until `upgrade` claims one: its `dispose` frees the document, and
+ * `advance` frees the one it trims away from.
  */
-export function createLoroReplica(doc: LoroDocType): Replica<LoroVersion> {
-  let slot = releasable(doc, freeLoroDoc)
+export function createLoroReplica(): Replica<LoroVersion> {
+  let slot = releasable(new LoroDoc(), freeLoroDoc)
 
   const replica = {
     get [BACKING_DOC]() {
@@ -1020,23 +1005,43 @@ export function takeReplicaDoc(replica: Replica<LoroVersion>): LoroDocType {
   return slotOf().take()
 }
 
+/**
+ * Schema-free replica factory for Loro: headless replicas over bare
+ * `LoroDoc`s, with no schema walking, no container initialization, no
+ * reader, no event bridge and no changefeed. What conduit participants
+ * (stores, routing servers) use to accumulate state, compute per-peer deltas,
+ * and compact storage without interpreting document fields.
+ */
 export const loroReplicaFactory: ReplicaFactory<LoroVersion> = {
   replicaType: ["loro", 1, 0] as const,
   historyFree: false,
+  createEmpty: createLoroReplica,
+  parseVersion: LoroVersion.parse,
+}
 
-  createEmpty(): Replica<LoroVersion> {
-    return createLoroReplica(new LoroDoc())
-  },
+// ---------------------------------------------------------------------------
+// loroUpgrade — how a LoroDoc gains a schema
+// ---------------------------------------------------------------------------
 
-  fromEntirety(payload: SubstratePayload): Replica<LoroVersion> {
-    const replica = this.createEmpty()
-    replica.merge(payload)
-    return replica
-  },
-
-  parseVersion(serialized: string): LoroVersion {
-    return LoroVersion.parse(serialized)
-  },
+/**
+ * A substrate over `doc`, which it now owns, for `schema` keyed by
+ * `binding`. Claims `peer` first, if given; a substrate built for hydration
+ * claims it later, at `adopt`.
+ *
+ * Every factory gives a document a schema through this, so the standalone
+ * and the peer-bound factories cannot drift apart. Loro's root containers are
+ * addressed by name, so `ensureLoroContainers` only looks them up and writes
+ * no operations: nothing here needs a commit.
+ */
+export function loroUpgrade(
+  doc: LoroDocType,
+  schema: SchemaNode,
+  binding: SchemaBinding,
+  peer?: PeerID,
+): Substrate<LoroVersion> & HasBackingDoc<LoroDocType> {
+  if (peer !== undefined) doc.setPeerId(peer)
+  ensureLoroContainers(doc, schema, binding)
+  return ownedLoroSubstrate(doc, schema, binding)
 }
 
 // ---------------------------------------------------------------------------
@@ -1044,66 +1049,15 @@ export const loroReplicaFactory: ReplicaFactory<LoroVersion> = {
 // ---------------------------------------------------------------------------
 
 /**
- * Factory for constructing Loro-backed substrates.
- *
- * - `create(schema)` — creates a fresh LoroDoc with empty containers
- *   matching the schema structure. No seed data — initial content
- *   should be applied via `batch()` after construction.
- * - `fromEntirety(payload, schema)` — creates a LoroDoc from an entirety
- *   payload, returns a substrate.
- * - `parseVersion(serialized)` — deserializes a LoroVersion.
+ * The standalone Loro factory: no peer identity of its own (each document
+ * keeps Loro's random PeerID), and containers keyed by the schema's own
+ * identity binding (`identityBindingOf`), as `loro.bind` keys them. Build with
+ * `createSubstrate` and `substrateFromEntirety` (`@kyneta/schema`).
  */
-/**
- * Compute a trivial SchemaBinding for a schema (no migration chain).
- * For product schemas, derives identity from field names at generation 1.
- * For non-product schemas, returns empty maps.
- */
-function trivialBinding(schema: SchemaNode): SchemaBinding {
-  if (schema[KIND] === "product") {
-    return deriveSchemaBinding(schema as ProductSchema, {})
-  }
-  return { forward: new Map(), inverse: new Map() }
-}
-
 export const loroSubstrateFactory: SubstrateFactory<LoroVersion> = {
   replica: loroReplicaFactory,
-
-  createReplica(): Replica<LoroVersion> {
-    // Default random PeerID — safe for hydration (no local writes).
-    return createLoroReplica(new LoroDoc())
-  },
-
-  upgrade(
-    replica: Replica<LoroVersion>,
-    schema: SchemaNode,
-  ): Substrate<LoroVersion> {
-    const doc = takeReplicaDoc(replica)
-    const binding = trivialBinding(schema)
-    ensureLoroContainers(doc, schema, binding)
-    return ownedLoroSubstrate(doc, schema, binding)
-  },
-
-  create(schema: SchemaNode): Substrate<LoroVersion> {
-    const doc = new LoroDoc()
-    const binding = trivialBinding(schema)
-    ensureLoroContainers(doc, schema, binding)
-    doc.commit()
-    return ownedLoroSubstrate(doc, schema, binding)
-  },
-
-  fromEntirety(
-    payload: SubstratePayload,
-    schema: SchemaNode,
-  ): Substrate<LoroVersion> {
-    // Two-phase path: createReplica → merge → upgrade
-    const replica = this.createReplica()
-    replica.merge(payload)
-    return this.upgrade(replica, schema)
-  },
-
-  parseVersion(serialized: string): LoroVersion {
-    return LoroVersion.parse(serialized)
-  },
+  upgrade: (replica, schema) =>
+    loroUpgrade(takeReplicaDoc(replica), schema, identityBindingOf(schema)),
 }
 
 // ---------------------------------------------------------------------------

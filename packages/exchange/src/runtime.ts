@@ -54,8 +54,10 @@ import {
   DEFAULT_LINEAGE,
   DocumentClosedError,
   metadataOf,
+  replicaFromEntirety,
   replicaTypesCompatible,
   subscribe,
+  upgradeReplica,
   type WriteRefusal,
 } from "@kyneta/schema"
 import type { DocId, PeerId } from "@kyneta/transport"
@@ -1068,7 +1070,8 @@ export class Runtime {
 
   /**
    * Replace a replicate-mode document's replica with one built from an
-   * entirety. Throws what `fromEntirety` throws.
+   * entirety (`replicaFromEntirety`), and dispose the one it replaces. Throws
+   * what taking the entirety in throws.
    *
    * The Synchronizer calls this when a reset means the incoming image is not
    * a continuation of what the relay holds (see the replicate arm of its
@@ -1085,8 +1088,10 @@ export class Runtime {
       )
     }
     const replaced = entry.readyInfo.replica
-    entry.readyInfo.replica =
-      entry.readyInfo.replicaFactory.fromEntirety(payload)
+    entry.readyInfo.replica = replicaFromEntirety(
+      entry.readyInfo.replicaFactory,
+      payload,
+    )
     replaced.dispose("disposed")
   }
 
@@ -1421,38 +1426,36 @@ export class Runtime {
     //
     // A document that will hydrate is about to import operations this peer
     // wrote in an earlier session, so it takes the deferred-identity path:
-    // `adopt` is called by `#becomeReady` once that import finishes. One that will not
-    // hydrate has nothing to import, so `create()`'s immediate claim is
-    // correct and `adopt` is a no-op.
+    // `adopt` is called by `#becomeReady` once that import finishes. One that
+    // will not hydrate has nothing to import, so `upgrade`'s immediate claim
+    // is correct and `adopt` is a no-op.
     //
     // Whether deferring changes anything is a per-backend fact, and not one
     // this file should hold: `beginHydration` puts the question to the factory
     // and falls back to the safe answer for backends that do not care.
     //
-    // Bound once and used at all three decision points below — see
+    // Bound once and used at every decision point below — see
     // `#usesStores` for why they have to agree. A promotion never hydrates:
     // the replica it upgrades has already loaded, which is the precondition
     // the caller had to satisfy to get here.
     const willHydrate = !promoting && this.#usesStore(bound.syncMode)
 
-    // All three arms end with this peer's identity claimed; they differ in
-    // *when*, and each is right for what it can guarantee. `beginHydration`
-    // defers, because an import is still coming. `create` claims at once,
-    // because none is. `upgrade` claims at once too, because the import has
-    // already finished — that is the two-phase construction contract every
-    // backend defines `create` in terms of. Making it defer to match the first
-    // arm would leave the identity unclaimed with nothing left to claim it.
-    const { substrate, ...authorship } = promoting
-      ? {
-          substrate: factory.upgrade(promoting.readyInfo.replica, bound.schema),
+    // Both ways end with this peer's identity claimed; they differ in *when*.
+    // `beginHydration` defers, because an import is still coming. Otherwise
+    // a replica is upgraded, which claims at once: the relay's, whose import
+    // has already finished, or an empty one, with nothing to import. Making
+    // it defer would leave the identity unclaimed with nothing left to claim
+    // it. `upgradeReplica` closes the replica, which `upgrade` took or copied.
+    const { substrate, ...authorship } = willHydrate
+      ? beginHydration(factory, bound.schema)
+      : {
+          substrate: upgradeReplica(
+            factory,
+            promoting?.readyInfo.replica ?? factory.replica.createEmpty(),
+            bound.schema,
+          ),
           ...NO_AUTHORSHIP,
         }
-      : willHydrate
-        ? beginHydration(factory, bound.schema)
-        : { substrate: factory.create(bound.schema), ...NO_AUTHORSHIP }
-    // The relay's replica is replaced. `upgrade` took what it did not copy,
-    // so this frees nothing the substrate uses.
-    promoting?.readyInfo.replica.dispose("disposed")
 
     // Who may author it besides the substrate: another seat of the storage
     // may write it (`#refuse`), and the network may refuse it.
@@ -1864,7 +1867,7 @@ export class Runtime {
    * call {@link Runtime.#register} separately, once hydration resolves.
    * Context: jj:mrlnmlus.
    *
-   * For interpret mode with structural clientID 0, `factory.create(schema)`
+   * For interpret mode with structural clientID 0, an upgraded empty replica
    * produces structural ops at `(0, 0..N)` — identical to what any stored
    * state has. Merging stored data deduplicates the structural ops and
    * applies application ops. No separate replica, no upgrade step.

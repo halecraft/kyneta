@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest"
 import { createRef } from "../create-doc.js"
 import { batch } from "../facade/batch.js"
+import { createSubstrate } from "../substrate.js"
 import { plainSubstrateFactory } from "../substrates/plain.js"
 import {
   UndoFixture,
@@ -12,12 +13,12 @@ import {
 } from "../testing/index.js"
 
 function create(): UndoPeer {
-  const substrate = plainSubstrateFactory.create(UndoFixture)
+  const substrate = createSubstrate(plainSubstrateFactory, UndoFixture)
   return { substrate, doc: createRef(UndoFixture, substrate) }
 }
 
 function reload(peer: UndoPeer): UndoPeer {
-  const substrate = plainSubstrateFactory.create(UndoFixture)
+  const substrate = createSubstrate(plainSubstrateFactory, UndoFixture)
   substrate.merge(peer.substrate.exportEntirety())
   return { substrate, doc: createRef(UndoFixture, substrate) }
 }

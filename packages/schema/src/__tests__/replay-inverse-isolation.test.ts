@@ -18,6 +18,7 @@ import { describe, expect, it } from "vitest"
 import {
   batch,
   createRef,
+  createSubstrate,
   exportSince,
   merge,
   plainSubstrateFactory,
@@ -42,9 +43,9 @@ describe("merged ops do not record inverses", () => {
       remote: Schema.string(),
       local: Schema.string(),
     })
-    const peer = plainSubstrateFactory.create(schema)
+    const peer = createSubstrate(plainSubstrateFactory, schema)
     const peerDoc = createRef(schema, peer)
-    const substrate = plainSubstrateFactory.create(schema)
+    const substrate = createSubstrate(plainSubstrateFactory, schema)
     const doc = createRef(schema, substrate)
 
     const v0 = peer.version()

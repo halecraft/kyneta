@@ -5,6 +5,7 @@ import {
   batch,
   createDoc,
   createRef,
+  createSubstrate,
   DocumentClosedError,
   Schema,
   unwrap,
@@ -44,7 +45,7 @@ describe("yjs release", () => {
 
   it("after dispose, a held ref no longer reaches its Y.Doc", async () => {
     const make = () => {
-      const substrate = yjsSubstrateFactory.create(schema)
+      const substrate = createSubstrate(yjsSubstrateFactory, schema)
       const doc: any = createRef(schema, substrate)
       doc.title.insert(0, "kept")
       const native = new WeakRef(unwrap(doc) as Y.Doc)

@@ -24,31 +24,20 @@
 
 import type {
   BindingTarget,
-  Replica,
   SchemaBinding,
-  Schema as SchemaNode,
-  Substrate,
   SubstrateFactory,
-  SubstratePayload,
 } from "@kyneta/schema"
 import {
   BACKING_DOC,
   createBindingTarget,
-  type HasBackingDoc,
   peerNumber,
   SYNC_COLLABORATIVE,
 } from "@kyneta/schema"
-import type { LoroDoc as LoroDocType, PeerID } from "loro-crdt"
+import type { PeerID } from "loro-crdt"
 import { LoroDoc } from "loro-crdt"
 import type { LoroNativeMap } from "./native-map.js"
-import {
-  createLoroReplica,
-  ensureLoroContainers,
-  loroReplicaFactory,
-  ownedLoroSubstrate,
-  takeReplicaDoc,
-} from "./substrate.js"
-import { LoroVersion } from "./version.js"
+import { loroReplicaFactory, loroUpgrade, takeReplicaDoc } from "./substrate.js"
+import type { LoroVersion } from "./version.js"
 
 // ---------------------------------------------------------------------------
 // Peer id → Loro PeerID
@@ -77,54 +66,22 @@ function createLoroFactory(
 ): SubstrateFactory<LoroVersion> {
   const numericPeerId = loroPeerId(peerId)
 
-  // Every construction below is this, differing only in where the LoroDoc
-  // comes from and whether identity is claimed now or later. Sharing the body
-  // keeps that one difference visible as an argument rather than something a
-  // reader has to find by diffing three near-identical functions.
-  //
-  // Loro's root containers are addressed by name, so `ensureLoroContainers`
-  // only looks them up — it writes no operations, and the commit that follows
-  // has nothing to record. That is why this has no counterpart to the Yjs
-  // binding's STRUCTURAL_YJS_CLIENT_ID dance: Yjs has to neutralise the
-  // identity on its structural operations, and here there are none to
-  // neutralise. Either choice of `claimIdentity` therefore starts from an
-  // empty operation log.
-  const buildSubstrate = (
-    doc: LoroDocType,
-    schema: SchemaNode,
-    claimIdentity: boolean,
-  ): Substrate<LoroVersion> & HasBackingDoc<LoroDocType> => {
-    if (claimIdentity) doc.setPeerId(numericPeerId)
-    ensureLoroContainers(doc, schema, binding)
-    doc.commit()
-    return ownedLoroSubstrate(doc, schema, binding)
-  }
-
+  // Both constructions give a document a schema through `loroUpgrade`, and
+  // differ only in when identity is claimed. Loro's root containers are
+  // addressed by name, so they write no operations, which is why this has no
+  // counterpart to the Yjs binding's STRUCTURAL_YJS_CLIENT_ID dance: Yjs has
+  // to neutralise the identity on its structural operations, and here there
+  // are none. Either way the document starts from an empty operation log.
   return {
     replica: loroReplicaFactory,
 
-    createReplica(): Replica<LoroVersion> {
-      // Default random PeerID — safe for hydration (no local writes).
-      // Identity is set at upgrade() time, after hydration.
-      return createLoroReplica(new LoroDoc())
-    },
+    // Claims identity now: the replica has already taken in any history, so
+    // the op counter for our PeerID resumes past it rather than colliding
+    // with it.
+    upgrade: (replica, schema) =>
+      loroUpgrade(takeReplicaDoc(replica), schema, binding, numericPeerId),
 
-    upgrade(
-      replica: Replica<LoroVersion>,
-      schema: SchemaNode,
-    ): Substrate<LoroVersion> {
-      // Claim identity now: this is the two-phase path, so any import has
-      // already happened and the op counter for our PeerID resumes past it
-      // rather than colliding with it.
-      return buildSubstrate(takeReplicaDoc(replica), schema, true)
-    },
-
-    create(schema: SchemaNode): Substrate<LoroVersion> {
-      // Fresh doc, nothing to import — claiming immediately is safe.
-      return buildSubstrate(new LoroDoc(), schema, true)
-    },
-
-    createForHydration(schema: SchemaNode) {
+    createForHydration(schema) {
       // Identity is deferred to `adopt` below. See the contract note on
       // SubstrateFactory.createForHydration for why claiming a PeerID before
       // importing that PeerID's own history silently drops an operation.
@@ -134,7 +91,7 @@ function createLoroFactory(
       // operation, which makes a stable PeerID misleading here — identity
       // survives a restart looking healthy precisely because nothing defended
       // it.
-      const substrate = buildSubstrate(new LoroDoc(), schema, false)
+      const substrate = loroUpgrade(new LoroDoc(), schema, binding)
       return {
         substrate,
         // Through the substrate, which reads the document through its slot.
@@ -142,22 +99,6 @@ function createLoroFactory(
           substrate[BACKING_DOC].setPeerId(numericPeerId)
         },
       }
-    },
-
-    fromEntirety(
-      payload: SubstratePayload,
-      schema: SchemaNode,
-    ): Substrate<LoroVersion> {
-      // Two-phase path: createReplica → merge → upgrade
-      // Identity is set at upgrade() time, after hydration —
-      // avoids any PeerID conflict with operations in hydrated state.
-      const replica = this.createReplica()
-      replica.merge(payload)
-      return this.upgrade(replica, schema)
-    },
-
-    parseVersion(serialized: string): LoroVersion {
-      return LoroVersion.parse(serialized)
     },
   }
 }

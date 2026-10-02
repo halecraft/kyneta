@@ -7,6 +7,7 @@
 import {
   createDoc,
   createRef,
+  createSubstrate,
   isBoundSchema,
   plainSubstrateFactory,
   Schema,
@@ -41,7 +42,7 @@ describe("loro.bind()", () => {
     })
 
     // Create a substrate and verify it works
-    const substrate = factory.create(testSchema)
+    const substrate = createSubstrate(factory, testSchema)
     expect(substrate.version().serialize()).toBeDefined()
     expect(substrate.exportEntirety()).toBeDefined()
   })
@@ -51,7 +52,8 @@ describe("loro.bind()", () => {
       // A fresh bind per document stands in for a restart.
       const bound = loro.bind(testSchema)
       const factory = bound.factory({ peerId, binding: bound.identityBinding })
-      return unwrap(createRef(testSchema, factory.create(testSchema))).peerIdStr
+      return unwrap(createRef(testSchema, createSubstrate(factory, testSchema)))
+        .peerIdStr
     }
 
     expect(peerIdOf("alice-laptop-7f3a")).toBe(loroPeerId("alice-laptop-7f3a"))
@@ -77,7 +79,7 @@ describe("unwrap() escape hatch", () => {
 
   it("returns non-LoroDoc native for refs with a non-Loro substrate", () => {
     const schema = Schema.struct({ title: Schema.string() })
-    const substrate = plainSubstrateFactory.create(schema)
+    const substrate = createSubstrate(plainSubstrateFactory, schema)
     const fakeRef = createRef(schema, substrate)
 
     // unwrap returns the [NATIVE] value — for plain substrate the root

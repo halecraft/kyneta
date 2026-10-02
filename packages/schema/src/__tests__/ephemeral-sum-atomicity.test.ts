@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from "vitest"
 import { own } from "../change.js"
-import { replaceChange, Schema } from "../index.js"
+import { replaceChange, Schema, substrateFromEntirety } from "../index.js"
 import { RawPath } from "../path.js"
 import { ephemeralSubstrateFactory } from "../substrates/ephemeral.js"
 import {
@@ -179,7 +179,8 @@ describe("nullable struct is an atomic register", () => {
 
 describe("state substrate converges concurrent variant switches", () => {
   it("merged peers read a coherent single variant", () => {
-    const subA = ephemeralSubstrateFactory.fromEntirety(
+    const subA = substrateFromEntirety(
+      ephemeralSubstrateFactory,
       payload({
         shape: wire({ kind: "circle", radius: 5 }, 100),
         label: wire("a", 100),

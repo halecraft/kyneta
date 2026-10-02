@@ -20,16 +20,11 @@
 // Named binding targets follow the rename-over-configure ergonomic rule:
 // `json` and `ephemeral` are separate targets, not `json("ephemeral")`.
 
-import type {
-  IdentityManifest,
-  MigrationChain,
-  SchemaBinding,
-} from "./migration.js"
+import type { MigrationChain, SchemaBinding } from "./migration.js"
 import {
   computeSupportedHashes,
-  deriveManifest,
-  deriveSchemaBinding,
   getMigrationChain,
+  identityBindingOf,
   validateChain,
 } from "./migration.js"
 import type { NativeMap, PlainNativeMap, UnknownNativeMap } from "./native.js"
@@ -345,30 +340,10 @@ export function bind<S extends SchemaNode>(config: {
   // schema is usually bound.
   validateEphemeralSchema(config.schema, config.syncMode)
 
-  // Derive identity binding from the migration chain (if present).
+  // How the schema's fields key their containers, from its migration chain
+  // when it has one.
+  const identityBinding = identityBindingOf(config.schema)
   const chain = getMigrationChain(config.schema)
-  let identityBinding: SchemaBinding
-  let manifest: IdentityManifest | undefined
-
-  if (chain && config.schema[KIND] === "product") {
-    manifest = deriveManifest(config.schema as unknown as ProductSchema, chain)
-    identityBinding = deriveSchemaBinding(
-      config.schema as unknown as ProductSchema,
-      manifest,
-    )
-  } else if (config.schema[KIND] === "product") {
-    // No migration chain — derive trivial binding from the schema.
-    identityBinding = deriveSchemaBinding(
-      config.schema as unknown as ProductSchema,
-      {}, // empty manifest → trivial origins
-    )
-  } else {
-    // Non-product schema — empty binding.
-    identityBinding = {
-      forward: new Map(),
-      inverse: new Map(),
-    }
-  }
 
   // Chain validation — O(migrations × nodes), runs unconditionally.
   // Validates path consistency, detects collisions and missing references.

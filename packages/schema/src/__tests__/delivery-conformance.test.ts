@@ -15,6 +15,7 @@ import { createRef } from "../create-doc.js"
 import { batch } from "../facade/batch.js"
 import { subscribe } from "../facade/observe.js"
 import { Schema } from "../schema.js"
+import { createSubstrate, substrateFromEntirety } from "../substrate.js"
 import { ephemeralSubstrateFactory } from "../substrates/ephemeral.js"
 import { plainSubstrateFactory } from "../substrates/plain.js"
 import {
@@ -30,13 +31,14 @@ import {
  * produced.
  */
 function createPlainEnv(): DeliveryTestEnv {
-  const substrateA = plainSubstrateFactory.create(DeliveryFixture)
+  const substrateA = createSubstrate(plainSubstrateFactory, DeliveryFixture)
   const doc = createRef(DeliveryFixture, substrateA)
 
   return {
     doc,
     remoteWrite(fn) {
-      const substrateB = plainSubstrateFactory.fromEntirety(
+      const substrateB = substrateFromEntirety(
+        plainSubstrateFactory,
         substrateA.exportEntirety(),
         DeliveryFixture,
       )
@@ -62,13 +64,14 @@ deliveryConformance(createPlainEnv, { label: "plain" })
  * fields the join actually moved.
  */
 function createEphemeralEnv(): DeliveryTestEnv {
-  const substrateA = ephemeralSubstrateFactory.create(DeliveryFixture)
+  const substrateA = createSubstrate(ephemeralSubstrateFactory, DeliveryFixture)
   const doc = createRef(DeliveryFixture, substrateA)
 
   return {
     doc,
     remoteWrite(fn) {
-      const substrateB = ephemeralSubstrateFactory.fromEntirety(
+      const substrateB = substrateFromEntirety(
+        ephemeralSubstrateFactory,
         substrateA.exportEntirety(),
         DeliveryFixture,
       )
@@ -102,7 +105,7 @@ describe("the documented delivery example", () => {
   // to something that runs, rather than to prose that drifted from the code
   // for two major versions.
   it("one changeset to every level, each covering its own subtree", () => {
-    const substrate = plainSubstrateFactory.create(ExampleDoc)
+    const substrate = createSubstrate(plainSubstrateFactory, ExampleDoc)
     // The example reads untyped, exercising the runtime surface rather than
     // the type surface.
     const doc = createRef(ExampleDoc, substrate) as any

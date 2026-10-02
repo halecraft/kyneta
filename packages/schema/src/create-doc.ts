@@ -20,6 +20,7 @@ import type { DocRef } from "./ref/schema-ref.js"
 import type { WriteRefusal } from "./refusal.js"
 import type { Schema as SchemaType } from "./schema.js"
 import type { Substrate, SubstratePayload, Version } from "./substrate.js"
+import { createSubstrate, substrateFromEntirety } from "./substrate.js"
 
 // ---------------------------------------------------------------------------
 // createRef — internal core: schema + substrate → ref
@@ -53,7 +54,7 @@ import type { Substrate, SubstratePayload, Version } from "./substrate.js"
  * corner.
  *
  * @param schema - The root schema
- * @param substrate - A pre-built substrate (from factory.create or factory.fromEntirety)
+ * @param substrate - A pre-built substrate (from `createSubstrate`, `substrateFromEntirety` or `beginHydration`)
  * @param options - `lease` for cooperating cascade budgets, `refusal` for the
  *   owner's answer to who may write
  * @returns The document's root ref, untyped: cast it at the call site
@@ -106,8 +107,8 @@ function createDocUnderPeerIdUntyped(
     binding: bound.identityBinding,
   })
   const substrate = payload
-    ? factory.fromEntirety(payload, bound.schema)
-    : factory.create(bound.schema)
+    ? substrateFromEntirety(factory, payload, bound.schema)
+    : createSubstrate(factory, bound.schema)
   return createRef(bound.schema, substrate)
 }
 
