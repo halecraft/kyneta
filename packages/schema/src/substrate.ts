@@ -357,6 +357,36 @@ export interface SubstratePayload {
   readonly lineage?: string
 }
 
+/**
+ * The bytes of a binary payload, for a format whose payloads are bytes (Loro,
+ * Yjs). Throws, naming `label`, for a payload that is not: a JSON payload
+ * here comes from a peer bound to another format.
+ */
+export function payloadBytes(
+  payload: SubstratePayload,
+  label: string,
+): Uint8Array {
+  if (payload.encoding !== "binary" || !(payload.data instanceof Uint8Array)) {
+    throw new Error(
+      `${label} expects binary-encoded payloads. ` +
+        "If you recently switched CRDT backends, stale clients may be sending incompatible data.",
+    )
+  }
+  return payload.data
+}
+
+/**
+ * The `digest` of a format whose version answers equality (plain, Loro, Yjs):
+ * `undefined`, which means *ask my version*. It reads `held` first, so a
+ * disposed replica throws here as it does everywhere else.
+ */
+export function noDigest(held: () => unknown): () => undefined {
+  return () => {
+    held()
+    return undefined
+  }
+}
+
 // ---------------------------------------------------------------------------
 // ReplicaLike — variance-safe replica contract (no type parameter)
 // ---------------------------------------------------------------------------
@@ -438,21 +468,21 @@ export interface ReplicaLike {
 
   /**
    * A fingerprint of everything this replica would replicate, or `undefined`
-   * when the version already answers equality.
+   * when its version already answers equality. A property of the format:
+   * every replica of one document answers alike, a headless one included.
    *
-   * Only substrates whose version cannot say "equal" need one. A version
-   * vector compares two replicas exactly, so Plain, Loro and Yjs (whose delete
-   * clock makes every change advance its state vector) return nothing and
-   * mean it: *ask my version*. The ephemeral substrate's version is an install
-   * counter — a fact about itself, meaningless to a peer — so it answers here
-   * instead.
+   * `undefined` means *ask my version*. A version vector compares two
+   * replicas exactly, so Plain, Loro and Yjs (whose delete clock makes every
+   * change advance its state vector) answer it. The ephemeral version is an
+   * install counter, a fact about one replica and meaningless to a peer, so
+   * the ephemeral format answers with a fingerprint instead.
    *
    * Equal fingerprints must mean equal replicated state, and must not depend
    * on the order state arrived in or on anything local. Two peers that
    * converged by opposite routes have to agree, or they will resync forever
    * while each looks correct.
    */
-  digest?(): string | undefined
+  digest(): string | undefined
 
   /**
    * Merge a payload into this live replica.

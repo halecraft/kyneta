@@ -30,7 +30,6 @@ import type {
   DevtoolsHistory,
   DocMetadata,
   ReplicaFactoryLike,
-  ReplicaLike,
   ReplicaType,
   SubstratePayload,
   SyncMode,
@@ -192,16 +191,40 @@ export type VersionGapResult =
    */
   | { kind: "absent" }
 
+/** What one side holds, as a comparison reads it. */
+export interface Holding {
+  readonly version: Version
+  readonly digest: string | undefined
+}
+
 /**
- * Compare an offered or stated version against ours. `ahead`/`concurrent`
- * means the peer has data we may need to take in; `behind`/`equal` means it
- * has nothing we lack.
+ * How `theirs` stands against `ours`. Equal when both sides fingerprint and
+ * the fingerprints match; otherwise what the versions say.
+ *
+ * The digest enters here, not inside `Version`: a version is a lattice element
+ * with a `meet`, and a fingerprint has neither. A match reports `"equal"`,
+ * which is all a digest can say.
+ */
+export function compareHoldings(
+  ours: Holding,
+  theirs: Holding,
+): "behind" | "equal" | "ahead" | "concurrent" {
+  if (ours.digest !== undefined && ours.digest === theirs.digest) {
+    return "equal"
+  }
+  return theirs.version.compare(ours.version)
+}
+
+/**
+ * Compare an offered or stated version against what we hold.
+ * `ahead`/`concurrent` means the peer has data we may need to take in;
+ * `behind`/`equal` means it has nothing we lack.
  */
 function resolveInboundVersionGap(
-  replica: ReplicaLike,
+  ours: Holding,
   replicaFactory: ReplicaFactoryLike,
   serializedVersion: string | undefined,
-  peerDigest?: string,
+  peerDigest: string | undefined,
 ): VersionGapResult {
   if (serializedVersion === undefined) return { kind: "absent" }
   let parsed: Version
@@ -210,14 +233,10 @@ function resolveInboundVersionGap(
   } catch (error) {
     return { kind: "parse-error", error }
   }
-  // The digest enters as part of the comparison, not as part of the
-  // `Version`: a version is a lattice element with a `meet`, and a
-  // fingerprint has neither. A match reports `"equal"`, which is all a
-  // digest can say.
-  const comparison =
-    peerDigest !== undefined && replica.digest?.() === peerDigest
-      ? "equal"
-      : parsed.compare(replica.version())
+  const comparison = compareHoldings(ours, {
+    version: parsed,
+    digest: peerDigest,
+  })
   if (comparison === "behind" || comparison === "equal") {
     return { kind: "no-gap", comparison }
   }
@@ -1533,13 +1552,12 @@ export class Synchronizer {
    * built: the sync program is pure and holds no replica, and the digest is
    * a fact about the replica at the moment of sending.
    *
-   * A substrate whose version already answers equality returns nothing, and
-   * the field stays absent — which is itself the instruction to compare
-   * versions instead.
+   * A replica whose version already answers equality answers `undefined`,
+   * and the field stays absent: the receiver compares versions instead.
    */
   #withDigest(message: SyncMsg): SyncMsg {
     if (message.type !== "interest" && message.type !== "offer") return message
-    const digest = this.#docs.get(message.docId)?.replica.digest?.()
+    const digest = this.#docs.get(message.docId)?.replica.digest()
     return digest === undefined ? message : { ...message, digest }
   }
 
@@ -1668,7 +1686,7 @@ export class Synchronizer {
     digest?: string,
   ): VersionGapResult {
     const gap = resolveInboundVersionGap(
-      doc.replica,
+      { version: doc.replica.version(), digest: doc.replica.digest() },
       doc.replicaFactory,
       version,
       digest,

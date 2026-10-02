@@ -48,7 +48,7 @@ import {
   DocumentLoadingError,
   type WriteRefusal,
 } from "../refusal.js"
-import { releasable } from "../releasable.js"
+import { type Releasable, releasable } from "../releasable.js"
 import type { Schema as SchemaNode } from "../schema.js"
 import type {
   BatchOutcome,
@@ -63,7 +63,7 @@ import type {
   SubstratePayload,
   Version,
 } from "../substrate.js"
-import { BACKING_DOC, hasBackingDoc } from "../substrate.js"
+import { BACKING_DOC, hasBackingDoc, noDigest } from "../substrate.js"
 import {
   versionVectorCompare,
   versionVectorJoin,
@@ -467,26 +467,12 @@ export function createPlainSubstrate(
       return cachedCtx
     },
 
-    version(): PlainVersion {
-      return slot.get().version()
-    },
-
-    baseVersion(): PlainVersion {
-      return slot.get().baseVersion()
-    },
+    ...plainReplication(slot, core => core),
 
     advance(to: Version): void {
       // σ already holds every logged op, so trimming moves only the base
       // offset; there is nothing to project.
       slot.get().advance(asPlainVersion(to), () => {})
-    },
-
-    exportEntirety(): SubstratePayload {
-      return slot.get().exportEntirety()
-    },
-
-    exportSince(since: Version): SubstratePayload | null {
-      return slot.get().exportSince(asPlainVersion(since))
     },
 
     merge(payload: SubstratePayload, options?: MergeOptions): void {
@@ -505,10 +491,6 @@ export function createPlainSubstrate(
           decodeEntirety(payload, "PlainSubstrate.resetFromEntirety"),
           docEffects(options),
         )
-    },
-
-    dispose(reason: ClosedReason = "disposed"): void {
-      slot.release(reason)
     },
   }
 
@@ -678,6 +660,31 @@ function createPlainCore(
   }
 }
 
+/** The replication core a plain replica or substrate holds. */
+type PlainCore = ReturnType<typeof createPlainCore>
+
+/**
+ * What a plain replica and substrate answer alike, read through `slot`, whose
+ * value `coreOf` names the core of: the format's members, defined once so the
+ * two tiers cannot drift apart. A plain version is a lineage and a log
+ * position, which answers equality, so there is no digest.
+ */
+function plainReplication<H>(
+  slot: Releasable<H>,
+  coreOf: (held: H) => PlainCore,
+) {
+  const core = (): PlainCore => coreOf(slot.get())
+  return {
+    version: (): PlainVersion => core().version(),
+    baseVersion: (): PlainVersion => core().baseVersion(),
+    digest: noDigest(core),
+    exportEntirety: (): SubstratePayload => core().exportEntirety(),
+    exportSince: (since: Version): SubstratePayload | null =>
+      core().exportSince(asPlainVersion(since)),
+    dispose: (reason: ClosedReason = "disposed"): void => slot.release(reason),
+  }
+}
+
 // ---------------------------------------------------------------------------
 // createPlainReplica — headless append-log replication surface (no schema)
 // ---------------------------------------------------------------------------
@@ -711,25 +718,11 @@ export function createPlainReplica(clock: PlainClock): Replica<PlainVersion> {
       return slot.get().materialize()
     },
 
-    version(): PlainVersion {
-      return slot.get().core.version()
-    },
-
-    baseVersion(): PlainVersion {
-      return slot.get().core.baseVersion()
-    },
+    ...plainReplication(slot, held => held.core),
 
     advance(to: Version): void {
       const { core, trim } = slot.get()
       core.advance(asPlainVersion(to), trim)
-    },
-
-    exportEntirety(): SubstratePayload {
-      return slot.get().core.exportEntirety()
-    },
-
-    exportSince(since: Version): SubstratePayload | null {
-      return slot.get().core.exportSince(asPlainVersion(since))
     },
 
     merge(payload: SubstratePayload, _options?: MergeOptions): void {
@@ -746,10 +739,6 @@ export function createPlainReplica(clock: PlainClock): Replica<PlainVersion> {
         decodeEntirety(payload, "PlainReplica.resetFromEntirety"),
         effects,
       )
-    },
-
-    dispose(reason: ClosedReason = "disposed"): void {
-      slot.release(reason)
     },
   }
 

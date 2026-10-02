@@ -70,9 +70,11 @@ import {
   type MapChange,
   type MarkConfig,
   type MergeOptions,
+  noDigest,
   type Path,
   type PositionCapable,
   type ProductSchema,
+  payloadBytes,
   plainReader,
   planAdvance,
   planReconcile,
@@ -486,9 +488,7 @@ function loroSubstrateOver(
 
     reader: reader,
 
-    baseVersion(): LoroVersion {
-      return new LoroVersion(slot.get().shallowSinceVV())
-    },
+    ...loroReplication(() => slot.get()),
 
     /**
      * Trims nothing, and throws only for a `to` beyond the current version.
@@ -714,47 +714,12 @@ function loroSubstrateOver(
       return cachedCtx
     },
 
-    version(): LoroVersion {
-      return new LoroVersion(slot.get().version())
-    },
-
-    exportEntirety(): SubstratePayload {
-      return {
-        kind: "entirety",
-        encoding: "binary",
-        data: slot.get().export({ mode: "snapshot" }),
-        lineage: DEFAULT_LINEAGE,
-      }
-    },
-
-    exportSince(since: Version): SubstratePayload | null {
-      const doc = slot.get()
-      try {
-        // ReplicaLike variance: signature uses Version, runtime type is always LoroVersion.
-        const bytes = doc.export({
-          mode: "update",
-          from: (since as LoroVersion).vv,
-        })
-        return { kind: "since", encoding: "binary", data: bytes }
-      } catch {
-        return null
-      }
-    },
-
     merge(payload: SubstratePayload, options?: MergeOptions): void {
       const doc = slot.get()
-      if (
-        payload.encoding !== "binary" ||
-        !(payload.data instanceof Uint8Array)
-      ) {
-        throw new Error(
-          "LoroSubstrate.merge expects binary-encoded payloads. " +
-            "If you recently switched CRDT backends, stale clients may be sending incompatible data.",
-        )
-      }
+      const bytes = payloadBytes(payload, "LoroSubstrate.merge")
       pendingImportOrigin = options?.origin
       try {
-        doc.import(payload.data)
+        doc.import(bytes)
       } finally {
         pendingImportOrigin = undefined
       }
@@ -939,6 +904,40 @@ function loroDevtoolsHistory(getDoc: () => LoroDocType): DevtoolsHistory {
 }
 
 /**
+ * What a Loro replica and substrate answer alike, read through `doc`: the
+ * format's members, defined once so the two tiers cannot drift apart. A
+ * version vector answers equality, so there is no digest.
+ */
+function loroReplication(doc: () => LoroDocType) {
+  return {
+    version: (): LoroVersion => new LoroVersion(doc().version()),
+    baseVersion: (): LoroVersion => new LoroVersion(doc().shallowSinceVV()),
+    digest: noDigest(doc),
+    exportEntirety: (): SubstratePayload => ({
+      kind: "entirety",
+      encoding: "binary",
+      data: doc().export({ mode: "snapshot" }),
+      lineage: DEFAULT_LINEAGE,
+    }),
+    exportSince: (since: Version): SubstratePayload | null => {
+      const current = doc()
+      try {
+        // The ReplicaLike contract uses the base `Version` type for variance
+        // safety. At runtime the synchronizer always passes a LoroVersion from
+        // this format's own factory — the cast is sound.
+        const bytes = current.export({
+          mode: "update",
+          from: (since as LoroVersion).vv,
+        })
+        return { kind: "since", encoding: "binary", data: bytes }
+      } catch {
+        return null
+      }
+    },
+  }
+}
+
+/**
  * The slot of every replica `createLoroReplica` built, for `takeReplicaDoc`.
  * A getter, because `advance` moves the replica to a new document.
  */
@@ -960,13 +959,8 @@ export function createLoroReplica(doc: LoroDocType): Replica<LoroVersion> {
     },
     [DEVTOOLS_HISTORY]: loroDevtoolsHistory(() => slot.get()),
 
-    version(): LoroVersion {
-      return new LoroVersion(slot.get().version())
-    },
-
-    baseVersion(): LoroVersion {
-      return new LoroVersion(slot.get().shallowSinceVV())
-    },
+    // A getter of the slot, which `advance` moves to a new document.
+    ...loroReplication(() => slot.get()),
 
     advance(to: Version): void {
       const current = slot.get()
@@ -993,47 +987,13 @@ export function createLoroReplica(doc: LoroDocType): Replica<LoroVersion> {
       slot = trimmed
     },
 
-    exportEntirety(): SubstratePayload {
-      return {
-        kind: "entirety",
-        encoding: "binary",
-        data: slot.get().export({ mode: "snapshot" }),
-        lineage: DEFAULT_LINEAGE,
-      }
-    },
-
-    exportSince(since: Version): SubstratePayload | null {
-      const current = slot.get()
-      try {
-        // The ReplicaLike contract uses the base `Version` type for variance
-        // safety. At runtime the synchronizer always passes a LoroVersion from
-        // this replica's own factory — the cast is sound.
-        const bytes = current.export({
-          mode: "update",
-          from: (since as LoroVersion).vv,
-        })
-        return { kind: "since", encoding: "binary", data: bytes }
-      } catch {
-        return null
-      }
-    },
-
     merge(payload: SubstratePayload, _options?: MergeOptions): void {
       const current = slot.get()
-      if (
-        payload.encoding !== "binary" ||
-        !(payload.data instanceof Uint8Array)
-      ) {
-        throw new Error(
-          "LoroReplica.merge expects binary-encoded payloads. " +
-            "If you recently switched CRDT backends, stale clients may be sending incompatible data.",
-        )
-      }
-      current.import(payload.data)
+      current.import(payloadBytes(payload, "LoroReplica.merge"))
     },
 
     resetFromEntirety(payload: SubstratePayload, options?: MergeOptions): void {
-      // See createLoroSubstrate's resetFromEntirety — CRDT merge (set
+      // See loroSubstrateOver's resetFromEntirety — CRDT merge (set
       // union via doc.import) is always the correct absorption, lineage
       // boundary or not, so this delegates to the routine merge path.
       this.merge(payload, options)
@@ -1069,17 +1029,9 @@ export const loroReplicaFactory: ReplicaFactory<LoroVersion> = {
   },
 
   fromEntirety(payload: SubstratePayload): Replica<LoroVersion> {
-    if (
-      payload.encoding !== "binary" ||
-      !(payload.data instanceof Uint8Array)
-    ) {
-      throw new Error(
-        "LoroReplicaFactory.fromEntirety only supports binary-encoded payloads",
-      )
-    }
-    const doc = new LoroDoc()
-    doc.import(payload.data)
-    return createLoroReplica(doc)
+    const replica = this.createEmpty()
+    replica.merge(payload)
+    return replica
   },
 
   parseVersion(serialized: string): LoroVersion {

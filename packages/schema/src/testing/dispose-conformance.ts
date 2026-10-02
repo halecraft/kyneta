@@ -136,6 +136,7 @@ export function disposeConformance(
       const members: Array<() => unknown> = [
         () => replica.version(),
         () => replica.baseVersion(),
+        () => replica.digest(),
         () => replica.advance(at),
         () => replica.exportEntirety(),
         () => replica.exportSince(at),
@@ -153,6 +154,7 @@ export function disposeConformance(
       const members: Array<() => unknown> = [
         () => substrate.version(),
         () => substrate.baseVersion(),
+        () => substrate.digest(),
         () => substrate.advance(at),
         () => substrate.exportEntirety(),
         () => substrate.exportSince(at),

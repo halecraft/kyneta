@@ -19,7 +19,7 @@ import {
   subscribe,
 } from "@kyneta/schema"
 import { defined } from "@kyneta/schema/testing"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { drain, exchangesPerTest } from "./exchanges.js"
 
 const createExchange = exchangesPerTest()
@@ -502,5 +502,60 @@ describe("a delete survives promotion", () => {
     const settled = { dave: "here", erin: "here" }
     expect(docB.peers()).toEqual(settled)
     expect(docA.peers()).toEqual(settled)
+  }, 30_000)
+})
+
+// A relay holds a headless replica, not a substrate. An ephemeral version
+// cannot say "equal", so without the replica's digest a relay and its peers
+// take every round as a difference and import what they already hold.
+describe("a relay agrees with its peers by digest", () => {
+  const Roster = ephemeral.bind(
+    Schema.struct({ peers: Schema.record(Schema.string()) }),
+  )
+
+  it("imports nothing on a reconnect when it holds what the peer holds, and imports a real change", async () => {
+    const bridge = new Bridge()
+    const relay = createExchange({
+      principal: "relay",
+      type: "service",
+      transports: [createBridgeTransport({ transportId: "relay", bridge })],
+      resolve: () => Replicate(),
+    })
+    const client = createExchange({
+      principal: "client",
+      transports: [createBridgeTransport({ transportId: "client", bridge })],
+      schemas: [Roster],
+    })
+    const doc = client.get("presence", Roster)
+    batch(doc, d => {
+      for (let i = 0; i < 200; i++) d.peers.set(`peer-${i}`, `online-${i}`)
+    })
+    await drain(30)
+
+    const relayReplica = defined(
+      relay.synchronizer.getDoc("presence"),
+      "the relay's replica",
+    ).replica
+    const clientReplica = defined(
+      client.synchronizer.getDoc("presence"),
+      "the client's substrate",
+    ).replica
+    expect(relayReplica.digest()).toBe(clientReplica.digest())
+    const relayMerges = vi.spyOn(relayReplica, "merge")
+    const clientMerges = vi.spyOn(clientReplica, "merge")
+
+    client.removeTransport("client")
+    await drain(10)
+    await client.addTransport(
+      createBridgeTransport({ transportId: "client", bridge }),
+    )
+    await drain(40)
+    expect(relayMerges).not.toHaveBeenCalled()
+    expect(clientMerges).not.toHaveBeenCalled()
+
+    batch(doc, d => d.peers.set("peer-7", "away"))
+    await drain(30)
+    expect(relayMerges).toHaveBeenCalledTimes(1)
+    expect(relayReplica.digest()).toBe(clientReplica.digest())
   }, 30_000)
 })

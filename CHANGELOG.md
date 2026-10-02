@@ -21,6 +21,7 @@
 - **`mapPayload`, `diffText`, `CoordinateTrie` and `Coordinate`** (`@kyneta/schema`). `mapPayload(change, f)` is the one definition of the values a change carries; `diffText` (moved from `@kyneta/react`, which re-exports it) takes an optional cursor hint; `CoordinateTrie` is a context's trie of coordinates (`ctx.trie`), and a `Coordinate` is one of them, which is its address.
 
 - **`signalFeed`, `firstDefined` and `settableFeed`** (`@kyneta/changefeed`). `signalFeed(read, subscribe)` moves here from `@kyneta/exchange`. `firstDefined(...feeds)` answers the first feed that has an answer and notifies when any changes. `settableFeed(initial)` holds a value or follows another feed until the next `set`, and lets go of what it held; `Settable<T>` is its type.
+- **`payloadBytes(payload, label)` and `noDigest(held)`** (`@kyneta/schema`). For a custom backend: `payloadBytes` is the bytes of a binary payload, throwing, naming `label`, for a payload of another format; `noDigest` is the `digest` of a format whose version answers equality.
 - **`collectGarbage()` and `disposeConformance`** (`@kyneta/schema/testing`). `collectGarbage` forces a full collection and lets finalizers run, turning on `--expose-gc` at run time, so no test runner needs the flag (Node only). `disposeConformance` checks a backend's `dispose`: a held ref reads its last value, and everything that needs what was released throws `DocumentClosedError`.
 
 ## Changed
@@ -34,6 +35,10 @@
   - **`writeRefusal(doc)` and `writeRefusalFeed(doc)` return `WriteRefusal | undefined`**, read from the document's context, so they report a loading `json` document's `DocumentLoadingError` and a closed document's `DocumentClosedError` too. `useWriteRefusal` (`@kyneta/react`) returns `WriteRefusal | undefined`: narrow with `instanceof WriterRefusedError` to read `.writer`.
   - **`signalFeed` is exported from `@kyneta/changefeed`**, no longer from `@kyneta/exchange`'s internals.
   - **`exchange.documents` and an undo stack's following update only the documents a change names**, not every document held.
+- **Every replica answers `digest()`, so an ephemeral relay recognises a peer holding what it holds** (`@kyneta/schema`, `@kyneta/loro-schema`, `@kyneta/yjs-schema`, `@kyneta/exchange`) (breaking).
+  - **`ReplicaLike.digest()` is required**, returning `string | undefined`: `undefined` means "ask my version". Every custom `ReplicaLike` must implement it.
+  - **The ephemeral headless replica answers it.** A relay (`resolve: () => Replicate()`) had no digest, so it could never tell an ephemeral peer it held the same state, and both sides imported what they already held on every reconnect. They now import nothing. The digest is computed once per change to the state tree, not once per message.
+  - **Each backend defines what its substrate and headless replica answer alike once** (version, exports, digest). `fromEntirety` on every replica factory is `createEmpty()` then `merge`, so a mis-encoded payload now throws from the replica's `merge`, naming it.
 
 - **The folds are the interpreters, and the two ref flags share one protocol** (`@kyneta/schema`, `@kyneta/exchange`) (breaking).
   - `plainInterpreter` is removed: use `createMaterializeInterpreter(plainValueResolver(value))`. `Writable<S>`, which nothing used, and `INTERPRETER`, a marker nothing read, are removed too.

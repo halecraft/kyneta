@@ -1689,8 +1689,9 @@ function applyMapChange(
  * threading a path string through every recursion — and a digest maintained in
  * several places can drift, which would make two divergent peers agree to stop
  * talking. Encoding the path structurally costs a walk and removes both
- * problems. Memoize per flush: at 5000 leaves this is 3.8 ms against the 1.7 ms
- * `JSON.stringify` already spends once per offer per peer.
+ * problems: 3.8 ms at 5000 leaves. A replica folds once per change to its
+ * tree, not once per message: `createStateReplicaCore` keeps the digest with
+ * the install count it was taken at.
  */
 export function stateTreeDigest(tree: StateTree): Digest {
   const lanes: [number, number, number, number] = [0, 0, 0, 0]

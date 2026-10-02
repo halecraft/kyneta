@@ -83,6 +83,8 @@ import {
   freezePayload,
   invert,
   KIND,
+  noDigest,
+  payloadBytes,
   plainReader,
   planAdvance,
   planReconcile,
@@ -531,9 +533,7 @@ function yjsSubstrateOver(
       return cachedCtx
     },
 
-    version(): YjsVersion {
-      return YjsVersion.fromDoc(slot.get())
-    },
+    ...yjsReplication(() => slot.get()),
 
     baseVersion(): YjsVersion {
       // A live substrate never trims, so its history starts at the beginning.
@@ -558,41 +558,13 @@ function yjsSubstrateOver(
       }
     },
 
-    exportEntirety(): SubstratePayload {
-      return {
-        kind: "entirety",
-        encoding: "binary",
-        data: Y.encodeStateAsUpdate(slot.get()),
-        lineage: DEFAULT_LINEAGE,
-      }
-    },
-
-    exportSince(since: Version): SubstratePayload | null {
-      const doc = slot.get()
-      try {
-        // ReplicaLike variance: signature uses Version, runtime type is always YjsVersion.
-        const bytes = Y.encodeStateAsUpdate(doc, (since as YjsVersion).sv)
-        return { kind: "since", encoding: "binary", data: bytes }
-      } catch {
-        return null
-      }
-    },
-
     merge(payload: SubstratePayload, options?: MergeOptions): void {
       const doc = slot.get()
-      if (
-        payload.encoding !== "binary" ||
-        !(payload.data instanceof Uint8Array)
-      ) {
-        throw new Error(
-          "YjsSubstrate.merge expects binary-encoded payloads. " +
-            "If you recently switched CRDT backends, stale clients may be sending incompatible data.",
-        )
-      }
+      const bytes = payloadBytes(payload, "YjsSubstrate.merge")
       // The origin rides on the merge's transaction, where the event bridge
       // reads it. A write an observer makes in reaction is a transaction of
       // its own, so it keeps its own origin.
-      Y.applyUpdate(doc, payload.data, options?.origin)
+      Y.applyUpdate(doc, bytes, options?.origin)
       // The observeDeep handler announces the merged ops. Yjs holds back
       // structs whose dependencies are missing; the version stays short of
       // the offer's, which is how a caller sees what is missing.
@@ -742,6 +714,38 @@ function yjsDevtoolsHistory(getDoc: () => Y.Doc): DevtoolsHistory {
 }
 
 /**
+ * What a Yjs replica and substrate answer alike, read through `doc`: the
+ * format's members, defined once so the two tiers cannot drift apart. A state
+ * vector answers equality (the delete clock makes every change advance it),
+ * so there is no digest. `baseVersion` differs by tier, and is not
+ * here.
+ */
+function yjsReplication(doc: () => Y.Doc) {
+  return {
+    version: (): YjsVersion => YjsVersion.fromDoc(doc()),
+    digest: noDigest(doc),
+    exportEntirety: (): SubstratePayload => ({
+      kind: "entirety",
+      encoding: "binary",
+      data: Y.encodeStateAsUpdate(doc()),
+      lineage: DEFAULT_LINEAGE,
+    }),
+    exportSince: (since: Version): SubstratePayload | null => {
+      const current = doc()
+      try {
+        // The ReplicaLike contract uses the base `Version` type for variance
+        // safety. At runtime the synchronizer always passes a YjsVersion from
+        // this format's own factory — the cast is sound.
+        const bytes = Y.encodeStateAsUpdate(current, (since as YjsVersion).sv)
+        return { kind: "since", encoding: "binary", data: bytes }
+      } catch {
+        return null
+      }
+    },
+  }
+}
+
+/**
  * The slot of every replica `createYjsReplica` built, for `takeReplicaDoc`.
  * A getter, because `advance` moves the replica to a new document.
  */
@@ -761,9 +765,8 @@ export function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
     },
     [DEVTOOLS_HISTORY]: yjsDevtoolsHistory(() => slot.get()),
 
-    version(): YjsVersion {
-      return YjsVersion.fromDoc(slot.get())
-    },
+    // A getter of the slot, which `advance` moves to a new document.
+    ...yjsReplication(() => slot.get()),
 
     baseVersion(): YjsVersion {
       slot.get()
@@ -790,44 +793,13 @@ export function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
       currentBase = YjsVersion.fromDoc(newDoc)
     },
 
-    exportEntirety(): SubstratePayload {
-      return {
-        kind: "entirety",
-        encoding: "binary",
-        data: Y.encodeStateAsUpdate(slot.get()),
-        lineage: DEFAULT_LINEAGE,
-      }
-    },
-
-    exportSince(since: Version): SubstratePayload | null {
-      const current = slot.get()
-      try {
-        // The ReplicaLike contract uses the base `Version` type for variance
-        // safety. At runtime the synchronizer always passes a YjsVersion from
-        // this replica's own factory — the cast is sound.
-        const bytes = Y.encodeStateAsUpdate(current, (since as YjsVersion).sv)
-        return { kind: "since", encoding: "binary", data: bytes }
-      } catch {
-        return null
-      }
-    },
-
     merge(payload: SubstratePayload, _options?: MergeOptions): void {
       const current = slot.get()
-      if (
-        payload.encoding !== "binary" ||
-        !(payload.data instanceof Uint8Array)
-      ) {
-        throw new Error(
-          "YjsReplica.merge expects binary-encoded payloads. " +
-            "If you recently switched CRDT backends, stale clients may be sending incompatible data.",
-        )
-      }
-      Y.applyUpdate(current, payload.data)
+      Y.applyUpdate(current, payloadBytes(payload, "YjsReplica.merge"))
     },
 
     resetFromEntirety(payload: SubstratePayload, options?: MergeOptions): void {
-      // See createYjsSubstrate's resetFromEntirety — CRDT merge (set union
+      // See yjsSubstrateOver's resetFromEntirety — CRDT merge (set union
       // via Y.applyUpdate) is always the correct absorption, lineage boundary
       // or not, so this delegates to the routine merge path.
       this.merge(payload, options)
@@ -863,17 +835,9 @@ export const yjsReplicaFactory: ReplicaFactory<YjsVersion> = {
   },
 
   fromEntirety(payload: SubstratePayload): Replica<YjsVersion> {
-    if (
-      payload.encoding !== "binary" ||
-      !(payload.data instanceof Uint8Array)
-    ) {
-      throw new Error(
-        "YjsReplicaFactory.fromEntirety only supports binary-encoded payloads",
-      )
-    }
-    const doc = new Y.Doc()
-    Y.applyUpdate(doc, payload.data)
-    return createYjsReplica(doc)
+    const replica = this.createEmpty()
+    replica.merge(payload)
+    return replica
   },
 
   parseVersion(serialized: string): YjsVersion {

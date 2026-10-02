@@ -38,7 +38,7 @@ import {
   reconcileShadow,
 } from "../reconcile-shadow.js"
 import type { ClosedReason } from "../refusal.js"
-import { releasable } from "../releasable.js"
+import { type Releasable, releasable } from "../releasable.js"
 import type { Schema as SchemaNode } from "../schema.js"
 import type {
   BatchOutcome,
@@ -236,10 +236,9 @@ function newIncarnation(): string {
 }
 
 /**
- * Creates the core replication surface for the ephemeral substrate.
- *
- * This is a pure CvRDT implementation. It maintains a `StateTree` and
- * a cached version, with no op-log.
+ * The replication core of an ephemeral replica or substrate: the install
+ * counter over a state tree it reads and replaces through `getTree` and
+ * `setTree`, with no op log.
  */
 function createStateReplicaCore(
   getTree: () => Container,
@@ -258,6 +257,15 @@ function createStateReplicaCore(
   // "the counter moved" and "our state changed" are the same fact, and
   // `exportSince` can answer "what have I taken in since?" by reading it.
   let installSeq = 0
+
+  // The last fingerprint, and the install count it was taken at. The count is
+  // an exact key: the merge stamps only what it adopts, and a merge that moves
+  // nothing gives its ordinal back, so the count moves exactly when the tree
+  // does. A decay tick never writes the tree.
+  let fingerprint: {
+    readonly installSeq: number
+    readonly digest: string
+  } | null = null
 
   return {
     /**
@@ -295,7 +303,13 @@ function createStateReplicaCore(
      * converged by opposite routes agree and stop exchanging.
      */
     digest(): string {
-      return digestToHex(stateTreeDigest(getTree()))
+      if (fingerprint?.installSeq !== installSeq) {
+        fingerprint = {
+          installSeq,
+          digest: digestToHex(stateTreeDigest(getTree())),
+        }
+      }
+      return fingerprint.digest
     },
 
     exportEntirety(): SubstratePayload {
@@ -333,10 +347,19 @@ function createStateReplicaCore(
       }
     },
 
-    /** Join `payload` into the tree; returns the key paths the join moved. */
-    merge(payload: SubstratePayload): readonly (readonly string[])[] {
+    /**
+     * Join `payload` into the tree; returns the key paths the join moved.
+     * `label` names the caller in the error for a payload of another format.
+     */
+    merge(
+      payload: SubstratePayload,
+      label: string,
+    ): readonly (readonly string[])[] {
       if (payload.encoding !== "json" || typeof payload.data !== "string") {
-        throw new Error("StateReplica expects JSON-encoded StateTree payloads.")
+        throw new Error(
+          `${label} expects JSON-encoded StateTree payloads. ` +
+            "If you recently switched backends, stale clients may be sending incompatible data.",
+        )
       }
 
       // Both kinds join identically. A delta is a partial tree, and the merge
@@ -361,16 +384,6 @@ function createStateReplicaCore(
       // closes, and an endless loop among three, where it never does.
       if (moved.length === 0) installSeq -= 1
       return moved
-    },
-
-    resetFromEntirety(payload: SubstratePayload): void {
-      // This substrate carries a single constant lineage (DEFAULT_LINEAGE) for
-      // its entire lifetime, so a true lineage boundary never arises here —
-      // `classifyResetTrigger` in the Synchronizer excludes it on both counts.
-      // Kept to satisfy the `ReplicaLike` contract. If it were ever invoked,
-      // field-level merge is the safe behaviour: discarding local state would
-      // lose concurrent field writes the peer has not seen.
-      this.merge(payload)
     },
   }
 }
@@ -547,35 +560,13 @@ export function createStateSubstrate(
       return cachedCtx
     },
 
-    version(): StateVersion {
-      return slot.get().core.version()
-    },
-
-    baseVersion(): StateVersion {
-      return slot.get().core.baseVersion()
-    },
-
-    advance(to: StateVersion): void {
-      slot.get().core.advance(to)
-    },
-
-    digest(): string {
-      return slot.get().core.digest()
-    },
-
-    exportEntirety(): SubstratePayload {
-      return slot.get().core.exportEntirety()
-    },
-
-    exportSince(since: StateVersion): SubstratePayload | null {
-      return slot.get().core.exportSince(since)
-    },
+    ...stateReplication(slot),
 
     merge(payload: SubstratePayload, options?: MergeOptions): void {
       // Both kinds join the same way. A delta is a partial tree and the merge
       // unions keys, so a key it omits is one it makes no claim about — the
       // same rule that makes an entirety safe to join rather than adopt.
-      const moved = slot.get().core.merge(payload)
+      const moved = slot.get().core.merge(payload, "StateSubstrate.merge")
       announceReprojection(
         Date.now(),
         planReconcile(
@@ -616,16 +607,14 @@ export function createStateSubstrate(
         planReconcile(schema, [{ path: RawPath.empty, effect: "all" }]),
       )
     },
-
-    dispose(reason: ClosedReason = "disposed"): void {
-      slot.release(reason)
-    },
   }
 
   return substrate
 }
 
 /** A state tree and the install counter that stamps what it takes in. */
+type StateHolder = ReturnType<typeof stateHolder>
+
 function stateHolder(initial: Container) {
   let tree = initial
   const core = createStateReplicaCore(
@@ -637,6 +626,23 @@ function stateHolder(initial: Container) {
   return { tree: (): Container => tree, core }
 }
 
+/**
+ * What an ephemeral replica and substrate answer alike, read through `slot`:
+ * the format's members, defined once so the two tiers cannot drift apart.
+ */
+function stateReplication(slot: Releasable<StateHolder>) {
+  return {
+    version: (): StateVersion => slot.get().core.version(),
+    baseVersion: (): StateVersion => slot.get().core.baseVersion(),
+    advance: (to: StateVersion): void => slot.get().core.advance(to),
+    digest: (): string => slot.get().core.digest(),
+    exportEntirety: (): SubstratePayload => slot.get().core.exportEntirety(),
+    exportSince: (since: StateVersion): SubstratePayload | null =>
+      slot.get().core.exportSince(since),
+    dispose: (reason: ClosedReason = "disposed"): void => slot.release(reason),
+  }
+}
+
 // ---------------------------------------------------------------------------
 // createStateReplica — headless
 // ---------------------------------------------------------------------------
@@ -645,22 +651,14 @@ export function createStateReplica(): Replica<StateVersion> {
   const slot = releasable(stateHolder({}), null)
 
   const replica = {
-    version: () => slot.get().core.version(),
-    baseVersion: () => slot.get().core.baseVersion(),
-    advance: (to: StateVersion) => slot.get().core.advance(to),
-    exportEntirety: () => slot.get().core.exportEntirety(),
-    exportSince: (since: StateVersion) => slot.get().core.exportSince(since),
+    ...stateReplication(slot),
     merge(payload: SubstratePayload): void {
-      slot.get().core.merge(payload)
+      slot.get().core.merge(payload, "StateReplica.merge")
     },
+    // No lineage boundary arises for this format, so field-level merge is
+    // the safe absorption (see `createStateSubstrate`'s `resetFromEntirety`).
     resetFromEntirety(payload: SubstratePayload) {
-      // See createStateSubstrate's resetFromEntirety — same rationale:
-      // this substrate has no true lineage boundary, so field-level merge is
-      // the correct fallback.
       replica.merge(payload)
-    },
-    dispose(reason: ClosedReason = "disposed"): void {
-      slot.release(reason)
     },
   }
   return replica
@@ -679,12 +677,7 @@ export const ephemeralReplicaFactory: ReplicaFactory<StateVersion> = {
   },
 
   fromEntirety(payload: SubstratePayload): Replica<StateVersion> {
-    if (payload.encoding !== "json" || typeof payload.data !== "string") {
-      throw new Error(
-        "StateReplicaFactory.fromEntirety only supports JSON-encoded payloads",
-      )
-    }
-    const replica = createStateReplica()
+    const replica = this.createEmpty()
     replica.merge(payload)
     return replica
   },

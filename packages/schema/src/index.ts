@@ -520,6 +520,8 @@ export {
   jsonRecordCodec,
   mismatchForInterpretation,
   mismatchForSync,
+  noDigest,
+  payloadBytes,
   planAdvance,
   reaches,
   replicaTypesCompatible,

@@ -15,8 +15,10 @@
 // reads is recorded on that transition, and assuming it early is exactly the
 // bug this replaced.
 
+import { ephemeralReplicaFactory } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import {
+  compareHoldings,
   transitionForPeerVersion,
   type VersionGapResult,
 } from "../synchronizer.js"
@@ -95,4 +97,55 @@ describe("transitionForPeerVersion", () => {
     // Not assumed either way. The caller warns; the state stays honest.
     expect(transitionForPeerVersion(parseError, "d", "p", "??")).toBeNull()
   })
+})
+
+// ---------------------------------------------------------------------------
+// compareHoldings — how a peer's holding stands against ours
+// ---------------------------------------------------------------------------
+
+describe("compareHoldings", () => {
+  // Ephemeral versions: an install counter can only ever say "concurrent",
+  // which is the case the digest exists for.
+  const ours = (digest: string | undefined) => ({
+    version: ephemeralReplicaFactory.parseVersion("ours:3"),
+    digest,
+  })
+  const theirs = (digest: string | undefined) => ({
+    version: ephemeralReplicaFactory.parseVersion("theirs:5"),
+    digest,
+  })
+  const cases: readonly [
+    string,
+    string | undefined,
+    string | undefined,
+    "equal" | "concurrent",
+  ][] = [
+    ["equal digests say equal, whatever the versions say", "d1", "d1", "equal"],
+    ["different digests leave it to the versions", "d1", "d2", "concurrent"],
+    [
+      "no digest of ours leaves it to the versions",
+      undefined,
+      "d1",
+      "concurrent",
+    ],
+    [
+      "no digest of theirs leaves it to the versions",
+      "d1",
+      undefined,
+      "concurrent",
+    ],
+    [
+      "no digests at all leave it to the versions",
+      undefined,
+      undefined,
+      "concurrent",
+    ],
+  ]
+  for (const [name, ourDigest, theirDigest, expected] of cases) {
+    it(name, () => {
+      expect(compareHoldings(ours(ourDigest), theirs(theirDigest))).toBe(
+        expected,
+      )
+    })
+  }
 })

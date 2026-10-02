@@ -1,10 +1,10 @@
 // ephemeral-digest — the fingerprint that lets two peers answer "do we hold
 // the same state?".
 //
-// A wall clock cannot answer it. `StateVersion.compare` says so, and returns
-// `"concurrent"` unconditionally rather than guess — which is why every
-// ephemeral exchange ships a whole document today. The digest is what replaces
-// the guess.
+// An install counter cannot answer it. `StateVersion.compare` says so, and
+// returns `"concurrent"` unconditionally rather than guess. The digest is what
+// answers instead, and every replica of the format gives it, a relay's
+// headless replica as well as a substrate.
 //
 // Everything here turns on one property: the digest is a function of the tree
 // alone, not of the route taken to it. Two peers that converge by opposite
@@ -12,8 +12,12 @@
 // the substrate is worse off than with no digest at all.
 
 import { describe, expect, it } from "vitest"
+import { digestToHex } from "../hash.js"
 import { batch, createRef, Schema } from "../index.js"
-import { ephemeralSubstrateFactory } from "../substrates/ephemeral.js"
+import {
+  ephemeralReplicaFactory,
+  ephemeralSubstrateFactory,
+} from "../substrates/ephemeral.js"
 import {
   type Container,
   decodeTree,
@@ -124,5 +128,67 @@ describe("the digest covers what replicates, and nothing else", () => {
 
     expect(stateTreeDigest(one)).not.toEqual(stateTreeDigest(two))
     expect(stateTreeDigest(back)).toEqual(stateTreeDigest(one))
+  })
+})
+
+describe("every replica of the format answers the digest", () => {
+  const S = Schema.struct({ peers: Schema.record(Schema.string()) })
+
+  /** The digest a fresh fold of `replica`'s state gives. */
+  const freshFold = (replica: { exportEntirety(): { data: unknown } }) =>
+    digestToHex(
+      stateTreeDigest(decodeTree(replica.exportEntirety().data as string)),
+    )
+
+  it("a headless replica and a substrate holding the same tree agree", () => {
+    const substrate = ephemeralSubstrateFactory.create(S)
+    batch(createRef(S, substrate) as any, (d: any) => {
+      d.peers.set("alice", "here")
+      d.peers.set("bob", "away")
+    })
+    const replica = ephemeralReplicaFactory.fromEntirety(
+      substrate.exportEntirety(),
+    )
+    expect(replica.digest()).toBe(substrate.digest())
+  })
+
+  it("the cached digest is never stale, on a substrate or a headless replica", () => {
+    const writer = ephemeralSubstrateFactory.create(S)
+    const write = (key: string, value: string) =>
+      batch(createRef(S, writer) as any, (d: any) => d.peers.set(key, value))
+    write("alice", "here")
+    const substrate = ephemeralSubstrateFactory.create(S)
+    const replica = ephemeralReplicaFactory.createEmpty()
+    const doc: any = createRef(S, substrate)
+
+    for (const held of [substrate, replica]) {
+      held.merge(writer.exportEntirety())
+      expect(held.digest()).toBe(freshFold(held))
+      // A merge that moves nothing leaves the digest, and the fold, as they
+      // were.
+      const before = held.digest()
+      held.merge(writer.exportEntirety())
+      expect(held.digest()).toBe(before)
+      expect(held.digest()).toBe(freshFold(held))
+    }
+
+    // A local write moves it.
+    const beforeWrite = substrate.digest()
+    batch(doc, (d: any) => d.peers.set("carol", "here"))
+    expect(substrate.digest()).not.toBe(beforeWrite)
+    expect(substrate.digest()).toBe(freshFold(substrate))
+
+    // A merge that moves something moves it.
+    write("bob", "away")
+    for (const held of [substrate, replica]) {
+      const beforeMerge = held.digest()
+      held.merge(writer.exportEntirety())
+      expect(held.digest()).not.toBe(beforeMerge)
+      expect(held.digest()).toBe(freshFold(held))
+    }
+
+    // And a second local write, after the cache was filled at the merge.
+    batch(doc, (d: any) => d.peers.set("carol", "gone"))
+    expect(substrate.digest()).toBe(freshFold(substrate))
   })
 })
