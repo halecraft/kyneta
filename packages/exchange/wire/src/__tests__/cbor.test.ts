@@ -29,6 +29,7 @@ import type {
   WireMessage,
   WireOfferMsg,
   WirePresentMsg,
+  WireRefuseMsg,
 } from "../wire-types.js"
 import {
   MessageType,
@@ -44,6 +45,7 @@ import {
   interestWire,
   offerWire,
   presentWire,
+  refuseWire,
   vacantWire,
 } from "./__helpers__/wire-fixtures.js"
 
@@ -226,6 +228,13 @@ describe("CBOR codec — offer", () => {
     expect(decoded.t).toBe(MessageType.Accept)
     expect(decoded.doc).toBe("doc-1")
     expect(decoded.v).toBe("AQ==:3")
+  })
+
+  it("round-trips refuse, by doc and by dx", () => {
+    for (const doc of [{ doc: "doc-1" }, { dx: 7 }]) {
+      const wire = refuseWire(doc, "AQ==:3")
+      expect(roundTrip(wire) as WireRefuseMsg).toEqual(wire)
+    }
   })
 
   it("round-trips offer with lineage set", () => {

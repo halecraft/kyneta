@@ -6,11 +6,13 @@
 //
 // Wire type ranges:
 //   0x01–0x0F: Lifecycle messages (establish, depart)
-//   0x10–0x1F: Sync messages (present, interest, offer, dismiss, vacant, accept)
+//   0x10–0x1F: Sync messages (present, interest, offer, dismiss, vacant, accept,
+//              refuse)
 //
 // Discriminators are allocated sequentially from the next free value and
 // classified by exact-value set-membership — numbering carries no
-// semantics (no range/mask dispatch anywhere). 0x14 = vacant, 0x15 = accept.
+// semantics (no range/mask dispatch anywhere). 0x14 = vacant, 0x15 = accept,
+// 0x16 = refuse.
 
 import type { SyncMode } from "@kyneta/schema"
 import {
@@ -37,6 +39,7 @@ export const MessageType = {
   Dismiss: 0x13,
   Vacant: 0x14,
   Accept: 0x15,
+  Refuse: 0x16,
 } as const
 
 export type MessageTypeValue = (typeof MessageType)[keyof typeof MessageType]
@@ -53,6 +56,7 @@ export const MessageTypeToString: Record<MessageTypeValue, string> = {
   [MessageType.Dismiss]: "dismiss",
   [MessageType.Vacant]: "vacant",
   [MessageType.Accept]: "accept",
+  [MessageType.Refuse]: "refuse",
 }
 
 /**
@@ -67,6 +71,7 @@ export const StringToMessageType: Record<string, MessageTypeValue> = {
   dismiss: MessageType.Dismiss,
   vacant: MessageType.Vacant,
   accept: MessageType.Accept,
+  refuse: MessageType.Refuse,
 }
 
 // ---------------------------------------------------------------------------
@@ -337,6 +342,18 @@ export type WireAcceptMsg = {
   v: string
 }
 
+/**
+ * Compact wire format for refuse: the refused offer's `v`, quoted back.
+ *
+ * Decoder invariant: exactly one of `{doc, dx}` must be present.
+ */
+export type WireRefuseMsg = {
+  t: typeof MessageType.Refuse
+  doc?: string
+  dx?: number
+  v: string
+}
+
 /** Union of all compact wire message types. */
 export type WireMessage =
   | WireEstablishMsg
@@ -347,3 +364,4 @@ export type WireMessage =
   | WireDismissMsg
   | WireVacantMsg
   | WireAcceptMsg
+  | WireRefuseMsg

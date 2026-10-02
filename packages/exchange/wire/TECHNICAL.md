@@ -135,7 +135,7 @@ Source: `packages/exchange/wire/src/wire-types.ts`. `encodeWireMessage` maps `Wi
 
 An `establish` is `{ t, id, pr, y, f?, pv? }`: the seat, the principal, the peer type, features and protocol version. `pr` joined in protocol 2.0 and replaced `n` (name); the validator requires it only when `pv` names 2.0 or later, so a 1.x peer's `establish` still parses and its major mismatch is reported (PROTOCOL.md §"Establish negotiation-core invariant").
 
-`MessageType` allocates discriminators sequentially: `0x01` establish, `0x02` depart, `0x10` present, `0x11` interest, `0x12` offer, `0x13` dismiss, `0x14` vacant, `0x15` accept (`{ t, doc | dx, v }`, the offer's version quoted back). An offer carries no `r`: reciprocation lives on interests only, and an `r` on an offer is ignored like any unknown field.
+`MessageType` allocates discriminators sequentially: `0x01` establish, `0x02` depart, `0x10` present, `0x11` interest, `0x12` offer, `0x13` dismiss, `0x14` vacant, `0x15` accept and `0x16` refuse (each `{ t, doc | dx, v }`, the offer's version quoted back; one validator, `validateOfferAnswer`, checks both). `VALID_MESSAGE_TYPES` is the set of `MessageType`'s values, so a new discriminator is valid once declared. An offer carries no `r`: reciprocation lives on interests only, and an `r` on an offer is ignored like any unknown field.
 
 ---
 

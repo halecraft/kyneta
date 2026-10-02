@@ -1,5 +1,6 @@
 // protocol-version — unit tests for the pure compatibility classifier.
 
+import { PROTOCOL_VERSION } from "@kyneta/transport"
 import { describe, expect, it } from "vitest"
 import { classifyProtocolSkew } from "../protocol-version.js"
 
@@ -24,5 +25,12 @@ describe("classifyProtocolSkew", () => {
 
   it("major mismatch dominates over minor differences", () => {
     expect(classifyProtocolSkew(v(2, 0), v(1, 9))).toBe("major-mismatch")
+  })
+})
+
+describe("PROTOCOL_VERSION", () => {
+  it("is 2.1, which added refuse; a 2.0 peer is a minor skew", () => {
+    expect(PROTOCOL_VERSION).toEqual(v(2, 1))
+    expect(classifyProtocolSkew(PROTOCOL_VERSION, v(2, 0))).toBe("minor-skew")
   })
 })

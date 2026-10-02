@@ -9,6 +9,7 @@
 import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import { CHANGEFEED } from "@kyneta/changefeed"
 import { json, Schema } from "@kyneta/schema"
+import type { PeerIdentityDetails } from "@kyneta/transport"
 import { describe, expect, it } from "vitest"
 import { authorityFor } from "../doc-meta.js"
 import { termsOf } from "../document-terms.js"
@@ -16,7 +17,7 @@ import type { Authority } from "../governance.js"
 import { Governance } from "../governance.js"
 import { settled, settledFeed } from "../settle.js"
 import { whenSettled } from "../sync.js"
-import { derivePeerSettled } from "../synchronizer.js"
+import { derivePeerSettled, refusingAuthority } from "../synchronizer.js"
 import { exchangesPerTest } from "./exchanges.js"
 
 const TestDoc = json.bind(Schema.struct({ title: Schema.string() }))
@@ -85,6 +86,49 @@ describe("derivePeerSettled", () => {
       }),
     ).toBe(false)
   })
+})
+
+describe("refusingAuthority", () => {
+  const peer = (principal: string) => ({
+    peerId: `${principal}-seat`,
+    principal,
+    type: "user" as const,
+  })
+  const server = peer("server")
+  const client = peer("client")
+  const other = peer("other")
+
+  // authority, refusing peers → the refusing authority
+  const table: Array<
+    [string, Authority, PeerIdentityDetails[], PeerIdentityDetails | undefined]
+  > = [
+    ["self, none refusing", "self", [], undefined],
+    ["self, one refusing", "self", [server], undefined],
+    ["self, two refusing", "self", [client, server], undefined],
+    ["any, none refusing", "any", [], undefined],
+    ["any, one refusing", "any", [client], client],
+    ["any, two refusing: the first", "any", [client, server], client],
+    ["predicate, none refusing", isServer, [], undefined],
+    [
+      "predicate, one refusing it does not match",
+      isServer,
+      [client],
+      undefined,
+    ],
+    ["predicate, one refusing it matches", isServer, [server], server],
+    [
+      "predicate, two refusing: the one it matches",
+      isServer,
+      [other, server],
+      server,
+    ],
+  ]
+
+  for (const [label, authority, refusing, expected] of table) {
+    it(label, () => {
+      expect(refusingAuthority(authority, refusing)).toBe(expected)
+    })
+  }
 })
 
 // ===========================================================================

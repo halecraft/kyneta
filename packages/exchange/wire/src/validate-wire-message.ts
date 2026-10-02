@@ -67,16 +67,7 @@ function fail(
 // Valid value sets
 // ---------------------------------------------------------------------------
 
-const VALID_MESSAGE_TYPES = new Set<number>([
-  MessageType.Establish,
-  MessageType.Depart,
-  MessageType.Present,
-  MessageType.Interest,
-  MessageType.Offer,
-  MessageType.Dismiss,
-  MessageType.Vacant,
-  MessageType.Accept,
-])
+const VALID_MESSAGE_TYPES = new Set<number>(Object.values(MessageType))
 
 const VALID_PEER_TYPES = new Set<string>(["user", "bot", "service"])
 
@@ -252,13 +243,16 @@ function validateVacant(
   return ok(obj as unknown as WireMessage)
 }
 
-function validateAccept(
-  obj: Record<string, unknown>,
-): Result<WireMessage, WireValidationError> {
-  const docCheck = validateDocOrDx(obj, "accept")
-  if (!docCheck.ok) return docCheck
-  if (!isString(obj.v)) return fail("v must be a string", ["v"])
-  return ok(obj as unknown as WireMessage)
+/** `accept` and `refuse`: a document, and the offer's `v` quoted back. */
+function validateOfferAnswer(
+  type: "accept" | "refuse",
+): (obj: Record<string, unknown>) => Result<WireMessage, WireValidationError> {
+  return obj => {
+    const docCheck = validateDocOrDx(obj, type)
+    if (!docCheck.ok) return docCheck
+    if (!isString(obj.v)) return fail("v must be a string", ["v"])
+    return ok(obj as unknown as WireMessage)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -276,7 +270,8 @@ const validators: Record<
   [MessageType.Offer]: validateOffer,
   [MessageType.Dismiss]: validateDismiss,
   [MessageType.Vacant]: validateVacant,
-  [MessageType.Accept]: validateAccept,
+  [MessageType.Accept]: validateOfferAnswer("accept"),
+  [MessageType.Refuse]: validateOfferAnswer("refuse"),
 }
 
 // ---------------------------------------------------------------------------

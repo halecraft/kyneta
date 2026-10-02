@@ -13,6 +13,7 @@
 //   await whenSettled(doc)
 
 import { CHANGEFEED, type Feed } from "@kyneta/changefeed"
+import { WriteRefusal } from "@kyneta/schema"
 import type { DocId, PeerId, PeerIdentityDetails } from "@kyneta/transport"
 import { authorityFor } from "./doc-meta.js"
 import { type Sync, type SyncRef, termsOf } from "./document-terms.js"
@@ -22,6 +23,30 @@ import type { Synchronizer } from "./synchronizer.js"
 import type { Connectivity, PeerSyncState } from "./types.js"
 
 export type { SyncRef } from "./document-terms.js"
+
+/**
+ * This document's authority refused our operations on it (`refuse`), so the
+ * document refuses this peer's authored writes, and its native handle: the
+ * local document holds operations the authority will never take. It lifts
+ * when the refusal is forgotten (the authority reconnects or departs) or the
+ * refusing peer stops being the authority. To rejoin, `destroy` the document
+ * and `get` it again.
+ */
+export class OfferRefusedError extends WriteRefusal {
+  override readonly name = "OfferRefusedError"
+
+  constructor(
+    readonly docId: DocId,
+    /** The refusing peer, which this peer treats as the document's authority. */
+    readonly peer: PeerIdentityDetails,
+  ) {
+    super(
+      `Sync: peer ${peer.peerId} (principal "${peer.principal}"), ` +
+        `the authority for document '${docId}', refused its operations; ` +
+        `destroy and get the document to rejoin`,
+    )
+  }
+}
 
 // ---------------------------------------------------------------------------
 // The live sync handle, over the Synchronizer

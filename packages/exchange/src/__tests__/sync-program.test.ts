@@ -1979,7 +1979,7 @@ describe("sync-program", () => {
       expect(defined(imports[0], "imports[0]").fromPeerId).toBe("bob")
     })
 
-    it("unauthorized peer: no import effect", () => {
+    it("a vetoed sender's offer goes to the shell marked vetoed, and is never accepted", () => {
       const update = makeUpdate({
         canAccept: (_docId, peer) => peer.peerId !== "bob",
       })
@@ -1987,20 +1987,16 @@ describe("sync-program", () => {
       ;[model] = addPeer(update, model, "bob", bob)
       ;[model] = ensureDoc(update, model, "doc-1")
 
-      const payload = {
-        kind: "entirety" as const,
-        encoding: "json" as const,
-        data: "{}",
-      }
       const [, effects] = receiveMessage(update, model, "bob", {
         type: "offer",
         docId: "doc-1",
-        payload,
+        payload: { kind: "entirety", encoding: "json", data: "{}" },
         version: "v2",
       })
 
-      const imports = effectsOfType(effects, "import-doc-data")
-      expect(imports.length).toBe(0)
+      expect(effectsOfType(effects, "import-doc-data")).toMatchObject([
+        { docId: "doc-1", fromPeerId: "bob", vetoed: true, accept: false },
+      ])
     })
 
     it("only imports: an offer is answered by an accept once imported, never by an interest", () => {
@@ -2581,6 +2577,12 @@ describe("sync-program", () => {
       })
       drive({ type: "sync/doc-advanced", docId: VETOED_DOC, version: "v4" })
       drive({ type: "sync/doc-publishable", docId: VETOED_DOC })
+      drive({
+        type: "sync/offer-vetoed",
+        docId: VETOED_DOC,
+        from: "carol",
+        version: "c0",
+      })
       drive({ type: "sync/doc-reset", docId: VETOED_DOC, version: "v4a" })
       drive({
         type: "sync/doc-imported",
@@ -2648,30 +2650,6 @@ describe("sync-program", () => {
   // canAccept predicate
   // -----------------------------------------------------------------------
   describe("canAccept predicate", () => {
-    it("blocks offer import from unauthorized peer", () => {
-      const update = makeUpdate({
-        canAccept: (_docId, peer) => peer.peerId !== "bob",
-      })
-      let model = initSync(alice)
-      ;[model] = addPeer(update, model, "bob", bob)
-      ;[model] = ensureDoc(update, model, "doc-1")
-
-      const payload = {
-        kind: "entirety" as const,
-        encoding: "json" as const,
-        data: "{}",
-      }
-      const [, effects] = receiveMessage(update, model, "bob", {
-        type: "offer",
-        docId: "doc-1",
-        payload,
-        version: "v2",
-      })
-
-      const imports = effectsOfType(effects, "import-doc-data")
-      expect(imports.length).toBe(0)
-    })
-
     it("allows offer import from authorized peer", () => {
       const update = makeUpdate({
         canAccept: (_docId, peer) => peer.peerId === "bob",
@@ -3242,5 +3220,284 @@ describe("leaving the sync graph", () => {
       created,
     )
     expect(effectsOfType(pushes, "send-offers")).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// refuse — a vetoed offer answered, and a refusal heard
+// ---------------------------------------------------------------------------
+
+describe("refuse", () => {
+  /** Alice holds doc-1 and has answered bob's interest, so bob gets pushes. */
+  function synced(update = makeUpdate()) {
+    let model = initSync(alice)
+    ;[model] = addPeer(update, model, "bob", bob)
+    ;[model] = ensureDoc(update, model, "doc-1")
+    ;[model] = receiveMessage(update, model, "bob", {
+      type: "interest",
+      docId: "doc-1",
+      version: "b1",
+    })
+    ;[model] = reportSent(update, model, "doc-1", "v1", "bob")
+    return model
+  }
+  const vetoed = (from = "bob"): Parameters<SyncUpdate>[0] => ({
+    type: "sync/offer-vetoed",
+    docId: "doc-1",
+    from,
+    version: "b2",
+  })
+  const refuse = { type: "refuse", docId: "doc-1", version: "v2" }
+  const stateOf = (model: SyncModel, peer = "bob") =>
+    model.peers.get(peer)?.docSyncStates.get("doc-1")
+
+  describe("answering a vetoed offer", () => {
+    it("sends one refuse quoting the offer's version", () => {
+      const update = makeUpdate()
+      const [, effects] = applyUpdate(update, vetoed(), synced(update))
+      expect(effects).toEqual([
+        {
+          type: "send-to-peer",
+          to: "bob",
+          message: { type: "refuse", docId: "doc-1", version: "b2" },
+        },
+      ])
+    })
+
+    it("sends nothing to a sender the document is not shared with", () => {
+      const update = makeUpdate({ canShare: () => false })
+      let model = initSync(alice)
+      ;[model] = addPeer(update, model, "bob", bob)
+      ;[model] = ensureDoc(update, model, "doc-1")
+      const [, effects] = applyUpdate(update, vetoed(), model)
+      expect(effects).toEqual([])
+    })
+
+    it("sends nothing for a leaving or unloaded document", () => {
+      const update = makeUpdate()
+      const [leaving] = applyUpdate(
+        update,
+        { type: "sync/doc-unloading", docId: "doc-1", leaving: true },
+        synced(update),
+      )
+      expect(applyUpdate(update, vetoed(), leaving)[1]).toEqual([])
+      const [unloaded] = applyUpdate(
+        update,
+        { type: "sync/doc-leave", docId: "doc-1", as: "unload" },
+        leaving,
+      )
+      expect(applyUpdate(update, vetoed(), unloaded)[1]).toEqual([])
+    })
+
+    it("does not even reach the shell for a leaving document", () => {
+      const update = makeUpdate({ canAccept: () => false })
+      const [leaving] = applyUpdate(
+        update,
+        { type: "sync/doc-unloading", docId: "doc-1", leaving: true },
+        synced(update),
+      )
+      const [, effects] = receiveMessage(update, leaving, "bob", {
+        type: "offer",
+        docId: "doc-1",
+        payload: { kind: "since", encoding: "json", data: "{}" },
+        version: "b2",
+      })
+      expect(effects).toEqual([])
+    })
+  })
+
+  describe("hearing a refusal", () => {
+    it("records refusesOurs, announces the document, and reports offer-refused once", () => {
+      const update = makeUpdate()
+      const [model, effects] = receiveMessage(
+        update,
+        synced(update),
+        "bob",
+        refuse,
+      )
+      expect(stateOf(model)?.refusesOurs).toBe(true)
+      expect(model.pendingPeerSyncDocIds).toContain("doc-1")
+      expect(effectsOfType(effects, "diagnostic")).toMatchObject([
+        {
+          code: "offer-refused",
+          severity: "warning",
+          peer: "bob",
+          docId: "doc-1",
+        },
+      ])
+      const [, again] = receiveMessage(update, model, "bob", refuse)
+      expect(again).toEqual([])
+    })
+
+    it("drops a refuse for a document with no state for the peer", () => {
+      const update = makeUpdate()
+      let model = initSync(alice)
+      ;[model] = addPeer(update, model, "bob", bob)
+      ;[model] = ensureDoc(update, model, "doc-1")
+      const [after, effects] = receiveMessage(update, model, "bob", refuse)
+      expect(after).toBe(model)
+      expect(effects).toEqual([])
+    })
+
+    it("sends the refusing peer no content, and still asks for its state, tells it what we hold, and takes its offers", () => {
+      const update = makeUpdate()
+      const [model] = receiveMessage(update, synced(update), "bob", refuse)
+
+      const [, pushed] = applyUpdate(
+        update,
+        { type: "sync/doc-advanced", docId: "doc-1", version: "v2" },
+        model,
+      )
+      expect(effectsOfType(pushed, "send-offers")).toEqual([])
+
+      const [, owed] = applyUpdate(
+        update,
+        { type: "sync/doc-publishable", docId: "doc-1" },
+        model,
+      )
+      expect(effectsOfType(owed, "send-offers")).toEqual([])
+
+      const [asked, answered] = receiveMessage(update, model, "bob", {
+        type: "interest",
+        docId: "doc-1",
+        version: "b2",
+        reciprocate: true,
+      })
+      expect(effectsOfType(answered, "send-offers")).toEqual([])
+      expect(effectsOfType(answered, "send-to-peer")).toMatchObject([
+        { to: "bob", message: { type: "interest", docId: "doc-1" } },
+      ])
+      expect(stateOf(asked)?.offerOwed).toBeUndefined()
+
+      const [, presented] = applyUpdate(
+        update,
+        {
+          type: "sync/doc-ensure",
+          docId: "doc-2",
+          mode: "interpret",
+          version: "v1",
+          replicaType: ["test", 0, 0],
+          historyFree: false,
+          syncMode: SYNC_COLLABORATIVE,
+          schemaHash: "abc123",
+          suspended: false,
+        },
+        model,
+      )
+      expect(effectsOfType(presented, "send-to-peers")).toMatchObject([
+        { to: ["bob"], message: { type: "present" } },
+      ])
+
+      const [, imported] = receiveMessage(update, model, "bob", {
+        type: "offer",
+        docId: "doc-1",
+        payload: { kind: "since", encoding: "json", data: "{}" },
+        version: "b2",
+      })
+      expect(effectsOfType(imported, "import-doc-data")).toMatchObject([
+        { vetoed: false },
+      ])
+    })
+
+    it("a reconnect forgets the refusal and announces only the documents it was forgotten for", () => {
+      const update = makeUpdate()
+      let model = synced(update)
+      ;[model] = ensureDoc(update, model, "doc-2")
+      ;[model] = receiveMessage(update, model, "bob", {
+        type: "interest",
+        docId: "doc-2",
+        version: "b1",
+      })
+      ;[model] = receiveMessage(update, model, "bob", refuse)
+      ;[model] = applyUpdate(update, { type: "sync/tick-quiescent" }, model)
+      ;[model] = applyUpdate(
+        update,
+        { type: "sync/peer-unavailable", peerId: "bob" },
+        model,
+      )
+      ;[model] = applyUpdate(update, { type: "sync/tick-quiescent" }, model)
+      expect(stateOf(model)?.refusesOurs).toBe(true)
+
+      const [back] = addPeer(update, model, "bob", bob)
+      expect(stateOf(back)?.refusesOurs).toBeUndefined()
+      expect(back.pendingPeerSyncDocIds).toEqual(["doc-1"])
+    })
+
+    it("a departure deletes the refusal with the rest of the peer's state", () => {
+      const update = makeUpdate()
+      const [model] = receiveMessage(update, synced(update), "bob", refuse)
+      const [gone] = applyUpdate(
+        update,
+        { type: "sync/peer-departed", peerId: "bob" },
+        model,
+      )
+      expect(gone.peers.has("bob")).toBe(false)
+      expect(gone.pendingPeerSyncDocIds).toContain("doc-1")
+    })
+  })
+
+  describe("contentRecipients — no content reaches a refusing peer", () => {
+    it("holds across every input that sends content, with an unrefusing control", () => {
+      const update = makeUpdate({
+        canShare: (_docId, peer) => peer.peerId !== "carol",
+      })
+      let model = initSync(alice)
+      const collected: SyncEffect[] = []
+      const drive = (input: Parameters<SyncUpdate>[0]) => {
+        const [m, fx] = applyUpdate(update, input, model)
+        model = m
+        collected.push(...fx)
+      }
+      const interest = (from: string) =>
+        drive({
+          type: "sync/message-received",
+          from,
+          message: { type: "interest", docId: "doc-1", version: "x1" },
+        })
+
+      ;[model] = addPeer(update, model, "bob", bob)
+      ;[model] = addPeer(update, model, "dave", {
+        peerId: "dave",
+        principal: "dave",
+        type: "user",
+      })
+      ;[model] = addPeer(update, model, "carol", carol)
+      ;[model] = ensureDoc(update, model, "doc-1")
+      for (const peer of ["bob", "dave"]) {
+        interest(peer)
+        ;[model] = reportSent(update, model, "doc-1", "v1", peer)
+      }
+      ;[model] = receiveMessage(update, model, "dave", refuse)
+      collected.length = 0
+
+      drive({ type: "sync/doc-advanced", docId: "doc-1", version: "v2" })
+      drive({ type: "sync/doc-publishable", docId: "doc-1" })
+      drive({
+        type: "sync/doc-imported",
+        docId: "doc-1",
+        version: "v3",
+        offered: "c1",
+        fromPeerId: "carol",
+        changed: true,
+        held: true,
+      })
+      interest("dave")
+      interest("bob")
+      // Carol is not shared with: a vetoed offer of hers is not refused.
+      drive(vetoed("carol"))
+
+      const contentTo = (peer: string) =>
+        effectsOfType(collected, "send-offers").some(e =>
+          e.to.some(r => r.peerId === peer),
+        )
+      expect(contentTo("bob")).toBe(true)
+      expect(contentTo("dave")).toBe(false)
+      expect(contentTo("carol")).toBe(false)
+      expect(
+        effectsOfType(collected, "send-to-peer").some(
+          e => e.to === "carol" && e.message.type === "refuse",
+        ),
+      ).toBe(false)
+    })
   })
 })

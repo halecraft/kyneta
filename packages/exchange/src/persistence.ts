@@ -6,7 +6,8 @@
 // within a document, whether that has happened, and why not. Whether this peer
 // may author the document is its context's refusal (`writeRefusal`): a
 // document a `canWrite` policy keeps from this peer refuses authored writes,
-// so does a serialized document another seat of the storage writes
+// so does one whose authority refused this peer's operations, so does a
+// serialized document another seat of the storage writes
 // (§"Serialized documents: one writer seat per storage"), and so does a closed
 // one.
 //
@@ -101,6 +102,8 @@ export function whenPersisted(ref: object): Promise<void> {
  * itself throws:
  * - `NotAWriterError`: a `Policy.canWrite` rejects this peer's own identity
  *   for the document, for as long as the policies say so;
+ * - `OfferRefusedError`: the document's authority refused this peer's
+ *   operations on it, for as long as that refusal stands;
  * - `DocumentClosedError`: the document was destroyed, unloaded or disposed,
  *   or is unloading;
  * - `DocumentLoadingError`: a serialized document is still loading its own

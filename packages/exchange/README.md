@@ -363,16 +363,17 @@ Each BoundSchema carries a `SyncMode` — a structured record with two orthogona
 | `SYNC_AUTHORITATIVE` | serialized + persistent | Request/response | Total (no concurrency) | Plain substrates |
 | `SYNC_EPHEMERAL` | concurrent + transient | Bidirectional exchange | Unordered (digest decides equality) | Ephemeral/presence |
 
-All three run over the same six-message sync protocol:
+All three run over the same seven-message sync protocol:
 
 - **`present`** — "I have these documents." Carries `docId`, `replicaType`, `syncMode`, and `schemaHash` so the receiver can validate compatibility before any data exchange.
 - **`interest`** — "I want document X. Here's my version." Carries `reciprocate` for collaborative bidirectional exchange.
 - **`offer`** — "Here is state for document X." Carries an opaque `SubstratePayload` — the exchange never inspects the bytes.
 - **`accept`** — "I now hold your version of document X." Lets a writer compact its history down to what every reader holds.
+- **`refuse`** — "I will not take your operations on document X." Answers an offer the receiver's policy vetoes; see [When a peer refuses your writes](#when-a-peer-refuses-your-writes).
 - **`dismiss`** — "I'm leaving document X."
 - **`vacant`** — "You asked for document X, and I won't serve it."
 
-Two lifecycle messages (`establish`, `depart`) handle the channel handshake and departure. The sync mode's field values determine *when* and *how* these messages are sent, not their shape. Peers must speak the same protocol major; this release is protocol 2.0, and a 1.x peer is reported as a `protocol-mismatch` diagnostic.
+Two lifecycle messages (`establish`, `depart`) handle the channel handshake and departure. The sync mode's field values determine *when* and *how* these messages are sent, not their shape. Peers must speak the same protocol major; this release is protocol 2.1, a 1.x peer is reported as a `protocol-mismatch` diagnostic, and a 2.0 peer as a `protocol-skew` warning (it drops `refuse`, and is not told its offers are refused).
 
 ### The exchange never inspects your data
 
@@ -476,7 +477,7 @@ Five predicates control information flow. All use three-valued logic (`true` / `
 
 - **`canShare(docId, peer) → boolean | undefined`** — Outbound. Gates all four ways a document can reach a peer: the `present` that announces it, the push on a local change, the relay of an imported change, and the `offer` answering a peer that asks for it by id. A denied request is answered `vacant` — "I will not serve you this" — which is deliberately the same reply the peer would get for a document that does not exist, so a denial reveals nothing about which ids are real. Also gates `resolve`: if `canShare` returns `false` for the announcing peer, the callback never fires.
 
-- **`canAccept(docId, peer) → boolean | undefined`** — Inbound. Gates offer imports. When rejected, the offer is silently dropped, and its operations stay with the peer that wrote them. To keep a peer from writing a document at all, use `canWrite`.
+- **`canAccept(docId, peer) → boolean | undefined`** — Inbound. Gates offer imports. A rejected offer is not imported, and its sender is told with `refuse`: it stops sending you that document, and if you are its authority, it stops writing it ([When a peer refuses your writes](#when-a-peer-refuses-your-writes)). Its operations stay with it, so to keep a peer from writing a document at all, use `canWrite`.
 
 - **`canWrite(docId, peer) → boolean | undefined`** — Authorship. May `peer` author operations in this document? Judged twice: against this exchange's own identity for every local write, which throws `NotAWriterError` when rejected, and against the sender of every offer, which is dropped as a `canAccept` veto is. See [A document only one peer writes](#a-document-only-one-peer-writes).
 
@@ -510,6 +511,18 @@ exchange.register({
 - **The host must pass its own predicate.** A host whose principal the predicate rejects is read-only too, and finds out at its first write.
 
 A read-only document hands out no native handle: `unwrap` throws `NotAWriterError` too (see [Escape Hatches](#escape-hatches)). Render a read-only view through Kyneta refs (`useText` and its siblings), not through a native editor binding in read-only mode.
+
+### When a peer refuses your writes
+
+Where `canWrite` is not declared on both sides (the host vetoes with `canAccept` alone, the two run different policy builds, or a client bypasses its gate), a write can still reach a peer that will not take it. That peer answers with `refuse`, and the writer:
+
+- reports an `offer-refused` diagnostic (a warning, on the console and the observation bus) naming the peer and the document;
+- sends that peer no more of the document's content until the peer reconnects;
+- if that peer is the document's authority (by `Policy.authority`: a predicate that matches it, or `"any"`; never under `"self"`), goes read-only: every write throws `OfferRefusedError`, which `writeRefusal(doc)` returns and `useText` honours.
+
+The lock follows the authority's current refusal. It survives a disconnection until the authority departs (`departureTimeout`); a reconnect clears it until the authority refuses again, at the reconnect's first offer; and a policy change that makes the refusing peer no longer the authority lifts it.
+
+A refused writer is forked from its authority: its document, and its store, hold operations the authority will never take, and the authority's later writes may not reach it. To rejoin, `destroy` the document locally and `get` it again, which loads the authority's state. An `unload` does not recover: loading again brings the refused operations back from the store, and the next offer is refused again. Nothing rejoins automatically, because discarding local operations is your application's decision.
 
 ### Dynamic Document Creation
 
@@ -1032,7 +1045,7 @@ Standalone functions, not members of `sync(doc)`. They divide by three questions
 | `persistedFeed(doc)` | Observable form of `persisted`. A callable, so never put it in an `if`. |
 | `whenPersisted(doc)` | Resolve once `persisted`. Rejects at once if a store write failed and none has succeeded since, and rejects if one fails while waiting. Writes are retried on their own, so a caller can check `persistenceError` and wait again. |
 | `persistenceError(doc)` | The error of the latest failed store write, cleared by the next write that succeeds. Covers every store write, including one that stores only operations imported from peers, so it can be set while `persisted` is true. After the seat is lost, the `SeatLostError`, for good. |
-| `writeRefusal(doc)` | Why this document's writes throw, a `WriteRefusal` (narrow with `instanceof`), or `undefined`: a `NotAWriterError` while a `canWrite` policy rejects this exchange's own identity, a `WriterRefusedError` when another seat of the store writes this `json` document (kept for the session), a `DocumentLoadingError` while a stored `json` document loads, a `DocumentClosedError` once the document is closed. |
+| `writeRefusal(doc)` | Why this document's writes throw, a `WriteRefusal` (narrow with `instanceof`), or `undefined`: a `NotAWriterError` while a `canWrite` policy rejects this exchange's own identity, an `OfferRefusedError` while the document's authority refuses this exchange's operations on it, a `WriterRefusedError` when another seat of the store writes this `json` document (kept for the session), a `DocumentLoadingError` while a stored `json` document loads, a `DocumentClosedError` once the document is closed. |
 | `writeRefusalFeed(doc)` | Observable form of `writeRefusal`, e.g. to disable an editor. A callable, so never put it in an `if`. |
 
 `whenSettled` and `docStatus` resolve the authority the same way, so they cannot disagree: call-site `opts.authority` → the Exchange's `Policy.authority` → `"any"`.

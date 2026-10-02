@@ -43,6 +43,7 @@ import {
   type WireMessage,
   type WireOfferMsg,
   type WirePresentMsg,
+  type WireRefuseMsg,
   type WireVacantMsg,
 } from "@kyneta/wire"
 import type {
@@ -189,8 +190,8 @@ function recordInboundSchemaAlias(
  *   - present: announces aliases (`a`, `sa`) for any doc/schema not yet
  *     assigned. Always sets `d` and `sh` (full identifiers) for
  *     forward-compat. The first reference to a schema also assigns `sa`.
- *   - interest/offer/dismiss: if mutual alias is on AND the doc has an
- *     alias, emits `dx` with `doc` absent. Otherwise emits `doc`.
+ *   - every other message names one document: if mutual alias is on AND the
+ *     doc has an alias, emits `dx` with `doc` absent. Otherwise emits `doc`.
  */
 export function applyOutboundAliasing(
   state: AliasState,
@@ -272,12 +273,9 @@ export function applyOutboundAliasing(
     }
 
     case "interest": {
-      const wire: WireInterestMsg = { t: MessageType.Interest }
-      const aliasInfo = state.outboundAliasByDoc.get(msg.docId)
-      if (aliasInfo !== undefined && state.mutualAlias) {
-        wire.dx = aliasInfo
-      } else {
-        wire.doc = msg.docId
+      const wire: WireInterestMsg = {
+        t: MessageType.Interest,
+        ...outboundDoc(state, msg.docId),
       }
       if (msg.version !== undefined) wire.v = msg.version
       if (msg.reciprocate !== undefined) wire.r = msg.reciprocate
@@ -313,12 +311,7 @@ export function applyOutboundAliasing(
         pe,
         d: msg.payload.data,
         v: msg.version,
-      }
-      const aliasInfo = state.outboundAliasByDoc.get(msg.docId)
-      if (aliasInfo !== undefined && state.mutualAlias) {
-        wire.dx = aliasInfo
-      } else {
-        wire.doc = msg.docId
+        ...outboundDoc(state, msg.docId),
       }
       if (msg.payload.lineage !== undefined) wire.ln = msg.payload.lineage
       if (msg.digest !== undefined) wire.g = msg.digest
@@ -326,43 +319,54 @@ export function applyOutboundAliasing(
     }
 
     case "accept": {
-      const wire: WireAcceptMsg = { t: MessageType.Accept, v: msg.version }
-      const aliasInfo = state.outboundAliasByDoc.get(msg.docId)
-      if (aliasInfo !== undefined && state.mutualAlias) {
-        wire.dx = aliasInfo
-      } else {
-        wire.doc = msg.docId
+      const wire: WireAcceptMsg = {
+        t: MessageType.Accept,
+        v: msg.version,
+        ...outboundDoc(state, msg.docId),
+      }
+      return { state, result: ok(wire) }
+    }
+
+    case "refuse": {
+      const wire: WireRefuseMsg = {
+        t: MessageType.Refuse,
+        v: msg.version,
+        ...outboundDoc(state, msg.docId),
       }
       return { state, result: ok(wire) }
     }
 
     case "dismiss": {
-      const wire: WireDismissMsg = { t: MessageType.Dismiss }
-      const aliasInfo = state.outboundAliasByDoc.get(msg.docId)
-      if (aliasInfo !== undefined && state.mutualAlias) {
-        wire.dx = aliasInfo
-      } else {
-        wire.doc = msg.docId
+      const wire: WireDismissMsg = {
+        t: MessageType.Dismiss,
+        ...outboundDoc(state, msg.docId),
       }
       return { state, result: ok(wire) }
     }
 
     case "vacant": {
-      const wire: WireVacantMsg = { t: MessageType.Vacant }
-      const aliasInfo = state.outboundAliasByDoc.get(msg.docId)
-      if (aliasInfo !== undefined && state.mutualAlias) {
-        wire.dx = aliasInfo
-      } else {
-        wire.doc = msg.docId
+      const wire: WireVacantMsg = {
+        t: MessageType.Vacant,
+        ...outboundDoc(state, msg.docId),
       }
       return { state, result: ok(wire) }
     }
   }
 }
 
-// ---------------------------------------------------------------------------
-// Inbound transformer
-// ---------------------------------------------------------------------------
+/**
+ * How an outbound message names `docId`: by its alias when aliasing is
+ * mutual and the document has one, otherwise by the id itself.
+ */
+function outboundDoc(
+  state: AliasState,
+  docId: string,
+): { dx: Alias } | { doc: string } {
+  const alias = state.outboundAliasByDoc.get(docId)
+  return alias !== undefined && state.mutualAlias
+    ? { dx: alias }
+    : { doc: docId }
+}
 
 /**
  * Pure transformer: resolve a `WireMessage` to its `ChannelMsg` form,
@@ -471,10 +475,8 @@ export function applyInboundAliasing(
     }
 
     case MessageType.Interest: {
-      const docResult = resolveDocId(s_get_inbound(state), wire.doc, wire.dx)
+      const docResult = inboundDoc(state, wire)
       if ("error" in docResult) return { state, result: err(docResult.error) }
-      const docErr = validateDocId(docResult.docId)
-      if (docErr) return { state, result: err(docErr) }
       const msg: InterestMsg = { type: "interest", docId: docResult.docId }
       if (wire.v !== undefined) msg.version = wire.v
       if (wire.r !== undefined) msg.reciprocate = wire.r
@@ -484,10 +486,8 @@ export function applyInboundAliasing(
     }
 
     case MessageType.Offer: {
-      const docResult = resolveDocId(s_get_inbound(state), wire.doc, wire.dx)
+      const docResult = inboundDoc(state, wire)
       if ("error" in docResult) return { state, result: err(docResult.error) }
-      const docErr = validateDocId(docResult.docId)
-      if (docErr) return { state, result: err(docErr) }
       const kind =
         PayloadKindToString[wire.pk as keyof typeof PayloadKindToString]
       const encoding =
@@ -518,29 +518,32 @@ export function applyInboundAliasing(
     }
 
     case MessageType.Accept: {
-      const docResult = resolveDocId(s_get_inbound(state), wire.doc, wire.dx)
+      const docResult = inboundDoc(state, wire)
       if ("error" in docResult) return { state, result: err(docResult.error) }
-      const docErr = validateDocId(docResult.docId)
-      if (docErr) return { state, result: err(docErr) }
       return {
         state,
         result: ok({ type: "accept", docId: docResult.docId, version: wire.v }),
       }
     }
 
-    case MessageType.Dismiss: {
-      const docResult = resolveDocId(s_get_inbound(state), wire.doc, wire.dx)
+    case MessageType.Refuse: {
+      const docResult = inboundDoc(state, wire)
       if ("error" in docResult) return { state, result: err(docResult.error) }
-      const docErr = validateDocId(docResult.docId)
-      if (docErr) return { state, result: err(docErr) }
+      return {
+        state,
+        result: ok({ type: "refuse", docId: docResult.docId, version: wire.v }),
+      }
+    }
+
+    case MessageType.Dismiss: {
+      const docResult = inboundDoc(state, wire)
+      if ("error" in docResult) return { state, result: err(docResult.error) }
       return { state, result: ok({ type: "dismiss", docId: docResult.docId }) }
     }
 
     case MessageType.Vacant: {
-      const docResult = resolveDocId(s_get_inbound(state), wire.doc, wire.dx)
+      const docResult = inboundDoc(state, wire)
       if ("error" in docResult) return { state, result: err(docResult.error) }
-      const docErr = validateDocId(docResult.docId)
-      if (docErr) return { state, result: err(docErr) }
       return { state, result: ok({ type: "vacant", docId: docResult.docId }) }
     }
 
@@ -555,9 +558,18 @@ export function applyInboundAliasing(
   }
 }
 
-/** Read-only view of the inbound docId map for resolution. */
-function s_get_inbound(state: AliasState): ReadonlyMap<Alias, string> {
-  return state.inboundDocByAlias
+/**
+ * The document an inbound message names, by id or by an alias already
+ * introduced, checked against the docId length cap.
+ */
+function inboundDoc(
+  state: AliasState,
+  wire: { readonly doc?: string; readonly dx?: number },
+): { docId: string } | { error: AliasResolutionError } {
+  const resolved = resolveDocId(state.inboundDocByAlias, wire.doc, wire.dx)
+  if ("error" in resolved) return resolved
+  const invalid = validateDocId(resolved.docId)
+  return invalid === null ? resolved : { error: invalid }
 }
 
 function resolveDocId(

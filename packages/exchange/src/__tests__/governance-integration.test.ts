@@ -4,14 +4,12 @@
 // and acceptance rules at runtime, including dynamic registration
 // and disposal of policies across Exchange instances connected via
 // BridgeTransport.
-//
-// Backward compatibility (ExchangeParams.canShare/canAccept) is already
-// covered by the 204 pre-existing integration tests — no need to
-// duplicate that coverage here.
 
 import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import { batch, Interpret, json, Reject, Schema } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
+import { writeRefusal } from "../persistence.js"
+import { OfferRefusedError } from "../sync.js"
 import { drain, exchangesPerTest } from "./exchanges.js"
 
 // ---------------------------------------------------------------------------
@@ -183,7 +181,7 @@ describe("dynamic policy canShare", () => {
 // ---------------------------------------------------------------------------
 
 describe("dynamic policy canAccept", () => {
-  it("blocks inbound mutations while registered; disposing re-enables them", async () => {
+  it("blocks inbound mutations while registered, and tells the writer; after disposal, a reconnect re-enables them", async () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
@@ -208,15 +206,24 @@ describe("dynamic policy canAccept", () => {
     docA.title.set("V1")
     await drain(40)
 
-    // Bob should NOT have Alice's mutation
+    // Bob does not have Alice's mutation, and says so. Under the default
+    // authority, `"any"`, Bob's refusal stops Alice's writes.
     expect(docB.title()).toBe("")
+    expect(writeRefusal(docA)).toBeInstanceOf(OfferRefusedError)
 
-    // Dispose — Alice's future mutations should sync
+    // Disposing changes Bob's rule, which Alice hears of at a reconnect: it
+    // forgets the refusal, and Bob takes what Alice offers.
     dispose()
-
-    docA.title.set("V2")
+    await exchangeA.removeTransport("alice")
+    await exchangeA.addTransport(
+      createBridgeTransport({ transportId: "alice", bridge }),
+    )
     await drain(40)
 
+    expect(writeRefusal(docA)).toBeUndefined()
+    expect(docB.title()).toBe("V1")
+    docA.title.set("V2")
+    await drain(40)
     expect(docB.title()).toBe("V2")
   })
 })

@@ -1,8 +1,8 @@
 // sync-program — TEA state machine for document convergence.
 //
 // The sync program handles the document-exchange vocabulary: present,
-// interest, offer, dismiss. It tracks per-peer document sync states
-// and manages sync protocol dispatch. Every way our own document leaves the
+// interest, offer, accept, refuse, dismiss and vacant. It tracks per-peer
+// document sync states and manages sync protocol dispatch. Every way our own document leaves the
 // sync graph (suspend, unload, destroy) is one input, `sync/doc-leave`,
 // decided by `planLeave`.
 //
@@ -29,6 +29,7 @@ import type {
   PeerId,
   PeerIdentityDetails,
   PresentMsg,
+  RefuseMsg,
   SyncMsg,
   VacantMsg,
 } from "@kyneta/transport"
@@ -97,12 +98,22 @@ export type DocEntry = {
     }
 )
 
+/** A document held in memory: interpret or replicate. */
+type HeldEntry = Extract<DocEntry, { mode: "interpret" | "replicate" }>
+
+/** Whether `entry` is held in memory. */
+function isHeld(entry: DocEntry | undefined): entry is HeldEntry {
+  return entry?.mode === "interpret" || entry?.mode === "replicate"
+}
+
 /** Whether `entry` is held here and leaving: see {@link DocEntry}. */
 function isLeaving(entry: DocEntry): boolean {
-  return (
-    (entry.mode === "interpret" || entry.mode === "replicate") &&
-    entry.leaving === true
-  )
+  return isHeld(entry) && entry.leaving === true
+}
+
+/** Whether `entry` takes anything in: held in memory, and not leaving. */
+function takesIn(entry: DocEntry | undefined): entry is HeldEntry {
+  return isHeld(entry) && entry.leaving !== true
 }
 
 /** How our own document leaves the sync graph. */
@@ -300,6 +311,17 @@ export type SyncInput =
     }
   /** `docId` may leave the process again: send what was withheld. */
   | { type: "sync/doc-publishable"; docId: DocId }
+  /**
+   * The shell found that an offer the acceptance predicate vetoed carries
+   * operations we lack (`planImport`'s `vetoed`): answer it with `refuse`.
+   */
+  | {
+      type: "sync/offer-vetoed"
+      docId: DocId
+      from: PeerId
+      /** The vetoed offer's version, quoted back. */
+      version: string
+    }
   | { type: "sync/declare-vacant"; docId: DocId; to: PeerId }
   | { type: "sync/queue-doc-event"; event: DocChange }
   | { type: "sync/tick-quiescent" }
@@ -338,6 +360,7 @@ type SyncDiagnostic = Extract<
       | "sync-mode-mismatch"
       | "lineage-collision"
       | "unloaded-doc-reloaded"
+      | "offer-refused"
   }
 >
 
@@ -424,6 +447,13 @@ export type SyncEffect =
       payload: SubstratePayload
       version: string
       fromPeerId: PeerId
+      /**
+       * The acceptance predicate vetoed the sender. The shell compares the
+       * offer's version and takes nothing in: an offer with operations we
+       * lack comes back as `sync/offer-vetoed`, and one we already hold is
+       * left unanswered.
+       */
+      vetoed: boolean
       /**
        * Whether the sender is owed an `accept` once the offer is held
        * (imported, already held, or taken by a reset). Decided here: a
@@ -533,7 +563,7 @@ function appendUniqueDocIds(
  *
  * This is the **single fold point** for the volatile `docSyncStates` map:
  * `handlePeerSynced`, `handleInterestForKnownDoc`, `handleDocImported`,
- * `handleAccept` and `handleVacant` all route through it, so "a peer's state
+ * `handleAccept`, `handleRefuse` and `handleVacant` all route through it, so "a peer's state
  * changed" is recorded in exactly one place.
  *
  * `patch` updates only the fields it names, so a new status keeps what we
@@ -603,6 +633,7 @@ type PeerDocSyncPatch = {
   readonly ourVersionTheyWillHold?: string
   readonly theirVersionWeHold?: string
   readonly offerOwed?: PeerDocSyncState["offerOwed"]
+  readonly refusesOurs?: true
 }
 
 /** `state` without the fields whose value is `undefined`. */
@@ -624,6 +655,21 @@ function clearReconciled(
   const next = new Map(map)
   next.delete(docId)
   return next
+}
+
+/**
+ * Pure projection: the identities of the peers refusing our operations on
+ * this doc (`refusesOurs`), in the order the model holds the peers.
+ */
+export function refusingPeers(
+  model: SyncModel,
+  docId: DocId,
+): PeerIdentityDetails[] {
+  const refusing: PeerIdentityDetails[] = []
+  for (const peer of model.peers.values()) {
+    if (peer.docSyncStates.get(docId)?.refusesOurs) refusing.push(peer.identity)
+  }
+  return refusing
 }
 
 /**
@@ -690,7 +736,7 @@ function vacantReply(to: PeerId, docId: DocId): SyncEffect {
  */
 function filterPeersByShare(
   model: SyncModel,
-  peerIds: PeerId[],
+  peerIds: readonly PeerId[],
   docId: DocId,
   canShare: SyncPredicate,
 ): PeerId[] {
@@ -699,6 +745,50 @@ function filterPeersByShare(
     if (!peer) return false
     return canShare(docId, peer.identity)
   })
+}
+
+/**
+ * "I will not take your operations on this document." The answer to an offer
+ * the acceptance predicate vetoed and that carries operations we lack.
+ *
+ * Sent only to a peer the document is shared with, and nothing otherwise.
+ * An offer for a document we do not hold gets silence, so a `refuse` to a
+ * peer `canShare` denies would tell it that we hold the document: the
+ * existence oracle `vacantReply` describes, from the other direction.
+ *
+ * It carries no reason. The acceptance predicate is one (`canAccept ∧
+ * canWrite`, composed by the Exchange), and the sender does the same thing
+ * whichever part vetoed it.
+ */
+function refuseReply(
+  to: PeerId,
+  peer: PeerIdentityDetails,
+  docId: DocId,
+  version: string,
+  canShare: SyncPredicate,
+): SyncEffect[] {
+  if (!canShare(docId, peer)) return []
+  return [
+    { type: "send-to-peer", to, message: { type: "refuse", docId, version } },
+  ]
+}
+
+/**
+ * The peers among `peerIds` a document's content may go to: shared with,
+ * and not refusing our operations on it. Every path that sends content
+ * (push, relay, an owed offer, the answer to an interest) filters through
+ * this; `present` and `dismiss`, which carry none, filter by `canShare`
+ * alone, so a refusing peer still hears what we hold and what we leave.
+ */
+function contentRecipients(
+  model: SyncModel,
+  peerIds: readonly PeerId[],
+  docId: DocId,
+  canShare: SyncPredicate,
+): PeerId[] {
+  return filterPeersByShare(model, peerIds, docId, canShare).filter(
+    id => model.peers.get(id)?.docSyncStates.get(docId)?.refusesOurs !== true,
+  )
 }
 
 /**
@@ -781,7 +871,8 @@ function versionTheyHold(message: InterestMsg): string | undefined {
  *
  * A peer whose baseline we do not know, one that has just come back or whose
  * interest has not been answered yet, is not pushed to; the answer to its
- * interest catches it up. A peer that no longer holds its baseline, one that
+ * interest catches it up. Neither is a peer that refuses our operations
+ * (`contentRecipients`). A peer that no longer holds its baseline, one that
  * restarted without its state, takes the push short of the offered version
  * and asks for the rest.
  */
@@ -794,7 +885,7 @@ function buildPush(
   // Interest-based routing for all protocols — only peers who have
   // expressed interest (via announce → interest → offer) receive pushes.
   const raw = getSyncedPeers(model, docId, excludePeerId)
-  const peerIds = filterPeersByShare(model, raw, docId, canShare)
+  const peerIds = contentRecipients(model, raw, docId, canShare)
   const to: { peerId: PeerId; sinceVersion: string }[] = []
   let pushed = model
   for (const peerId of peerIds) {
@@ -882,22 +973,27 @@ function buildPresent(
 }
 
 /**
- * Build the commands to respond to an interest message for a known doc.
- * Pure logic, shared by handleInterestForKnownDoc.
+ * Build the commands to respond to an interest message for a known doc: our
+ * state, when `answered` (the peer may have our content), and, for
+ * concurrent writers, an interest in theirs. Pure logic, used by
+ * handleInterestForKnownDoc.
  */
 function buildInterestResponse(
   fromPeerId: PeerId,
   message: InterestMsg,
   docEntry: DocEntry,
   model: SyncModel,
+  answered: boolean,
 ): SyncEffect[] {
   const effects: SyncEffect[] = []
 
-  effects.push({
-    type: "send-offers",
-    docId: message.docId,
-    to: [{ peerId: fromPeerId, sinceVersion: versionTheyHold(message) }],
-  })
+  if (answered) {
+    effects.push({
+      type: "send-offers",
+      docId: message.docId,
+      to: [{ peerId: fromPeerId, sinceVersion: versionTheyHold(message) }],
+    })
+  }
 
   // Concurrent writers need to hear each other, so ask for the peer's state
   // in turn. `reciprocate: false` on the way back stops the loop. A leaving
@@ -985,8 +1081,10 @@ const defaultParams: CreateSyncUpdateParams = {
  *
  * The returned function is the pure TEA update: (input, model) → [model, ...effects].
  * The `canShare` and `canAccept` predicates control information flow:
- * - `canShare`: gates all outbound messages (present, push, relay)
- * - `canAccept`: gates inbound data import (offers)
+ * - `canShare`: gates all outbound messages (present, push, relay, and the
+ *   answers to an interest and to a vetoed offer)
+ * - `canAccept`: gates inbound data import (offers); a vetoed offer with
+ *   operations we lack is answered with `refuse`
  * - `servesUnloaded`: whether a peer's request loads an unloaded document
  */
 export function createSyncUpdate(
@@ -1042,6 +1140,8 @@ export function createSyncUpdate(
         return handleOffersSent(input, model)
       case "sync/doc-publishable":
         return handleDocPublishable(input, model, canShare)
+      case "sync/offer-vetoed":
+        return handleOfferVetoed(input, model, canShare)
       case "sync/declare-vacant":
         return handleDeclareVacant(input, model)
       case "sync/queue-doc-event":
@@ -1080,6 +1180,8 @@ function handleMessageReceived(
       return handleOffer(from, message, model, canShare, canAccept)
     case "accept":
       return handleAccept(from, message, model)
+    case "refuse":
+      return handleRefuse(from, message, model)
     case "dismiss":
       return handleDismiss(from, message, model)
     case "vacant":
@@ -1107,13 +1209,20 @@ function handlePeerAvailable(
 
   // Preserve existing docSyncStates for reconnecting peers, except what we
   // knew of their holding: a peer that comes back may have lost its state,
-  // and its interest will say what it holds now.
-  peers.set(peerId, {
-    identity,
-    docSyncStates: forgetWhatTheyHold(existingPeer?.docSyncStates),
-  })
+  // and its interest will say what it holds now. A refusal is forgotten too,
+  // and the documents it held are announced, since a lock derives from it:
+  // the peer may take our operations now, and refuses again if it does not.
+  const { states, unrefused } = forgetWhatTheyHold(existingPeer?.docSyncStates)
+  peers.set(peerId, { identity, docSyncStates: states })
 
-  const updatedModel: SyncModel = { ...model, peers }
+  const updatedModel: SyncModel = {
+    ...model,
+    peers,
+    pendingPeerSyncDocIds: appendUniqueDocIds(
+      model.pendingPeerSyncDocIds,
+      unrefused,
+    ),
+  }
 
   // Filter docs by canShare — only announce docs this peer is allowed to see
   const docIds = Array.from(model.documents.keys()).filter(id =>
@@ -1127,25 +1236,30 @@ function handlePeerAvailable(
 
 /**
  * The same sync states, with no record of which of our versions the peer
- * holds or will hold, or of offers owed to it: a peer that comes back may
- * have lost its state, and its interest restates what it holds.
+ * holds or will hold, of offers owed to it, or of its refusal: a peer that
+ * comes back may have lost its state or changed its policy, and its interest
+ * restates what it holds. `unrefused` names the documents whose refusal was
+ * forgotten.
  */
 function forgetWhatTheyHold(
   states: ReadonlyMap<DocId, PeerDocSyncState> | undefined,
-): Map<DocId, PeerDocSyncState> {
+): { states: Map<DocId, PeerDocSyncState>; unrefused: DocId[] } {
   const forgotten = new Map<DocId, PeerDocSyncState>()
+  const unrefused: DocId[] = []
   for (const [
     docId,
     {
       ourVersionTheyHold: _held,
       ourVersionTheyWillHold: _willHold,
       offerOwed: _owed,
+      refusesOurs,
       ...rest
     },
   ] of states ?? []) {
     forgotten.set(docId, rest)
+    if (refusesOurs) unrefused.push(docId)
   }
-  return forgotten
+  return { states: forgotten, unrefused }
 }
 
 /**
@@ -1353,9 +1467,7 @@ function handleDocReset(
   canShare: SyncPredicate,
 ): [SyncModel, ...SyncEffect[]] {
   const docEntry = model.documents.get(msg.docId)
-  if (docEntry?.mode !== "interpret" && docEntry?.mode !== "replicate") {
-    return [model]
-  }
+  if (!isHeld(docEntry)) return [model]
   const entry: DocEntry = { ...docEntry, version: msg.version }
   const documents = new Map(model.documents)
   documents.set(msg.docId, entry)
@@ -1391,9 +1503,7 @@ function handleDocUnloading(
   canShare: SyncPredicate,
 ): [SyncModel, ...SyncEffect[]] {
   const entry = model.documents.get(msg.docId)
-  if (entry?.mode !== "interpret" && entry?.mode !== "replicate") {
-    return [model]
-  }
+  if (!isHeld(entry)) return [model]
   if (msg.leaving === isLeaving(entry)) return [model]
   const documents = new Map(model.documents)
   if (msg.leaving) {
@@ -1682,8 +1792,9 @@ function handleOffersSent(
 
 /**
  * The document may leave the process again. Send every peer still owed an
- * offer the offer it is owed, from where that offer starts. The records stay
- * until `sync/offers-sent` reports them sent.
+ * offer, and that may have our content (`contentRecipients`), the offer it is
+ * owed, from where that offer starts. The records stay until
+ * `sync/offers-sent` reports them sent.
  */
 function handleDocPublishable(
   msg: Extract<SyncInput, { type: "sync/doc-publishable" }>,
@@ -1696,7 +1807,7 @@ function handleDocPublishable(
     const offer = peer.docSyncStates.get(msg.docId)?.offerOwed
     if (offer) owed.set(peerId, offer.since)
   }
-  const to = filterPeersByShare(
+  const to = contentRecipients(
     model,
     [...owed.keys()],
     msg.docId,
@@ -1942,13 +2053,15 @@ function handleInterest(
   const peerState = model.peers.get(from)
   if (!peerState) return [model]
 
-  // A document can leave this peer by four paths, and all four consult
+  // A document can leave this peer by five paths, and all five consult
   // `canShare`: announcing it (`handlePeerAvailable`, `announceDoc`), pushing
   // a local change or a compaction's merge (`handleDocAdvanced`), relaying an
-  // imported one (`handleDocImported`) — and this one, answering a peer that
-  // asked for it by name. If you add a fifth, gate it here too; the invariant test in
-  // `sync-program.test.ts` ("no outbound effect reaches a vetoed peer") is
-  // what will fail if you forget.
+  // imported one (`handleDocImported`), sending an owed offer
+  // (`handleDocPublishable`), and this one, answering a peer that asked for
+  // it by name. The four that carry content also skip a peer refusing our
+  // operations (`contentRecipients`). If you add a path, gate it the same
+  // way; the invariant test in `sync-program.test.ts` ("no outbound effect
+  // reaches a vetoed peer") is what will fail if you forget.
   //
   // This path shipped ungated through 3.0.0, which meant `canShare` decided
   // only whether a peer was *told* about a document, not whether it could
@@ -1971,7 +2084,7 @@ function handleInterest(
   }
 
   // Known doc — respond based on sync protocol and update peer sync state
-  return handleInterestForKnownDoc(from, message, docEntry, model)
+  return handleInterestForKnownDoc(from, message, docEntry, model, canShare)
 }
 
 /**
@@ -1984,11 +2097,22 @@ function handleInterestForKnownDoc(
   message: InterestMsg,
   docEntry: DocEntry,
   model: SyncModel,
+  canShare: SyncPredicate,
 ): [SyncModel, ...SyncEffect[]] {
   const peerState = model.peers.get(fromPeerId)
   if (!peerState) return [model]
 
-  const effects = buildInterestResponse(fromPeerId, message, docEntry, model)
+  // Content never goes to a peer refusing our operations; a request for its
+  // state still does.
+  const answered =
+    contentRecipients(model, [fromPeerId], message.docId, canShare).length > 0
+  const effects = buildInterestResponse(
+    fromPeerId,
+    message,
+    docEntry,
+    model,
+    answered,
+  )
 
   // An interest tells us the sender *wants our state*, and which of ours it
   // holds. It says nothing about whether we want theirs — that depends on
@@ -2018,7 +2142,7 @@ function handleInterestForKnownDoc(
       status: "pending",
       ourVersionTheyHold: holds,
       ourVersionTheyWillHold: undefined,
-      offerOwed: { since: holds },
+      ...(answered ? { offerOwed: { since: holds } } : {}),
     }),
     ...effects,
     {
@@ -2047,15 +2171,15 @@ function handleOffer(
 
   // Only a document held in memory and not leaving takes anything in.
   const docEntry = model.documents.get(message.docId)
-  if (docEntry?.mode !== "interpret" && docEntry?.mode !== "replicate") {
-    return [model]
-  }
-  if (isLeaving(docEntry)) return [model]
+  if (!takesIn(docEntry)) return [model]
 
-  // Check canAccept — reject silently if the peer isn't allowed. A refused
-  // offer is not imported, so it is not accepted either: the sender's record
-  // of what we hold stays where it was.
-  if (!canAccept(message.docId, peerState.identity)) return [model]
+  // The acceptance predicate decides whether we take the sender's
+  // operations. A vetoed offer still goes to the shell, which compares its
+  // version and takes nothing in: one with operations we lack comes back as
+  // `sync/offer-vetoed`, answered with `refuse`; one we already hold carries
+  // nothing to refuse, and gets no reply. A vetoed offer is not accepted
+  // either: the sender's record of what we hold stays where it was.
+  const vetoed = !canAccept(message.docId, peerState.identity)
 
   // Import the payload — the shell calls replica.merge(payload) and reports
   // back with `sync/doc-imported` or `sync/peer-synced`.
@@ -2068,7 +2192,9 @@ function handleOffer(
       version: message.version,
       fromPeerId: from,
       digest: message.digest,
+      vetoed,
       accept:
+        !vetoed &&
         docEntry.historyFree === false &&
         canShare(message.docId, peerState.identity),
       ourVersionTheyWillHold: peerState.docSyncStates.get(message.docId)
@@ -2095,6 +2221,71 @@ function handleAccept(
     setPeerDocState(model, from, message.docId, {
       ourVersionTheyHold: message.version,
     }),
+  ]
+}
+
+// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+// HANDLER: Refuse — a vetoed offer answered, and a refusal heard
+// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+
+/**
+ * The shell found operations we lack in an offer the acceptance predicate
+ * vetoed: answer its sender with `refuse`, if the document may be shared
+ * with it (`refuseReply`). Nothing, for a peer or a document no longer held,
+ * or a document now leaving, which takes nothing in and refuses no one.
+ */
+function handleOfferVetoed(
+  msg: Extract<SyncInput, { type: "sync/offer-vetoed" }>,
+  model: SyncModel,
+  canShare: SyncPredicate,
+): [SyncModel, ...SyncEffect[]] {
+  const peer = model.peers.get(msg.from)
+  if (peer === undefined || !takesIn(model.documents.get(msg.docId))) {
+    return [model]
+  }
+  return [
+    model,
+    ...refuseReply(msg.from, peer.identity, msg.docId, msg.version, canShare),
+  ]
+}
+
+/**
+ * A peer will not take our operations on a document. Record it
+ * (`refusesOurs`), so no more of the document's content goes to it
+ * (`contentRecipients`), and announce the change, since the Exchange derives
+ * a lock on our writes from it. `setPeerDocState` announces only a status
+ * change, and this is not one. Reported once, as `offer-refused`, when the
+ * peer starts refusing. A `refuse` for a document we hold no state with the
+ * peer for answers nothing we sent, and is dropped.
+ */
+function handleRefuse(
+  from: PeerId,
+  message: RefuseMsg,
+  model: SyncModel,
+): [SyncModel, ...SyncEffect[]] {
+  const state = model.peers.get(from)?.docSyncStates.get(message.docId)
+  if (state === undefined || state.refusesOurs) return [model]
+  const refused = setPeerDocState(model, from, message.docId, {
+    refusesOurs: true,
+  })
+  return [
+    {
+      ...refused,
+      pendingPeerSyncDocIds: appendUniqueDocId(
+        refused.pendingPeerSyncDocIds,
+        message.docId,
+      ),
+    },
+    {
+      type: "diagnostic",
+      code: "offer-refused",
+      severity: "warning",
+      peer: from,
+      docId: message.docId,
+      message:
+        `[exchange] peer '${from}' refused our operations on doc '${message.docId}': ` +
+        "it is sent none of the document's content until it reconnects",
+    },
   ]
 }
 

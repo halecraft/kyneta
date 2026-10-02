@@ -18,6 +18,7 @@ import {
   type WireMessage,
   type WireOfferMsg,
   type WirePresentMsg,
+  type WireRefuseMsg,
   type WireVacantMsg,
 } from "../../wire-types.js"
 
@@ -139,6 +140,17 @@ export function offerWire(opts: {
 
 export function acceptWire(docId: string, version: string): WireAcceptMsg {
   return { t: MessageType.Accept, doc: docId, v: version }
+}
+
+// ---------------------------------------------------------------------------
+// Refuse
+// ---------------------------------------------------------------------------
+
+export function refuseWire(
+  doc: { doc: string } | { dx: number },
+  version: string,
+): WireRefuseMsg {
+  return { t: MessageType.Refuse, ...doc, v: version }
 }
 
 // ---------------------------------------------------------------------------

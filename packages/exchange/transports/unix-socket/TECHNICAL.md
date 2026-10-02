@@ -60,7 +60,7 @@ Two structural differences from the WebSocket transport:
 | Topology | Client ↔ Server | Leaderless peer (optional) or Client ↔ Server |
 | Ready gate | Yes (server sends `"ready"`) | No (stream is bidirectionally ready on connect) |
 
-All else — the binary `Pipeline` (from `@kyneta/transport`), the `createObservableProgram` runtime, the exchange's six-message protocol, the channel lifecycle — is identical.
+All else — the binary `Pipeline` (from `@kyneta/transport`), the `createObservableProgram` runtime, the exchange's nine-message protocol, the channel lifecycle — is identical.
 
 ### What this transport is NOT
 

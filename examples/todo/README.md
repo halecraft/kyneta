@@ -192,7 +192,7 @@ The @kyneta/exchange, the @kyneta/wire protocol, the @kyneta/cast view, the serv
 
 ### The sync layer is pluggable end-to-end
 
-The @kyneta/exchange handles sync through pluggable **transports** and pluggable **stores** — via the same six-message protocol (`establish`, `depart`, `present`, `interest`, `offer`, `dismiss`) regardless of what's underneath. This todo uses WebSocket, but the adapter could be SSE, WebRTC, or HTTP polling without changing a line of application code.
+The @kyneta/exchange handles sync through pluggable **transports** and pluggable **stores** — via the same nine-message protocol (`establish`, `depart`, `present`, `interest`, `offer`, `accept`, `refuse`, `dismiss`, `vacant`) regardless of what's underneath. This todo uses WebSocket, but the adapter could be SSE, WebRTC, or HTTP polling without changing a line of application code.
 
 The synchronizer itself is a pure **TEA (Elm Architecture) state machine**: immutable model in, commands out, no I/O. Multi-hop relay — server receives a change from Tab A, forwards to Tab B — falls out naturally from this design, because the state machine doesn't know or care where messages came from.
 

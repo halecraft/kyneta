@@ -61,8 +61,12 @@ import { planInterpretation } from "./interpret.js"
 import type { Intent } from "./lifecycle-program.js"
 import type { ObsSink } from "./observe.js"
 import { mismatchError, Runtime, type RuntimeParams } from "./runtime.js"
-import { liveSync } from "./sync.js"
-import { derivePeerSettled, Synchronizer } from "./synchronizer.js"
+import { liveSync, OfferRefusedError } from "./sync.js"
+import {
+  derivePeerSettled,
+  refusingAuthority,
+  Synchronizer,
+} from "./synchronizer.js"
 import type { DocChange, DocInfo, PeerChange } from "./types.js"
 import { validatePrincipal } from "./utils.js"
 
@@ -552,6 +556,17 @@ export class Exchange {
     const governance = this.#governance
     const identity = this.#identity
     const notAWriter = new NotAWriterError(docId, identity)
+    // One error object per refusing peer, so successive reads of a document
+    // its authority refuses return the same value.
+    const offerRefused = new Map<PeerId, OfferRefusedError>()
+    const refusedBy = (peer: PeerIdentityDetails): OfferRefusedError => {
+      let error = offerRefused.get(peer.peerId)
+      if (error === undefined) {
+        error = new OfferRefusedError(docId, peer)
+        offerRefused.set(peer.peerId, error)
+      }
+      return error
+    }
     registerNetworkTerms(ref, {
       peer: settableFeed<Peer>(
         signalFeed(
@@ -559,18 +574,7 @@ export class Exchange {
             settled: this.#peerSettled(docId),
             resolve: authority => this.#peerSettled(docId, authority),
           }),
-          // `settled` judges by the policy's authority, so a policy change
-          // can move it as a peer's sync can.
-          onChange => {
-            const stopSync = this.#synchronizer.onPeerSyncChange(changed => {
-              if (changed === docId) onChange()
-            })
-            const stopPolicy = governance.subscribe(onChange)
-            return () => {
-              stopSync()
-              stopPolicy()
-            }
-          },
+          onChange => this.#followDocument(docId, onChange),
         ),
       ),
       // Read at each use, and notified on every policy change: `Policy` is a
@@ -589,17 +593,47 @@ export class Exchange {
           synchronizer: this.#synchronizer,
         }),
       ),
-      // The answer of `canWrite` for this peer's own identity, the one the
-      // Synchronizer announces, so a peer refuses its own write exactly when
-      // its peers would refuse its offer. One error object, so successive
-      // reads of a refused document return the same value.
+      // The network's verdict on this peer's writes, policy first, since it
+      // is the standing rule and an offer refusal is what happened under it:
+      // - the answer of `canWrite` for this peer's own identity, the one the
+      //   Synchronizer announces, so a peer refuses its own write exactly when
+      //   its peers would refuse its offer;
+      // - the refusal of our operations by a peer this Exchange treats as the
+      //   document's authority, derived from sync state as `peer` is.
+      // One feed over both, so a policy change, which can move either, is
+      // heard once.
       refusal: settableFeed<WriteRefusal | undefined>(
         signalFeed(
-          () => (governance.canWrite(docId, identity) ? undefined : notAWriter),
-          onChange => governance.subscribe(onChange),
+          () => {
+            if (!governance.canWrite(docId, identity)) return notAWriter
+            const peer = refusingAuthority(
+              this.#authority(),
+              this.#synchronizer.refusing(docId),
+            )
+            return peer === undefined ? undefined : refusedBy(peer)
+          },
+          onChange => this.#followDocument(docId, onChange),
         ),
       ),
     })
+  }
+
+  /**
+   * Follow what a term over `docId`'s sync state and the policy's authority
+   * reads: the Synchronizer's peer-sync changes for the document, and every
+   * policy change, since the authority judges both whether the peers settle
+   * the document and whether a refusing peer locks its writes. Returns one
+   * unsubscribe.
+   */
+  #followDocument(docId: DocId, onChange: () => void): () => void {
+    const stopSync = this.#synchronizer.onPeerSyncChange(changed => {
+      if (changed === docId) onChange()
+    })
+    const stopPolicy = this.#governance.subscribe(onChange)
+    return () => {
+      stopSync()
+      stopPolicy()
+    }
   }
 
   /** The declared `Policy.authority`, or `"any"` when no policy declares one. */

@@ -26,6 +26,7 @@ import type {
   EstablishMsg,
   InterestMsg,
   PresentMsg,
+  RefuseMsg,
   VacantMsg,
 } from "../messages.js"
 import { PROTOCOL_VERSION } from "../types.js"
@@ -397,6 +398,44 @@ describe("alias-table — vacant", () => {
     expect(inbound.result.ok).toBe(true)
     if (!inbound.result.ok) return
     expect(inbound.result.value).toEqual(vacant)
+  })
+})
+
+describe("alias-table — refuse", () => {
+  it("round-trips by alias once aliasing is mutual and the doc aliased", () => {
+    let out = emptyAliasState()
+    let inbound = emptyAliasState()
+    const send = (msg: Parameters<typeof applyOutboundAliasing>[1]) => {
+      const sent = applyOutboundAliasing(out, msg)
+      out = sent.state
+      if (!sent.result.ok) throw new Error("outbound aliasing failed")
+      const received = applyInboundAliasing(inbound, sent.result.value)
+      inbound = received.state
+      return { wire: sent.result.value, received: received.result }
+    }
+    out = applyInboundAliasing(out, {
+      t: 0x01,
+      id: "bob",
+      pr: "bob",
+      y: "user",
+      f: { a: true },
+    } as WireMessage).state
+    send(alice)
+    send(presentDoc1)
+
+    const refuse: RefuseMsg = { type: "refuse", docId: "doc-1", version: "v3" }
+    const { wire, received } = send(refuse)
+    expect(wire).toEqual({ t: 0x16, dx: 0, v: "v3" })
+    expect(received.ok).toBe(true)
+    if (received.ok) expect(received.value).toEqual(refuse)
+  })
+
+  it("names the doc in full without mutual aliasing", () => {
+    const refuse: RefuseMsg = { type: "refuse", docId: "doc-1", version: "v3" }
+    const { result } = applyOutboundAliasing(emptyAliasState(), refuse)
+    expect(result.ok).toBe(true)
+    if (result.ok)
+      expect(result.value).toEqual({ t: 0x16, doc: "doc-1", v: "v3" })
   })
 })
 

@@ -98,6 +98,7 @@ export {
   Line,
   lineDocId,
   NotAWriterError,
+  OfferRefusedError,
   parseLineDocId,
   routeLine,
   sync,

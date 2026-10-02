@@ -65,9 +65,10 @@ export type ProtocolVersion = { major: number; minor: number }
  *
  * 2.0 added `accept` and removed `offer.reciprocate`. A peer on 1.x neither
  * acknowledges what it applies nor understands being told, so the two cannot
- * converge; the major says so at `establish`.
+ * converge; the major says so at `establish`. 2.1 added `refuse`, which a 2.0
+ * peer drops as an unknown message.
  */
-export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 0 }
+export const PROTOCOL_VERSION: ProtocolVersion = { major: 2, minor: 1 }
 
 /**
  * What an `establish` without `pv` means: the revision before the field

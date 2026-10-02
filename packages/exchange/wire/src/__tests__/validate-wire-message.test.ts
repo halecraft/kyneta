@@ -545,6 +545,29 @@ describe("dismiss (t: 0x13)", () => {
   })
 })
 
+describe("refuse (t: 0x16)", () => {
+  it("accepts refuse with doc, and with dx", () => {
+    for (const doc of [{ doc: "doc1" }, { dx: 3 }]) {
+      const r = validateWireMessage({ t: MessageType.Refuse, ...doc, v: "1" })
+      expect(r.ok).toBe(true)
+    }
+  })
+
+  it("rejects both doc and dx, or neither, labeling the variant 'refuse'", () => {
+    for (const doc of [{ doc: "doc1", dx: 3 }, {}]) {
+      const r = validateWireMessage({ t: MessageType.Refuse, ...doc, v: "1" })
+      expect(r.ok).toBe(false)
+      if (!r.ok) expect(r.error.reason).toContain("refuse")
+    }
+  })
+
+  it("rejects a missing v", () => {
+    const r = validateWireMessage({ t: MessageType.Refuse, doc: "doc1" })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error.path).toEqual(["v"])
+  })
+})
+
 describe("vacant (t: 0x14)", () => {
   it("accepts vacant with doc", () => {
     const r = validateWireMessage({

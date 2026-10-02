@@ -33,6 +33,7 @@ export type {
   LifecycleMsg,
   OfferMsg,
   PresentMsg,
+  RefuseMsg,
   ReturnEnvelope,
   SyncMsg,
   VacantMsg,

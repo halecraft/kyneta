@@ -86,6 +86,7 @@ import {
   type LeaveAs,
   type LineageCrossing,
   reconciledMatching,
+  refusingPeers,
   type SyncEffect,
   type SyncInput,
   type SyncModel,
@@ -380,6 +381,8 @@ export function classifyResetTrigger(
 export type ImportFacts = {
   /** The offered version against ours. */
   readonly gap: VersionGapResult
+  /** The acceptance predicate vetoed the sender: nothing of it is taken. */
+  readonly vetoed: boolean
   /** `classifyResetTrigger`, or `"none"` when there is no gap. */
   readonly resetTrigger: ResetTrigger
   /** The `canReset` policy's answer, asked only for a reset. */
@@ -391,7 +394,10 @@ export type ImportFacts = {
  * What to do with an inbound offer.
  *
  * - `unreadable`: its version does not parse. Nothing, and no `accept`.
- * - `already-held`: we hold its version. `accept` if owed.
+ * - `already-held`: we hold its version. `accept` if owed. A vetoed offer
+ *   that carries nothing we lack is planned this way too, and gets no reply.
+ * - `vetoed`: the acceptance predicate vetoed its sender, and it carries
+ *   operations we lack. Nothing is taken; the sender is answered `refuse`.
  * - `refused`: a reset the policy vetoed. Keep local state.
  * - `outrank`: the sender's lineage is superseded by ours. Take nothing, and
  *   owe the sender our whole document, to which it will reset.
@@ -405,6 +411,7 @@ export type ImportFacts = {
 export type ImportPlan =
   | "unreadable"
   | "already-held"
+  | "vetoed"
   | "refused"
   | "outrank"
   | "ask-whole"
@@ -421,6 +428,9 @@ export function planImport(facts: ImportFacts): ImportPlan {
     case "gap":
       break
   }
+  // Ahead of every reset rule: a vetoed offer is never merged, reset or asked
+  // for whole.
+  if (facts.vetoed) return "vetoed"
   if (facts.resetTrigger === "none") return "merge"
   // Nothing of ours is discarded, so the reset policy is not asked.
   if (facts.resetTrigger === "stale-lineage") return "outrank"
@@ -548,6 +558,26 @@ export function derivePeerSettled(input: {
   if (input.isOffline) return true
   if (input.authority === "any") return input.hasReconciled
   return input.matchesAuthority
+}
+
+/**
+ * The refusing peer that is this document's authority, if any: whose refusal
+ * of our operations stops our writes. Pure.
+ *
+ * - `"self"`: none. This peer is the authority, and another peer refusing its
+ *   operations is that peer's business.
+ * - `"any"`: the first refusing peer, as any peer's answer settles the
+ *   document.
+ * - a predicate: the first refusing peer it matches. A refusal from any other
+ *   peer leaves our writes alone.
+ */
+export function refusingAuthority(
+  authority: Authority,
+  refusing: readonly PeerIdentityDetails[],
+): PeerIdentityDetails | undefined {
+  if (authority === "self") return undefined
+  if (authority === "any") return refusing[0]
+  return refusing.find(authority)
 }
 
 /**
@@ -1221,6 +1251,16 @@ export class Synchronizer {
   }
 
   /**
+   * The identities of the peers refusing our operations on this doc: each
+   * answered an offer of ours with `refuse`, and has not reconnected since.
+   * Volatile, unlike the reconciliation latch: a reconnect, a departure or
+   * the document leaving the sync graph forgets a refusal.
+   */
+  refusing(docId: DocId): PeerIdentityDetails[] {
+    return refusingPeers(this.#syncHandle.getState(), docId)
+  }
+
+  /**
    * The identities of the peers this doc has reconciled with: what
    * `hasReconciled` and `reconciledMatching` read, kept by a closed
    * document's terms to answer the same questions after the close.
@@ -1802,7 +1842,11 @@ export class Synchronizer {
 
   /**
    * Take in an offer: gather what is known, plan, do the one thing the plan
-   * names, and report what it did.
+   * names, and report what it did. What is gathered: the offered version
+   * against ours (which marks the sender `synced` when it holds nothing we
+   * lack, vetoed or not), and, unless the sender was vetoed, the reset
+   * trigger and `canReset`'s answer. A vetoed offer with operations we lack
+   * takes nothing in, and goes back to the program as `sync/offer-vetoed`.
    */
   #executeImportDocData(effect: ImportDocData): void {
     const doc = this.#docs.get(effect.docId)
@@ -1817,8 +1861,9 @@ export class Synchronizer {
     )
     const sync = this.#syncHandle.getState()
     const peerState = sync.peers.get(effect.fromPeerId)
+    // A vetoed offer gathers no reset facts, so `canReset` is never asked.
     const resetTrigger =
-      gap.kind === "gap"
+      gap.kind === "gap" && !effect.vetoed
         ? classifyResetTrigger(
             doc.replica.version().lineage,
             gap.parsed.lineage,
@@ -1829,6 +1874,7 @@ export class Synchronizer {
         : "none"
     const plan = planImport({
       gap,
+      vetoed: effect.vetoed,
       resetTrigger,
       resetPermitted:
         resetTrigger !== "none" &&
@@ -1847,6 +1893,14 @@ export class Synchronizer {
         return
       case "already-held":
         this.#acceptIfOwed(effect)
+        return
+      case "vetoed":
+        this.#dispatchSync({
+          type: "sync/offer-vetoed",
+          docId: effect.docId,
+          from: effect.fromPeerId,
+          version: effect.version,
+        })
         return
     }
     // Every remaining plan follows a gap, which carries the parsed version.

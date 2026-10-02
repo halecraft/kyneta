@@ -17,7 +17,7 @@ Batching is **orthogonal to framing**. The frame layer does not distinguish sing
 
 ## Message Types
 
-Eight message types form the exchange protocol:
+Nine message types form the exchange protocol:
 
 | Discriminator (CBOR) | Type | Direction | Purpose |
 |----------------------|------|-----------|---------|
@@ -29,12 +29,13 @@ Eight message types form the exchange protocol:
 | `0x13` | `dismiss` | Bidirectional | Retract interest in a document |
 | `0x14` | `vacant` | Point-to-point | Negative ack to interest: "I don't have this doc and won't serve it" |
 | `0x15` | `accept` | Point-to-point | Acknowledges an offer: "I now hold your version `v`". Protocol 2.0 and later |
+| `0x16` | `refuse` | Point-to-point | Answers a vetoed offer: "I will not take your operations on this doc", quoting its `v`. Protocol 2.1 and later |
 
 Discriminator ranges:
 - `0x01–0x0F` — Lifecycle messages (establish, depart)
-- `0x10–0x1F` — Sync messages (present, interest, offer, dismiss, vacant, accept)
+- `0x10–0x1F` — Sync messages (present, interest, offer, dismiss, vacant, accept, refuse)
 
-Discriminators are allocated **sequentially from the next free value** and classified by exact-value set-membership — numbering carries no semantics (there is no range/mask dispatch anywhere; classification is `Set` membership in `validate-wire-message.ts` and an exact-value decode `switch`). A future datagram-only message type takes the next free value (`0x16+`). Introduce a reserved *range* only alongside range *dispatch*.
+Discriminators are allocated **sequentially from the next free value** and classified by exact-value set-membership — numbering carries no semantics (there is no range/mask dispatch anywhere; classification is `Set` membership in `validate-wire-message.ts` and an exact-value decode `switch`). A future datagram-only message type takes the next free value (`0x17+`). Introduce a reserved *range* only alongside range *dispatch*.
 
 The text pipeline uses human-readable type strings (`"establish"`, `"present"`, etc.) instead of integer discriminators.
 
@@ -145,8 +146,8 @@ v1 has no transport-prefix layer. The frame type byte (offset 1 of the 6-byte he
 | `f` | features | `WireFeatures` (compact map) | establish (optional) |
 | `pv` | protocolVersion | `[major, minor]` (two integers) | establish (optional; absent ⇒ `[1,0]`, the baseline; omitted only at the baseline) |
 | `docs` | docs | `Array<{d, a?, rt, ms, sh?, sa?, shx?, shs?}>` | present |
-| `doc` | docId | `string` (one of doc/dx required) | interest, offer, accept, dismiss, vacant |
-| `dx` | docId alias | non-negative integer | interest, offer, accept, dismiss, vacant (one of doc/dx required) |
+| `doc` | docId | `string` (one of doc/dx required) | interest, offer, accept, refuse, dismiss, vacant |
+| `dx` | docId alias | non-negative integer | interest, offer, accept, refuse, dismiss, vacant (one of doc/dx required) |
 | `sh` | schemaHash | `string` (one of sh/shx required on present-doc) | present (doc entry) |
 | `sa` | schemaHash alias | non-negative integer (alias assignment) | present (doc entry, optional) |
 | `shx` | schemaHash alias | non-negative integer (alias reference) | present (doc entry, alternative to sh) |
@@ -154,13 +155,13 @@ v1 has no transport-prefix layer. The frame type byte (offset 1 of the 6-byte he
 | `d` | docId / data | `string` (present doc entry) or `string \| Uint8Array` (offer) | present, offer |
 | `rt` | replicaType | `[string, number, number]` | present (doc entry) |
 | `ms` | syncMode | `SyncModeWireValue` (`0x00` collaborative, `0x01` authoritative, `0x02` ephemeral) | present (doc entry) |
-| `v` | version | `string` | interest (optional), offer, accept (the offer's `v`, quoted back) |
+| `v` | version | `string` | interest (optional), offer, accept and refuse (the offer's `v`, quoted back) |
 | `r` | reciprocate | `boolean` (optional) | interest |
 | `pk` | payload kind | `0x00` (entirety) or `0x01` (since) | offer |
 | `pe` | payload encoding | `0x00` (json) or `0x01` (binary) | offer |
 
 **Decoder invariants** (Phase 3):
-- Interest, offer, accept, dismiss, vacant: exactly one of `{doc, dx}` must be present. Both → `doc-id-form-conflict`. Neither → same code.
+- Interest, offer, accept, refuse, dismiss, vacant: exactly one of `{doc, dx}` must be present. Both → `doc-id-form-conflict`. Neither → same code.
 - Present doc entries: exactly one of `{sh, shx}` must be present. Both → `schema-hash-form-conflict`.
 
 ### Default values for optional fields
@@ -411,7 +412,7 @@ Computed identically on both peers (no extra round-trip), once per channel-estab
 - same major, peer `minor !== self.minor` → backward-compatible refinement (warning).
 - equal (or absent) → silent.
 
-The current revision is `[2, 0]`, the first real major: it added `accept` and removed `offer`'s `r`, so a `[1, x]` peer neither acknowledges what it applies nor understands being told, and gets the error branch. Detection is **warn/error-only — it never gates**: an incompatible peer remains observable and enters the sync graph (data simply will not converge). Refusing to sync with it is a separate decision.
+The current revision is `[2, 1]`. `[2, 0]`, the first real major, added `accept` and removed `offer`'s `r`, so a `[1, x]` peer neither acknowledges what it applies nor understands being told, and gets the error branch. `[2, 1]` added `refuse` (`0x16`): a `[2, 0]` peer drops the unknown discriminator, is not told its offers are refused, and gets the warning branch. Detection is **warn/error-only — it never gates**: an incompatible peer remains observable and enters the sync graph (data simply will not converge). Refusing to sync with it is a separate decision.
 
 ### Establish negotiation-core invariant
 
@@ -427,7 +428,7 @@ Variable-length string identifiers (`doc`, `sh`) repeat heavily in steady-state 
   - `a?: number` — alias assignment for the docId. Always emitted (announcement is forward-compatible).
   - `sa?: number` — alias assignment for the schema hash. Emitted on first reference.
   - `shx?: number` — alias reference; replaces `sh` on subsequent references when `mutualAlias` is on.
-- `interest` / `offer` / `accept` / `dismiss` / `vacant`:
+- `interest` / `offer` / `accept` / `refuse` / `dismiss` / `vacant`:
   - `dx?: number` — alias reference; replaces `doc` when `mutualAlias` is on.
 
 Aliases are non-negative integers (CBOR major type 0). They have no fixed width: CBOR encodes the smallest fitting form (1 byte for 0–23, 2 bytes for 24–255, 3 bytes for 256–65,535, 5 bytes above). Practical upper bound is `Number.MAX_SAFE_INTEGER`; unreachable in any realistic channel lifetime.
@@ -478,7 +479,7 @@ Reserved for QUIC datagrams. One MTU-bounded datagram per ephemeral snapshot; al
 
 ### Type discriminator allocation
 
-Discriminators are allocated **sequentially from the next free value** and classified by exact-value set-membership; numbering carries no semantics. There is no range/mask dispatch anywhere — `VALID_MESSAGE_TYPES` is a `Set`, the decode path is an exact-value `switch`, and `isLifecycleMsg` is string equality. `vacant` took the next free sync value (`0x14`); future datagram-only message types (e.g. `EphemeralSnapshot`, `EphemeralAck`) take the next free values (`0x15+`). A reserved *range* should be introduced only alongside range *dispatch* (define the range and its masking together).
+Discriminators are allocated **sequentially from the next free value** and classified by exact-value set-membership; numbering carries no semantics. There is no range/mask dispatch anywhere — `VALID_MESSAGE_TYPES` is a `Set`, the decode path is an exact-value `switch`, and `isLifecycleMsg` is string equality. `vacant`, `accept` and `refuse` took the next free sync values (`0x14`, `0x15`, `0x16`); future datagram-only message types (e.g. `EphemeralSnapshot`, `EphemeralAck`) take the next free values (`0x17+`). A reserved *range* should be introduced only alongside range *dispatch* (define the range and its masking together).
 
 ### Future hash rule
 
@@ -558,4 +559,4 @@ The **Version** column is the binary `WIRE_VERSION` byte (the text pipeline carr
 |---------|---------|
 | 0–1 | Pre-release. Unified `Frame<T>` architecture. 7-byte binary header. Single-byte transport prefixes. 8-byte string frameId, 4-byte index/total. |
 | 2 | Compact 6-byte binary header (version, type, payloadLength); no hash-algorithm byte (deferred to frame trailer). Numeric uint16 frameId / index / total; uint32 totalSize. Removed transport-prefix layer. **DocId & schemaHash aliasing** with `a`/`dx`/`sa`/`shx` fields. **Wire features negotiation** in `establish` (`f` map; backward-compat). **Identifier length caps** (DocId 512 UTF-8 bytes; schemaHash 256). **Delivery-mode taxonomy** (muxed, streamed-deferred, datagram-deferred). **`vacant` message** (`0x14`) — additive negative-ack to interest; old peers reject the unknown discriminator harmlessly (set-membership), so it is wire-backward-compatible. **Establish `protocolVersion`** (`pv: [major, minor]`; absent ⇒ `[1,0]`; emitted only when non-default) — names the sync wire-contract revision, compared by the three-tier rule (features silent / minor warning / major error); additive and byte-identical for `[1,0]` peers. |
-| 3 | **Current.** 10-byte binary header — appends a uint32 **`seq`** (per-direction monotonic message id) at offset 6; `payloadLength` stays at offset 2. Text frames gain a `seq` element after the prefix (`TEXT_WIRE_VERSION` 1→2). The per-fragment `frameId` metadata field is **removed** — the header `seq` is the reassembly group key (binary fragment meta 10→8 bytes; text fragment arity unchanged). `seq` stamps every frame so each exchanged message is referenceable for debugging/tracing, surfaced via the opt-in `WireOpts.onFrame` hook. Breaking vs. v2 — gated by the version byte / text prefix; landed pre-2.0 so no shipped peers are affected. |
+| 3 | **Current.** 10-byte binary header — appends a uint32 **`seq`** (per-direction monotonic message id) at offset 6; `payloadLength` stays at offset 2. Text frames gain a `seq` element after the prefix (`TEXT_WIRE_VERSION` 1→2). The per-fragment `frameId` metadata field is **removed** — the header `seq` is the reassembly group key (binary fragment meta 10→8 bytes; text fragment arity unchanged). `seq` stamps every frame so each exchanged message is referenceable for debugging/tracing, surfaced via the opt-in `WireOpts.onFrame` hook. Breaking vs. v2 — gated by the version byte / text prefix; landed pre-2.0 so no shipped peers are affected. **`refuse` message** (`0x16`, `{ t, doc | dx, v }`), with protocol `[2, 1]`: additive, and dropped harmlessly by a `[2, 0]` peer (set-membership); the frame encoding is unchanged. |

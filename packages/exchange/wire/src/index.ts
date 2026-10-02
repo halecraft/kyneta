@@ -46,6 +46,7 @@ export {
   type WireMessage,
   type WireOfferMsg,
   type WirePresentMsg,
+  type WireRefuseMsg,
   type WireVacantMsg,
 } from "./wire-types.js"
 

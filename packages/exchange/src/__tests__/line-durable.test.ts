@@ -10,6 +10,7 @@ import { batch, json, Schema } from "@kyneta/schema"
 import type { DocId } from "@kyneta/transport"
 import { describe, expect, it } from "vitest"
 import { Line, type LineReceiver, lineDocId } from "../line.js"
+import type { ObsEvent } from "../observe.js"
 import {
   createInMemoryStoreData,
   InMemoryStore,
@@ -331,6 +332,55 @@ describe("durable Line: disconnect/reconnect", () => {
 
     aliceSender.close()
     bobReceiver.close()
+  })
+
+  it("a reconnect draws no refuse: the remote's offer of our own outbox carries nothing to take", async () => {
+    const bridge = new Bridge()
+    const exchangeA = createExchange({
+      principal: "alice",
+      transports: [createBridgeTransport({ transportId: "alice", bridge })],
+    })
+    const exchangeB = createExchange({
+      principal: "bob",
+      transports: [createBridgeTransport({ transportId: "bob", bridge })],
+    })
+    const events: ObsEvent[] = []
+    exchangeA.observe(e => events.push(e))
+    exchangeB.observe(e => events.push(e))
+    await drain()
+
+    const P = Line.protocol({ topic: "reconnect-refuse", schema: SimpleSchema })
+    const aliceSender = P.sender(exchangeA, exchangeB.peerId)
+    const bobReceiver = P.claimReceiver(exchangeB, exchangeA.peerId)
+    const bobSender = P.sender(exchangeB, exchangeA.peerId)
+    const aliceReceiver = P.claimReceiver(exchangeA, exchangeB.peerId)
+    const received: any[] = []
+    collect(bobReceiver, received)
+    collect(aliceReceiver, [])
+    aliceSender.send({ value: 1 })
+    bobSender.send({ value: 2 })
+    await drain()
+
+    await exchangeB.removeTransport("bob")
+    await drain()
+    await exchangeB.addTransport(
+      new BridgeTransport({ transportId: "bob", bridge }),
+    )
+    aliceSender.send({ value: 3 })
+    await drain()
+
+    expect(received.map(m => m.value)).toEqual([1, 3])
+    const refusals = events.filter(
+      e =>
+        (e.layer === "protocol" && e.msgType === "refuse") ||
+        (e.layer === "diagnostic" && e.code === "offer-refused"),
+    )
+    expect(refusals).toEqual([])
+
+    aliceSender.close()
+    bobReceiver.close()
+    bobSender.close()
+    aliceReceiver.close()
   })
 
   it("bidirectional sends during disconnect — both sides receive all", async () => {

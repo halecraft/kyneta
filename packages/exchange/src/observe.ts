@@ -63,15 +63,15 @@ export interface MessageBody {
   readonly layer: "protocol"
   readonly kind: "message"
   readonly dir: "out" | "in"
-  /** establish | depart | present | interest | offer | accept | dismiss | vacant */
+  /** establish | depart | present | interest | offer | accept | refuse | dismiss | vacant */
   readonly msgType: string
   /** Remote peer (sync messages). */
   readonly peer?: string
   /** Channel (lifecycle messages). */
   readonly channelId?: number
-  /** Doc the message concerns (interest/offer/accept/dismiss/vacant). */
+  /** Doc the message concerns (interest/offer/accept/refuse/dismiss/vacant). */
   readonly docId?: string
-  /** Serialized version (offer/interest/accept). */
+  /** Serialized version (offer/interest/accept/refuse). */
   readonly version?: string
   /** For `present`: the announced docIds. */
   readonly docs?: readonly string[]

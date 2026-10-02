@@ -2,8 +2,8 @@
 //
 // Provides sync infrastructure for any @kyneta/schema substrate.
 // How a document syncs is declared by its factory's `SyncMode`, over one
-// six-message sync protocol (present, interest, offer, accept, dismiss,
-// vacant).
+// seven-message sync protocol (present, interest, offer, accept, refuse,
+// dismiss, vacant).
 
 // ---------------------------------------------------------------------------
 // Core types — sync-specific (defined here)
@@ -212,7 +212,7 @@ export { createCapabilities, DEFAULT_REPLICAS } from "./capabilities.js"
 // ---------------------------------------------------------------------------
 
 export type { SyncRef } from "./sync.js"
-export { sync, whenSettled } from "./sync.js"
+export { OfferRefusedError, sync, whenSettled } from "./sync.js"
 
 // ---------------------------------------------------------------------------
 // Settle terms — "have all of this document's truth sources reported?"

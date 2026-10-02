@@ -3,7 +3,8 @@
 // A document refuses this peer's writes when it is closed (destroyed, or its
 // Exchange shut down), while a stored `json` document is still loading, when
 // another seat of the same store (another tab, another process) writes a
-// stored `json` document, and when a `canWrite` policy excludes this peer.
+// stored `json` document, when a `canWrite` policy excludes this peer, and
+// when the document's authority refused this peer's operations.
 // `useText` already keeps its element read-only then; this hook is for every
 // other editor, and for saying why.
 
@@ -19,6 +20,9 @@ import { useChangefeed } from "./use-changefeed.js"
  * `instanceof` to say why:
  * - `NotAWriterError` names the document and this peer's identity, which a
  *   `canWrite` policy rejects, and lifts if the policy changes;
+ * - `OfferRefusedError` names the document and its authority, which refused
+ *   this peer's operations; the document must be destroyed and opened again
+ *   to rejoin;
  * - `WriterRefusedError` names the seat that writes the document, and stays
  *   for the session;
  * - `DocumentLoadingError` lasts until the document has loaded from its store;

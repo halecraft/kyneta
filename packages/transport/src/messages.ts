@@ -1,10 +1,11 @@
 // messages — substrate-agnostic message types for the sync protocol.
 //
-// Six sync messages form the document-exchange vocabulary:
+// Seven sync messages form the document-exchange vocabulary:
 // - `present` — "I have these documents, here are their properties."
 // - `interest` — "I want document X. Here's my version."
 // - `offer` — "Here is state for document X."
 // - `accept` — "I now hold your version V of document X."
+// - `refuse` — "I will not take your operations on document X."
 // - `dismiss` — "I'm leaving the sync graph for this document."
 // - `vacant` — "You want document X, but I don't have it and won't serve it."
 //
@@ -77,7 +78,7 @@ export type DepartMsg = {
 }
 
 // ---------------------------------------------------------------------------
-// Sync messages — the six-message document-exchange vocabulary
+// Sync messages — the seven-message document-exchange vocabulary
 // ---------------------------------------------------------------------------
 
 /**
@@ -198,13 +199,30 @@ export type OfferMsg = {
  * holds: a peer that only reads never offers anything back. The sender keeps
  * the latest as what that peer holds of it, and compaction never trims past
  * it. Sent once for each offer imported, on documents whose format keeps
- * history; a history-free document is never compacted, so it needs none.
+ * history; a history-free document is never compacted, so it needs none. An
+ * offer with operations the receiver will not take is answered with
+ * {@link RefuseMsg} instead.
  *
  * `version` quotes the offer's `version` unchanged: a version the offerer
  * minted, so it means the same thing to the offerer on every substrate.
  */
 export type AcceptMsg = {
   type: "accept"
+  docId: DocId
+  version: string
+}
+
+/**
+ * Refusal of an offer — "I will not take your operations on document X."
+ *
+ * Quotes the refused offer's `version`. Sent instead of `accept`, for an
+ * offer carrying operations the receiver lacks, to a peer the document is
+ * shared with. Carries no reason: the receiver's acceptance rule is one
+ * predicate. The sender stops sending the receiver the document's content,
+ * and stops writing it if the receiver is its authority.
+ */
+export type RefuseMsg = {
+  type: "refuse"
   docId: DocId
   version: string
 }
@@ -223,8 +241,9 @@ export type DismissMsg = {
 }
 
 /**
- * Terminal negative acknowledgement — "you expressed interest in document
- * X, but I do not have it and will not serve it."
+ * Terminal negative answer to an `interest` — "you expressed interest in
+ * document X, but I do not have it and will not serve it." Its counterpart
+ * for an `offer` is {@link RefuseMsg}.
  *
  * The semantic opposite of `dismiss`: dismiss means "I am leaving a doc I
  * *had*" (and its receiver tears down the local replica link), whereas
@@ -251,6 +270,7 @@ export type SyncMsg =
   | InterestMsg
   | OfferMsg
   | AcceptMsg
+  | RefuseMsg
   | DismissMsg
   | VacantMsg
 

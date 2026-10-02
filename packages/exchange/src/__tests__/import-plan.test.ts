@@ -27,6 +27,7 @@ const gap: VersionGapResult = {
 
 const facts = (over: Partial<ImportFacts> = {}): ImportFacts => ({
   gap,
+  vetoed: false,
   resetTrigger: "none",
   resetPermitted: false,
   payloadKind: "since",
@@ -111,6 +112,52 @@ describe("planImport", () => {
         ),
       ).toBe("reset")
     }
+  })
+})
+
+describe("planImport for a vetoed offer", () => {
+  it("answers vetoed for operations we lack, and takes nothing, whatever the reset facts", () => {
+    for (const resetTrigger of [
+      "none",
+      "lineage",
+      "stale-lineage",
+      "compaction",
+    ] as const) {
+      for (const resetPermitted of [false, true]) {
+        for (const payloadKind of ["since", "entirety"] as const) {
+          expect(
+            planImport(
+              facts({
+                vetoed: true,
+                resetTrigger,
+                resetPermitted,
+                payloadKind,
+              }),
+            ),
+          ).toBe("vetoed")
+        }
+      }
+    }
+  })
+
+  it("holds what we already hold, and leaves an unreadable version unread", () => {
+    for (const held of [
+      { kind: "no-gap", comparison: "equal" },
+      { kind: "no-gap", comparison: "behind" },
+      { kind: "absent" },
+    ] as const) {
+      expect(planImport(facts({ vetoed: true, gap: held }))).toBe(
+        "already-held",
+      )
+    }
+    expect(
+      planImport(
+        facts({
+          vetoed: true,
+          gap: { kind: "parse-error", error: new Error("x") },
+        }),
+      ),
+    ).toBe("unreadable")
   })
 })
 
@@ -209,5 +256,10 @@ describe("crossingOf", () => {
     expect(crossingOf("compaction", "reset", "a", "a")).toBeUndefined()
     expect(crossingOf("compaction", "refused", "a", "a")).toBeUndefined()
     expect(crossingOf("none", "merge", "a", "a")).toBeUndefined()
+  })
+
+  it("is nothing for a vetoed offer, whose sender is refused instead", () => {
+    expect(crossingOf("lineage", "vetoed", "a", "b")).toBeUndefined()
+    expect(crossingOf("stale-lineage", "vetoed", "b", "a")).toBeUndefined()
   })
 })

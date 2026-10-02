@@ -70,6 +70,7 @@ export type DiagnosticCode =
   | "sync-mode-mismatch"
   | "lineage-collision"
   | "unloaded-doc-reloaded"
+  | "offer-refused"
 
 interface DiagnosticCore {
   readonly severity: "error" | "warning"
@@ -114,6 +115,12 @@ export type Diagnostic =
         readonly code: "unloaded-doc-reloaded"
         readonly docId: DocId
       })
+  /** A peer refused our operations on a document (`refuse`). */
+  | (DiagnosticCore &
+      PeerScoped & {
+        readonly code: "offer-refused"
+        readonly docId: DocId
+      })
 
 // ---------------------------------------------------------------------------
 // Peer document sync tracking
@@ -130,6 +137,7 @@ export type Diagnostic =
  * The versions are facts independent of the status, so they survive it
  * changing: two about our versions the peer holds (acknowledged, and
  * expected once what we sent arrives), and one about its versions we hold.
+ * So is `refusesOurs`, which says the peer will not take our operations.
  */
 export type PeerDocSyncState = {
   readonly status: "pending" | "synced" | "vacant"
@@ -160,6 +168,13 @@ export type PeerDocSyncState = {
    * back to it as an interest's `since`.
    */
   readonly theirVersionWeHold?: string
+  /**
+   * The peer answered an offer of ours with `refuse`: it will not take our
+   * operations on this document, and is sent none of its content. Cleared
+   * when the peer reconnects; deleted with the rest of its state when it
+   * departs or the document leaves.
+   */
+  readonly refusesOurs?: true
   readonly lastUpdated: Date
 }
 
