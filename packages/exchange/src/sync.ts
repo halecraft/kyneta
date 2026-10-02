@@ -1,9 +1,8 @@
 // sync — sync capabilities access for exchange documents.
 //
 // The `sync()` function retrieves sync capabilities for a document
-// created by `Exchange.get()`, reached from any ref within it. Sync state is
-// kept in a `DocumentMap` (`document-key.ts`), like every per-document
-// registry in this package.
+// created by `Exchange.get()`, reached from any ref within it. The handle is
+// the sync term of the document's network terms (`document-terms.ts`).
 //
 // Usage:
 //   const doc = exchange.get("my-doc", schema)
@@ -13,83 +12,19 @@
 //   s.peerStates    // current per-peer sync state
 //   await whenSettled(doc)
 
+import { CHANGEFEED, type Feed } from "@kyneta/changefeed"
 import type { DocId, PeerId, PeerIdentityDetails } from "@kyneta/transport"
 import { authorityFor } from "./doc-meta.js"
-import { createDocumentMap } from "./document-key.js"
+import { type Sync, type SyncRef, termsOf } from "./document-terms.js"
 import type { Authority } from "./governance.js"
 import { settledWith, whenHydrated } from "./settle.js"
 import type { Synchronizer } from "./synchronizer.js"
 import type { Connectivity, PeerSyncState } from "./types.js"
 
-// ---------------------------------------------------------------------------
-// SyncRef — what sync() returns
-// ---------------------------------------------------------------------------
-
-/**
- * SyncRef provides access to sync/network capabilities for a document.
- *
- * This interface is returned by `sync(ref)` and provides:
- * - `peerId` — the local peer ID
- * - `docId` — the document ID
- * - `peerStates` — current per-peer sync state
- * - `ready` / `readyFor(pred)` — monotonic readiness latches
- * - `onPeerSyncChange()` — subscribe to per-peer sync state changes
- */
-export interface SyncRef {
-  /** The local peer ID. */
-  readonly peerId: PeerId
-
-  /** The document ID. */
-  readonly docId: DocId
-
-  /** Current per-peer sync state with all peers (volatile — can regress). */
-  readonly peerStates: PeerSyncState[]
-
-  /**
-   * Monotonic readiness latch: `true` once this doc has reconciled with ≥1
-   * peer (received data, or a terminal `vacant` reply). Stays `true` across
-   * the `synced→pending→synced` reconnect re-handshake flip and across a
-   * reconciled peer departing. The 90% case that users typically want: "is it
-   * safe to read?" gate.
-   */
-  readonly ready: boolean
-
-  /**
-   * Monotonic latch restricted to peers matching `pred` (the authority /
-   * quorum case) — resolved against stored identities, so it holds even
-   * after the matching peer has left.
-   */
-  readyFor(pred: (peer: PeerIdentityDetails) => boolean): boolean
-
-  /**
-   * Coarse connection lifecycle: `online` (≥1 established peer),
-   * `connecting` (transports configured, none established), or `offline`
-   * (no transports configured).
-   */
-  readonly connectivity: Connectivity
-
-  /**
-   * Subscribe to per-peer sync state changes.
-   * @param cb Callback that receives the new peer states
-   * @returns Unsubscribe function
-   */
-  onPeerSyncChange(cb: (peerStates: PeerSyncState[]) => void): () => void
-}
+export type { SyncRef } from "./document-terms.js"
 
 // ---------------------------------------------------------------------------
-// Per-document storage for sync refs, reachable from any ref in the document
-// ---------------------------------------------------------------------------
-
-const syncRefMap = createDocumentMap<SyncRef>()
-
-/** The raw wiring behind each `SyncRef`, for waits that need the synchronizer. */
-const syncSourceMap = createDocumentMap<{
-  docId: DocId
-  synchronizer: Synchronizer
-}>()
-
-// ---------------------------------------------------------------------------
-// SyncRef implementation
+// The live sync handle, over the Synchronizer
 // ---------------------------------------------------------------------------
 
 class SyncRefImpl implements SyncRef {
@@ -142,33 +77,34 @@ class SyncRefImpl implements SyncRef {
   }
 }
 
-// ---------------------------------------------------------------------------
-// registerSync — internal helper (called by Exchange.get())
-// ---------------------------------------------------------------------------
-
 /**
- * Register sync capabilities for a document ref.
+ * A document's live sync handle, and the Synchronizer narrowed to that
+ * document for its waits.
  *
- * Called internally by `Exchange.get()` after creating the ref.
- * NOT exported from the barrel — internal cross-module helper.
- *
- * @param ref - The document ref (Ref<S>) to attach sync to
- * @param params - The sync parameters (peerId, docId, synchronizer)
+ * @internal Called by `Exchange` as it attaches a document's network terms.
  */
-export function registerSync(
-  ref: object,
-  params: {
-    peerId: PeerId
-    docId: DocId
-    synchronizer: Synchronizer
-  },
-): void {
-  const syncRef = new SyncRefImpl(params)
-  syncRefMap.set(ref, syncRef)
-  // `whenSettled` needs the synchronizer itself, not just the public SyncRef
-  // surface, because it waits on an authority predicate that `SyncRef` does
-  // not expose.
-  syncSourceMap.set(ref, params)
+export function liveSync(params: {
+  peerId: PeerId
+  docId: DocId
+  synchronizer: Synchronizer
+}): Sync {
+  const { docId, synchronizer } = params
+  return {
+    ref: new SyncRefImpl(params),
+    source: {
+      connectivity: () => synchronizer.connectivity(),
+      reconciled: () => synchronizer.reconciledIdentities(docId),
+      awaitReconciliation: async (isSettled, offlineAfter, signal) =>
+        (await synchronizer.awaitReconciliation(
+          docId,
+          isSettled,
+          offlineAfter,
+          signal,
+        )) === "ready"
+          ? "ready"
+          : "offline",
+    },
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -185,6 +121,8 @@ export function registerSync(
  * - `ready` / `readyFor(pred)` — monotonic readiness latches
  * - `onPeerSyncChange()` — subscribe to per-peer sync state changes
  *
+ * A closed document's handle reports its state at the close.
+ *
  * @param ref - A document obtained from `exchange.get()`
  * @returns SyncRef with sync capabilities
  * @throws If the document was not created via `exchange.get()`
@@ -200,17 +138,15 @@ export function registerSync(
  * ```
  */
 export function sync(ref: object): SyncRef {
-  const syncRef = syncRefMap.get(ref)
-
-  if (!syncRef) {
+  const network = termsOf(ref)?.network()
+  if (network === undefined) {
     throw new Error(
       "sync() requires a document from exchange.get(). " +
         "Documents created without an Exchange don't have sync capabilities. " +
         "Use exchange.get(docId, schema) to get a document with sync support.",
     )
   }
-
-  return syncRef
+  return network.sync().ref
 }
 
 // ---------------------------------------------------------------------------
@@ -275,16 +211,14 @@ export async function whenSettled(
   await whenHydrated(ref)
 
   // ── Step 2: peers, with the timeout. ──
-  const source = syncSourceMap.get(ref)
+  const network = termsOf(ref)?.network()
   // No exchange behind this document, so there is no upstream to wait for.
-  if (!source) return { via: "local" }
+  if (network === undefined) return { via: "local" }
 
   // Resolution order: call-site → Policy.authority → "any", the same order
   // `docStatus` and `initialize` use. Sharing it is what stops the promise and
   // the boolean forms from answering differently about the same document.
   const authority = opts?.authority ?? authorityFor(ref)
-
-  const { docId, synchronizer } = source
 
   // Hydration is already done above, so what remains of the conjunction is the
   // peer term — and that term is where `derivePeerSettled` applies the
@@ -299,14 +233,52 @@ export async function whenSettled(
     // having spoken, and callers such as `initialize` read this label to know
     // whether the verdict rests on local evidence alone.
     const answered =
-      authority !== "self" && synchronizer.connectivity() !== "offline"
+      authority !== "self" && network.sync().source.connectivity() !== "offline"
     return { via: answered ? "peer" : "local" }
   }
 
-  const result = await synchronizer.awaitReconciliation(
-    docId,
+  const result = await awaitSource(
+    network.sync,
     isSettled,
     opts?.offlineAfter ?? 0,
   )
   return result === "ready" ? { via: "peer" } : { via: "offline" }
+}
+
+/**
+ * Wait on the source the sync term holds, and on the one that replaces it: a
+ * document that closes while this waits replaces its live source with one
+ * whose wait rejects, and the live wait is let go.
+ */
+function awaitSource(
+  term: Feed<Sync>,
+  isSettled: () => boolean,
+  offlineAfter: number,
+): Promise<"ready" | "offline"> {
+  return new Promise((resolve, reject) => {
+    let current = new AbortController()
+    const wait = (): void => {
+      const signal = current.signal
+      term()
+        .source.awaitReconciliation(isSettled, offlineAfter, signal)
+        .then(
+          result => {
+            if (signal.aborted) return
+            stop()
+            resolve(result)
+          },
+          error => {
+            if (signal.aborted) return
+            stop()
+            reject(error)
+          },
+        )
+    }
+    const stop = term[CHANGEFEED].subscribe(() => {
+      current.abort()
+      current = new AbortController()
+      wait()
+    })
+    wait()
+  })
 }

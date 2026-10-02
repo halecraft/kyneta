@@ -14,7 +14,6 @@ import { describe, expect, it } from "vitest"
 import { subscribe } from "../facade/observe.js"
 import { batch, createRef, Schema } from "../index.js"
 import {
-  ALWAYS_AUTHOR,
   createPlainClock,
   createPlainSubstrate,
   EMPTY_HISTORY,
@@ -165,14 +164,12 @@ describe("delivery: cross-doc cascade with shared lease", () => {
       schemaA,
       createPlainClock("testA"),
       EMPTY_HISTORY,
-      ALWAYS_AUTHOR,
     )
     const substrateB = createPlainSubstrate(
       { v: 0 },
       schemaB,
       createPlainClock("testB"),
       EMPTY_HISTORY,
-      ALWAYS_AUTHOR,
     )
 
     const docA = createRef(schemaA, substrateA, { lease: sharedLease })

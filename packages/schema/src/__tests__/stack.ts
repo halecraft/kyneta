@@ -10,7 +10,6 @@ import { createRootRef } from "../ref/create.js"
 import type { Ref } from "../ref/schema-ref.js"
 import type { Schema } from "../schema.js"
 import {
-  ALWAYS_AUTHOR,
   createPlainClock,
   createPlainSubstrate,
   EMPTY_HISTORY,
@@ -27,7 +26,6 @@ export function contextOver(
     schema,
     createPlainClock("test"),
     EMPTY_HISTORY,
-    ALWAYS_AUTHOR,
   ).context()
 }
 

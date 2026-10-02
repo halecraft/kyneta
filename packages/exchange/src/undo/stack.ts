@@ -299,6 +299,31 @@ export function stackOps(
 // The shell
 // ---------------------------------------------------------------------------
 
+/** Which documents the stack starts and stops listening to. */
+export interface Following {
+  readonly attach: readonly DocId[]
+  readonly detach: readonly DocId[]
+}
+
+/**
+ * What the stack does about the documents `docIds` names, each once: listen
+ * to one that is open, and let go of one that is not. Pure; `isOpen` reads
+ * the Runtime. `attach` itself keeps what is out of scope out, and listens
+ * again to a document whose substrate changed.
+ */
+export function followChanges(
+  docIds: Iterable<DocId>,
+  isOpen: (docId: DocId) => boolean,
+): Following {
+  const attach: DocId[] = []
+  const detach: DocId[] = []
+  for (const docId of new Set(docIds)) {
+    if (isOpen(docId)) attach.push(docId)
+    else detach.push(docId)
+  }
+  return { attach, detach }
+}
+
 export async function createUndoStack(
   params: UndoStackParams,
 ): Promise<UndoStack> {
@@ -355,7 +380,7 @@ export async function createUndoStack(
 
   /**
    * A document open here now, with its undo. Read from the Runtime each time:
-   * a rebuilt document has a new substrate, and a destroyed one is gone. A
+   * a promoted document has a new substrate, and a destroyed one is gone. A
    * part stands only if its document is this when the part is used.
    */
   const interpreted = (docId: DocId) => {
@@ -439,18 +464,34 @@ export async function createUndoStack(
     )
     attached.set(docId, { substrate, stop })
   }
+  const detach = (docId: DocId) => {
+    attached.get(docId)?.stop()
+    attached.delete(docId)
+  }
+  const apply = (follow: Following) => {
+    for (const docId of follow.attach) attach(docId)
+    for (const docId of follow.detach) detach(docId)
+  }
+  const isOpen = (docId: DocId) => interpreted(docId) !== undefined
   /** Listen to exactly the documents in scope that are open: a destroyed
-   *  document's substrate is let go. */
+   *  document's substrate, and through it its document, is let go. Walks
+   *  every document: at construction, and at each gesture, where `scope`
+   *  may answer differently than it did. */
   const scan = () => {
-    for (const docId of exchange.documents.keys()) attach(docId)
-    for (const [docId, { stop }] of attached) {
-      if (interpreted(docId) !== undefined) continue
-      stop()
-      attached.delete(docId)
-    }
+    apply(
+      followChanges([...exchange.documents.keys(), ...attached.keys()], isOpen),
+    )
   }
   scan()
-  const stopScanning = exchange.documents.subscribe(scan)
+  // Afterwards, only the documents a change names.
+  const stopScanning = exchange.documents.subscribe(changeset =>
+    apply(
+      followChanges(
+        changeset.changes.map(change => change.docId),
+        isOpen,
+      ),
+    ),
+  )
 
   // --- Opening what a step names -----------------------------------------
 

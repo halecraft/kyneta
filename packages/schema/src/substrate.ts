@@ -41,6 +41,7 @@ import type { Footprint } from "./footprint.js"
 import { isPropertyHost } from "./guards.js"
 import type { Path } from "./interpret.js"
 import type { Reader } from "./reader.js"
+import type { ClosedReason } from "./refusal.js"
 import type { Schema as SchemaNode } from "./schema.js"
 import type { WritableContext } from "./writable-context.js"
 
@@ -492,6 +493,18 @@ export interface ReplicaLike {
    *   everything the replica takes on, its version included.
    */
   resetFromEntirety(payload: SubstratePayload, options?: MergeOptions): void
+
+  /**
+   * Release everything native: the native document, op log or state tree,
+   * and every listener registered on it. Afterwards every member throws
+   * `DocumentClosedError`, except a substrate's reads, which return σ as it
+   * last stood. Idempotent.
+   *
+   * What the replica owns is freed; a bring-your-own native document is only
+   * let go of. A replica whose document `upgrade` took owns nothing more, and
+   * frees nothing.
+   */
+  dispose(reason?: ClosedReason): void
 }
 
 // ---------------------------------------------------------------------------
@@ -1319,20 +1332,10 @@ export type HydrationHandle<V extends Version = Version> = {
   readonly substrate: Substrate<V>
   /**
    * The document's own history has loaded. Claims this peer's stable identity
-   * (Yjs, Loro), and lets authored writes through (plain) unless they have
-   * been refused. Idempotent — safe to call twice.
+   * (Yjs, Loro), and lets authored writes through (plain). Idempotent — safe
+   * to call twice.
    */
   readonly adopt: () => void
-  /**
-   * From now on, authored writes throw `reason`, whether or not `adopt` has
-   * run or runs later. Merges and announcements are unaffected. A permission
-   * withdrawn, at any time, rather than an obligation of hydration: the
-   * exchange refuses a serialized document another writer holds.
-   *
-   * Only a serialized substrate (plain) implements it; a concurrent one has
-   * no single writer to refuse in favour of, and throws.
-   */
-  readonly refuse: (reason: string) => void
 }
 
 /**
@@ -1353,43 +1356,11 @@ export function beginHydration<V extends Version>(
     factory.createForHydration?.(schema) ?? {
       substrate: factory.create(schema),
       adopt: NOOP_ADOPT,
-      refuse: CANNOT_REFUSE,
-    }
-  )
-}
-
-/**
- * Build a substrate over an already-loaded replica (a promotion), with the
- * same handle `beginHydration` gives. Its history has loaded, so `adopt` may
- * be called at once.
- *
- * Falls back to `upgrade()` plus a no-op `adopt` for backends that declare no
- * {@link SubstrateFactory.upgradeForHydration}.
- */
-export function beginUpgrade<V extends Version>(
-  factory: SubstrateFactory<V>,
-  replica: Replica<V>,
-  schema: SchemaNode,
-): HydrationHandle<V> {
-  return (
-    factory.upgradeForHydration?.(replica, schema) ?? {
-      substrate: factory.upgrade(replica, schema),
-      adopt: NOOP_ADOPT,
-      refuse: CANNOT_REFUSE,
     }
   )
 }
 
 const NOOP_ADOPT = (): void => {}
-
-/**
- * `refuse` for a substrate that implements neither hook. A serialized
- * substrate must implement both, so this only reaches one the exchange never
- * refuses.
- */
-const CANNOT_REFUSE = (): void => {
-  throw new Error("this substrate cannot refuse authored writes")
-}
 
 export interface SubstrateFactory<V extends Version = Version> {
   /**
@@ -1430,6 +1401,13 @@ export interface SubstrateFactory<V extends Version = Version> {
    * supplies the schema it was missing. Because the returned substrate wraps
    * the same backing document, everything the replica accumulated carries
    * across.
+   *
+   * **`upgrade` takes what it does not copy.** A native document (Loro, Yjs)
+   * moves out of the replica's slot into the substrate's (`Releasable.take`),
+   * so the replica is closed, and its `dispose` frees nothing the substrate
+   * uses. Plain shares the replica's frozen state and copies its history, and
+   * the ephemeral substrate reads the replica's entirety, so neither takes
+   * anything: disposing the replica afterwards empties only its own slot.
    *
    * Step 1 above is why that transition has a precondition. Identity is
    * claimed here immediately, assuming any import has already finished —
@@ -1492,22 +1470,11 @@ export interface SubstrateFactory<V extends Version = Version> {
    * stored.
    *
    * The returned `adopt` is the obligation that comes with the substrate: call
-   * it once the imports are finished and no further ones are outstanding. Its
-   * `refuse` withdraws the right to author, at any time.
+   * it once the imports are finished and no further ones are outstanding.
+   * Who else may stop authored writes is the owner's decision, not the
+   * substrate's: it passes its refusal to `createRef`.
    */
   createForHydration?(schema: SchemaNode): HydrationHandle<V>
-
-  /**
-   * `upgrade(replica, schema)`, returned with the handle `createForHydration`
-   * gives, for a document promoted from a relay: the exchange may still have
-   * to refuse its authored writes. **Optional**; {@link beginUpgrade} supplies
-   * `upgrade()` plus a no-op for backends that leave it out. A serialized
-   * substrate must implement it.
-   */
-  upgradeForHydration?(
-    replica: Replica<V>,
-    schema: SchemaNode,
-  ): HydrationHandle<V>
 
   /**
    * Construct a new substrate from a self-sufficient payload.

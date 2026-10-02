@@ -40,19 +40,23 @@ import { resolveContainer } from "./loro-resolve.js"
 // Loro resolver
 // ---------------------------------------------------------------------------
 
+/**
+ * Reads values out of the document `doc()` returns, which is called for each
+ * read: a substrate's document is read through its slot.
+ */
 export function createLoroResolver(
-  doc: LoroDoc,
+  doc: () => LoroDoc,
   rootSchema: SchemaNode,
   binding?: SchemaBinding,
 ): MaterializeResolver {
   return {
     resolveValue(path: Path): unknown {
-      const { resolved } = resolveContainer(doc, rootSchema, path, binding)
+      const { resolved } = resolveContainer(doc(), rootSchema, path, binding)
       return extractValue(resolved)
     },
 
     resolveText(path: Path): string | undefined {
-      const { resolved } = resolveContainer(doc, rootSchema, path, binding)
+      const { resolved } = resolveContainer(doc(), rootSchema, path, binding)
       if (hasKind(resolved) && resolved.kind() === "Text") {
         return resolved.toString() as string
       }
@@ -60,7 +64,7 @@ export function createLoroResolver(
     },
 
     resolveCounter(path: Path): number | undefined {
-      const { resolved } = resolveContainer(doc, rootSchema, path, binding)
+      const { resolved } = resolveContainer(doc(), rootSchema, path, binding)
       if (isLoroCounter(resolved)) {
         return resolved.value
       }
@@ -68,7 +72,7 @@ export function createLoroResolver(
     },
 
     resolveRichText(path: Path): RichTextDelta | undefined {
-      const { resolved } = resolveContainer(doc, rootSchema, path, binding)
+      const { resolved } = resolveContainer(doc(), rootSchema, path, binding)
       if (isLoroText(resolved)) {
         return loroDeltaToRichTextDelta(resolved.toDelta() as Delta<string>[])
       }
@@ -76,14 +80,14 @@ export function createLoroResolver(
     },
 
     resolveLength(path: Path): number {
-      const { resolved } = resolveContainer(doc, rootSchema, path, binding)
+      const { resolved } = resolveContainer(doc(), rootSchema, path, binding)
       if (isLoroList(resolved)) return resolved.length
       if (hasKind(resolved)) return 0
       return plainResolution.length(resolved)
     },
 
     resolveKeys(path: Path): string[] {
-      const { resolved } = resolveContainer(doc, rootSchema, path, binding)
+      const { resolved } = resolveContainer(doc(), rootSchema, path, binding)
       if (isLoroMap(resolved)) return resolved.keys()
       if (hasKind(resolved)) return []
       return plainResolution.keys(resolved)
@@ -92,14 +96,14 @@ export function createLoroResolver(
     // A record's keys are runtime keys, never identity-keyed field names,
     // so the key is looked up as it is. A deleted key reads as `undefined`.
     resolveHasKey(path: Path, key: string): boolean {
-      const { resolved } = resolveContainer(doc, rootSchema, path, binding)
+      const { resolved } = resolveContainer(doc(), rootSchema, path, binding)
       if (isLoroMap(resolved)) return resolved.get(key) !== undefined
       if (hasKind(resolved)) return false
       return plainResolution.hasKey(resolved, key)
     },
 
     resolveForest(path: Path): readonly FlatTreeNodeTopology[] {
-      const { resolved } = resolveContainer(doc, rootSchema, path, binding)
+      const { resolved } = resolveContainer(doc(), rootSchema, path, binding)
       if (!isLoroTree(resolved)) return []
       // LoroTree.toArray() returns a NESTED `TreeNodeValue[]` (roots at
       // top, descendants under `.children`). The kyneta topology contract
@@ -138,7 +142,7 @@ export function materializeLoroShadow(
   schema: SchemaNode,
   binding?: SchemaBinding,
 ): PlainState {
-  const resolver = createLoroResolver(doc, schema, binding)
+  const resolver = createLoroResolver(() => doc, schema, binding)
   const interp = createMaterializeInterpreter(resolver)
   const ctx = materializeContextFromResolver(resolver)
   const result = interpret(schema, interp, ctx)

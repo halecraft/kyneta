@@ -380,6 +380,15 @@ export type {
 } from "./ref/writable.js"
 // `at`, the cursor-positioning primitive; `TRANSACT`, a ref's context
 export { at, type HasTransact, hasTransact, TRANSACT } from "./ref/write.js"
+// Refusal and release — why a document refuses writes, and the slot a
+// replica's `dispose` empties
+export {
+  type ClosedReason,
+  DocumentClosedError,
+  DocumentLoadingError,
+  WriteRefusal,
+} from "./refusal.js"
+export { type Releasable, releasable } from "./releasable.js"
 export type { ValueRestore } from "./restore.js"
 export { planValueRestores } from "./restore.js"
 export type { PartReverted, StepReverted } from "./revert-step.js"
@@ -501,7 +510,6 @@ export type {
 export {
   BACKING_DOC,
   beginHydration,
-  beginUpgrade,
   computeSchemaHash,
   DEVTOOLS_HISTORY,
   HASH_ALGORITHM_VERSION,

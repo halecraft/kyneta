@@ -296,7 +296,7 @@ describe("createLoroResolver.resolveHasKey", () => {
     batch(doc, (d: any) => d.peers.delete("bob"))
 
     const resolver = createLoroResolver(
-      getLoroDoc(substrate),
+      () => getLoroDoc(substrate),
       schema,
       trivialBinding(schema),
     )

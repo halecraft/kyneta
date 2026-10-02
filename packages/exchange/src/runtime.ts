@@ -22,7 +22,13 @@
 // real I/O. The tick clock (`setInterval`) lives here, not in substrates —
 // substrates expose a pure `tick?(now: number)` that the Runtime calls.
 
-import type { Changeset } from "@kyneta/changefeed"
+import {
+  type Changeset,
+  firstDefined,
+  type Settable,
+  settableFeed,
+  signalFeed,
+} from "@kyneta/changefeed"
 import type { Lease, ObservableHandle } from "@kyneta/machine"
 import { createLease, createObservableProgram } from "@kyneta/machine"
 import type {
@@ -43,19 +49,25 @@ import type {
 } from "@kyneta/schema"
 import {
   beginHydration,
-  beginUpgrade,
+  type ClosedReason,
   createRef,
   DEFAULT_LINEAGE,
+  DocumentClosedError,
   metadataOf,
   replicaTypesCompatible,
   subscribe,
+  type WriteRefusal,
 } from "@kyneta/schema"
 import type { DocId, PeerId } from "@kyneta/transport"
-import { registerDocSyncMode } from "./doc-meta.js"
+import {
+  closeTerms,
+  type Hydration,
+  type Persistence,
+  registerLocalTerms,
+  termsOf,
+} from "./document-terms.js"
 import { planInterpretation } from "./interpret.js"
-import { registerPersistenceTerm, registerWriteRefusal } from "./persistence.js"
 import { gateOpen } from "./publish-gate.js"
-import { registerHydrationTerm, signalFeed } from "./settle.js"
 import {
   type Seat,
   SeatLostError,
@@ -145,23 +157,37 @@ async function storeWrite(
 }
 
 /**
- * What the Runtime owes a document's substrate and may withdraw from it: its
- * `HydrationHandle`, less the substrate.
+ * What the Runtime owes a document's substrate: its `HydrationHandle`, less
+ * the substrate.
  */
 type Authorship = Omit<HydrationHandle, "substrate">
 
 /**
  * The authorship of an interpreted document that loads nothing from a store
- * (no store, or a transient document): `adopt` has nothing to wait for, and
- * no stored writer can refuse it.
+ * (no store, a transient document, or a promotion whose replica already
+ * loaded): `adopt` has nothing to wait for.
  */
-const NO_AUTHORSHIP: Authorship = {
-  adopt: () => {},
-  refuse: () => {
-    throw new Error(
-      "[runtime] a document with no stored writer is never refused",
-    )
-  },
+const NO_AUTHORSHIP: Authorship = { adopt: () => {} }
+
+/**
+ * Who, besides the substrate, refuses an interpreted document's authored
+ * writes: its owner's answer, which `createRef` attaches to the context as
+ * `firstDefined(seat, network)`.
+ */
+type Refusals = {
+  /** Another seat of the storage writes this serialized document. Set once,
+   *  at load or after a lost race, and kept for the session. */
+  readonly seat: Settable<WriteRefusal | undefined>
+  /** What the network refuses. Emptied when the document closes, so what
+   *  fills it is let go of with it. */
+  readonly network: Settable<WriteRefusal | undefined>
+}
+
+/** What a latch says, as the hydration term reports it. */
+function hydrationOf(latch: HydrationLatch): Hydration {
+  return latch.state === "failed"
+    ? { status: "failed", error: latch.error }
+    : { status: latch.state }
 }
 
 /** What a document that has not become ready has wired: nothing. */
@@ -341,13 +367,6 @@ export type Publication = {
   ownHigh: Version | undefined
   /** The error of the latest failed store write, until a write succeeds. */
   error: unknown
-  /**
-   * Why this document's authored writes are refused: another seat of the
-   * storage writes it. Set once, at load or after a lost race, and kept for
-   * the session.
-   */
-  refusal: WriterRefusedError | undefined
-  readonly refusalListeners: Set<() => void>
   /** What the persistence term last reported, so it reports changes only. */
   reported: { readonly persisted: boolean; readonly error: unknown }
   readonly listeners: Set<() => void>
@@ -357,8 +376,6 @@ function createPublication(): Publication {
   return {
     ownHigh: undefined,
     error: undefined,
-    refusal: undefined,
-    refusalListeners: new Set(),
     reported: { persisted: true, error: undefined },
     listeners: new Set(),
   }
@@ -390,6 +407,7 @@ export type DocCacheEntry =
       /** Undoes what `#becomeReady` wired; a no-op until then. */
       unwire: () => void
       authorship: Authorship
+      refusals: Refusals
       /** The writer the store recorded when the document loaded. */
       writer: PeerId | null
       /** Why it was created. A `get` while an `open` loads makes it
@@ -480,10 +498,10 @@ export type RuntimeHooks = {
    * before the document becomes ready, so what is attached here observes its
    * registration with the sync graph.
    *
-   * The Exchange implements this to attach the ref's network capabilities:
+   * The Exchange implements this to attach the ref's network terms:
    * `sync(ref)`, its authority, and the peer half of its settle conjunction.
-   * The Runtime has already attached the local ones (hydration, persistence,
-   * refusal).
+   * The Runtime has already attached the local ones (hydration, persistence)
+   * and its refusal.
    */
   onDocInterpreted?: (docId: DocId, ref: object) => void
 
@@ -859,7 +877,8 @@ export class Runtime {
 
   /**
    * Resolve once this document's stored data has finished loading; reject if
-   * the load failed.
+   * the load failed, or with its `DocumentClosedError` if the document closed
+   * while it loaded.
    *
    * No timeout, for the reason `whenHydrated(ref)` gives: a slow disk is a
    * local fault we can observe, and abandoning the wait would mean proceeding
@@ -926,7 +945,12 @@ export class Runtime {
   // =========================================================================
 
   /**
-   * Destroy a document — remove it from the cache and delete from the store.
+   * Destroy a document — close it, remove it from the cache and delete it from
+   * the store.
+   *
+   * Closing releases its native document (`#evict`): a ref the application
+   * still holds reads its last value, and its writes throw
+   * `DocumentClosedError` with reason `"destroyed"`.
    *
    * Fires {@link RuntimeHooks.onDocDestroyed} so the Exchange can broadcast
    * `dismiss` to peers and remove the doc from the sync graph.
@@ -953,7 +977,7 @@ export class Runtime {
       entry.mode === "deferred" ||
       this.#usesStore(entry.readyInfo.syncMode)
 
-    this.#evict(docId)
+    this.#evict(docId, "destroyed")
     if (touchesStore) this.#storeHandle?.dispatch({ type: "destroy", docId })
     this.#hooks?.onDocDestroyed?.(docId)
   }
@@ -1050,7 +1074,8 @@ export class Runtime {
    * a continuation of what the relay holds (see the replicate arm of its
    * reset branch). It is the Runtime's to do because the Runtime owns the
    * document's record: the Synchronizer reads the same object, so it sees
-   * the new replica, and so do persistence and promotion.
+   * the new replica, and so do persistence and promotion. The replaced
+   * replica is disposed.
    */
   rebuildReplica(docId: DocId, payload: SubstratePayload): void {
     const entry = this.#docCache.get(docId)
@@ -1059,8 +1084,10 @@ export class Runtime {
         `[runtime] cannot rebuild '${docId}': not a replicate-mode document`,
       )
     }
+    const replaced = entry.readyInfo.replica
     entry.readyInfo.replica =
       entry.readyInfo.replicaFactory.fromEntirety(payload)
+    replaced.dispose("disposed")
   }
 
   /**
@@ -1163,7 +1190,7 @@ export class Runtime {
         entry?.mode === "interpret" &&
         entry.readyInfo.syncMode.writerModel === "serialized" &&
         entry.publication.ownHigh !== undefined &&
-        entry.publication.refusal === undefined,
+        entry.refusals.seat() === undefined,
     }
   }
 
@@ -1324,27 +1351,32 @@ export class Runtime {
   }
 
   /**
-   * Gracefully shut down: flush all pending operations, close the store,
-   * stop the tick clock.
+   * Gracefully shut down: flush all pending operations, close every document
+   * (reason `"disposed"`), close the store, stop the tick clock.
    */
   async shutdown(): Promise<void> {
     await this.#quiesce()
     this.#storeHandle?.dispose()
     this.#stopTick()
     this.#cancelAllRetries()
-    for (const docId of [...this.#docCache.keys()]) this.#evict(docId)
+    for (const docId of [...this.#docCache.keys()]) {
+      this.#evict(docId, "disposed")
+    }
     await this.#store?.close()
   }
 
   /**
-   * Synchronous teardown — clears the cache and stops everything without
-   * awaiting pending I/O. Use {@link shutdown} for graceful teardown.
+   * Synchronous teardown — closes every document (reason `"disposed"`) and
+   * stops everything without awaiting pending I/O. Use {@link shutdown} for
+   * graceful teardown.
    */
   reset(): void {
     this.#stopTick()
     this.#cancelAllRetries()
     this.#storeHandle?.dispose()
-    for (const docId of [...this.#docCache.keys()]) this.#evict(docId)
+    for (const docId of [...this.#docCache.keys()]) {
+      this.#evict(docId, "disposed")
+    }
   }
 
   // =========================================================================
@@ -1406,21 +1438,31 @@ export class Runtime {
     // All three arms end with this peer's identity claimed; they differ in
     // *when*, and each is right for what it can guarantee. `beginHydration`
     // defers, because an import is still coming. `create` claims at once,
-    // because none is. `beginUpgrade` claims at once too, because the import
-    // has already finished — that is the two-phase construction contract every
+    // because none is. `upgrade` claims at once too, because the import has
+    // already finished — that is the two-phase construction contract every
     // backend defines `create` in terms of. Making it defer to match the first
     // arm would leave the identity unclaimed with nothing left to claim it.
-    //
-    // The two stored arms keep their handle's `refuse`: another seat of the
-    // storage may write the document, which withdraws the right to author it.
     const { substrate, ...authorship } = promoting
-      ? beginUpgrade(factory, promoting.readyInfo.replica, bound.schema)
+      ? {
+          substrate: factory.upgrade(promoting.readyInfo.replica, bound.schema),
+          ...NO_AUTHORSHIP,
+        }
       : willHydrate
         ? beginHydration(factory, bound.schema)
         : { substrate: factory.create(bound.schema), ...NO_AUTHORSHIP }
+    // The relay's replica is replaced. `upgrade` took what it did not copy,
+    // so this frees nothing the substrate uses.
+    promoting?.readyInfo.replica.dispose("disposed")
 
+    // Who may author it besides the substrate: another seat of the storage
+    // may write it (`#refuse`), and the network may refuse it.
+    const refusals: Refusals = {
+      seat: settableFeed<WriteRefusal | undefined>(undefined),
+      network: settableFeed<WriteRefusal | undefined>(undefined),
+    }
     const ref: any = createRef(bound.schema, substrate, {
       lease: this.lease,
+      refusal: firstDefined(refusals.seat, refusals.network),
     })
 
     const readyInfo: InterpretReadyInfo = {
@@ -1446,6 +1488,7 @@ export class Runtime {
       publication,
       unwire: NOTHING_WIRED,
       authorship,
+      refusals,
       writer: null,
       // A promoted replica is held, so it is had whatever an `open` asked.
       intent: promoting ? CREATE : intent,
@@ -1462,45 +1505,38 @@ export class Runtime {
     // and whatever it was holding is replaced without a word.
     this.#docCache.set(docId, entry)
 
-    // The storage term joins this document's settle conjunction. It is
-    // registered here rather than after hydration finishes, because the point
-    // of the term is to be observable *while* still pending — that is what
-    // stops a caller concluding "empty" from a document that simply has not
-    // finished loading.
-    registerDocSyncMode(ref, bound.syncMode)
-    registerHydrationTerm(
-      ref,
-      signalFeed(
-        () => hydration.state === "loaded",
-        onChange => {
-          if (hydration.state !== "pending") return () => {}
-          hydration.listeners.add(onChange)
-          return () => hydration.listeners.delete(onChange)
-        },
+    // The local terms: the storage term, which joins this document's settle
+    // conjunction, and the persistence term. They are registered here rather
+    // than after hydration finishes, because the point of the storage term is
+    // to be observable *while* still pending — that is what stops a caller
+    // concluding "empty" from a document that simply has not finished
+    // loading. Each follows a live feed over this entry until the document
+    // closes (`#evict`).
+    registerLocalTerms(ref, {
+      syncMode: bound.syncMode,
+      hydration: settableFeed<Hydration>(
+        signalFeed(
+          () => hydrationOf(hydration),
+          onChange => {
+            if (hydration.state !== "pending") return () => {}
+            hydration.listeners.add(onChange)
+            return () => hydration.listeners.delete(onChange)
+          },
+        ),
       ),
-      () => (hydration.state === "failed" ? hydration.error : undefined),
-    )
-    registerPersistenceTerm(
-      ref,
-      signalFeed(
-        () => this.#persisted(entry),
-        onChange => {
-          publication.listeners.add(onChange)
-          return () => publication.listeners.delete(onChange)
-        },
+      persistence: settableFeed<Persistence>(
+        signalFeed(
+          () => ({
+            persisted: this.#persisted(entry),
+            error: this.#persistenceError(entry),
+          }),
+          onChange => {
+            publication.listeners.add(onChange)
+            return () => publication.listeners.delete(onChange)
+          },
+        ),
       ),
-      () => this.#persistenceError(entry),
-    )
-    registerWriteRefusal(
-      ref,
-      signalFeed(
-        () => publication.refusal,
-        onChange => {
-          publication.refusalListeners.add(onChange)
-          return () => publication.refusalListeners.delete(onChange)
-        },
-      ),
-    )
+    })
 
     // Before it can become ready: a document that loads nothing does so
     // below, synchronously, and registers with the sync graph.
@@ -1587,19 +1623,20 @@ export class Runtime {
    * The one place a document becomes ready, whatever path created it.
    *
    * The order is fixed:
-   * 1. A document destroyed or replaced while it loaded is no longer this
-   *    entry's to make ready: its latch fails, so waiters are not told a
-   *    document that is gone has loaded, and nothing below runs.
+   * 1. A document closed while it loaded is no longer this entry's to make
+   *    ready, and nothing below runs. `#evict` already failed its latch with
+   *    the close error, so waiters are not told a document that is gone has
+   *    loaded.
    * 2. What was loaded decides (`readinessFor`). An `open` that found
-   *    nothing takes the document out again, and puts back the deferred
-   *    entry it replaced, in this one step, so nothing sees it missing
-   *    between; nothing was registered, written or announced, and its latch
-   *    fails. Otherwise the store program learns what the store holds.
-   * 3. `adopt` claims identity (Yjs, Loro) and the right to author (plain)
+   *    nothing fails its latch, then takes the document out again and puts
+   *    back the deferred entry it replaced, in this one step, so nothing sees
+   *    it missing between; nothing was registered, written or announced.
+   *    Otherwise the store program learns what the store holds.
+   * 3. `adopt` claims identity (Yjs, Loro) and lifts plain's loading refusal
    *    before anyone is told the document has loaded, so a listener that
    *    writes on that signal finds the document writable. A serialized
-   *    document another seat of the storage writes is refused instead, so
-   *    such a listener's write throws.
+   *    document another seat of the storage writes is refused instead (its
+   *    seat refusal is set), so such a listener's write throws.
    * 4. The latch resolves `loaded`.
    * 5. `#register` publishes the document to the sync graph, and an
    *    interpreted document is wired: its local updates start leaving the
@@ -1608,22 +1645,18 @@ export class Runtime {
    */
   #becomeReady(entry: ReadyEntry, loaded: Loaded): void {
     const { docId } = entry.readyInfo
-    if (this.#docCache.get(docId) !== entry) {
-      resolveHydration(entry.hydration, {
-        ok: false,
-        error: new Error(`Document '${docId}' was destroyed while loading`),
-      })
-      return
-    }
+    // Closed while it loaded: `#evict` failed its latch with the close error.
+    if (this.#docCache.get(docId) !== entry) return
     const intent = entry.mode === "interpret" ? entry.intent : CREATE
     const readiness = readinessFor(docId, loaded.outcome, intent)
     if (readiness.kind === "absent") {
-      this.#evict(docId)
-      if (intent.kind === "open" && intent.wasDeferred) this.markDeferred(docId)
+      // Failed first, so its terms close with this error, not the close's.
       resolveHydration(entry.hydration, {
         ok: false,
         error: new Error(`Document '${docId}' is not held here`),
       })
+      this.#evict(docId, "disposed")
+      if (intent.kind === "open" && intent.wasDeferred) this.markDeferred(docId)
       return
     }
     if (readiness.input) this.#storeHandle?.dispatch(readiness.input)
@@ -1671,13 +1704,32 @@ export class Runtime {
   }
 
   /**
-   * Remove a document from the cache, and unwire it first so that a write on
-   * a ref that outlives it cannot reach whatever is created under its id
-   * next.
+   * Close a document and remove it from the cache, in this order:
+   * 1. Unwire it. Its changeset subscription lives in the context's
+   *    subscriber trie, which a held ref keeps, and closes over this Runtime.
+   * 2. Close its terms (`closeTerms`): each keeps the answer it had, a
+   *    pending one fails with the close error, and none reaches this Runtime
+   *    any more. A load still in flight fails its latch with the same error,
+   *    for the waiters `whenHydrated(docId)` attached to it. The network
+   *    refusal is emptied, letting go of whatever filled it.
+   * 3. Dispose its replica, which releases the native document. A held ref
+   *    reads its last value, and every write throws `DocumentClosedError`.
+   * 4. Delete the entry.
    */
-  #evict(docId: DocId): void {
+  #evict(docId: DocId, reason: ClosedReason): void {
     const entry = this.#docCache.get(docId)
-    if (entry?.mode === "interpret") entry.unwire()
+    if (entry === undefined) return
+    if (entry.mode !== "deferred") {
+      const error = new DocumentClosedError(reason)
+      if (entry.mode === "interpret") {
+        entry.unwire()
+        const terms = termsOf(entry.ref)
+        if (terms !== undefined) closeTerms(terms, error)
+        entry.refusals.network.set(undefined)
+      }
+      resolveHydration(entry.hydration, { ok: false, error })
+      entry.readyInfo.replica.dispose(reason)
+    }
     this.#docCache.delete(docId)
   }
 
@@ -1945,14 +1997,12 @@ export class Runtime {
 
   /**
    * Withdraw the right to author `entry`: another seat of its storage writes
-   * it. Authored writes throw from now on, and `writeRefusal` reports it.
+   * it. Its context's refusal answers `refusal` from now on, so authored
+   * writes throw it and `writeRefusal` reports it. The first refusal stands.
    */
   #refuse(entry: InterpretEntry, refusal: WriterRefusedError): void {
-    entry.authorship.refuse(refusal.message)
-    const { publication } = entry
-    if (publication.refusal !== undefined) return
-    publication.refusal = refusal
-    for (const listener of [...publication.refusalListeners]) listener()
+    const { seat } = entry.refusals
+    if (seat() === undefined) seat.set(refusal)
   }
 
   /**
@@ -2001,13 +2051,20 @@ export class Runtime {
       bound.factory({ peerId: this.peerId, binding: bound.identityBinding }),
       bound.schema,
     )
-    const { stored } = takeStoredEntries(
-      fresh,
-      readyInfo.replicaFactory,
-      entries,
-      latestStoredLineage(readyInfo.replicaFactory, entries),
-    )
-    readyInfo.replica.resetFromEntirety(fresh.exportEntirety())
+    let stored: string | undefined
+    try {
+      stored = takeStoredEntries(
+        fresh,
+        readyInfo.replicaFactory,
+        entries,
+        latestStoredLineage(readyInfo.replicaFactory, entries),
+      ).stored
+      // The entirety is a payload of its own: the live document shares
+      // nothing with the fresh one once it has taken it in.
+      readyInfo.replica.resetFromEntirety(fresh.exportEntirety())
+    } finally {
+      fresh.dispose("disposed")
+    }
     this.#hooks?.onDocReset?.(docId)
 
     const readiness = readinessFor(

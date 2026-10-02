@@ -12,6 +12,7 @@
 import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import {
   batch,
+  DocumentLoadingError,
   json,
   plainReplicaFactory,
   Schema,
@@ -36,6 +37,10 @@ import { drain, exchangesPerTest } from "./exchanges.js"
 import { wrapStore } from "./wrap-store.js"
 
 const FieldsSchema = Schema.struct({ a: Schema.string(), b: Schema.string() })
+
+/** The seat a refusal names, if it is another seat's claim. */
+const writerOf = (refusal: unknown) =>
+  refusal instanceof WriterRefusedError ? refusal.writer : undefined
 const Fields = json.bind(FieldsSchema)
 type Field = { (): string; set(value: string): void }
 type FieldsDoc = { readonly a: Field; readonly b: Field }
@@ -101,7 +106,7 @@ describe("serialized documents: one writer seat per storage", () => {
     expect(two.b()).toBe("")
     const refusal = writeRefusal(two)
     expect(refusal).toBeInstanceOf(WriterRefusedError)
-    expect(refusal?.writer).toBe(first.peerId)
+    expect(writerOf(refusal)).toBe(first.peerId)
     expect(errors).toHaveLength(1)
     expect(errors[0]).toBeInstanceOf(WriterRefusedError)
     // The rebuild's own write succeeded; the refusal stays.
@@ -125,10 +130,11 @@ describe("serialized documents: one writer seat per storage", () => {
     const reader = open(storage)
     const doc = reader.get("doc", Fields) as FieldsDoc
     const feed = writeRefusalFeed(doc)
-    expect(feed()).toBeUndefined()
+    // While it loads, a serialized document refuses every authored write.
+    expect(feed()).toBeInstanceOf(DocumentLoadingError)
     await whenHydrated(doc)
     expect(feed()).toBeInstanceOf(WriterRefusedError)
-    expect(feed()?.writer).toBe(writer.peerId)
+    expect(writerOf(feed())).toBe(writer.peerId)
     expect(() => doc.b.set("theirs")).toThrow(
       "a serialized document has one writer per storage",
     )

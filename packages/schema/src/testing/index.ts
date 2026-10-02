@@ -1,3 +1,4 @@
+export { collectGarbage } from "./collect-garbage.js"
 export { defined } from "./defined.js"
 export {
   type DeliveryConformanceFactory,
@@ -8,6 +9,12 @@ export {
   deliveryConformance,
   type RemoteWrite,
 } from "./delivery-conformance.js"
+export {
+  type DisposeConformanceOptions,
+  DisposeFixture,
+  type DisposeTestEnv,
+  disposeConformance,
+} from "./dispose-conformance.js"
 export { frozenInvariantViolations } from "./frozen-invariant.js"
 export {
   type PositionTestEnv,

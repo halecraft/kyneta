@@ -1,6 +1,5 @@
 // ref lifetime — a ref lives while something holds it, and a coordinate stays
-// in the trie while something needs it. Runs with `--expose-gc`
-// (`vitest.config.ts`).
+// in the trie while something needs it.
 import { CHANGEFEED } from "@kyneta/changefeed"
 import { describe, expect, it } from "vitest"
 import {
@@ -15,6 +14,7 @@ import { __countKeptRefs, __countTrieNodes } from "../coordinate-trie.js"
 import { deleted, deletedFeed } from "../index.js"
 import { RawPath } from "../path.js"
 import { TRANSACT } from "../ref/write.js"
+import { collectGarbage } from "../testing/collect-garbage.js"
 import { withReadScope } from "../tracking.js"
 import type { WritableContext } from "../writable-context.js"
 
@@ -24,25 +24,6 @@ const Doc = Schema.struct({
 })
 
 const contextOf = (doc: any) => doc[TRANSACT] as WritableContext
-
-const gc = (): void => {
-  const collectGarbage = (globalThis as { gc?: () => void }).gc
-  if (collectGarbage === undefined) throw new Error("run with --expose-gc")
-  collectGarbage()
-}
-
-/**
- * Collect, then let the finalizers run. A `WeakRef` made in this job is kept
- * until it ends, and a finalizer runs in a task of its own, so each round
- * yields first.
- */
-async function collect(): Promise<void> {
-  for (let i = 0; i < 4; i++) {
-    await new Promise(resolve => setTimeout(resolve, 0))
-    gc()
-  }
-  await new Promise(resolve => setTimeout(resolve, 0))
-}
 
 function fixture(): any {
   const doc: any = createDoc(Doc)
@@ -62,11 +43,11 @@ describe("refs live while held", () => {
   it("navigating to 1,000 entries and dropping them leaves no ref and no coordinate below the record", async () => {
     const doc = fixture()
     doc.rows.at("row-0")
-    await collect()
+    await collectGarbage()
     const before = __countTrieNodes(contextOf(doc))
     visitRows(doc)
     expect(__countTrieNodes(contextOf(doc))).toBeGreaterThan(before)
-    await collect()
+    await collectGarbage()
     expect(__countKeptRefs(contextOf(doc))).toBe(0)
     expect(__countTrieNodes(contextOf(doc))).toBe(before)
   })
@@ -75,14 +56,14 @@ describe("refs live while held", () => {
     const doc = fixture()
     const held = doc.rows.at("row-1")
     visitRows(doc)
-    await collect()
+    await collectGarbage()
     expect(doc.rows.at("row-1")).toBe(held)
   })
 
   it("holding only an entry's field keeps the entry", async () => {
     const doc = fixture()
     const heldN = doc.rows.at("row-2").n
-    await collect()
+    await collectGarbage()
     expect(doc.rows.at("row-2").n).toBe(heldN)
   })
 
@@ -91,7 +72,7 @@ describe("refs live while held", () => {
     const held = doc.rows.at("row-3")
     doc.rows.delete("row-3")
     expect(deleted(held)).toBe(true)
-    await collect()
+    await collectGarbage()
     doc.rows.set("row-3", { n: 30 })
     expect(deleted(held)).toBe(false)
     expect(doc.rows.at("row-3")).toBe(held)
@@ -100,11 +81,11 @@ describe("refs live while held", () => {
 
   it("an unheld deleted entry is pruned", async () => {
     const doc = fixture()
-    await collect()
+    await collectGarbage()
     const before = __countTrieNodes(contextOf(doc))
     doc.rows.at("row-4").n()
     doc.rows.delete("row-4")
-    await collect()
+    await collectGarbage()
     expect(__countTrieNodes(contextOf(doc))).toBe(before)
   })
 })
@@ -114,7 +95,7 @@ describe("what else keeps a coordinate", () => {
     const doc = fixture()
     const heard: unknown[] = []
     subscribe(doc.rows.at("row-5"), changeset => heard.push(changeset))
-    await collect()
+    await collectGarbage()
     applyChanges(doc, [
       {
         path: RawPath.empty.field("rows").entry("row-5").field("n"),
@@ -128,14 +109,14 @@ describe("what else keeps a coordinate", () => {
     const doc = fixture()
     const heard: unknown[] = []
     subscribe(doc.items.at(1), changeset => heard.push(changeset))
-    await collect()
+    await collectGarbage()
     applyChanges(doc, [
       {
         path: RawPath.empty.field("items"),
         change: sequenceChange([{ insert: [own({ name: "z" })] }]),
       },
     ])
-    await collect()
+    await collectGarbage()
     applyChanges(doc, [
       {
         path: RawPath.empty.field("items").item(2).field("name"),
@@ -151,7 +132,7 @@ describe("what else keeps a coordinate", () => {
     deletedFeed(doc.rows.at("row-6"))[CHANGEFEED].subscribe(() => {
       heard++
     })
-    await collect()
+    await collectGarbage()
     doc.rows.delete("row-6")
     expect(heard).toBe(1)
   })
@@ -160,7 +141,21 @@ describe("what else keeps a coordinate", () => {
     const doc = fixture()
     const read = () => withReadScope(() => doc.rows.at("row-7").n()).deps
     const first = read()
-    await collect()
+    await collectGarbage()
     expect(read().map(dep => dep.key)).toEqual(first.map(dep => dep.key))
+  })
+})
+
+describe("a document lives while held", () => {
+  it("a root ref is collected though a WeakMap keyed by its context holds a closure over it", async () => {
+    const byContext = new WeakMap<object, () => unknown>()
+    const make = (): WeakRef<object> => {
+      const doc = fixture()
+      byContext.set(contextOf(doc), () => doc)
+      return new WeakRef(doc)
+    }
+    const held = make()
+    await collectGarbage()
+    expect(held.deref()).toBeUndefined()
   })
 })

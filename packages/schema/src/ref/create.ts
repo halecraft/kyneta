@@ -9,11 +9,11 @@
 // coordinate (`node.ref`), as the one canonical ref `.at` hands back; and
 // every ref holds its parent, so holding any ref keeps the refs above it.
 // A ref its parent does not hold (the root, a list item, a record entry, a
-// tree node) is anchored: it counts itself on its coordinate, and when it is
-// collected its coordinate and the field coordinates below it are pruned if
-// nothing else needs them (`CoordinateTrie.prune`). A field ref and its
-// parent hold each other, so they are collected together, and one count and
-// one finalization (72 bytes of registration) serve both.
+// tree node) is anchored: it counts itself on its coordinate
+// (`CoordinateTrie.anchor`), and when it is collected its coordinate and the
+// field coordinates below it are pruned if nothing else needs them
+// (`CoordinateTrie.prune`). A field ref and its parent hold each other, so
+// they are collected together, and the anchor's one count serves both.
 
 import { dispatchSum } from "../interpret.js"
 import type { AddressedPath, Coordinate } from "../path.js"
@@ -35,32 +35,6 @@ import {
   STATE,
 } from "./state.js"
 
-/**
- * Counts a collected ref off its coordinate, and prunes what is unneeded.
- * Holds each ref's path, which names its trie and its coordinate.
- */
-const collected = new FinalizationRegistry<AddressedPath>(path => {
-  const node = path.trie.node(path)
-  if (node === undefined) return
-  node.refs--
-  path.trie.prune(path)
-})
-
-/**
- * Count `ref` on its coordinate, `node`, for as long as it lives. Only an
- * anchored ref: one its parent does not hold (`Coordinate.refs`).
- */
-function anchor(
-  ref: RefFunction,
-  node: Coordinate | undefined,
-  path: AddressedPath,
-): RefFunction {
-  if (node === undefined) return ref
-  node.refs++
-  collected.register(ref, path)
-  return ref
-}
-
 /** The root ref of `schema` over `ctx`. */
 export function createRootRef(
   ctx: WritableContext,
@@ -68,7 +42,10 @@ export function createRootRef(
 ): RefFunction {
   const { root } = ctx.trie
   const node = ctx.trie.node(root)
-  return anchor(refAt(ctx, root, node, schema, "root", undefined), node, root)
+  return ctx.trie.anchor(
+    refAt(ctx, root, node, schema, "root", undefined),
+    root,
+  )
 }
 
 /** The ref of `schema` at `path`, reached from `parent`. */
@@ -96,9 +73,8 @@ export function canonicalChild(
   const node = ctx.trie.node(path)
   const held = node?.ref?.deref() as RefFunction | undefined
   if (held !== undefined) return held
-  const ref = anchor(
+  const ref = ctx.trie.anchor(
     refAt(ctx, path, node, schema, position, parent),
-    node,
     path,
   )
   if (node !== undefined) node.ref = new WeakRef(ref)

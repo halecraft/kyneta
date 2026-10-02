@@ -5,11 +5,20 @@
 // that declares no `createForHydration`. That graceful absence is the reason
 // the factory method is optional, so it is pinned here on the ephemeral
 // factory, which needs nothing. Plain declares it: a plain document refuses
-// authored writes until its history has loaded, and from `refuse` on.
+// authored writes until its history has loaded. Who else refuses them is the
+// owner's decision, which `createRef` attaches to the context.
 
+import { CHANGEFEED, settableFeed } from "@kyneta/changefeed"
 import { describe, expect, it } from "vitest"
-import { batch, createRef, Schema } from "../index.js"
-import { beginHydration, beginUpgrade } from "../substrate.js"
+import {
+  batch,
+  createRef,
+  DocumentLoadingError,
+  Schema,
+  TRANSACT,
+  WriteRefusal,
+} from "../index.js"
+import { beginHydration } from "../substrate.js"
 import { ephemeralSubstrateFactory } from "../substrates/ephemeral.js"
 import { plainSubstrateFactory } from "../substrates/plain.js"
 
@@ -38,7 +47,9 @@ describe("beginHydration", () => {
     const { substrate, adopt } = beginHydration(plainSubstrateFactory, schema)
     const doc = createRef(schema, substrate)
 
-    expect(() => batch(doc, d => d.title.set("early"))).toThrow("still loading")
+    expect(() => batch(doc, d => d.title.set("early"))).toThrow(
+      DocumentLoadingError,
+    )
     expect(doc.title()).toBe("")
 
     adopt()
@@ -47,47 +58,48 @@ describe("beginHydration", () => {
   })
 })
 
-describe("refuse", () => {
-  const REASON = "another seat writes this document"
+describe("the owner's refusal", () => {
+  class Refused extends WriteRefusal {}
+  const refused = new Refused("another seat writes this document")
 
-  it("plain: after adopt, authored writes throw the reason", () => {
-    const { substrate, adopt, refuse } = beginHydration(
-      plainSubstrateFactory,
-      schema,
-    )
-    const doc = createRef(schema, substrate)
+  it("authored writes throw the owner's refusal, which createRef attaches", () => {
+    const { substrate, adopt } = beginHydration(plainSubstrateFactory, schema)
+    const owner = settableFeed<WriteRefusal | undefined>(undefined)
+    const doc = createRef(schema, substrate, { refusal: owner })
     adopt()
     batch(doc, d => d.title.set("mine"))
-    refuse(REASON)
-    expect(() => batch(doc, d => d.title.set("again"))).toThrow(REASON)
+    owner.set(refused)
+    expect(() => batch(doc, d => d.title.set("again"))).toThrow(refused)
     expect(doc.title()).toBe("mine")
+    expect(doc[TRANSACT].refusal()).toBe(refused)
   })
 
-  it("plain: before adopt, the reason wins over still loading, and adopt does not lift it", () => {
-    const { substrate, adopt, refuse } = beginHydration(
-      plainSubstrateFactory,
-      schema,
+  it("the substrate answers first: a loading document refuses with DocumentLoadingError", () => {
+    const { substrate, adopt } = beginHydration(plainSubstrateFactory, schema)
+    const doc = createRef(schema, substrate, {
+      refusal: settableFeed<WriteRefusal | undefined>(refused),
+    })
+    expect(() => batch(doc, d => d.title.set("early"))).toThrow(
+      DocumentLoadingError,
     )
-    const doc = createRef(schema, substrate)
-    refuse(REASON)
-    expect(() => batch(doc, d => d.title.set("early"))).toThrow(REASON)
+    let heard = 0
+    doc[TRANSACT].refusal[CHANGEFEED].subscribe(() => heard++)
     adopt()
-    expect(() => batch(doc, d => d.title.set("after"))).toThrow(REASON)
+    expect(heard).toBe(1)
+    expect(() => batch(doc, d => d.title.set("after"))).toThrow(refused)
   })
 
-  it("plain: merges and resets still reach a refused document", () => {
+  it("merges and resets still reach a refused document", () => {
     const source = plainSubstrateFactory.create(schema)
     const writer = createRef(schema, source)
     batch(writer, d => d.title.set("one"))
     const afterOne = source.version()
 
-    const { substrate, adopt, refuse } = beginHydration(
-      plainSubstrateFactory,
-      schema,
-    )
-    const doc = createRef(schema, substrate)
+    const { substrate, adopt } = beginHydration(plainSubstrateFactory, schema)
+    const doc = createRef(schema, substrate, {
+      refusal: settableFeed<WriteRefusal | undefined>(refused),
+    })
     adopt()
-    refuse(REASON)
     substrate.merge(source.exportEntirety())
     expect(doc.title()).toBe("one")
 
@@ -100,36 +112,5 @@ describe("refuse", () => {
     batch(writer, d => d.title.set("three"))
     substrate.resetFromEntirety(source.exportEntirety())
     expect(doc.title()).toBe("three")
-  })
-
-  it("beginUpgrade gives plain a refusable substrate over a loaded replica", () => {
-    const replica = plainSubstrateFactory.createReplica()
-    const source = plainSubstrateFactory.create(schema)
-    batch(createRef(schema, source), d => d.title.set("relayed"))
-    replica.merge(source.exportEntirety())
-
-    const { substrate, adopt, refuse } = beginUpgrade(
-      plainSubstrateFactory,
-      replica,
-      schema,
-    )
-    const doc = createRef(schema, substrate)
-    expect(doc.title()).toBe("relayed")
-    // Already loaded: it may author before adopt.
-    batch(doc, d => d.title.set("promoted"))
-    adopt()
-    refuse(REASON)
-    expect(() => batch(doc, d => d.title.set("again"))).toThrow(REASON)
-  })
-
-  it("a factory with neither hook cannot refuse", () => {
-    const hydrating = beginHydration(ephemeralSubstrateFactory, schema)
-    expect(() => hydrating.refuse(REASON)).toThrow("cannot refuse")
-    const upgrading = beginUpgrade(
-      ephemeralSubstrateFactory,
-      ephemeralSubstrateFactory.createReplica(),
-      schema,
-    )
-    expect(() => upgrading.refuse(REASON)).toThrow("cannot refuse")
   })
 })

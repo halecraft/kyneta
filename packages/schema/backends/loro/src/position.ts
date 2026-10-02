@@ -1,10 +1,11 @@
 // position — LoroPosition implementation.
 //
 // Wraps Loro's Cursor object to implement @kyneta/schema's Position interface.
-// Cursors bind to specific character IDs in the Loro operation log, making
-// resolve() a stateless query — transform() is a no-op.
+// Cursors bind to specific character IDs in the Loro operation log, so
+// resolve() asks the document where that character is now — transform() is a
+// no-op.
 
-import type { Instruction, Position, Side } from "@kyneta/schema"
+import type { Instruction, Position, Releasable, Side } from "@kyneta/schema"
 import type {
   Cursor,
   LoroDoc as LoroDocType,
@@ -33,21 +34,24 @@ export function fromLoroSide(loroSide: LoroSide): Side {
  * A Position backed by a Loro Cursor.
  *
  * Loro cursors are bound to character IDs in the operation log, so
- * `resolve()` is a stateless query against the current doc state and
- * `transform()` is a no-op — the CRDT runtime handles position tracking.
+ * `resolve()` asks the document where the cursor's character is now, and
+ * `transform()` is a no-op — the CRDT runtime handles position tracking. The
+ * document is read through its substrate's slot, so a position made before
+ * the substrate is disposed throws `DocumentClosedError` rather than reaching
+ * a freed document.
  */
 export class LoroPosition implements Position {
   readonly side: Side
 
   constructor(
     private readonly cursor: Cursor,
-    private readonly doc: LoroDocType,
+    private readonly doc: Releasable<LoroDocType>,
   ) {
     this.side = fromLoroSide(cursor.side())
   }
 
   resolve(): number | null {
-    const result = this.doc.getCursorPos(this.cursor)
+    const result = this.doc.get().getCursorPos(this.cursor)
     return result ? result.offset : null
   }
 

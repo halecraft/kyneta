@@ -857,8 +857,9 @@ describe("a relay's replica after a lineage reset", () => {
     await relay.flush()
 
     // The rebuild ran. Without this, the assertions below could pass on a
-    // relay that merged instead.
-    expect(relay.synchronizer.getDoc("doc-1")?.replica).not.toBe(before)
+    // relay that merged instead. The replaced replica is disposed, so it is
+    // compared by identity alone: inspecting it would throw.
+    expect(relay.synchronizer.getDoc("doc-1")?.replica === before).toBe(false)
     return relay
   }
 

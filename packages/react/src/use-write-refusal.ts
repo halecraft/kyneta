@@ -1,19 +1,25 @@
 // use-write-refusal — "may this peer write this document?"
 //
-// A stored `json` document refuses this peer's writes when another seat of
-// the same store (another tab, another process) writes it. `useText` already
-// keeps its element read-only then; this hook is for every other editor, and
-// for saying why.
+// A document refuses this peer's writes when it is closed (destroyed, or its
+// Exchange shut down), while a stored `json` document is still loading, and
+// when another seat of the same store (another tab, another process) writes a
+// stored `json` document. `useText` already keeps its element read-only then;
+// this hook is for every other editor, and for saying why.
 
 import { changefeed } from "@kyneta/changefeed"
-import { type WriterRefusedError, writeRefusalFeed } from "@kyneta/exchange"
+import { writeRefusalFeed } from "@kyneta/exchange"
+import type { WriteRefusal } from "@kyneta/schema"
 import { useMemo } from "react"
 import { useChangefeed } from "./use-changefeed.js"
 
 /**
- * Subscribe to why a document refuses this peer's writes: a
- * `WriterRefusedError` naming the seat that writes it, or `undefined` while
- * writes are allowed. Once set it stays set for the session.
+ * Subscribe to why a document refuses this peer's writes, or `undefined`
+ * while writes are allowed. The refusal is a `WriteRefusal`; narrow it with
+ * `instanceof` to say why:
+ * - `WriterRefusedError` names the seat that writes the document, and stays
+ *   for the session;
+ * - `DocumentLoadingError` lasts until the document has loaded from its store;
+ * - `DocumentClosedError` is final.
  *
  * ```tsx
  * function TitleField({ doc }: { doc: Ref<typeof NoteSchema> }) {
@@ -22,7 +28,11 @@ import { useChangefeed } from "./use-changefeed.js"
  *     <input
  *       value={useValue(doc.title)}
  *       disabled={refusal !== undefined}
- *       title={refusal ? "Another tab is editing this note" : undefined}
+ *       title={
+ *         refusal instanceof WriterRefusedError
+ *           ? "Another tab is editing this note"
+ *           : undefined
+ *       }
  *       onChange={e => doc.title.set(e.target.value)}
  *     />
  *   )
@@ -31,7 +41,7 @@ import { useChangefeed } from "./use-changefeed.js"
  *
  * @param doc - A document ref (or any ref within one).
  */
-export function useWriteRefusal(doc: object): WriterRefusedError | undefined {
+export function useWriteRefusal(doc: object): WriteRefusal | undefined {
   const feed = useMemo(() => changefeed(writeRefusalFeed(doc)), [doc])
   return useChangefeed(feed)
 }

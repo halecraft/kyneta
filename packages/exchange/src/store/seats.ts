@@ -8,7 +8,7 @@
 // store issues depends on how it makes the seat exclusive; see `Seat`.
 
 import { randomPeerId } from "@kyneta/random"
-import { peerNumber } from "@kyneta/schema"
+import { peerNumber, WriteRefusal } from "@kyneta/schema"
 import type { DocId, PeerId } from "@kyneta/transport"
 
 /**
@@ -160,10 +160,10 @@ export class SeatLostError extends Error {
 
 /**
  * Thrown by a write to a serialized document another seat of the storage
- * writes, and reported as the document's refusal: of the seats sharing one
- * storage, at most one authors each serialized document.
+ * writes, and reported as the document's refusal (a `WriteRefusal`): of the
+ * seats sharing one storage, at most one authors each serialized document.
  */
-export class WriterRefusedError extends Error {
+export class WriterRefusedError extends WriteRefusal {
   readonly docId: DocId
   /** The seat recorded as the document's writer. */
   readonly writer: PeerId

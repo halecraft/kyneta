@@ -33,19 +33,23 @@ import { resolveYjsType } from "./yjs-resolve.js"
 // Yjs resolver
 // ---------------------------------------------------------------------------
 
+/**
+ * Reads values out of the root map `rootMap()` returns, which is called for
+ * each read: a substrate's document is read through its slot.
+ */
 export function createYjsResolver(
-  rootMap: Y.Map<any>,
+  rootMap: () => Y.Map<any>,
   rootSchema: SchemaNode,
   binding?: SchemaBinding,
 ): MaterializeResolver {
   return {
     resolveValue(path: Path): unknown {
-      const result = resolveYjsType(rootMap, rootSchema, path, binding)
+      const result = resolveYjsType(rootMap(), rootSchema, path, binding)
       return extractValue(result.resolved)
     },
 
     resolveText(path: Path): string | undefined {
-      const { resolved } = resolveYjsType(rootMap, rootSchema, path, binding)
+      const { resolved } = resolveYjsType(rootMap(), rootSchema, path, binding)
       if (resolved instanceof Y.Text) {
         return resolved.toJSON()
       }
@@ -59,7 +63,7 @@ export function createYjsResolver(
     },
 
     resolveRichText(path: Path): RichTextDelta | undefined {
-      const { resolved } = resolveYjsType(rootMap, rootSchema, path, binding)
+      const { resolved } = resolveYjsType(rootMap(), rootSchema, path, binding)
       if (resolved instanceof Y.Text) {
         return yTextToRichTextDelta(resolved)
       }
@@ -67,7 +71,7 @@ export function createYjsResolver(
     },
 
     resolveLength(path: Path): number {
-      const { resolved } = resolveYjsType(rootMap, rootSchema, path, binding)
+      const { resolved } = resolveYjsType(rootMap(), rootSchema, path, binding)
       if (resolved instanceof Y.Array) {
         return resolved.length
       }
@@ -75,7 +79,7 @@ export function createYjsResolver(
     },
 
     resolveKeys(path: Path): string[] {
-      const { resolved } = resolveYjsType(rootMap, rootSchema, path, binding)
+      const { resolved } = resolveYjsType(rootMap(), rootSchema, path, binding)
       if (resolved instanceof Y.Map) {
         return Array.from(resolved.keys())
       }
@@ -85,7 +89,7 @@ export function createYjsResolver(
     // A record's keys are runtime keys, never identity-keyed field names,
     // so the key is looked up as it is.
     resolveHasKey(path: Path, key: string): boolean {
-      const { resolved } = resolveYjsType(rootMap, rootSchema, path, binding)
+      const { resolved } = resolveYjsType(rootMap(), rootSchema, path, binding)
       if (resolved instanceof Y.Map) return resolved.has(key)
       return plainResolution.hasKey(resolved, key)
     },
@@ -108,7 +112,7 @@ export function materializeYjsShadow(
   binding?: SchemaBinding,
 ): PlainState {
   const rootMap = doc.getMap("root")
-  const resolver = createYjsResolver(rootMap, schema, binding)
+  const resolver = createYjsResolver(() => rootMap, schema, binding)
   const interp = createMaterializeInterpreter(resolver)
   const ctx = materializeContextFromResolver(resolver)
   const result = interpret(schema, interp, ctx)

@@ -20,7 +20,6 @@ import {
   Zero,
 } from "../index.js"
 import {
-  ALWAYS_AUTHOR,
   createPlainClock,
   createPlainReplica,
   createPlainSubstrate,
@@ -1365,7 +1364,6 @@ function createSubstrateWithLineage(lineage: string) {
     TestSchema,
     createPlainClock(lineage),
     EMPTY_HISTORY,
-    ALWAYS_AUTHOR,
   )
 }
 

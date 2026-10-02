@@ -83,6 +83,8 @@ import {
 // ---------------------------------------------------------------------------
 
 export interface YjsRevertibleHost {
+  /** The document, read through the substrate's slot: it throws
+   *  `DocumentClosedError` once the substrate is disposed. */
   readonly doc: Y.Doc
   readonly rootMap: Y.Map<any>
   readonly schema: SchemaNode
@@ -103,6 +105,9 @@ export interface YjsRevertible extends Revertible<YjsRecord> {
   prepared(path: Path, change: ChangeBase): void
   /** An authored batch ended. */
   ended(outcome: BatchOutcome): void
+  /** Stop listening to the document. The substrate calls it as it is
+   *  disposed, while the document is still there to stop listening to. */
+  dispose(): void
   /** Events on the root map, for any transaction, before the bridge syncs σ. */
   observed(
     events: Y.YEvent<any>[],
@@ -112,7 +117,6 @@ export interface YjsRevertible extends Revertible<YjsRecord> {
 }
 
 export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
-  const { doc } = host
   const tree: Tree = host
   const listeners = new Set<(commit: RevertibleCommit<YjsRecord>) => void>()
   const drafts = new Map<Y.Transaction, Draft>()
@@ -132,7 +136,7 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
   // The ops of each transaction, for grouping.
   const draftOps = new Map<Y.Transaction, Op[]>()
 
-  doc.on("afterTransaction", (tr: Y.Transaction) => {
+  const afterTransaction = (tr: Y.Transaction): void => {
     const draft = drafts.get(tr)
     if (draft === undefined) return
     drafts.delete(tr)
@@ -152,7 +156,8 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
     }
     const footprint = footprintOf(host.schema, ops)
     for (const listener of [...listeners]) listener({ record, ops, footprint })
-  })
+  }
+  host.doc.on("afterTransaction", afterTransaction)
 
   // The client's clock before the authored op `prepared` will see.
   let clockBefore = 0
@@ -210,7 +215,7 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
 
     preparing(path, change) {
       if (!active() || authored === undefined) return
-      clockBefore = stateOf(doc, doc.clientID)
+      clockBefore = stateOf(host.doc, host.doc.clientID)
       const draft = draftFor(authored)
       // Inside a `.json()` value the whole value is one register, written
       // as a whole when the batch ends: record it as one value.
@@ -272,11 +277,11 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
         }
         ids = toRuns(chars)
       } else {
-        const clockAfter = stateOf(doc, doc.clientID)
+        const clockAfter = stateOf(host.doc, host.doc.clientID)
         if (clockAfter === clockBefore) return
         ids = [
           {
-            client: doc.clientID,
+            client: host.doc.clientID,
             clock: clockBefore,
             length: clockAfter - clockBefore,
           },
@@ -324,7 +329,7 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
             : (draft.texts.get(JSON.stringify(stable)) ??
               ((shadowAt(path) ?? []) as RichTextSpan[]))
         const { deleted, inserted } = textChanges(
-          doc,
+          host.doc,
           target,
           stable,
           transaction,
@@ -387,7 +392,7 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
 
     recovered(record, position) {
       const from = decodePosition(position)
-      const now = stateOf(doc, from.client)
+      const now = stateOf(host.doc, from.client)
       const fresh: IdRun[] =
         now > from.clock
           ? [
@@ -437,17 +442,24 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
 
     position() {
       return encodePosition({
-        client: doc.clientID,
-        clock: stateOf(doc, doc.clientID),
+        client: host.doc.clientID,
+        clock: stateOf(host.doc, host.doc.clientID),
       })
     },
 
     authoredSince(position) {
       const from = decodePosition(position)
-      return stateOf(doc, from.client) > from.clock
+      return stateOf(host.doc, from.client) > from.clock
     },
 
     codec,
+
+    dispose() {
+      host.doc.off("afterTransaction", afterTransaction)
+      listeners.clear()
+      drafts.clear()
+      draftOps.clear()
+    },
   }
 
   function pathOf(event: Y.YEvent<any>): Path | null {
@@ -460,7 +472,7 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
 
   /** Read what `record` names as the document holds it now. */
   function gather(record: YjsRecord): YjsGathered {
-    const deletedNow = Y.snapshot(doc).ds
+    const deletedNow = Y.snapshot(host.doc).ds
     const alive = (id: Id) =>
       !Y.isDeleted(deletedNow, Y.createID(id.client, id.clock))
     const containers = new Map<string, GatheredContainer>()
@@ -498,7 +510,7 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
       const out: { id: Id; index: number }[] = []
       for (const id of unitsOf(ids)) {
         if (!alive(id)) continue
-        const where = locate(doc, id)
+        const where = locate(host.doc, id)
         if (where !== null && where.type === type) {
           out.push({ id, index: where.index })
         }
@@ -517,7 +529,7 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
       deleted: record.deleted.map(run => ({
         container: container(run.container),
         back: [...unitsOf(run.ids)].some(alive),
-        gap: gapAfter(doc, run.after),
+        gap: gapAfter(host.doc, run.after),
       })),
       marks: record.marks.map(mark => {
         const key = container(mark.container)

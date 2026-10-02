@@ -1,10 +1,11 @@
 // position — YjsPosition implementation.
 //
 // Wraps Yjs's RelativePosition to implement @kyneta/schema's Position interface.
-// Relative positions bind to specific item IDs in the Yjs document, making
-// resolve() a stateless query — transform() is a no-op.
+// Relative positions bind to specific item IDs in the Yjs document, so
+// resolve() asks the document where that item is now — transform() is a
+// no-op.
 
-import type { Instruction, Position, Side } from "@kyneta/schema"
+import type { Instruction, Position, Releasable, Side } from "@kyneta/schema"
 import * as Y from "yjs"
 
 /** Map kyneta Side to Yjs assoc. Left → -1 (left-sticky), Right → 0 (right-sticky). */
@@ -20,9 +21,11 @@ export function fromYjsAssoc(assoc: number): Side {
 export class YjsPosition implements Position {
   readonly side: Side
 
+  /** `doc` is the substrate's slot: a position made before the substrate is
+   *  disposed throws `DocumentClosedError`. */
   constructor(
     private readonly rpos: Y.RelativePosition,
-    private readonly doc: Y.Doc,
+    private readonly doc: Releasable<Y.Doc>,
   ) {
     this.side = fromYjsAssoc(rpos.assoc)
   }
@@ -30,7 +33,7 @@ export class YjsPosition implements Position {
   resolve(): number | null {
     const abs = Y.createAbsolutePositionFromRelativePosition(
       this.rpos,
-      this.doc,
+      this.doc.get(),
     )
     return abs ? abs.index : null
   }

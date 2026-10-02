@@ -52,10 +52,11 @@ export interface UseTextOptions {
  *
  * The element is bound once its document has loaded, and is read-only until
  * then: text typed before the load would be written over state not yet seen.
- * It is also read-only while the document refuses this peer's writes, which a
- * stored `json` document does when another tab of the same store writes it
- * (`writeRefusal`); remote edits still arrive. To say why, read
- * `useWriteRefusal`.
+ * It is also read-only while the document refuses this peer's writes
+ * (`writeRefusal`): a stored `json` document does when another tab of the
+ * same store writes it, and every document does once it has closed (destroyed,
+ * or its Exchange shut down). Remote edits still arrive while it is open. To
+ * say why, read `useWriteRefusal`.
  *
  * The binding is model-as-source-of-truth:
  * - Local edits are captured on `input` events, diffed against the model,

@@ -1,11 +1,11 @@
 # @kyneta/loro-schema — Technical Reference
 
 > **Package**: `@kyneta/loro-schema`
-> **Role**: Loro CRDT substrate for `@kyneta/schema`. Wraps a `LoroDoc` as a `Substrate<LoroVersion>` with schema-guided live navigation, `applyDiff`-based writes, identity-keyed containers for cross-schema sync, and a persistent event bridge so every mutation — local kyneta writes, `merge()`, `doc.import()`, or raw Loro API — fires the kyneta changefeed.
+> **Role**: Loro CRDT substrate for `@kyneta/schema`. Wraps a `LoroDoc` as a `Substrate<LoroVersion>` with schema-guided live navigation, `applyDiff`-based writes, identity-keyed containers for cross-schema sync, and an event bridge, held until `dispose`, so every mutation — local kyneta writes, `merge()`, `doc.import()`, or raw Loro API — fires the kyneta changefeed.
 > **Depends on**: `@kyneta/schema` (peer), `@kyneta/changefeed` (peer), `loro-crdt` (peer)
 > **Depended on by**: `@kyneta/exchange` (dev), `@kyneta/react` (dev), `@kyneta/cast` (dev), application code that wants collaborative documents
 > **Canonical symbols**: `loro` (binding target: `loro.bind`, `loro.replica`), `LoroLaws`, `LoroNativeMap`, `createLoroSubstrate`, `loroSubstrateFactory`, `loroReplicaFactory`, `LoroVersion`, `LoroPosition`, `loroReader`, `resolveContainer`, `stepIntoLoro`, `PROPS_KEY`, `changeToDiff`, `batchToOps`, `hasKind`, `isLoroContainer`, `isLoroDoc`, `fromLoroSide`, `toLoroSide`
-> **Key invariant(s)**: Subscribing to the kyneta doc observes **every** mutation to the underlying `LoroDoc`, regardless of source — local writes, `merge()`, `doc.import()`, or raw Loro API calls. The persistent `doc.subscribe()` event bridge is the enforcement mechanism; bridge batches are announced (`ingress: "announce"`) after the shadow is reconciled where they touched it, so they never reach `prepare`/`afterBatch`; and a pre-commit-hook discriminator (`subscribePreCommit` captures the in-flight commit's identity; the subscribe handler matches via `batch.to`) prevents the bridge from reprocessing commits we just issued ourselves, leaving the user-facing `batch.origin` slot free for `options.origin` round-trip.
+> **Key invariant(s)**: Subscribing to the kyneta doc observes **every** mutation to the underlying `LoroDoc`, regardless of source — local writes, `merge()`, `doc.import()`, or raw Loro API calls. The `doc.subscribe()` event bridge is the enforcement mechanism; bridge batches are announced (`ingress: "announce"`) after the shadow is reconciled where they touched it, so they never reach `prepare`/`afterBatch`; and a pre-commit-hook discriminator (`subscribePreCommit` captures the in-flight commit's identity; the subscribe handler matches via `batch.to`) prevents the bridge from reprocessing commits we just issued ourselves, leaving the user-facing `batch.origin` slot free for `options.origin` round-trip.
 
 The Loro backend for Kyneta. Hands you a substrate instance — stored state, versioning, export/import, and a `Reader` — in exchange for a `LoroDoc`. Every ref produced by the interpreter stack reads through schema-guided container resolution; every write produces a `Diff` applied via `doc.applyDiff`; every Loro-visible mutation surfaces as a `Changeset` on the kyneta changefeed.
 
@@ -336,7 +336,7 @@ The ctx-level `WritableContext.runBatch` invokes `substrate.runBatch` only at th
 
 `doc.applyDiff(group)` does NOT fire `doc.subscribe` events; only `doc.commit()` does. This is what lets the substrate apply diffs throughout `prepare` without emitting intermediate events — only the outermost `runBatch` release commits and emits the single batched event. If a future Loro version were to fire subscribe events on `applyDiff`, the eager-prepare model would need per-prepare suppression flags or a different structure. Flag this invariant explicitly so any future Loro upgrade triggers a review of this assumption.
 
-**`loro-crdt >= 1.13.4`, and the peer range says so.** Through `1.13.3`, building the event for a commit that changed *k* map keys was O(k²) — but only when a subscriber was attached, which for this substrate is always: the event bridge registers one at construction. Lists were unaffected, and the map's existing size was irrelevant; the cost was in the number of keys touched by a single commit. Filling a record with 8 000 entries in one batch cost ~1 100 ms of wasm time on `1.13.3` and ~17 ms on `1.13.4`. The floor is a peer *dependency* rather than a note because nothing in this package's behaviour reveals the difference — a consumer on an older Loro gets a quadratic write path and no signal.
+**`loro-crdt >= 1.13.4`, and the peer range says so.** Through `1.13.3`, building the event for a commit that changed *k* map keys was O(k²) — but only when a subscriber was attached, which for this substrate is always while it is open: the event bridge subscribes at construction and unsubscribes at `dispose`. Lists were unaffected, and the map's existing size was irrelevant; the cost was in the number of keys touched by a single commit. Filling a record with 8 000 entries in one batch cost ~1 100 ms of wasm time on `1.13.3` and ~17 ms on `1.13.4`. The floor is a peer *dependency* rather than a note because nothing in this package's behaviour reveals the difference — a consumer on an older Loro gets a quadratic write path and no signal.
 
 ### What the write path is NOT
 
@@ -350,7 +350,7 @@ The ctx-level `WritableContext.runBatch` invokes `substrate.runBatch` only at th
 
 Source: `packages/schema/backends/loro/src/substrate.ts` → `doc.subscribe` handler.
 
-The persistent `doc.subscribe()` callback is the enforcement mechanism for the key invariant: *every* mutation to the underlying `LoroDoc` fires the kyneta changefeed, regardless of source. Mutation sources include:
+The `doc.subscribe()` callback, subscribed from construction until `dispose`, is the enforcement mechanism for the key invariant: *every* mutation to the underlying `LoroDoc` fires the kyneta changefeed, regardless of source. Mutation sources include:
 
 - Local kyneta writes via `batch(doc, fn)` — suppressed by the pre-commit-hook discriminator (we already notified).
 - `substrate.merge(payload)` with a peer's update — announced with `local: false`.
@@ -368,6 +368,16 @@ The handler:
 3. Call `batchToOps(event.diffs, schema, binding)` → pure conversion from Loro `Diff[]` to kyneta `Op[]`.
 4. Reconcile the shadow from the LoroDoc, which already holds these changes, at what the ops touched: `reconcileShadow(shadow, planReconcile(schema, touchedBy(ops)), resolver, materializer)`, over `createLoroResolver`. `touchedBy` pairs each op's path with how far below it the change reached (`planSubtreeEffect`). Only those parts are re-materialized, so the cost is the change's size and every other σ object keeps its identity (`@kyneta/schema` TECHNICAL.md, §The functional shadow). Re-materializing rather than stepping σ by the ops matters here: `batchToOps` can emit overlapping structural and leaf diffs whose sequential application would double-count.
 5. `ctx.announce(ops, { origin, local: batch.by === "local" })`. The announcement never reaches `substrate.prepare` or `afterBatch`, and subscribers receive it with `replay: !local`. `loro-crdt` has no import-with-origin, so `merge` stashes its `options.origin` while it imports; the stash applies to `import` batches only. `import` implicitly commits pending local ops first, and that commit is a local batch with its own origin, not the merge's.
+
+### The bridge reaches the substrate weakly
+
+`loro-crdt` keeps a subscribed callback in wasm-bindgen's heap table until the subscription ends, and that table is a GC root. A callback that reached the substrate would keep it, and the `LoroDoc` the substrate holds, and the `LoroDoc` wrapper owns the wasm memory that holds the callback: a cycle through wasm memory, which JS GC cannot see, so a document nothing else holds would never be collected. So Loro is handed forwarders (`forward`, module-level, so its closure captures only a `WeakRef` and a key) that reach the substrate's bridge, the pre-commit, event and local-update handlers, through a `WeakRef`. The substrate keeps its bridge alive (a `WeakMap` keyed by the substrate), and no closure of the substrate names the `LoroDoc`: they all read it through the slot. A substrate nothing holds is then collected; its `LoroDoc` wrapper is finalized, which frees the wasm document and the forwarders with it. A standalone `createDoc` document is collected this way with no `dispose`. `subscribeLocalUpdates` listeners share one forwarder, subscribed while any listener is.
+
+`dispose` unsubscribes the forwarders, then releases the slot. A substrate collected without `dispose` leaves its forwarders subscribed to a bring-your-own document, inert, until that document is freed.
+
+### Ownership
+
+The `LoroDoc` lives in the substrate's slot (`Releasable`, `@kyneta/schema` TECHNICAL.md §Release). The factories' substrates own theirs: `create`, `createForHydration`, `fromEntirety` make one, and `upgrade(replica, schema)` takes the replica's (`takeReplicaDoc`), so the replica is closed and its `dispose` frees nothing; the substrate's `dispose` frees the document (`doc.free()`). `createLoroSubstrate(doc, schema)` borrows a document the caller owns: its `dispose` unsubscribes and lets go, and never frees it. The replica owns its document too, and `advance` frees the one it trims away from. Everything that reaches the document reads it through the slot (`[BACKING_DOC]`, `DEVTOOLS_HISTORY`, the resolver, the revertible, every export, merge and commit), so after `dispose` each throws `DocumentClosedError` instead of panicking on a freed wasm object.
 
 ### Why the pre-commit hook
 
@@ -474,19 +484,19 @@ Loro has a first-class `Cursor` type that survives concurrent edits by anchoring
 
 ```
 class LoroPosition implements Position {
-  constructor(private cursor: Cursor, private container: LoroText | LoroList | LoroMovableList) {}
+  constructor(private cursor: Cursor, private doc: Releasable<LoroDoc>) {}
 
-  resolve(): number {
-    return this.container.getCursorPos(this.cursor).offset
+  resolve(): number | null {
+    return this.doc.get().getCursorPos(this.cursor)?.offset ?? null
   }
 
-  transform(change: Change): void {
+  transform(instructions): void {
     // no-op — resolution queries the CRDT directly
   }
 }
 ```
 
-`resolve()` asks Loro for the cursor's current index. `transform()` is a no-op because Loro maintains the mapping internally; we don't need the position to track incoming changes explicitly.
+`resolve()` asks Loro for the cursor's current index. It holds the substrate's slot, not the document, so a position made before the substrate is disposed throws `DocumentClosedError`. `transform()` is a no-op because Loro maintains the mapping internally; we don't need the position to track incoming changes explicitly.
 
 `fromLoroSide` / `toLoroSide` translate between kyneta's `Side = "left" | "right"` and Loro's own boundary-bias enum.
 

@@ -101,6 +101,13 @@ class RootCoordinate extends Coordinate {
 /** One coordinate below a path, with the path that names it. */
 export type RegisteredNode = readonly [path: AddressedPath, node: Address]
 
+/** What says whether a subscriber sits at or below a coordinate. */
+export interface SubscriberHolds {
+  holdsAt(at: AddressedPath): boolean
+}
+
+const NO_SUBSCRIBERS: SubscriberHolds = { holdsAt: () => false }
+
 /**
  * The coordinates of one context, owned by its writable context (`ctx.trie`).
  *
@@ -108,18 +115,33 @@ export type RegisteredNode = readonly [path: AddressedPath, node: Address]
  * `.entry`, `.item`) asks the trie for addresses, and only ref construction
  * navigates. An op's path is located (`locate`), which creates nothing. A
  * coordinate leaves when nothing needs it any more (`prune`), or when it no
- * longer exists (`drop`).
+ * longer exists (`drop`), or, once the last ref anchored on it is collected,
+ * through the trie's own finalization registry (`anchor`).
+ *
+ * The registry belongs to the trie, not to the module. A registry's held
+ * values are as reachable as the registry, and each held value here is a
+ * path, which reaches the trie and so the document. A module-level registry
+ * is a GC root, so it would keep every document alive through its own held
+ * values. A registry only the document reaches is collected with it.
  */
 export class CoordinateTrie {
   private readonly rootNode = new RootCoordinate()
 
+  /** Counts a collected ref off its coordinate, and prunes what is unneeded. */
+  private readonly collected = new FinalizationRegistry<AddressedPath>(path => {
+    const node = this.node(path)
+    if (node === undefined) return
+    node.refs--
+    this.prune(path)
+  })
+
   /**
-   * `subscribed(at)` says whether a subscriber sits at or below a
-   * coordinate (`SubscriberTrie.holdsAt`), which keeps it from pruning.
+   * `subscribers` says whether a subscriber sits at or below a coordinate
+   * (`SubscriberTrie.holdsAt`), which keeps it from pruning. It is the
+   * subscriber trie itself, not a closure over it: a closure made where the
+   * context is built would share that scope, and reach the context.
    */
-  constructor(
-    private readonly subscribed: (at: AddressedPath) => boolean = () => false,
-  ) {}
+  constructor(private readonly subscribers: SubscriberHolds = NO_SUBSCRIBERS) {}
 
   /** The empty path into this trie. */
   readonly root: AddressedPath = AddressedPath.empty(this)
@@ -131,6 +153,19 @@ export class CoordinateTrie {
     if (parent === undefined || last === undefined) return this.rootNode
     const node = this.node(parent)
     return node === undefined ? undefined : childMatching(node, last)
+  }
+
+  /**
+   * Count `ref` on the coordinate at `path` for as long as it lives. Only an
+   * anchored ref: one its parent does not hold (`Coordinate.refs`). A path
+   * with no coordinate here counts nothing.
+   */
+  anchor<R extends object>(ref: R, path: AddressedPath): R {
+    const node = this.node(path)
+    if (node === undefined) return ref
+    node.refs++
+    this.collected.register(ref, path)
+    return ref
   }
 
   /** The coordinates strictly below `path`, parents before children. */
@@ -314,7 +349,7 @@ export class CoordinateTrie {
       refs,
       children: node.children.size,
       listeners: node.listeners?.size ?? 0,
-      subscribed: this.subscribed(at),
+      subscribed: this.subscribers.holdsAt(at),
     })
   }
 

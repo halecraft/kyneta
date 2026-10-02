@@ -9,6 +9,7 @@
 //
 // [SUBSTRATE] is attached by createRef on the root ref for sync functions.
 
+import type { Feed } from "@kyneta/changefeed"
 import type { Lease } from "@kyneta/machine"
 import { randomPeerId } from "@kyneta/random"
 import type { BoundSchema } from "./bind.js"
@@ -16,6 +17,7 @@ import type { NativeMap } from "./native.js"
 import { SUBSTRATE } from "./native.js"
 import { createRootRef } from "./ref/create.js"
 import type { DocRef } from "./ref/schema-ref.js"
+import type { WriteRefusal } from "./refusal.js"
 import type { Schema as SchemaType } from "./schema.js"
 import type { Substrate, SubstratePayload, Version } from "./substrate.js"
 
@@ -36,28 +38,37 @@ import type { Substrate, SubstratePayload, Version } from "./substrate.js"
  * creating a private lease. This lets doc-layer dispatchers cooperate with
  * the Exchange's Synchronizer under one shared cascade budget.
  *
- * **Lease attachment timing on cached ctx is exotic-but-defined.**
+ * When `options.refusal` is provided, it becomes the owner's part of the
+ * context's refusal (`ctx.ownerRefusal`), before the ref is handed out and so
+ * before anything can subscribe to it: authored writes throw its answer.
+ *
+ * **Attachment to a cached ctx is exotic-but-defined.**
  * `substrate.context()` is cached per-substrate. The dispatcher is
  * constructed on the context's first write, and captures whatever value
  * `ctx.lease` holds at that moment. A later `createRef` call on the same
  * substrate would overwrite `ctx.lease` but cannot re-create the
- * dispatcher — the captured lease binding is fixed. The Exchange's
- * normal flow (one substrate per doc, one `createRef` per substrate)
- * never reaches this corner.
+ * dispatcher — the captured lease binding is fixed — and would replace the
+ * owner's refusal for every ref of the document. The Exchange's normal flow
+ * (one substrate per doc, one `createRef` per substrate) never reaches this
+ * corner.
  *
  * @param schema - The root schema
  * @param substrate - A pre-built substrate (from factory.create or factory.fromEntirety)
- * @param options - Optional `{ lease }` for cooperating cascade budgets
+ * @param options - `lease` for cooperating cascade budgets, `refusal` for the
+ *   owner's answer to who may write
  * @returns The document's root ref, untyped: cast it at the call site
  */
 export function createRef(
   schema: SchemaType,
   substrate: Substrate<Version>,
-  options?: { lease?: Lease },
+  options?: { lease?: Lease; refusal?: Feed<WriteRefusal | undefined> },
 ): any {
   const ctx = substrate.context()
   if (options?.lease) {
     ctx.lease = options.lease
+  }
+  if (options?.refusal) {
+    ctx.ownerRefusal.set(options.refusal)
   }
   const ref = createRootRef(ctx, schema)
   Object.defineProperty(ref, SUBSTRATE, {

@@ -8,7 +8,14 @@
 
 import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import { loro } from "@kyneta/loro-schema"
-import { batch, json, Schema, subscribe, unwrap } from "@kyneta/schema"
+import {
+  batch,
+  DocumentClosedError,
+  json,
+  Schema,
+  subscribe,
+  unwrap,
+} from "@kyneta/schema"
 import { yjs } from "@kyneta/yjs-schema"
 import { describe, expect, it, vi } from "vitest"
 import type { Exchange } from "../exchange.js"
@@ -104,11 +111,10 @@ function localWrites<D extends object>(backend: Backend<D>): void {
       await sleep(50)
       await alice.flush()
 
-      expect(backend.readSide(bobDoc)).toEqual(backend.readSide(aliceDoc))
+      const side = backend.readSide(aliceDoc)
+      expect(backend.readSide(bobDoc)).toEqual(side)
       await alice.shutdown()
-      expect(backend.readSide(await reload(store))).toEqual(
-        backend.readSide(aliceDoc),
-      )
+      expect(backend.readSide(await reload(store))).toEqual(side)
     })
   })
 }
@@ -296,10 +302,11 @@ describe("a local write made while a merge is applied", () => {
 // ===========================================================================
 
 describe("a destroyed document", () => {
-  it("does not persist or push its successor when written", async () => {
-    // A ref outlives `destroy`. If its subscriptions did too, a write on it
-    // would mark the id dirty, and the new document created under that id
-    // would be persisted and pushed on its behalf.
+  it("refuses writes, and does not persist or push its successor", async () => {
+    // A ref outlives `destroy`. Its document is released, so a write on it
+    // throws rather than going nowhere, and its native document is gone. Nor
+    // does its id: the new document created under it is not persisted or
+    // pushed on its behalf.
     const runtime = new Runtime({
       store: createInMemoryStore(),
     })
@@ -311,8 +318,8 @@ describe("a destroyed document", () => {
     await runtime.flush()
 
     const persisted = vi.spyOn(runtime, "onStateAdvanced")
-    batch(old, d => d.count.set(1))
-    unwrap(old.title).insert(0, "native")
+    expect(() => batch(old, d => d.count.set(1))).toThrow(DocumentClosedError)
+    expect(() => unwrap(old.title)).toThrow(DocumentClosedError)
     await runtime.flush()
 
     expect(persisted).not.toHaveBeenCalled()

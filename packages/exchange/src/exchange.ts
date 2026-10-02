@@ -21,7 +21,7 @@
 //   const doc = exchange.get("my-doc", TodoDoc)
 //   await whenSettled(doc)
 
-import type { ReactiveMap } from "@kyneta/changefeed"
+import { type ReactiveMap, settableFeed, signalFeed } from "@kyneta/changefeed"
 import type {
   BoundReplica,
   BoundSchema,
@@ -52,19 +52,14 @@ import type {
 } from "@kyneta/transport"
 import type { Capabilities } from "./capabilities.js"
 import { createCapabilities, DEFAULT_REPLICAS } from "./capabilities.js"
-import { registerDocAuthority } from "./doc-meta.js"
+import { type Peer, registerNetworkTerms, type Sync } from "./document-terms.js"
 import type { Authority, Policy } from "./governance.js"
 import { Governance } from "./governance.js"
 import type { DocPhase } from "./interpret.js"
 import { planInterpretation } from "./interpret.js"
 import type { ObsSink } from "./observe.js"
 import { CREATE, type Intent, Runtime, type RuntimeParams } from "./runtime.js"
-import {
-  registerPeerResolver,
-  registerSettleTerm,
-  signalFeed,
-} from "./settle.js"
-import { registerSync } from "./sync.js"
+import { liveSync } from "./sync.js"
 import { derivePeerSettled, Synchronizer } from "./synchronizer.js"
 import type { DocChange, DocInfo, PeerChange } from "./types.js"
 import { validatePrincipal } from "./utils.js"
@@ -536,35 +531,48 @@ export class Exchange {
   }
 
   /**
-   * Attach a ref's network capabilities: `sync(ref)`, its authority, and
-   * the peer half of its settle conjunction. The Runtime calls this through
+   * Attach a ref's network terms: `sync(ref)`, its authority, and the peer
+   * half of its settle conjunction. The Runtime calls this through
    * `onDocInterpreted` for every interpreted document, whether created
    * through `get()`, loaded, promoted, or created on a standalone Runtime
    * before it was wrapped; it has already attached the local half.
    *
-   * The peer term is registered now rather than once sync completes, because
+   * The peer term is attached now rather than once sync completes, because
    * it has to be observable *while still false*. That is what stops a caller
-   * reading a not-yet-synced document as empty. Nothing needs undoing on
-   * eviction: each registry is keyed by the document itself.
+   * reading a not-yet-synced document as empty. Each term follows a live feed
+   * over this Exchange until the Runtime closes the document, which sets each
+   * to its value at the close and so lets go of this Exchange.
    */
   #attachNetwork(docId: DocId, ref: object): void {
-    registerSync(ref, {
-      peerId: this.peerId,
-      docId,
-      synchronizer: this.#synchronizer,
-    })
-    registerDocAuthority(ref, () => this.#governance.authority() ?? "any")
-    registerPeerResolver(ref, authority => this.#peerSettled(docId, authority))
-    registerSettleTerm(
-      ref,
-      signalFeed(
-        () => this.#peerSettled(docId),
-        onChange =>
-          this.#synchronizer.onPeerSyncChange(changed => {
-            if (changed === docId) onChange()
+    registerNetworkTerms(ref, {
+      peer: settableFeed<Peer>(
+        signalFeed(
+          () => ({
+            settled: this.#peerSettled(docId),
+            resolve: authority => this.#peerSettled(docId, authority),
           }),
+          onChange =>
+            this.#synchronizer.onPeerSyncChange(changed => {
+              if (changed === docId) onChange()
+            }),
+        ),
       ),
-    )
+      // Read lazily: `Policy` is a mutable registry, so a policy registered
+      // after the document was created still counts.
+      authority: settableFeed<Authority>(
+        signalFeed(
+          () => this.#governance.authority() ?? "any",
+          () => () => {},
+        ),
+      ),
+      sync: settableFeed<Sync>(
+        liveSync({
+          peerId: this.peerId,
+          docId,
+          synchronizer: this.#synchronizer,
+        }),
+      ),
+    })
   }
 
   /**

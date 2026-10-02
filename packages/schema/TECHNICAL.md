@@ -4,7 +4,7 @@
 > **Role**: The schema interpreter algebra — one recursive grammar for document structure, a reactive observation surface (`[CHANGEFEED]` on every ref, with tree-level composed changefeeds for composites), a substrate boundary that separates state management from replication, a migration system that derives stable identity from structure, and a position algebra for cursor-stable text and sequences.
 > **Depends on**: `@kyneta/changefeed`
 > **Depended on by**: `@kyneta/exchange`, `@kyneta/loro-schema`, `@kyneta/yjs-schema`, `@kyneta/index`, `@kyneta/react`, `@kyneta/compiler`, `@kyneta/cast`, `@kyneta/transport`
-> **Canonical symbols**: `Schema`, `Schema.*` constructors, `KIND`, `LAWS`, `bind`, `BoundSchema`, `BoundReplica`, `BindingTarget`, `createBindingTarget`, `metadataOf`, `json`, `ephemeral`, `Interpret`, `Replicate`, `Defer`, `Reject`, `interpret`, `Interpreter`, `createInterpreter`, `createDoc`, `createDocAs`, `createRef`, `batch`, `applyChanges`, `subscribe`, `subscribeNode`, `Substrate`, `SubstrateFactory`, `SubstrateCapabilities`, `beginHydration`, `beginUpgrade`, `HydrationHandle`, `DocMetadata`, `ReadCapability`, `supportsHash`, `mismatchForInterpretation`, `mismatchForSync`, `MetadataAxis`, `MetadataMismatch`, `Replica`, `ReplicaFactory`, `SubstratePayload`, `Version`, `SyncMode`, `SYNC_AUTHORITATIVE`, `SYNC_COLLABORATIVE`, `SYNC_EPHEMERAL`, `requiresBidirectionalSync`, `computeSchemaHash`, `peerNumber`, `planAdvance`, `BACKING_DOC`, `Op`, `RecursiveChangefeedProtocol`, `Change`, `ChangeBase`, `TextChange`, `SequenceChange`, `MapChange`, `TreeChange`, `ReplaceChange`, `IncrementChange`, `RichTextChange`, `mapPayload`, `own`, `trustAsOwned`, `transformIndex`, `diffText`, `textInstructionsToPatches`, `CoordinateTrie`, `Coordinate`, `Migration`, `MIGRATION_CHAIN`, `deriveIdentity`, `deriveManifest`, `deriveSchemaBinding`, `deriveTier`, `validateChain`, `Position`, `POSITION`, `PlainPosition`, `hasPosition`, `decodePlainPosition`, `Side`, `NATIVE`, `SUBSTRATE`, `NativeMap`, `unwrap`, `versionVectorMeet`, `versionVectorCompare`, `Zero`, `validate`, `tryValidate`, `SchemaValidationError`, `walkPath`, `PathWalk`, `foldPath`, `pathSchema`, `findOpaqueBoundary`, `OpaqueBoundaryHit`, `PathStepper`, `PathFoldResult`, `extendSchemaPathKey`, `materializeValue`, `MaterializedNode`, `EagerPolicy`, `containerKey`, `fieldAbsPath`, `needsContainer`, `withReadScope`, `reportRead`, `currentScope`, `dependencyKey`, `Dependency`, `Aspect`, `StateCell`, `applyChange`, `freezePayload`, `freezeTree`, `isDeeplyFrozen`
+> **Canonical symbols**: `Schema`, `Schema.*` constructors, `KIND`, `LAWS`, `bind`, `BoundSchema`, `BoundReplica`, `BindingTarget`, `createBindingTarget`, `metadataOf`, `json`, `ephemeral`, `Interpret`, `Replicate`, `Defer`, `Reject`, `interpret`, `Interpreter`, `createInterpreter`, `createDoc`, `createDocAs`, `createRef`, `batch`, `applyChanges`, `subscribe`, `subscribeNode`, `Substrate`, `SubstrateFactory`, `SubstrateCapabilities`, `beginHydration`, `HydrationHandle`, `Releasable`, `releasable`, `WriteRefusal`, `DocumentClosedError`, `DocumentLoadingError`, `ClosedReason`, `DocMetadata`, `ReadCapability`, `supportsHash`, `mismatchForInterpretation`, `mismatchForSync`, `MetadataAxis`, `MetadataMismatch`, `Replica`, `ReplicaFactory`, `SubstratePayload`, `Version`, `SyncMode`, `SYNC_AUTHORITATIVE`, `SYNC_COLLABORATIVE`, `SYNC_EPHEMERAL`, `requiresBidirectionalSync`, `computeSchemaHash`, `peerNumber`, `planAdvance`, `BACKING_DOC`, `Op`, `RecursiveChangefeedProtocol`, `Change`, `ChangeBase`, `TextChange`, `SequenceChange`, `MapChange`, `TreeChange`, `ReplaceChange`, `IncrementChange`, `RichTextChange`, `mapPayload`, `own`, `trustAsOwned`, `transformIndex`, `diffText`, `textInstructionsToPatches`, `CoordinateTrie`, `Coordinate`, `Migration`, `MIGRATION_CHAIN`, `deriveIdentity`, `deriveManifest`, `deriveSchemaBinding`, `deriveTier`, `validateChain`, `Position`, `POSITION`, `PlainPosition`, `hasPosition`, `decodePlainPosition`, `Side`, `NATIVE`, `SUBSTRATE`, `NativeMap`, `unwrap`, `versionVectorMeet`, `versionVectorCompare`, `Zero`, `validate`, `tryValidate`, `SchemaValidationError`, `walkPath`, `PathWalk`, `foldPath`, `pathSchema`, `findOpaqueBoundary`, `OpaqueBoundaryHit`, `PathStepper`, `PathFoldResult`, `extendSchemaPathKey`, `materializeValue`, `MaterializedNode`, `EagerPolicy`, `containerKey`, `fieldAbsPath`, `needsContainer`, `withReadScope`, `reportRead`, `currentScope`, `dependencyKey`, `Dependency`, `Aspect`, `StateCell`, `applyChange`, `freezePayload`, `freezeTree`, `isDeeplyFrozen`
 > **Key invariant(s)**: The schema grammar is one recursive type with eleven node kinds; substrates declare *closed* composition-law sets via phantom `[LAWS]` brands; `bind()` enforces law compatibility at compile time. Four named binding targets (`json`, `ephemeral`, `loro`, `yjs`) each bundle a substrate factory, a `SyncMode`, and a set of allowed laws. No runtime law dispatch; no open-world subtyping; no hidden backend coupling. A ref is its state, with what it does on one prototype per schema node; there is one canonical ref per coordinate while something holds it, and a read keeps its identity until what it read changes.
 
 The algebraic core of every document in Kyneta. You write a schema once — a tree of structural composites and CRDT leaves — and hand it to a substrate (plain JS, Loro, Yjs). The substrate stores state; `createRef` gives you a typed, navigable, writable reference (`Ref<S>`) over that state, with reactive observation baked in — every ref carries a `[CHANGEFEED]` that emits one `Changeset<Op>` per transaction covering own-path + descendants via `subscribeDescendants`. Migration primitives derive a content-addressed identity from the schema tree so that documents can evolve across schema versions without losing peer-to-peer identity.
@@ -298,6 +298,7 @@ interface ReplicaLike {
   advance(to: Version): void
   merge(payload: SubstratePayload, options?: MergeOptions): void
   resetFromEntirety(payload: SubstratePayload, options?: MergeOptions): void
+  dispose(reason?: ClosedReason): void
 }
 
 interface Replica<V> extends ReplicaLike {
@@ -330,7 +331,7 @@ interface Substrate<V> extends Replica<V>, SubstratePrepare {
 
 The split exists because TypeScript treats generics as invariant: `Replica<LoroVersion>` is NOT assignable to `Replica<Version>`, even though `LoroVersion extends Version`. The `-Like` interfaces solve this by using `Version` in all positions, making them assignable from any concrete `Replica<V>`.
 
-Every replica exposes six methods:
+Every replica exposes these methods:
 
 - `version()` → the current state's version.
 - `baseVersion()` → the earliest version retained (trimmed history starts here).
@@ -338,6 +339,23 @@ Every replica exposes six methods:
 - `exportSince(since)` → delta relative to the given version, or `null` when the cursor **cannot be served** (history trimmed past it, or an epoch this replica did not mint). `null` is not "nothing to send": the caller answers it with a whole document, so a peer that is merely current must get an empty delta instead. Conflating the two makes every agreement cost a full resend.
 - `advance(to)` → trim history as far as possible without passing `to`; a `to` the base has already passed, or one the replica cannot place, trims nothing. It throws only for a `to` beyond the current version. `planAdvance({ base, current, to })` decides the three cases once (`"beyond"`, `"trim"`, `"nothing"`), and every CRDT replica executes its answer as far as it can: a live Yjs or Loro substrate trims nothing even for `"trim"`, since trimming would mean swapping the native document its callers (editor bindings, `unwrap`) hold.
 - `merge(payload, options?)` → fold an incoming payload into local state. Whether it was taken in is whether the replica's version now reaches the version the payload was offered at (`reaches(version(), offered)`): a plain delta that does not continue the log is refused and applies nothing, and a CRDT holds back ops whose dependencies are missing, so both leave the version short. A full substrate then brings σ up to date and announces the ops (see [The functional shadow](#the-functional-shadow)); it announces them with `local: false`, so subscribers receive them with `replay: true`. `options.origin` propagates as an app-level label. `MergeOptions` has no `source`: an echo token names a local caller and never survives a merge.
+- `resetFromEntirety(payload, options?)` → adopt a whole document across a lineage boundary, discarding local history.
+- `dispose(reason?)` → release everything native, below.
+
+### Release: one slot, emptied
+
+Source: `src/releasable.ts`, `src/refusal.ts`.
+
+A replica keeps what its `dispose` releases in one slot, a `Releasable<T>`: Loro's `LoroDoc`, Yjs's `Y.Doc`, plain's op log, the ephemeral state tree. Every path to it goes through `slot.get()`, which throws `DocumentClosedError` once the slot is empty. **Closed is the absence of the value**, so there is no flag for a member to forget to check: a position, the devtools history or an undo record made before the close reaches the document through the slot and finds it gone, instead of a freed wasm object. `slot.closed` is a feed, `undefined` until the slot empties and the `DocumentClosedError` after.
+
+- `release(reason)` empties the slot and frees what it owns. A slot made with `free: null` holds a value its caller owns, a bring-your-own document (`createLoroSubstrate(doc)`, `createYjsSubstrate(doc)`), which it only lets go of.
+- `take()` empties the slot without freeing, and hands the value to a new holder, which owns it from then on.
+
+After `dispose`, every member throws `DocumentClosedError`, except a substrate's reads: σ's cell is not in the slot, so a ref that outlives its substrate reads its last value. `dispose` is idempotent, and the first reason stands. Each backend's `dispose` first takes off every listener it put on the native document, while the document is still there to take them off, then releases.
+
+**`upgrade` takes what it does not copy.** Loro's and Yjs's `upgrade(replica, schema)` take the replica's native document (`take()`), so the replica is closed and the substrate owns the document; disposing the replica afterwards frees nothing the substrate uses. Plain's `upgrade` shares the replica's frozen state and copies its history, and the ephemeral `upgrade` reads the replica's entirety, so neither takes anything: disposing the replica empties only its own slot.
+
+**The closures of one function scope share a context in V8**, so a closure that names the native document keeps it reachable for as long as any closure of that scope is reachable, a ref's included. Each backend's substrate is built over its slot (`loroSubstrateOver`, `yjsSubstrateOver`) and no closure in it names the document: they all call `slot.get()`. The same applies to `buildWritableContext`: a small closure made there would reach the whole context.
 
 A `Substrate` adds interpretation:
 
@@ -348,6 +366,19 @@ A `Substrate` adds interpretation:
 - `commitPending()` → commit any local operations the native document holds uncommitted, so the signal reports them now.
 - `tick(now)` → optional heartbeat for time-based projections (ephemeral decay).
 - `revertible` → undo records of local commits, and their revert. Plain, Loro and Yjs provide it; ephemeral does not. See [Undo](#undo).
+
+### Refusal: one feed per context
+
+Source: `src/refusal.ts`, `src/writable-context.ts` (`refusal`, `ownerRefusal`), `src/create-doc.ts` (`createRef`).
+
+Whether a document takes authored writes has one answer, its context's refusal: `ctx.refusal`, a `Feed<WriteRefusal | undefined>`, `firstDefined(substrate's, owner's)`.
+
+- **The substrate's**: its slot's `closed` (`DocumentClosedError`) for Loro, Yjs and ephemeral, and for plain `firstDefined(slot.closed, loading)`, where `loading` answers `DocumentLoadingError` until `adopt`.
+- **The owner's**: `ctx.ownerRefusal`, a settable feed that `createRef(schema, substrate, { refusal })` attaches before the ref is handed out, as it attaches `lease`. `@kyneta/exchange`'s Runtime passes its own feed there: another seat of the storage writes a serialized document (`WriterRefusedError`).
+
+`prepare` reads it for every op with `ingress: "author"` and throws it before the substrate sees the change; a batch that hits it aborts and compensates like any batch that throws. Merges and announcements are unaffected. `writeRefusal(ref)` in `@kyneta/exchange` reads the same feed, so what it reports is what the write path throws.
+
+**`WriteRefusal` is the base of every refusal**, in any package: `DocumentClosedError` (with its `ClosedReason`: `"destroyed"`, `"unloaded"` or `"disposed"`), `DocumentLoadingError`, and `@kyneta/exchange`'s `WriterRefusedError`. A caller narrows with `instanceof`. A refusal is a state the document is in, held by the feed for as long as a ref is, so it carries no stack: V8 keeps an error's call sites, with every frame's receiver, until `stack` is read, and a refusal made in a method would keep that method's object alive through every held ref. `WriteRefusal`'s constructor assigns `stack`, which drops them unformatted.
 
 ### The local-update signal
 
@@ -955,7 +986,9 @@ Every member that reads the document reports its read to a tracking scope itself
 
 **Children.** A product's field refs are made on first access and kept in its state: two variants of a sum may declare one field name with different schemas, so a field ref is per parent, never per coordinate. A list item, record entry or tree node has one canonical ref per coordinate, which the coordinate holds as a `WeakRef` (`canonicalChild`, `src/ref/create.ts`): `.at(k)` hands back the held ref while something holds it, and makes one otherwise.
 
-**How long a ref lives.** A ref lives while something holds it. A ref is *anchored* where its parent does not hold it: the root, a list item, a record entry, a tree node. An anchored ref counts itself on its coordinate (`Coordinate.refs`) and registers with a `FinalizationRegistry`; when it is collected, its coordinate is pruned if nothing else needs it ([The coordinate trie](#the-coordinate-trie)). A field ref or a sum's variant and its parent hold each other, so they are collected together, and the parent's count and registration serve both.
+**How long a ref lives.** A ref lives while something holds it. A ref is *anchored* where its parent does not hold it: the root, a list item, a record entry, a tree node. An anchored ref counts itself on its coordinate (`Coordinate.refs`) and registers with its trie's `FinalizationRegistry` (`CoordinateTrie.anchor`); when it is collected, its coordinate is pruned if nothing else needs it ([The coordinate trie](#the-coordinate-trie)). A field ref or a sum's variant and its parent hold each other, so they are collected together, and the parent's count and registration serve both.
+
+**The registry is per trie, because a held value must never reach its target.** A registration's held value is as reachable as its registry, and a registration whose held value reaches its target can never be finalized. The held value here is the ref's `AddressedPath`, which reaches its trie, and through the trie the document. A module-level registry is a GC root, so every held value would be too; `@kyneta/exchange`'s per-document state, keyed by the context and closing over the root ref, then closed the loop, and no document was ever collected. A registry the trie owns is reachable only through the document, and V8 collects an unreachable registry with its cells, so when the document becomes unreachable the registry, its held values, the trie and the context go together. The trie takes the subscriber trie itself, not a closure over it: a closure made in `buildWritableContext` would share that scope, and reach the context.
 
 **Substrate Capabilities:** Substrates declare optional capabilities (`nativeResolver`, `positionResolver`, `treeNodeAllocate`) via the `SubstrateCapabilities` bag — the builder (`buildWritableContext`) attaches them as non-enumerable, non-writable properties keyed by the canonical names (or symbols, for `TREE_NODE_ALLOCATE`). Consumers narrow via type guards (`hasTreeNodeAllocation`) or the typed optional fields on `WritableContext`.
 
@@ -997,6 +1030,8 @@ An address adds its segment: a field's or entry's `key`, or a list item's `index
 **A list item's identity is its id**, a number (`IndexAddress.identity`), since its index moves; a field's or entry's is its key. A raw index's identity is the string of its index, so the two never compare equal in a map. The subscriber trie is keyed by identity, so a subscription follows an item across inserts. `Path.key` writes an id as `@id`.
 
 **An `AddressedPath` is its parent path and one segment**, so a child path shares its parent's prefix rather than copying it. `segments` builds an array on each call; `read`, `dead`, an ancestor (`slice(0, n)`) and the trie's lookups walk the chain.
+
+**The trie holds what keeps a coordinate.** `new CoordinateTrie(subscribers)` takes the context's `SubscriberTrie` (anything with `holdsAt(path)`), which `prune` asks. `anchor(ref, path)` counts an anchored ref on the coordinate at `path` and registers it with the trie's own finalization registry, whose callback counts it off and prunes; a path with no coordinate counts nothing.
 
 **Only a ref creates a coordinate.** `AddressedPath.field`, `.entry` and `.item` ask the trie for the child's address, creating it on first use, and only ref construction calls them. A path whose coordinate has left the trie derives dead addresses rather than bringing a coordinate back. An op's path is located (`CoordinateTrie.locate`), which creates nothing: it follows the trie as far as it has coordinates, matching each raw segment to the address there, and continues with the path's own raw segments. So the live path a change is prepared at may end in raw segments below the trie's reach. Lookup is enough, because everything keyed off the trie cares only about coordinates that exist: `advance` needs a list's children, which exist only if the list was navigated; `settle` walks existing coordinates; and delivery finds subscribers only where a ref was made, and pruning keeps those coordinates while subscribed. A raw field or entry segment has the same identity as its address, so delivery and population marks find either. A path addressed in another document's trie is located by its coordinates.
 
@@ -1966,7 +2001,7 @@ The plain substrate keys σ by field name, not by identity. A schema with `renam
 
 ### Peer identity and when a substrate may claim it
 
-Source: `packages/schema/src/substrate.ts` → `beginHydration`, `beginUpgrade`, `SubstrateFactory.createForHydration`, `SubstrateFactory.upgradeForHydration`.
+Source: `packages/schema/src/substrate.ts` → `beginHydration`, `SubstrateFactory.createForHydration`.
 
 A CRDT addresses each operation by `(peer, counter)`, and **the counter restarts at zero on a fresh document**. It only means anything relative to the history that document has loaded. So claiming a peer identity is not a free act — it decides which addresses the next writes will occupy.
 
@@ -1985,9 +2020,7 @@ Get it wrong and a peer writing before its own stored history arrives produces o
 
 `beginHydration` returns `{ substrate, adopt }`. The obligation travels in the return value rather than sitting on the substrate as an optional capability, because a capability a caller must know to look for can only be discharged by a caller who already knew. `@kyneta/exchange`'s `Runtime` takes the second path whenever stores are configured and calls `adopt()` once hydration resolves — before telling anyone the document has loaded, and before registering it, so peers never see the transient identity.
 
-**Plain uses the same hook for a different reason.** A plain document has no addressed operations, but its identity is its lineage, and authoring is what mints it. Its merge also does not commute with a local write: a stored whole-document entry, replayed after a write made during loading, overwrites it. So `plainSubstrateFactory.createForHydration` returns a substrate that refuses authored writes until `adopt()` — for plain, `adopt` grants the right to write. Merges during loading are announcements, not authored writes, and are unaffected.
-
-**A refusal is a permission withdrawn, not a hydration obligation.** `HydrationHandle.refuse(reason)` makes authored writes throw `reason` from then on, whether or not `adopt` has run or runs later; merges and `resetFromEntirety` still reach the document. The exchange refuses a serialized document another seat of its storage writes, at load, after a lost race, or on a document promoted from a relay (§"Serialized documents: one writer seat per storage" in `packages/exchange/TECHNICAL.md`), so every interpreted document needs a handle: `beginUpgrade(factory, replica, schema)` gives one over an already-loaded replica, backed by the optional `SubstrateFactory.upgradeForHydration`. Plain implements both hooks: its substrate reads an `Authoring` function at every authored write, the reason writes are refused or `null` (`refusal ?? (adopted ? null : STILL_LOADING)`). Yjs and Loro implement `refuse` by throwing: concurrent writers each write under their own identity, so there is no single writer to refuse in favour of. A factory with neither hook gets a `refuse` that throws "this substrate cannot refuse authored writes"; a serialized custom substrate must implement both.
+**Plain uses the same hook for a different reason.** A plain document has no addressed operations, but its identity is its lineage, and authoring is what mints it. Its merge also does not commute with a local write: a stored whole-document entry, replayed after a write made during loading, overwrites it. So `plainSubstrateFactory.createForHydration` returns a substrate whose refusal answers `DocumentLoadingError` until `adopt()` — for plain, `adopt` lifts that refusal. Merges during loading are announcements, not authored writes, and are unaffected. Who else may refuse a document's writes is its owner's decision, not the substrate's ([Refusal](#refusal-one-feed-per-context)).
 
 Backends opt in by implementing `SubstrateFactory.createForHydration`; `beginHydration` supplies `create()` plus a no-op for those that do not. **Both identity-bearing backends need it.** Yjs and Loro fail differently, which is worth knowing because the difference is misleading:
 
@@ -2216,6 +2249,8 @@ Selection of the most-used types. Full list in the **Canonical symbols** line at
 | `Ref<S>`, `RRef<S>`, `DocRef<S>` | `src/ref/schema-ref.ts` | A ref; its read surface alone; a document's root ref. |
 | `RefState`, `RefTemplate`, `RefPosition` | `src/ref/state.ts`, `src/ref/prototype.ts` | What one ref holds; what every ref of a schema node and position shares; where a ref sits. Package-internal. |
 | `Substrate<V>`, `Replica<V>`, `SubstrateFactory<V>`, `ReplicaFactory<V>` | `src/substrate.ts` | Interfaces. |
+| `Releasable<T>`, `releasable` | `src/releasable.ts` | The slot a replica's `dispose` empties; closed is empty. |
+| `WriteRefusal`, `DocumentClosedError`, `DocumentLoadingError`, `ClosedReason` | `src/refusal.ts` | Why a document refuses authored writes. |
 | `SubstratePayload` | `src/substrate.ts` | Opaque transfer shape. |
 | `SyncMode`, `WriterModel`, `Delivery`, `Durability` | `src/substrate.ts` | Structured sync mode and its three axes. |
 | `SYNC_AUTHORITATIVE`, `SYNC_COLLABORATIVE`, `SYNC_EPHEMERAL` | `src/substrate.ts` | The three built-in sync mode constants. |
@@ -2249,7 +2284,7 @@ The package exposes three subpath exports via `package.json` `"exports"`:
 |---------|-------------|-------|------|
 | `"."` | `@kyneta/schema` | `src/index.ts` | Public barrel — every public symbol. |
 | `"./basic"` | `@kyneta/schema/basic` | `src/basic/index.ts` | Test-only helpers (re-exports of internal utilities for backend test suites). |
-| `"./testing"` | `@kyneta/schema/testing` | `src/testing/index.ts` | Backend conformance suites: `positionConformance`, `deliveryConformance`, `projectionConformance`. |
+| `"./testing"` | `@kyneta/schema/testing` | `src/testing/index.ts` | Backend conformance suites: `positionConformance`, `deliveryConformance`, `projectionConformance`, `undoConformance`, `versionConformance`, `disposeConformance`; and `collectGarbage()`, a forced collection for tests (Node only: it turns on `--expose-gc` at run time, so no runner needs the flag). |
 
 The `"./testing"` subpath exists so that backend packages (`@kyneta/loro-schema`, `@kyneta/yjs-schema`) can import the conformance harnesses without depending on vitest at runtime. The tsdown config externalises vitest via `neverBundle: ["vitest"]`, so vitest internals are never bundled into the published `dist/`.
 

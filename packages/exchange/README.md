@@ -422,6 +422,8 @@ const exchange = new Exchange({
 
 `exchange.get(docId, bound)` gives a document, creating it if this exchange has never seen it. `exchange.open(docId, bound)` gives it only if this exchange holds it (open, or in its store), and resolves `undefined` otherwise: it never creates one.
 
+`exchange.destroy(docId)` removes a document for good, and releases its memory: its native document (a `LoroDoc`, a `Y.Doc`) is freed, and once you let go of its refs, they are collected too. A ref you still hold reads the document's last value, but its writes, `unwrap`, and the sync functions throw `DocumentClosedError`, and `writeRefusal(doc)` returns that error. `reset()` and `shutdown()` close every document the same way.
+
 > **Peer identity:** you name a `principal`, who this exchange speaks for: a user, a service. Several exchanges may share one. The exchange issues its own `peerId`, its **seat**, which is the address its operations are written under. **A store makes the seat stable across restarts**: the store issues it, and a reload over the same storage gets it back, while two tabs or processes open at once hold different seats. Without a store, each session is a new peer. Key policies on `principal` when you mean *who*, and on `peerId` when you mean *which replica*. Input documents above are keyed by seat, one per tab.
 
 ### Heterogeneous Documents
@@ -901,11 +903,12 @@ You only engage the next level when you need it. Each level is additive — it d
 | `replicate(docId, replicaFactory, syncMode, schemaHash)` | Register a document for headless replication with explicit arguments. |
 | `has(docId)` | Check if a document exists (interpret or replicate mode). |
 | `deferred` | `ReadonlySet<DocId>` — deferred document IDs. Participate in routing but have no local representation. |
-| `dismiss(docId)` | Leave the sync graph — removes locally, broadcasts `dismiss`, deletes from the store. |
+| `destroy(docId)` | Remove a document for good: broadcasts `dismiss`, deletes it from the store, and releases its memory. A ref you still hold reads its last value, and its writes throw `DocumentClosedError`. |
+| `suspend(docId)` / `resume(docId)` | Leave / re-enter the sync graph, keeping the document and its local state. |
 | `peers` | `CallableChangefeed<ReadonlyMap<PeerId, PeerIdentityDetails>, PeerChange>` — reactive peer connection lifecycle (established / disconnected / reconnected / departed). |
 | `flush()` | Await all pending storage operations. |
-| `shutdown()` | Flush the store, disconnect transports, close handles. The recommended graceful teardown. |
-| `reset()` | Disconnect transports and clear state (synchronous). Does NOT flush pending storage. |
+| `shutdown()` | Flush the store, disconnect transports, close handles and every document. The recommended graceful teardown. |
+| `reset()` | Disconnect transports and close every document (synchronous). Does NOT flush pending storage. |
 | `addTransport(transport)` | Add a transport at runtime. |
 | `removeTransport(transportId)` | Remove a transport at runtime. |
 | `hasTransport(transportId)` | Check if a transport exists by ID. |
@@ -959,7 +962,7 @@ Standalone functions, not members of `sync(doc)`. They divide by three questions
 | `persistedFeed(doc)` | Observable form of `persisted`. A callable, so never put it in an `if`. |
 | `whenPersisted(doc)` | Resolve once `persisted`. Rejects at once if a store write failed and none has succeeded since, and rejects if one fails while waiting. Writes are retried on their own, so a caller can check `persistenceError` and wait again. |
 | `persistenceError(doc)` | The error of the latest failed store write, cleared by the next write that succeeds. Covers every store write, including one that stores only operations imported from peers, so it can be set while `persisted` is true. After the seat is lost, the `SeatLostError`, for good. |
-| `writeRefusal(doc)` | A `WriterRefusedError` when another seat of the store writes this `json` document, so this one's writes throw; `undefined` otherwise. Kept for the session. |
+| `writeRefusal(doc)` | Why this document's writes throw, a `WriteRefusal` (narrow with `instanceof`), or `undefined`: a `WriterRefusedError` when another seat of the store writes this `json` document (kept for the session), a `DocumentLoadingError` while a stored `json` document loads, a `DocumentClosedError` once the document is closed. |
 | `writeRefusalFeed(doc)` | Observable form of `writeRefusal`, e.g. to disable an editor. A callable, so never put it in an `if`. |
 
 `whenSettled` and `docStatus` resolve the authority the same way, so they cannot disagree: call-site `opts.authority` → the Exchange's `Policy.authority` → `"any"`.
@@ -1010,7 +1013,7 @@ Each binding target is a fixed `(substrate, sync-mode, supported-laws)` bundle. 
 | Export | Description |
 |--------|-------------|
 | `Store` | Interface for persistent storage backends: append, load, and compaction by mark (`StoreMark`). Several instances may open one storage. Writes take `WriteOptions` (`authored`); a pooled store records each serialized document's writer (`writerOf`). |
-| `WriterRefusedError` | Thrown by a write to, or reported for, a `json` document another seat of the store writes. Carries `writer`. |
+| `WriterRefusedError` | Thrown by a write to, or reported for, a `json` document another seat of the store writes. Carries `writer`. A `WriteRefusal` (`@kyneta/schema`), like `DocumentClosedError` and `DocumentLoadingError`. |
 | `StoreRecord` | A stored record: `{ kind: "meta", meta }` or `{ kind: "entry", payload, version }`. |
 | `createInMemoryStore(opts?)` | Map-backed store for testing. Pass `{ sharedData }` to open the same storage from several instances. |
 | `createInMemoryStoreData()` | An empty storage to share between in-memory stores. |

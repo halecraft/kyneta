@@ -34,7 +34,7 @@ import type {
 import {
   BACKING_DOC,
   createBindingTarget,
-  hasBackingDoc,
+  type HasBackingDoc,
   peerNumber,
   SYNC_COLLABORATIVE,
 } from "@kyneta/schema"
@@ -43,20 +43,12 @@ import { LoroDoc } from "loro-crdt"
 import type { LoroNativeMap } from "./native-map.js"
 import {
   createLoroReplica,
-  createLoroSubstrate,
   ensureLoroContainers,
   loroReplicaFactory,
+  ownedLoroSubstrate,
+  takeReplicaDoc,
 } from "./substrate.js"
 import { LoroVersion } from "./version.js"
-
-/**
- * `refuse` for a concurrent substrate. The exchange refuses only serialized
- * documents: concurrent writers each write under their own identity, so there
- * is no single writer to refuse in favour of.
- */
-const CONCURRENT_REFUSE = (): void => {
-  throw new Error("concurrent substrates have no single writer to refuse")
-}
 
 // ---------------------------------------------------------------------------
 // Peer id → Loro PeerID
@@ -101,11 +93,11 @@ function createLoroFactory(
     doc: LoroDocType,
     schema: SchemaNode,
     claimIdentity: boolean,
-  ): Substrate<LoroVersion> => {
+  ): Substrate<LoroVersion> & HasBackingDoc<LoroDocType> => {
     if (claimIdentity) doc.setPeerId(numericPeerId)
     ensureLoroContainers(doc, schema, binding)
     doc.commit()
-    return createLoroSubstrate(doc, schema, binding)
+    return ownedLoroSubstrate(doc, schema, binding)
   }
 
   return {
@@ -124,12 +116,7 @@ function createLoroFactory(
       // Claim identity now: this is the two-phase path, so any import has
       // already happened and the op counter for our PeerID resumes past it
       // rather than colliding with it.
-      if (!hasBackingDoc<LoroDocType>(replica)) {
-        throw new Error(
-          "upgrade() requires a replica produced by this factory.",
-        )
-      }
-      return buildSubstrate(replica[BACKING_DOC], schema, true)
+      return buildSubstrate(takeReplicaDoc(replica), schema, true)
     },
 
     create(schema: SchemaNode): Substrate<LoroVersion> {
@@ -147,14 +134,13 @@ function createLoroFactory(
       // operation, which makes a stable PeerID misleading here — identity
       // survives a restart looking healthy precisely because nothing defended
       // it.
-      const doc = new LoroDoc()
-      const substrate = buildSubstrate(doc, schema, false)
+      const substrate = buildSubstrate(new LoroDoc(), schema, false)
       return {
         substrate,
+        // Through the substrate, which reads the document through its slot.
         adopt: () => {
-          doc.setPeerId(numericPeerId)
+          substrate[BACKING_DOC].setPeerId(numericPeerId)
         },
-        refuse: CONCURRENT_REFUSE,
       }
     },
 

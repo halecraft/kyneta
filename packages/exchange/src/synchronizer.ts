@@ -515,6 +515,22 @@ export function derivePeerSettled(input: {
   return input.matchesAuthority
 }
 
+/**
+ * What `exchange.documents` takes from a drain of document events: one entry
+ * per distinct document the events name, with its info now, or `undefined`
+ * where it is gone. Pure; `infoOf` reads the current state.
+ *
+ * Only the named documents change, so the work is the size of the events,
+ * not of every document held.
+ */
+export function docInfoChanges(
+  events: readonly DocChange[],
+  infoOf: (docId: DocId) => DocInfo | undefined,
+): ReadonlyArray<readonly [DocId, DocInfo | undefined]> {
+  const docIds = new Set(events.map(event => event.docId))
+  return [...docIds].map(docId => [docId, infoOf(docId)] as const)
+}
+
 // ---------------------------------------------------------------------------
 // Synchronizer
 // ---------------------------------------------------------------------------
@@ -866,9 +882,9 @@ export class Synchronizer {
     // relayed headlessly and now interpreted has moved tier exactly as a
     // deferred one does.
     //
-    // Emitting matters more than it looks. `#emitDocEvents` rebuilds every
-    // `DocInfo` from `#docs` but returns early on an empty event list,
-    // so a transition with no event is not a missing notification — it is
+    // Emitting matters more than it looks. `#emitDocEvents` updates the
+    // `DocInfo` of exactly the documents its events name, so a transition
+    // with no event is not a missing notification — it is
     // `exchange.documents` reporting the old mode indefinitely.
     let event: DocChange | undefined
     if (existing && existing.mode !== doc.mode) {
@@ -1127,6 +1143,16 @@ export class Synchronizer {
   }
 
   /**
+   * The identities of the peers this doc has reconciled with: what
+   * `hasReconciled` and `reconciledMatching` read, kept by a closed
+   * document's terms to answer the same questions after the close.
+   */
+  reconciledIdentities(docId: DocId): readonly PeerIdentityDetails[] {
+    const inner = this.#syncHandle.getState().reconciledIdentities.get(docId)
+    return inner === undefined ? [] : [...inner.values()]
+  }
+
+  /**
    * Coarse connection lifecycle for sync: `online` if any peer is
    * established, `offline` if no transports are configured, else
    * `connecting`. Gathers the two counts and delegates to the pure
@@ -1168,7 +1194,8 @@ export class Synchronizer {
   /**
    * Shared wait core: resolve `"ready"` once `isReady()` becomes true (on a
    * peer-sync change for `docId`), or `"timeout"` after `timeoutMs` (0 ⇒ no
-   * timeout). Never rejects — callers decide what a timeout means.
+   * timeout). Never rejects — callers decide what a timeout means. A wait
+   * whose `signal` aborts stops listening and never settles.
    *
    * The resolve predicate is a parameter so this stays a pure
    * listener-plus-timeout mechanism with no opinion about readiness.
@@ -1180,6 +1207,7 @@ export class Synchronizer {
     docId: DocId,
     isReady: () => boolean,
     timeoutMs: number,
+    signal?: AbortSignal,
   ): Promise<"ready" | "timeout"> {
     if (isReady()) return Promise.resolve("ready")
 
@@ -1196,9 +1224,13 @@ export class Synchronizer {
       const cleanup = () => {
         this.#peerSyncListeners.delete(listener)
         if (timer) clearTimeout(timer)
+        signal?.removeEventListener("abort", cleanup)
       }
 
       this.#peerSyncListeners.add(listener)
+      // An aborted wait lets go of its listener, and with it `isReady` and
+      // whatever that reaches. It never settles: its caller has moved on.
+      signal?.addEventListener("abort", cleanup)
 
       if (timeoutMs > 0) {
         timer = setTimeout(() => {
@@ -1914,25 +1946,28 @@ export class Synchronizer {
 
   #emitDocEvents(events: readonly DocChange[]): void {
     if (events.length === 0) return
-    if (!this.#docHandle) return
+    const handle = this.#docHandle
+    if (!handle) return
 
-    this.#docHandle.clear()
-
-    // Rebuild from #docs (interpret + replicate docs)
+    // Bring each document the events name up to date: an interpret or
+    // replicate document from `#docs`, suspended while the sync model does
+    // not hold it, and a deferred one from the sync model alone.
     const sync = this.#syncHandle.getState()
-    for (const [docId, doc] of this.#docs) {
-      const suspended = !sync.documents.has(docId)
-      this.#docHandle.set(docId, { mode: doc.mode, suspended })
-    }
-
-    // Merge deferred docs from syncModel (not registered, only a model entry)
-    for (const [docId, entry] of sync.documents) {
-      if (entry.mode === "deferred") {
-        this.#docHandle.set(docId, { mode: "deferred", suspended: false })
+    const infoOf = (docId: DocId): DocInfo | undefined => {
+      const doc = this.#docs.get(docId)
+      if (doc !== undefined) {
+        return { mode: doc.mode, suspended: !sync.documents.has(docId) }
       }
+      return sync.documents.get(docId)?.mode === "deferred"
+        ? { mode: "deferred", suspended: false }
+        : undefined
+    }
+    for (const [docId, info] of docInfoChanges(events, infoOf)) {
+      if (info === undefined) handle.delete(docId)
+      else handle.set(docId, info)
     }
 
-    this.#docHandle.emit({ changes: [...events] })
+    handle.emit({ changes: [...events] })
   }
 
   #emitPeerSyncChanges(docIds: readonly DocId[]): void {
@@ -1993,8 +2028,8 @@ export class Synchronizer {
    *
    * The docIds snapshot must be taken before `#docs` is cleared;
    * the clear itself must happen before the dispatch, because
-   * `#emitDocEvents` rebuilds the doc map from `#docs` and a
-   * live entry there would re-introduce the doc the event is meant to
+   * `#emitDocEvents` reads each removed document's info from `#docs`, and
+   * a live entry there would re-introduce the doc the event is meant to
    * remove.
    */
   #emitSyntheticOnTeardown(): void {

@@ -109,7 +109,9 @@ describe("CoordinateTrie", () => {
 
   it("prune stops at a coordinate something needs", () => {
     let item: AddressedPath | undefined
-    const trie = new CoordinateTrie(at => at.key === item?.key)
+    const trie = new CoordinateTrie({
+      holdsAt: at => at.key === item?.key,
+    })
     const list = trie.root.field("items")
     item = list.item(0)
     const inside = item.field("x")

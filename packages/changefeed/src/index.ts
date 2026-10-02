@@ -25,6 +25,9 @@ export {
   hasChangefeed,
   staticChangefeed,
 } from "./changefeed.js"
+// Combinators — signal feeds from a getter, from other feeds, or set later
+export type { Settable } from "./combinators.js"
+export { firstDefined, settableFeed, signalFeed } from "./combinators.js"
 // ReactiveMap — callable changefeed over a mutable Map
 export type { ReactiveMap, ReactiveMapHandle } from "./reactive-map.js"
 export { createReactiveMap } from "./reactive-map.js"

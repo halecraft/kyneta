@@ -1,7 +1,7 @@
 # @kyneta/yjs-schema — Technical Reference
 
 > **Package**: `@kyneta/yjs-schema`
-> **Role**: Yjs CRDT substrate for `@kyneta/schema`. Wraps a `Y.Doc` as a `Substrate<YjsVersion>` with a single-root-`Y.Map` design, schema-guided live navigation via `instanceof` discrimination, imperative writes inside `Y.transact`, identity-keyed containers for cross-schema sync, and a persistent `observeDeep` event bridge so every mutation — local kyneta writes, `merge()`, `Y.applyUpdate()`, or raw Yjs API — fires the kyneta changefeed.
+> **Role**: Yjs CRDT substrate for `@kyneta/schema`. Wraps a `Y.Doc` as a `Substrate<YjsVersion>` with a single-root-`Y.Map` design, schema-guided live navigation via `instanceof` discrimination, imperative writes inside `Y.transact`, identity-keyed containers for cross-schema sync, and an `observeDeep` event bridge, registered until `dispose`, so every mutation — local kyneta writes, `merge()`, `Y.applyUpdate()`, or raw Yjs API — fires the kyneta changefeed.
 > **Depends on**: `@kyneta/schema` (peer), `@kyneta/changefeed` (peer), `yjs` (peer)
 > **Depended on by**: `@kyneta/exchange` (dev), `@kyneta/react` (dev), `@kyneta/cast` (dev), application code that wants collaborative documents via Yjs
 > **Canonical symbols**: `yjs` (binding target: `yjs.bind`, `yjs.replica`), `YjsLaws`, `YjsNativeMap`, `createYjsSubstrate`, `yjsSubstrateFactory`, `yjsReplicaFactory`, `YjsVersion`, `YjsPosition`, `yjsReader`, `resolveYjsType`, `stepIntoYjs`, `ensureContainers`, `applyChangeToYjs`, `eventsToOps`, `toYjsAssoc`, `STRUCTURAL_YJS_CLIENT_ID`, `DELETE_CLOCK`
@@ -365,7 +365,7 @@ Source: `materializeValue` (shared, `@kyneta/schema/src/materialize-value.ts` �
 
 Source: `packages/schema/backends/yjs/src/substrate.ts` → `rootMap.observeDeep(...)` handler; `src/change-mapping.ts` → `eventsToOps`.
 
-The persistent `observeDeep` callback on the root `Y.Map` is the enforcement mechanism for the key invariant: every mutation under the root fires the kyneta changefeed, regardless of source. Sources include:
+The `observeDeep` callback on the root `Y.Map`, registered from construction until `dispose`, is the enforcement mechanism for the key invariant: every mutation under the root fires the kyneta changefeed, regardless of source. Sources include:
 
 - Local kyneta writes via `batch(doc, fn)` — suppressed by the `transaction.meta` mark.
 - `substrate.merge(payload)` with a peer's update — announced with `local: false`.
@@ -380,6 +380,14 @@ The handler:
 2. Call `eventsToOps(events, schema, binding)` → pure translation from Yjs events to kyneta `Op[]`.
 3. Reconcile the shadow from the `Y.Doc` at what the ops touched: `reconcileShadow(shadow, planReconcile(schema, touchedBy(ops)), resolver, materializer)`, over `createYjsResolver`. `touchedBy` pairs each op's path with how far below it the change reached (`planSubtreeEffect`). Only those parts are re-materialized, so the cost is the change's size and every other σ object keeps its identity (`@kyneta/schema` TECHNICAL.md, §The functional shadow). Undo (`revertible.observed`) reads σ before this step.
 4. Announce the ops with `{ origin, local: transaction.local }`. `origin` is `transaction.origin` when it is a string: a merge passes its `options.origin` to `Y.applyUpdate`, so its transaction carries it, and a write an observer makes in reaction is a transaction of its own with its own origin. A merge without an origin reports `undefined`.
+
+### Ownership and `dispose`
+
+The `Y.Doc` lives in the substrate's slot (`Releasable`, `@kyneta/schema` TECHNICAL.md §Release). The factories' substrates own theirs: `create` and `createForHydration` make one, and `upgrade(replica, schema)` takes the replica's (`takeReplicaDoc`), so the replica is closed and its `dispose` frees nothing; the substrate's `dispose` destroys the document (`doc.destroy()`). `createYjsSubstrate(doc, schema)` borrows a document the caller owns, and never destroys it. The replica owns its document, and `advance` destroys the one it projects away from.
+
+Every closure of the substrate reads the document through the slot, the root map included (`rootMap()`, since a `Y.Map` names its document), so a ref held after `dispose` no longer reaches it. A `Y.Doc` is plain JS, so a substrate and the document it alone holds are collected together without `dispose`; on a bring-your-own document, the listeners the substrate registered keep the substrate as long as the document. `dispose` takes off, while the document is still there: the `observeDeep` handler, every `update` listener `subscribeLocalUpdates` registered, and the revertible's `afterTransaction` (`YjsRevertible.dispose`). Then it releases the slot.
+
+**The delete clock stays.** `installDeleteClock` registers one `afterTransaction` handler per `Y.Doc`, shared by every substrate over it (`clockedDocs`), and the handler reaches only the document. One substrate's `dispose` must not take it off, or the document's other substrates lose their delete clock. On an owned document `doc.destroy()` removes it; on a bring-your-own document it stays with the document.
 
 ### Own-commit discriminator via `transaction.meta`
 
@@ -478,11 +486,11 @@ Yjs provides `Y.RelativePosition` — an opaque reference to a location within `
 
 ```
 class YjsPosition implements Position {
-  constructor(private rel: Y.RelativePosition, private doc: Y.Doc) {}
+  constructor(private rel: Y.RelativePosition, private doc: Releasable<Y.Doc>) {}
 
-  resolve(): number {
-    const abs = Y.createAbsolutePositionFromRelativePosition(this.rel, this.doc)
-    return abs?.index ?? 0
+  resolve(): number | null {
+    const abs = Y.createAbsolutePositionFromRelativePosition(this.rel, this.doc.get())
+    return abs?.index ?? null
   }
 
   transform(change: Change): void {
@@ -491,7 +499,7 @@ class YjsPosition implements Position {
 }
 ```
 
-Same pattern as `LoroPosition`: wrap a CRDT-native cursor type, delegate `resolve` to the substrate's own resolution function, make `transform` a no-op because the substrate handles position tracking internally.
+Same pattern as `LoroPosition`: wrap a CRDT-native cursor type, delegate `resolve` to the substrate's own resolution function, make `transform` a no-op because the substrate handles position tracking internally. It holds the substrate's slot, so a position made before `dispose` throws `DocumentClosedError`.
 
 `toYjsAssoc(side)` maps kyneta's `Side = "left" | "right"` to Yjs's `assoc` enum (`0` for left / `-1` for right in Yjs's convention).
 

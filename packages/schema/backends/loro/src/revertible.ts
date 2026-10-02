@@ -430,6 +430,8 @@ const decodePosition = (bytes: Uint8Array): Position =>
 // ---------------------------------------------------------------------------
 
 export interface LoroRevertibleHost {
+  /** The document, read through the substrate's slot: it throws
+   *  `DocumentClosedError` once the substrate is disposed. */
   readonly doc: LoroDoc
   /** The document's schema: where a commit's ops landed, for its footprint. */
   readonly schema: SchemaNode
@@ -453,7 +455,6 @@ export interface LoroRevertible extends Revertible<LoroRecord> {
 }
 
 export function createLoroRevertible(host: LoroRevertibleHost): LoroRevertible {
-  const { doc } = host
   const listeners = new Set<(commit: RevertibleCommit<LoroRecord>) => void>()
   const pending = new Map<string, LoroRecord>()
   let reverting: { record: LoroRecord | null } | undefined
@@ -477,6 +478,7 @@ export function createLoroRevertible(host: LoroRevertibleHost): LoroRevertible {
    * cannot reach it: behind a shallow snapshot's start.
    */
   function gather(record: LoroRecord): LoroGathered[] | null {
+    const doc = host.doc
     let inverse: [ContainerID, Diff][]
     let then: LoroDoc
     try {
@@ -549,6 +551,7 @@ export function createLoroRevertible(host: LoroRevertibleHost): LoroRevertible {
 
   /** Pair each restored container, and those inside it, with its new id. */
   function remapOf(restores: readonly Restore[]): Remap {
+    const doc = host.doc
     const remap = new Map<string, string>()
     const pair = (old: unknown, fresh: unknown) => {
       if (!isLoroContainer(old) || !isLoroContainer(fresh)) return
@@ -632,7 +635,7 @@ export function createLoroRevertible(host: LoroRevertibleHost): LoroRevertible {
       if (group === null) return null
       reverting = { record: null }
       try {
-        host.commitNative(() => applyDiffGroup(doc, group), options)
+        host.commitNative(() => applyDiffGroup(host.doc, group), options)
         const redo = reverting.record
         if (redo === null) return null
         return { redo, remap: remapOf(restoresOf(group)) }
@@ -642,6 +645,7 @@ export function createLoroRevertible(host: LoroRevertibleHost): LoroRevertible {
     },
 
     recovered(record, position) {
+      const doc = host.doc
       const from = decodePosition(position)
       const counter = (doc.version().get(from.peer) ?? 0) - 1
       const after = [{ peer: from.peer, counter }]
@@ -680,6 +684,7 @@ export function createLoroRevertible(host: LoroRevertibleHost): LoroRevertible {
     rewrite: rewriteLoroRecord,
 
     position() {
+      const doc = host.doc
       const peer = doc.peerIdStr
       const position: Position = {
         peer,
@@ -691,7 +696,7 @@ export function createLoroRevertible(host: LoroRevertibleHost): LoroRevertible {
 
     authoredSince(position) {
       const from = decodePosition(position)
-      return (doc.version().get(from.peer) ?? 0) > from.counter
+      return (host.doc.version().get(from.peer) ?? 0) > from.counter
     },
 
     codec,

@@ -15,6 +15,7 @@ import {
   SYNC_AUTHORITATIVE,
 } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
+import { docInfoChanges } from "../synchronizer.js"
 import type { DocChange, DocInfo } from "../types.js"
 import { drain, exchangesPerTest } from "./exchanges.js"
 
@@ -650,5 +651,99 @@ describe("exchange.documents", () => {
       const created = changes.filter(c => c.type === "doc-created")
       expect(created.length).toBe(1)
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Bookkeeping proportional to change
+// ---------------------------------------------------------------------------
+
+describe("docInfoChanges", () => {
+  const live: Record<string, DocInfo> = {
+    a: { mode: "interpret", suspended: false },
+    s: { mode: "interpret", suspended: true },
+    d: { mode: "deferred", suspended: false },
+    r: { mode: "replicate", suspended: false },
+  }
+  const infoOf = (docId: string) => live[docId]
+  const cases: readonly [
+    string,
+    DocChange[],
+    (readonly [string, DocInfo | undefined])[],
+  ][] = [
+    ["create", [{ type: "doc-created", docId: "a" }], [["a", live.a]]],
+    ["suspend", [{ type: "doc-suspended", docId: "s" }], [["s", live.s]]],
+    ["resume", [{ type: "doc-resumed", docId: "a" }], [["a", live.a]]],
+    ["defer", [{ type: "doc-deferred", docId: "d" }], [["d", live.d]]],
+    [
+      "destroy",
+      [{ type: "doc-removed", docId: "gone" }],
+      [["gone", undefined]],
+    ],
+    [
+      "one entry per document, however many events name it",
+      [
+        { type: "doc-created", docId: "r" },
+        { type: "doc-suspended", docId: "s" },
+        { type: "doc-promoted", docId: "r" },
+      ],
+      [
+        ["r", live.r],
+        ["s", live.s],
+      ],
+    ],
+  ]
+  for (const [name, events, expected] of cases) {
+    it(name, () => {
+      expect(docInfoChanges(events, infoOf)).toEqual(expected)
+    })
+  }
+})
+
+describe("exchange.documents after interleaved events", () => {
+  it("is what a rebuild from every document held would say", async () => {
+    const bridge = new Bridge()
+    const alice = createExchange({
+      principal: "alice",
+      transports: [createBridgeTransport({ transportId: "alice", bridge })],
+      resolve: () => Defer(),
+    })
+    const bob = createExchange({
+      principal: "bob",
+      transports: [createBridgeTransport({ transportId: "bob", bridge })],
+    })
+    // A schema alice does not know, so she defers it.
+    bob.get("remote", CollabDoc)
+    alice.get("one", TestDoc)
+    alice.get("two", TestDoc)
+    alice.replicate(
+      "relayed",
+      plainReplicaFactory,
+      SYNC_AUTHORITATIVE,
+      TestDoc.schemaHash,
+    )
+    await drain()
+    alice.suspend("one")
+    alice.destroy("two")
+    alice.get("three", TestDoc)
+    alice.resume("one")
+    alice.suspend("three")
+    await drain()
+
+    // Every document alice holds, as the Runtime and the Synchronizer have
+    // it: the map a rebuild from scratch makes.
+    const rebuilt = new Map<string, DocInfo>()
+    for (const docId of ["one", "two", "three", "relayed", "remote"]) {
+      const entry = alice.runtime.getEntry(docId)
+      if (entry === undefined) continue
+      rebuilt.set(docId, {
+        mode: entry.mode,
+        suspended: entry.mode !== "deferred" && entry.suspended === true,
+      })
+    }
+    expect(new Map(alice.documents)).toEqual(rebuilt)
+    expect(rebuilt.get("remote")?.mode).toBe("deferred")
+    expect(rebuilt.get("three")?.suspended).toBe(true)
+    expect(rebuilt.has("two")).toBe(false)
   })
 })

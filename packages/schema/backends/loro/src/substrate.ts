@@ -9,9 +9,12 @@
 //   `doc.commit()` per outermost logical action. A `batch()` a subscriber
 //   issues runs after that commit, as its own.
 // - `afterBatch` flushes the coalescing buffer.
-// - Persistent doc.subscribe() event bridge for external changes: it
+// - A doc.subscribe() event bridge for external changes, subscribed until
+//   `dispose` through forwarders that reach the substrate only weakly: it
 //   re-materialises σ from λ (CRDT merge is a lattice join that has no
 //   incremental σ-step decomposition), then announces the ops.
+// - The LoroDoc lives in a slot (`Releasable`) that `dispose` empties, and
+//   frees if the substrate owns it.
 // - Own-commit discriminator: a pre-commit-hook discriminator
 //   (`subscribePreCommit` captures the in-flight commit's identity;
 //   the subscribe handler matches via `batch.to`) prevents the bridge
@@ -42,6 +45,7 @@ import {
   type BatchOutcome,
   buildWritableContext,
   type ChangeBase,
+  type ClosedReason,
   type CommitOptions,
   containerKey,
   createMaterializeInterpreter,
@@ -53,7 +57,7 @@ import {
   fieldAbsPath,
   findOpaqueBoundary,
   freezePayload,
-  hasBackingDoc,
+  type HasBackingDoc,
   invert,
   isJsonBoundary,
   isMapSchema,
@@ -73,10 +77,12 @@ import {
   planAdvance,
   planReconcile,
   type RecordInverseFn,
+  type Releasable,
   type Replica,
   type ReplicaFactory,
   type RichTextSchema,
   reconcileShadow,
+  releasable,
   type SchemaBinding,
   type Schema as SchemaNode,
   type Side,
@@ -93,6 +99,7 @@ import type {
   Diff,
   JsonDiff,
   LoroDoc as LoroDocType,
+  LoroEventBatch,
   LoroMap,
   Value,
 } from "loro-crdt"
@@ -166,6 +173,54 @@ function isStructuralGroup(
 }
 
 // ---------------------------------------------------------------------------
+// The event bridge's forwarders
+// ---------------------------------------------------------------------------
+
+/** What the substrate hears from its LoroDoc. */
+interface LoroBridge {
+  preCommit(
+    e: Parameters<Parameters<LoroDocType["subscribePreCommit"]>[0]>[0],
+  ): void
+  event(batch: LoroEventBatch): void
+  localUpdate(): void
+}
+
+/**
+ * A callback for Loro to hold that reaches `bridge` only weakly.
+ *
+ * Loro keeps a subscribed callback in wasm-bindgen's heap table, a GC root,
+ * until the subscription ends. A callback that reached the substrate would
+ * keep it, and the LoroDoc the substrate holds, which owns the wasm memory
+ * holding the callback: a cycle through wasm that JS GC cannot see. Through a
+ * `WeakRef` the callback reaches nothing, so a substrate nothing else holds
+ * is collected, its LoroDoc is finalized, and that frees the callback.
+ *
+ * Module-level, so its closure captures `weak` and `key` and nothing of the
+ * substrate's scope.
+ */
+function forward<K extends keyof LoroBridge>(
+  weak: WeakRef<LoroBridge>,
+  key: K,
+): LoroBridge[K] {
+  return ((arg: never) => {
+    weak.deref()?.[key](arg)
+  }) as LoroBridge[K]
+}
+
+/**
+ * Each substrate's bridge, alive exactly as long as its substrate. The
+ * forwarders Loro holds reach a bridge only weakly, so this is what keeps it:
+ * no closure of the substrate names the bridge itself.
+ */
+const bridges = new WeakMap<object, LoroBridge>()
+
+/** Frees a LoroDoc a slot owns: its wasm memory, and every callback subscribed
+ *  on it. */
+const freeLoroDoc = (doc: LoroDocType): void => {
+  doc.free()
+}
+
+// ---------------------------------------------------------------------------
 // createLoroSubstrate — wrap a user-provided LoroDoc
 // ---------------------------------------------------------------------------
 
@@ -177,16 +232,15 @@ function isStructuralGroup(
  * it with a schema-aware overlay providing typed reads, writes,
  * versioning, and export/import through the standard Substrate interface.
  *
- * **Event bridge contract:** A persistent `doc.subscribe()` handler is
- * registered at construction time. Every change this substrate's
- * `runBatch` did not commit (an import, or a commit on the LoroDoc from an
- * editor binding or another substrate) is announced to the kyneta
- * changefeed, with `replay: false` iff Loro reports it as local. A root
- * container the schema does not declare is not announced, but
- * `subscribeLocalUpdates` still reports writes to it.
+ * **Event bridge contract:** Every change this substrate's `runBatch` did
+ * not commit (an import, or a commit on the LoroDoc from an editor binding or
+ * another substrate) is announced to the kyneta changefeed, with
+ * `replay: false` iff Loro reports it as local. A root container the schema
+ * does not declare is not announced, but `subscribeLocalUpdates` still
+ * reports writes to it.
  *
- * @param doc - The LoroDoc to wrap. The substrate does NOT own the doc;
- *   the caller is responsible for its lifecycle.
+ * @param doc - The LoroDoc to wrap. The caller owns it: the substrate's
+ *   `dispose` unsubscribes from it and lets go of it, and never frees it.
  * @param schema - The root schema for the document.
  */
 export function createLoroSubstrate(
@@ -194,6 +248,32 @@ export function createLoroSubstrate(
   schema: SchemaNode,
   binding?: SchemaBinding,
 ): Substrate<LoroVersion> {
+  return loroSubstrateOver(releasable(doc, null), schema, binding)
+}
+
+/**
+ * A substrate that owns `doc`: its `dispose` frees it. What the factories
+ * build, over a document they made or took from a replica.
+ */
+export function ownedLoroSubstrate(
+  doc: LoroDocType,
+  schema: SchemaNode,
+  binding?: SchemaBinding,
+): Substrate<LoroVersion> & HasBackingDoc<LoroDocType> {
+  return loroSubstrateOver(releasable(doc, freeLoroDoc), schema, binding)
+}
+
+/**
+ * A substrate over the LoroDoc in `slot`. Every closure here reads the
+ * document through the slot, and none names it: V8 gives the closures of one
+ * scope one shared context, so a closure that named the document would keep
+ * it reachable from every ref after `dispose`.
+ */
+function loroSubstrateOver(
+  slot: Releasable<LoroDocType>,
+  schema: SchemaNode,
+  binding?: SchemaBinding,
+): Substrate<LoroVersion> & HasBackingDoc<LoroDocType> {
   // --- Closure-scoped state ---
 
   // Coalescing buffer for plain MapDiff writes and json-boundary
@@ -242,9 +322,12 @@ export function createLoroSubstrate(
   let authoredOutcome: BatchOutcome | undefined
 
   const revertible = createLoroRevertible({
-    doc: doc as unknown as LoroDoc,
+    get doc() {
+      return slot.get() as unknown as LoroDoc
+    },
     schema,
     commitNative(work, options) {
+      const doc = slot.get()
       pendingNative = options
       try {
         work()
@@ -264,10 +347,10 @@ export function createLoroSubstrate(
   // the reader reads through. `prepare` steps it for local writes; the event
   // bridge reconciles it for everything else.
   const shadow: StateCell = {
-    current: materializeLoroShadow(doc, schema, binding),
+    current: materializeLoroShadow(slot.get(), schema, binding),
   }
   // What the event bridge re-materializes σ's touched parts through.
-  const resolver = createLoroResolver(doc, schema, binding)
+  const resolver = createLoroResolver(() => slot.get(), schema, binding)
   const materializer = createMaterializeInterpreter(resolver)
   const reader = plainReader(shadow)
 
@@ -298,6 +381,7 @@ export function createLoroSubstrate(
    */
   function flushCoalesceBuffer(): void {
     if (coalesceBuffer.size === 0) return
+    const doc = slot.get()
     for (const [cid, updated] of coalesceBuffer) {
       applyDiffGroup(doc, [[cid, { type: "map", updated }]])
     }
@@ -340,6 +424,7 @@ export function createLoroSubstrate(
    * after the next applyDiff lands.
    */
   function applyJsonBoundaryWrite(path: Path, prefixLength: number): void {
+    const doc = slot.get()
     const parentPath = path.slice(0, prefixLength)
     const { resolved: parentResolved } = resolveContainer(
       doc,
@@ -388,14 +473,21 @@ export function createLoroSubstrate(
 
   // --- Substrate object ---
 
+  // Local updates reach every listener through one forwarder, subscribed
+  // while anyone listens.
+  const localListeners = new Set<() => void>()
+  let stopLocalUpdates: (() => void) | undefined
+
   const substrate = {
-    [BACKING_DOC]: doc,
-    [DEVTOOLS_HISTORY]: loroDevtoolsHistory(() => doc),
+    get [BACKING_DOC](): LoroDocType {
+      return slot.get()
+    },
+    [DEVTOOLS_HISTORY]: loroDevtoolsHistory(() => slot.get()),
 
     reader: reader,
 
     baseVersion(): LoroVersion {
-      return new LoroVersion(doc.shallowSinceVV())
+      return new LoroVersion(slot.get().shallowSinceVV())
     },
 
     /**
@@ -457,6 +549,7 @@ export function createLoroSubstrate(
       }
 
       // Non-boundary write — translate to a Loro diff group.
+      const doc = slot.get()
       const group = changeToDiff(path, change, schema, doc, binding)
       if (group.length === 0) return
 
@@ -497,6 +590,7 @@ export function createLoroSubstrate(
       // Ctx-level outermost detection (frameStarts.length === 0)
       // means substrate.runBatch is invoked at most once per outermost
       // batch(doc, fn). No per-substrate depth counter needed.
+      const doc = slot.get()
       capture = "open"
       try {
         try {
@@ -521,23 +615,36 @@ export function createLoroSubstrate(
       // Fires inside every commit of local ops, explicit or implicit (an
       // `export`, or an `import` with pending ops), and never for imported
       // ops.
-      return doc.subscribeLocalUpdates(() => listener())
+      const doc = slot.get()
+      localListeners.add(listener)
+      stopLocalUpdates ??= doc.subscribeLocalUpdates(
+        forward(weakBridge, "localUpdate"),
+      )
+      return () => {
+        localListeners.delete(listener)
+        if (localListeners.size > 0) return
+        stopLocalUpdates?.()
+        stopLocalUpdates = undefined
+      }
     },
 
     commitPending(): void {
       // A native commit like any other: the event bridge announces it and
       // `subscribeLocalUpdates` fires. Inside an open `batch()` body it is the
       // same implicit commit an `export` there would make.
+      const doc = slot.get()
       if (doc.getPendingTxnLength() > 0) doc.commit()
     },
 
     context(): WritableContext {
       if (!cachedCtx) {
         cachedCtx = buildWritableContext(substrate, schema, {
+          refusal: slot.closed,
           nativeResolver: (
             nodeSchema: SchemaNode,
             path: { segments: readonly unknown[] },
           ) => {
+            const doc = slot.get()
             if (path.segments.length === 0) return doc
             if (nodeSchema[KIND] === "scalar" || nodeSchema[KIND] === "sum")
               return undefined
@@ -557,7 +664,7 @@ export function createLoroSubstrate(
                 // Resolve path to the LoroText container
                 // Structurally-declared `path` — see the note above.
                 const resolved = resolveContainer(
-                  doc,
+                  slot.get(),
                   schema,
                   path as any,
                   binding,
@@ -576,11 +683,11 @@ export function createLoroSubstrate(
                     `positionResolver: getCursor returned undefined at index ${index}`,
                   )
                 }
-                return new LoroPosition(cursor, doc)
+                return new LoroPosition(cursor, slot)
               },
               decodePosition(bytes: Uint8Array) {
                 const cursor = Cursor.decode(bytes)
-                return new LoroPosition(cursor, doc)
+                return new LoroPosition(cursor, slot)
               },
             } satisfies PositionCapable
           },
@@ -590,7 +697,7 @@ export function createLoroSubstrate(
             index?: number,
           ): string => {
             const { resolved } = resolveContainer(
-              doc,
+              slot.get(),
               schema,
               treePath,
               binding,
@@ -608,19 +715,20 @@ export function createLoroSubstrate(
     },
 
     version(): LoroVersion {
-      return new LoroVersion(doc.version())
+      return new LoroVersion(slot.get().version())
     },
 
     exportEntirety(): SubstratePayload {
       return {
         kind: "entirety",
         encoding: "binary",
-        data: doc.export({ mode: "snapshot" }),
+        data: slot.get().export({ mode: "snapshot" }),
         lineage: DEFAULT_LINEAGE,
       }
     },
 
     exportSince(since: Version): SubstratePayload | null {
+      const doc = slot.get()
       try {
         // ReplicaLike variance: signature uses Version, runtime type is always LoroVersion.
         const bytes = doc.export({
@@ -634,6 +742,7 @@ export function createLoroSubstrate(
     },
 
     merge(payload: SubstratePayload, options?: MergeOptions): void {
+      const doc = slot.get()
       if (
         payload.encoding !== "binary" ||
         !(payload.data instanceof Uint8Array)
@@ -663,19 +772,30 @@ export function createLoroSubstrate(
       // correct absorption for an oplog CRDT, lineage boundary or not.
       substrate.merge(payload, options)
     },
+
+    dispose(reason: ClosedReason = "disposed"): void {
+      // Unsubscribe while the document is still there to unsubscribe from:
+      // a bring-your-own document outlives the substrate.
+      stopBridge?.()
+      stopBridge = undefined
+      stopLocalUpdates?.()
+      stopLocalUpdates = undefined
+      localListeners.clear()
+      slot.release(reason)
+    },
   }
 
-  // --- Event bridge (registered once at construction) ---
+  // --- Event bridge: subscribed through weak forwarders, until `dispose` ---
 
-  doc.subscribePreCommit(e => {
+  const preCommit: LoroBridge["preCommit"] = e => {
     revertible.committing(e.changeMeta)
     if (capture === "off") return
     const tail = e.changeMeta.counter + e.changeMeta.length - 1
     ourCommits.add(`${e.changeMeta.peer}:${tail}`)
     if (capture === "closing") capture = "off"
-  })
+  }
 
-  doc.subscribe(batch => {
+  const event: LoroBridge["event"] = batch => {
     // We consume the captured identity via delete-as-predicate. This immediately
     // cleans up the Set on match, preventing memory leaks. Local batches always
     // have a single entry in batch.to representing the peer's new counter, but
@@ -711,7 +831,7 @@ export function createLoroSubstrate(
 
     // Undo records a direct local commit as it would an authored one.
     if (batch.by === "local") {
-      const peer = doc.peerIdStr
+      const peer = slot.get().peerIdStr
       const tail = batch.to.find(f => f.peer === peer)
       if (tail !== undefined) revertible.committed(tail, ops, false)
     }
@@ -736,9 +856,37 @@ export function createLoroSubstrate(
       local,
       source: local ? pendingNative?.source : undefined,
     })
-  })
+  }
+
+  // The substrate holds the bridge, and Loro holds only the forwarders.
+  const bridge: LoroBridge = {
+    preCommit,
+    event,
+    localUpdate: () => {
+      for (const listener of [...localListeners]) listener()
+    },
+  }
+  bridges.set(substrate, bridge)
+  const weakBridge = new WeakRef(bridge)
+  let stopBridge: (() => void) | undefined = subscribeBridge(
+    slot.get(),
+    weakBridge,
+  )
 
   return substrate
+}
+
+/** Subscribe `doc`'s pre-commit hook and events to the bridge, weakly. */
+function subscribeBridge(
+  doc: LoroDocType,
+  weak: WeakRef<LoroBridge>,
+): () => void {
+  const stopPreCommit = doc.subscribePreCommit(forward(weak, "preCommit"))
+  const stopEvents = doc.subscribe(forward(weak, "event"))
+  return () => {
+    stopPreCommit()
+    stopEvents()
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -790,24 +938,38 @@ function loroDevtoolsHistory(getDoc: () => LoroDocType): DevtoolsHistory {
   }
 }
 
-export function createLoroReplica(doc: LoroDocType): Replica<LoroVersion> {
-  let currentDoc = doc
+/**
+ * The slot of every replica `createLoroReplica` built, for `takeReplicaDoc`.
+ * A getter, because `advance` moves the replica to a new document.
+ */
+const replicaSlots = new WeakMap<
+  Replica<LoroVersion>,
+  () => Releasable<LoroDocType>
+>()
 
-  return {
+/**
+ * A headless replica that owns `doc`: its `dispose` frees it, and `advance`
+ * frees the document it trims away from.
+ */
+export function createLoroReplica(doc: LoroDocType): Replica<LoroVersion> {
+  let slot = releasable(doc, freeLoroDoc)
+
+  const replica = {
     get [BACKING_DOC]() {
-      return currentDoc
+      return slot.get()
     },
-    [DEVTOOLS_HISTORY]: loroDevtoolsHistory(() => currentDoc),
+    [DEVTOOLS_HISTORY]: loroDevtoolsHistory(() => slot.get()),
 
     version(): LoroVersion {
-      return new LoroVersion(currentDoc.version())
+      return new LoroVersion(slot.get().version())
     },
 
     baseVersion(): LoroVersion {
-      return new LoroVersion(currentDoc.shallowSinceVV())
+      return new LoroVersion(slot.get().shallowSinceVV())
     },
 
     advance(to: Version): void {
+      const current = slot.get()
       const plan = planAdvance({
         base: this.baseVersion(),
         current: this.version(),
@@ -818,32 +980,35 @@ export function createLoroReplica(doc: LoroDocType): Replica<LoroVersion> {
       }
       if (plan === "nothing") return
       // Convert VV to frontiers for the shallow-snapshot API.
-      const frontiers = currentDoc.vvToFrontiers((to as LoroVersion).vv)
+      const frontiers = current.vvToFrontiers((to as LoroVersion).vv)
       // Export a shallow snapshot at the target frontiers.
-      const bytes = currentDoc.export({
+      const bytes = current.export({
         mode: "shallow-snapshot",
         frontiers,
       })
-      // Create a new doc from the shallow snapshot.
-      // LoroDoc.fromSnapshot handles both regular and shallow snapshots.
-      currentDoc = LoroDoc.fromSnapshot(bytes)
+      // Move to a new doc made from the shallow snapshot, and free the old
+      // one. LoroDoc.fromSnapshot handles both regular and shallow snapshots.
+      const trimmed = releasable(LoroDoc.fromSnapshot(bytes), freeLoroDoc)
+      slot.release("disposed")
+      slot = trimmed
     },
 
     exportEntirety(): SubstratePayload {
       return {
         kind: "entirety",
         encoding: "binary",
-        data: currentDoc.export({ mode: "snapshot" }),
+        data: slot.get().export({ mode: "snapshot" }),
         lineage: DEFAULT_LINEAGE,
       }
     },
 
     exportSince(since: Version): SubstratePayload | null {
+      const current = slot.get()
       try {
         // The ReplicaLike contract uses the base `Version` type for variance
         // safety. At runtime the synchronizer always passes a LoroVersion from
         // this replica's own factory — the cast is sound.
-        const bytes = currentDoc.export({
+        const bytes = current.export({
           mode: "update",
           from: (since as LoroVersion).vv,
         })
@@ -854,6 +1019,7 @@ export function createLoroReplica(doc: LoroDocType): Replica<LoroVersion> {
     },
 
     merge(payload: SubstratePayload, _options?: MergeOptions): void {
+      const current = slot.get()
       if (
         payload.encoding !== "binary" ||
         !(payload.data instanceof Uint8Array)
@@ -863,7 +1029,7 @@ export function createLoroReplica(doc: LoroDocType): Replica<LoroVersion> {
             "If you recently switched CRDT backends, stale clients may be sending incompatible data.",
         )
       }
-      currentDoc.import(payload.data)
+      current.import(payload.data)
     },
 
     resetFromEntirety(payload: SubstratePayload, options?: MergeOptions): void {
@@ -872,7 +1038,26 @@ export function createLoroReplica(doc: LoroDocType): Replica<LoroVersion> {
       // boundary or not, so this delegates to the routine merge path.
       this.merge(payload, options)
     },
+
+    dispose(reason: ClosedReason = "disposed"): void {
+      slot.release(reason)
+    },
   } as Replica<LoroVersion>
+  replicaSlots.set(replica, () => slot)
+  return replica
+}
+
+/**
+ * Take the document of a replica `createLoroReplica` built, for `upgrade`:
+ * the replica is closed, and the caller owns the document. `upgrade` takes
+ * what it does not copy.
+ */
+export function takeReplicaDoc(replica: Replica<LoroVersion>): LoroDocType {
+  const slotOf = replicaSlots.get(replica)
+  if (slotOf === undefined) {
+    throw new Error("upgrade() requires a replica produced by this factory.")
+  }
+  return slotOf().take()
 }
 
 export const loroReplicaFactory: ReplicaFactory<LoroVersion> = {
@@ -940,13 +1125,10 @@ export const loroSubstrateFactory: SubstrateFactory<LoroVersion> = {
     replica: Replica<LoroVersion>,
     schema: SchemaNode,
   ): Substrate<LoroVersion> {
-    if (!hasBackingDoc<LoroDocType>(replica)) {
-      throw new Error("upgrade() requires a replica produced by this factory.")
-    }
-    const doc = replica[BACKING_DOC]
+    const doc = takeReplicaDoc(replica)
     const binding = trivialBinding(schema)
     ensureLoroContainers(doc, schema, binding)
-    return createLoroSubstrate(doc, schema, binding)
+    return ownedLoroSubstrate(doc, schema, binding)
   },
 
   create(schema: SchemaNode): Substrate<LoroVersion> {
@@ -954,7 +1136,7 @@ export const loroSubstrateFactory: SubstrateFactory<LoroVersion> = {
     const binding = trivialBinding(schema)
     ensureLoroContainers(doc, schema, binding)
     doc.commit()
-    return createLoroSubstrate(doc, schema, binding)
+    return ownedLoroSubstrate(doc, schema, binding)
   },
 
   fromEntirety(

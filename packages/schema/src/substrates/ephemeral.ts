@@ -27,12 +27,6 @@ import type { Path } from "../interpret.js"
 import { invert } from "../inverse.js"
 import { RawPath } from "../path.js"
 import {
-  decodePlainPosition,
-  type PlainPosition,
-  type PositionCapable,
-  type Side,
-} from "../position.js"
-import {
   applyChange,
   freezePayload,
   plainReader,
@@ -43,6 +37,8 @@ import {
   type ReconcileTarget,
   reconcileShadow,
 } from "../reconcile-shadow.js"
+import type { ClosedReason } from "../refusal.js"
+import { releasable } from "../releasable.js"
 import type { Schema as SchemaNode } from "../schema.js"
 import type {
   BatchOutcome,
@@ -394,20 +390,15 @@ export function createStateSubstrate(
   const violation = stateTreeViolation(schema)
   if (violation) throw new Error(formatStateTreeViolation(violation))
 
-  let currentTree = tree
-  const core = createStateReplicaCore(
-    () => currentTree,
-    t => {
-      currentTree = t
-    },
-  )
+  // The tree and its install counter, in the slot `dispose` empties.
+  const slot = releasable(stateHolder(tree), null)
 
   // σ, the shadow the reader consumes. `prepare` writes it for
   // local writes; `announceReprojection` writes it for merges and decay.
   //
   // A copy, because a projection shares register values with the tree.
   const shadow: StateCell = {
-    current: deepClonePlain(projectStateTree(currentTree, schema, Date.now())),
+    current: deepClonePlain(projectStateTree(tree, schema, Date.now())),
   }
   const reader = plainReader(shadow)
 
@@ -445,14 +436,17 @@ export function createStateSubstrate(
     targets: readonly ReconcileTarget[],
     origin?: string,
   ): void {
-    const { resolver, interpreter } = stateTreeMaterializer(currentTree, now)
+    const { resolver, interpreter } = stateTreeMaterializer(
+      slot.get().tree(),
+      now,
+    )
     const ops = reconcileShadow(shadow, targets, resolver, interpreter)
     substrate.context().announce(ops, { origin, local: false })
   }
 
   const substrate = {
     get [BACKING_DOC]() {
-      return currentTree
+      return slot.get().tree()
     },
 
     reader,
@@ -504,8 +498,9 @@ export function createStateSubstrate(
       const boundary = findOpaqueBoundary(schema, path)
       const registerPath =
         boundary === null ? null : path.slice(0, boundary.prefixLength + 1)
+      const { tree, core } = slot.get()
       applyChangeToStateTree(
-        currentTree,
+        tree(),
         registerPath ?? path,
         registerPath === null
           ? change
@@ -529,30 +524,22 @@ export function createStateSubstrate(
     // Only Kyneta writes here, and a batch commits when it ends.
     commitPending(): void {},
 
-    writable(): PositionCapable {
-      return {
-        createPosition(_index: number, _side: Side): PlainPosition {
-          throw new Error("state substrate does not support ordered sequences")
-        },
-        decodePosition(bytes: Uint8Array): PlainPosition {
-          return decodePlainPosition(bytes)
-        },
-      }
-    },
-
     context(): WritableContext {
       if (!cachedCtx) {
         cachedCtx = buildWritableContext(substrate, schema, {
+          refusal: slot.closed,
+          // The root's native value is σ itself; a closed document has none.
           nativeResolver: (
             _schema: unknown,
             path: { segments: readonly unknown[] },
           ) => {
+            slot.get()
             return path.segments.length === 0 ? shadow.current : undefined
           },
         })
         Object.defineProperty(cachedCtx, BACKING_DOC, {
           get() {
-            return currentTree
+            return slot.get().tree()
           },
           enumerable: false,
         })
@@ -561,34 +548,34 @@ export function createStateSubstrate(
     },
 
     version(): StateVersion {
-      return core.version()
+      return slot.get().core.version()
     },
 
     baseVersion(): StateVersion {
-      return core.baseVersion()
+      return slot.get().core.baseVersion()
     },
 
     advance(to: StateVersion): void {
-      core.advance(to)
+      slot.get().core.advance(to)
     },
 
     digest(): string {
-      return core.digest()
+      return slot.get().core.digest()
     },
 
     exportEntirety(): SubstratePayload {
-      return core.exportEntirety()
+      return slot.get().core.exportEntirety()
     },
 
     exportSince(since: StateVersion): SubstratePayload | null {
-      return core.exportSince(since)
+      return slot.get().core.exportSince(since)
     },
 
     merge(payload: SubstratePayload, options?: MergeOptions): void {
       // Both kinds join the same way. A delta is a partial tree and the merge
       // unions keys, so a key it omits is one it makes no claim about — the
       // same rule that makes an entirety safe to join rather than adopt.
-      const moved = core.merge(payload)
+      const moved = slot.get().core.merge(payload)
       announceReprojection(
         Date.now(),
         planReconcile(
@@ -629,9 +616,25 @@ export function createStateSubstrate(
         planReconcile(schema, [{ path: RawPath.empty, effect: "all" }]),
       )
     },
+
+    dispose(reason: ClosedReason = "disposed"): void {
+      slot.release(reason)
+    },
   }
 
   return substrate
+}
+
+/** A state tree and the install counter that stamps what it takes in. */
+function stateHolder(initial: Container) {
+  let tree = initial
+  const core = createStateReplicaCore(
+    () => tree,
+    next => {
+      tree = next
+    },
+  )
+  return { tree: (): Container => tree, core }
 }
 
 // ---------------------------------------------------------------------------
@@ -639,28 +642,25 @@ export function createStateSubstrate(
 // ---------------------------------------------------------------------------
 
 export function createStateReplica(): Replica<StateVersion> {
-  let tree: Container = {}
-  const core = createStateReplicaCore(
-    () => tree,
-    t => {
-      tree = t
-    },
-  )
+  const slot = releasable(stateHolder({}), null)
 
   const replica = {
-    version: core.version,
-    baseVersion: core.baseVersion,
-    advance: core.advance,
-    exportEntirety: core.exportEntirety,
-    exportSince: core.exportSince,
+    version: () => slot.get().core.version(),
+    baseVersion: () => slot.get().core.baseVersion(),
+    advance: (to: StateVersion) => slot.get().core.advance(to),
+    exportEntirety: () => slot.get().core.exportEntirety(),
+    exportSince: (since: StateVersion) => slot.get().core.exportSince(since),
     merge(payload: SubstratePayload): void {
-      core.merge(payload)
+      slot.get().core.merge(payload)
     },
     resetFromEntirety(payload: SubstratePayload) {
       // See createStateSubstrate's resetFromEntirety — same rationale:
       // this substrate has no true lineage boundary, so field-level merge is
       // the correct fallback.
       replica.merge(payload)
+    },
+    dispose(reason: ClosedReason = "disposed"): void {
+      slot.release(reason)
     },
   }
   return replica

@@ -15,8 +15,10 @@
 //   `afterBatch`. Non-boundary writes are applied directly to λ via
 //   `applyChangeToYjs`.
 // - `afterBatch` flushes the json-boundary coalescer.
-// - Persistent observeDeep event bridge for external changes: it
-//   re-materialises σ from λ, then announces the ops.
+// - An observeDeep event bridge for external changes, registered until
+//   `dispose`: it re-materialises σ from λ, then announces the ops.
+// - The Y.Doc lives in a slot (`Releasable`) that `dispose` empties, and
+//   destroys if the substrate owns it.
 // - Per-transaction meta mark (`KYNETA_MARK`, one per substrate) inscribed
 //   from inside the transact body to ignore our own writes; survives Yjs's
 //   nested-transact collapse so external wrapping is handled correctly.
@@ -43,13 +45,16 @@
 import type {
   BatchOutcome,
   ChangeBase,
+  ClosedReason,
   CommitOptions,
+  HasBackingDoc,
   MergeOptions,
   Path,
   PositionCapable,
   ProductSchema,
   Reader,
   RecordInverseFn,
+  Releasable,
   Replica,
   ReplicaFactory,
   SchemaBinding,
@@ -76,13 +81,13 @@ import {
   fieldAbsPath,
   findOpaqueBoundary,
   freezePayload,
-  hasBackingDoc,
   invert,
   KIND,
   plainReader,
   planAdvance,
   planReconcile,
   reconcileShadow,
+  releasable,
   touchedBy,
 } from "@kyneta/schema"
 import * as Y from "yjs"
@@ -153,16 +158,17 @@ function advancedAnyClock(transaction: Y.Transaction): boolean {
  * it with a schema-aware overlay providing typed reads, writes,
  * versioning, and export/merge through the standard Substrate interface.
  *
- * **Event bridge contract:** A persistent `observeDeep` handler is
- * registered on the root Y.Map at construction time. Every mutation under
+ * **Event bridge contract:** An `observeDeep` handler is registered on the
+ * root Y.Map from construction until `dispose`. Every mutation under
  * it that this substrate's `runBatch` did not make (a merge, or a write on
  * the Y.Doc from an editor binding or another substrate) is announced to
  * the kyneta changefeed, with `replay: false` iff its transaction is local.
  * A write to another top-level type is not announced, since the schema has
  * no place for it, but `subscribeLocalUpdates` still reports it.
  *
- * @param doc - The Y.Doc to wrap. The substrate does NOT own the doc;
- *   the caller is responsible for its lifecycle.
+ * @param doc - The Y.Doc to wrap. The caller owns it: the substrate's
+ *   `dispose` unregisters every listener it put on it and lets go of it, and
+ *   never destroys it.
  * @param schema - The root schema for the document.
  * @param binding - Optional SchemaBinding for identity-keyed containers.
  */
@@ -171,6 +177,38 @@ export function createYjsSubstrate(
   schema: SchemaNode,
   binding?: SchemaBinding,
 ): Substrate<YjsVersion> {
+  return yjsSubstrateOver(releasable(doc, null), schema, binding)
+}
+
+/** Destroys a Y.Doc a slot owns, with every listener on it. */
+const destroyYDoc = (doc: Y.Doc): void => {
+  doc.destroy()
+}
+
+/**
+ * A substrate that owns `doc`: its `dispose` destroys it. What the factories
+ * build, over a document they made or took from a replica.
+ */
+export function ownedYjsSubstrate(
+  doc: Y.Doc,
+  schema: SchemaNode,
+  binding?: SchemaBinding,
+): Substrate<YjsVersion> & HasBackingDoc<Y.Doc> {
+  return yjsSubstrateOver(releasable(doc, destroyYDoc), schema, binding)
+}
+
+/**
+ * A substrate over the Y.Doc in `slot`. Every closure here reads the
+ * document through the slot, and none names it or its root map (which names
+ * it too): V8 gives the closures of one scope one shared context, so a
+ * closure that named the document would keep it reachable from every ref
+ * after `dispose`.
+ */
+function yjsSubstrateOver(
+  slot: Releasable<Y.Doc>,
+  schema: SchemaNode,
+  binding?: SchemaBinding,
+): Substrate<YjsVersion> & HasBackingDoc<Y.Doc> {
   // --- Closure-scoped state ---
 
   // JSON-boundary coalescing buffer. Keyed by the target Y.Map and the
@@ -203,15 +241,15 @@ export function createYjsSubstrate(
   let cachedCtx: WritableContext | undefined
 
   // The root Y.Map — all schema fields are children of this single map.
-  const rootMap = doc.getMap("root")
+  const rootMap = (): Y.Map<unknown> => slot.get().getMap("root")
 
-  installDeleteClock(doc)
+  installDeleteClock(slot.get())
 
   // The shadow — a plain JS object materialized from the Y.Doc.
   // `prepare` steps it for local writes; the event bridge re-materializes it
   // for everything else.
   const shadow: StateCell = {
-    current: materializeYjsShadow(doc, schema, binding),
+    current: materializeYjsShadow(slot.get(), schema, binding),
   }
   // What the event bridge re-materializes σ's touched parts through.
   const resolver = createYjsResolver(rootMap, schema, binding)
@@ -221,8 +259,12 @@ export function createYjsSubstrate(
   // Undo records of local transactions. Gathers nothing until someone
   // subscribes to commits or a revert runs.
   const revertible = createYjsRevertible({
-    doc,
-    rootMap,
+    get doc() {
+      return slot.get()
+    },
+    get rootMap() {
+      return rootMap()
+    },
     schema,
     binding,
     shadow,
@@ -264,7 +306,7 @@ export function createYjsSubstrate(
   function stageJsonBoundaryWrite(path: Path, prefixLength: number): void {
     const parentPath = path.slice(0, prefixLength)
     const { resolved: parent } = resolveYjsType(
-      rootMap,
+      rootMap(),
       schema,
       parentPath,
       binding,
@@ -324,9 +366,22 @@ export function createYjsSubstrate(
 
   // --- Substrate object ---
 
+  // Every `update` listener `subscribeLocalUpdates` put on the document, so
+  // `dispose` can take them off.
+  const updateListeners = new Set<
+    (
+      update: Uint8Array,
+      origin: unknown,
+      doc: Y.Doc,
+      transaction: Y.Transaction,
+    ) => void
+  >()
+
   const substrate = {
-    [BACKING_DOC]: doc,
-    [DEVTOOLS_HISTORY]: yjsDevtoolsHistory(() => doc),
+    get [BACKING_DOC](): Y.Doc {
+      return slot.get()
+    },
+    [DEVTOOLS_HISTORY]: yjsDevtoolsHistory(() => slot.get()),
 
     reader: reader,
 
@@ -364,7 +419,7 @@ export function createYjsSubstrate(
       // ambient Y.transact. The KYNETA_MARK on the transaction
       // lets the observeDeep bridge below recognise and skip the events we
       // generate here, so the changefeed isn't fired twice.
-      applyChangeToYjs(rootMap, schema, path, change, binding)
+      applyChangeToYjs(rootMap(), schema, path, change, binding)
       if (recordInverse) revertible.prepared(path, change)
     },
 
@@ -389,7 +444,7 @@ export function createYjsSubstrate(
       // The mark lives on per-transaction meta, orthogonal to origin.
       // The app-level `options?.origin` flows directly to `transaction.origin`
       // and round-trips to the changefeed layer.
-      doc.transact(tr => {
+      slot.get().transact(tr => {
         tr.meta.set(KYNETA_MARK, true)
         revertible.opened(tr)
         work()
@@ -407,8 +462,12 @@ export function createYjsSubstrate(
       ): void => {
         if (transaction.local) listener()
       }
-      doc.on("update", onUpdate)
-      return () => doc.off("update", onUpdate)
+      slot.get().on("update", onUpdate)
+      updateListeners.add(onUpdate)
+      return () => {
+        if (!updateListeners.delete(onUpdate)) return
+        slot.get().off("update", onUpdate)
+      }
     },
 
     // Every Yjs transaction commits when it ends, so nothing is ever pending.
@@ -417,10 +476,12 @@ export function createYjsSubstrate(
     context(): WritableContext {
       if (!cachedCtx) {
         cachedCtx = buildWritableContext(substrate, schema, {
+          refusal: slot.closed,
           nativeResolver: (
             nodeSchema: SchemaNode,
             path: { segments: readonly unknown[] },
           ) => {
+            const doc = slot.get()
             if (path.segments.length === 0) return doc
             if (nodeSchema[KIND] === "scalar" || nodeSchema[KIND] === "sum")
               return undefined
@@ -429,7 +490,7 @@ export function createYjsSubstrate(
             // stay substrate-agnostic and do not depend on `Path`. The value
             // really is a `Path`; the assertion recovers what the interface
             // deliberately does not state.
-            return resolveYjsType(rootMap, schema, path as any, binding)
+            return resolveYjsType(rootMap(), schema, path as any, binding)
               .resolved
           },
           positionResolver: (
@@ -440,7 +501,7 @@ export function createYjsSubstrate(
               createPosition(index: number, side: Side) {
                 // Resolve path to the Y.Text shared type
                 const { resolved: ytype } = resolveYjsType(
-                  rootMap,
+                  rootMap(),
                   schema,
                   // Structurally-declared `path` — see the note above.
                   path as any,
@@ -457,11 +518,11 @@ export function createYjsSubstrate(
                   index,
                   assoc,
                 )
-                return new YjsPosition(rpos, doc)
+                return new YjsPosition(rpos, slot)
               },
               decodePosition(bytes: Uint8Array) {
                 const rpos = Y.decodeRelativePosition(bytes)
-                return new YjsPosition(rpos, doc)
+                return new YjsPosition(rpos, slot)
               },
             } satisfies PositionCapable
           },
@@ -471,11 +532,12 @@ export function createYjsSubstrate(
     },
 
     version(): YjsVersion {
-      return YjsVersion.fromDoc(doc)
+      return YjsVersion.fromDoc(slot.get())
     },
 
     baseVersion(): YjsVersion {
       // A live substrate never trims, so its history starts at the beginning.
+      slot.get()
       return YjsVersion.empty
     },
 
@@ -500,12 +562,13 @@ export function createYjsSubstrate(
       return {
         kind: "entirety",
         encoding: "binary",
-        data: Y.encodeStateAsUpdate(doc),
+        data: Y.encodeStateAsUpdate(slot.get()),
         lineage: DEFAULT_LINEAGE,
       }
     },
 
     exportSince(since: Version): SubstratePayload | null {
+      const doc = slot.get()
       try {
         // ReplicaLike variance: signature uses Version, runtime type is always YjsVersion.
         const bytes = Y.encodeStateAsUpdate(doc, (since as YjsVersion).sv)
@@ -516,6 +579,7 @@ export function createYjsSubstrate(
     },
 
     merge(payload: SubstratePayload, options?: MergeOptions): void {
+      const doc = slot.get()
       if (
         payload.encoding !== "binary" ||
         !(payload.data instanceof Uint8Array)
@@ -543,11 +607,28 @@ export function createYjsSubstrate(
       // for an oplog CRDT, lineage boundary or not.
       substrate.merge(payload, options)
     },
+
+    dispose(reason: ClosedReason = "disposed"): void {
+      // Take every listener off while the document is still there to take
+      // them off: a bring-your-own document outlives the substrate. The
+      // delete clock stays, since it belongs to the document, not to this
+      // substrate (`installDeleteClock`).
+      if (slot.closed() !== undefined) return
+      const doc = slot.get()
+      doc.getMap("root").unobserveDeep(observe)
+      for (const onUpdate of updateListeners) doc.off("update", onUpdate)
+      updateListeners.clear()
+      revertible.dispose()
+      slot.release(reason)
+    },
   }
 
-  // --- Event bridge (registered once at construction) ---
+  // --- Event bridge: registered at construction, until `dispose` ---
 
-  rootMap.observeDeep((events, transaction) => {
+  const observe = (
+    events: Y.YEvent<any>[],
+    transaction: Y.Transaction,
+  ): void => {
     // Own-commit discriminator: kyneta's runBatch marks the transaction
     // via `tr.meta.set` inside the transact body. The mark survives Yjs's
     // nested-transact collapse, so external code wrapping `batch()` in
@@ -583,7 +664,8 @@ export function createYjsSubstrate(
       materializer,
     )
     ctx.announce(ops, { origin, local: transaction.local })
-  })
+  }
+  rootMap().observeDeep(observe)
 
   return substrate
 }
@@ -659,21 +741,32 @@ function yjsDevtoolsHistory(getDoc: () => Y.Doc): DevtoolsHistory {
   }
 }
 
+/**
+ * The slot of every replica `createYjsReplica` built, for `takeReplicaDoc`.
+ * A getter, because `advance` moves the replica to a new document.
+ */
+const replicaSlots = new WeakMap<Replica<YjsVersion>, () => Releasable<Y.Doc>>()
+
+/**
+ * A headless replica that owns `doc`: its `dispose` destroys it, and
+ * `advance` destroys the document it projects away from.
+ */
 export function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
-  let currentDoc = doc
+  let slot = releasable(doc, destroyYDoc)
   let currentBase: YjsVersion = YjsVersion.empty
 
-  return {
+  const replica = {
     get [BACKING_DOC]() {
-      return currentDoc
+      return slot.get()
     },
-    [DEVTOOLS_HISTORY]: yjsDevtoolsHistory(() => currentDoc),
+    [DEVTOOLS_HISTORY]: yjsDevtoolsHistory(() => slot.get()),
 
     version(): YjsVersion {
-      return YjsVersion.fromDoc(currentDoc)
+      return YjsVersion.fromDoc(slot.get())
     },
 
     baseVersion(): YjsVersion {
+      slot.get()
       return currentBase
     },
 
@@ -687,32 +780,32 @@ export function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
       // at the current version; short of it, as far as it can is nothing.
       if (plan !== "trim" || to.compare(current) !== "equal") return
 
-      // Full projection: create a new doc with current state, no history.
-      const update = Y.encodeStateAsUpdate(currentDoc)
+      // Full projection: move to a new doc with the current state and no
+      // history, and destroy the old one.
+      const update = Y.encodeStateAsUpdate(slot.get())
       const newDoc = new Y.Doc()
       Y.applyUpdate(newDoc, update)
-      currentDoc = newDoc
-      currentBase = YjsVersion.fromDoc(currentDoc)
+      slot.release("disposed")
+      slot = releasable(newDoc, destroyYDoc)
+      currentBase = YjsVersion.fromDoc(newDoc)
     },
 
     exportEntirety(): SubstratePayload {
       return {
         kind: "entirety",
         encoding: "binary",
-        data: Y.encodeStateAsUpdate(currentDoc),
+        data: Y.encodeStateAsUpdate(slot.get()),
         lineage: DEFAULT_LINEAGE,
       }
     },
 
     exportSince(since: Version): SubstratePayload | null {
+      const current = slot.get()
       try {
         // The ReplicaLike contract uses the base `Version` type for variance
         // safety. At runtime the synchronizer always passes a YjsVersion from
         // this replica's own factory — the cast is sound.
-        const bytes = Y.encodeStateAsUpdate(
-          currentDoc,
-          (since as YjsVersion).sv,
-        )
+        const bytes = Y.encodeStateAsUpdate(current, (since as YjsVersion).sv)
         return { kind: "since", encoding: "binary", data: bytes }
       } catch {
         return null
@@ -720,6 +813,7 @@ export function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
     },
 
     merge(payload: SubstratePayload, _options?: MergeOptions): void {
+      const current = slot.get()
       if (
         payload.encoding !== "binary" ||
         !(payload.data instanceof Uint8Array)
@@ -729,7 +823,7 @@ export function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
             "If you recently switched CRDT backends, stale clients may be sending incompatible data.",
         )
       }
-      Y.applyUpdate(currentDoc, payload.data)
+      Y.applyUpdate(current, payload.data)
     },
 
     resetFromEntirety(payload: SubstratePayload, options?: MergeOptions): void {
@@ -738,7 +832,26 @@ export function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
       // or not, so this delegates to the routine merge path.
       this.merge(payload, options)
     },
+
+    dispose(reason: ClosedReason = "disposed"): void {
+      slot.release(reason)
+    },
   } as Replica<YjsVersion>
+  replicaSlots.set(replica, () => slot)
+  return replica
+}
+
+/**
+ * Take the document of a replica `createYjsReplica` built, for `upgrade`:
+ * the replica is closed, and the caller owns the document. `upgrade` takes
+ * what it does not copy.
+ */
+export function takeReplicaDoc(replica: Replica<YjsVersion>): Y.Doc {
+  const slotOf = replicaSlots.get(replica)
+  if (slotOf === undefined) {
+    throw new Error("upgrade() requires a replica produced by this factory.")
+  }
+  return slotOf().take()
 }
 
 export const yjsReplicaFactory: ReplicaFactory<YjsVersion> = {
@@ -784,21 +897,18 @@ export const yjsSubstrateFactory: SubstrateFactory<YjsVersion> = {
     replica: Replica<YjsVersion>,
     schema: SchemaNode,
   ): Substrate<YjsVersion> {
-    if (!hasBackingDoc<Y.Doc>(replica)) {
-      throw new Error("upgrade() requires a replica produced by this factory.")
-    }
-    const doc = replica[BACKING_DOC]
+    const doc = takeReplicaDoc(replica)
     const binding = trivialBinding(schema)
     // No identity injection for the standalone factory (no peerId).
     ensureContainers(doc, schema, binding)
-    return createYjsSubstrate(doc, schema, binding)
+    return ownedYjsSubstrate(doc, schema, binding)
   },
 
   create(schema: SchemaNode): Substrate<YjsVersion> {
     const doc = new Y.Doc()
     const binding = trivialBinding(schema)
     ensureContainers(doc, schema, binding)
-    return createYjsSubstrate(doc, schema, binding)
+    return ownedYjsSubstrate(doc, schema, binding)
   },
 
   fromEntirety(

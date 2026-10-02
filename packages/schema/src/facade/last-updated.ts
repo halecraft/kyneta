@@ -17,7 +17,8 @@ import { newestTimestamp, stateTreeAt } from "../substrates/state-tree.js"
  * fields share the register's one timestamp.
  *
  * A container's timestamp is its newest leaf's: the last time any part of it
- * changed.
+ * changed. The timestamps live in the state tree, which a closed document
+ * released, so on one this throws `DocumentClosedError`, as `unwrap` does.
  *
  * @param ref - A reference from an `ephemeral` document.
  * @returns The wall-clock timestamp in milliseconds, or `null`.

@@ -7,6 +7,8 @@ import {
   applyChanges,
   batch,
   type DocRef,
+  DocumentClosedError,
+  DocumentLoadingError,
   json,
   RawPath,
   replaceChange,
@@ -15,7 +17,7 @@ import {
 import { describe, expect, it, vi } from "vitest"
 import { Exchange } from "../exchange.js"
 import { CREATE, Runtime, readinessFor } from "../runtime.js"
-import { whenHydrated } from "../settle.js"
+import { hydrated, whenHydrated } from "../settle.js"
 import {
   createInMemoryStore,
   createInMemoryStoreData,
@@ -607,11 +609,20 @@ describe("a document destroyed while it loads", () => {
     const exchange = new Exchange({ principal: "alice", store })
     const doc = exchange.get("todo-1", TodoDoc)
     const loaded = whenHydrated(doc)
+    const loadedById = exchange.whenHydrated("todo-1")
     exchange.destroy("todo-1")
     await exchange.flush()
 
     expect(exchange.documents.has("todo-1")).toBe(false)
-    await expect(loaded).rejects.toThrow("destroyed while loading")
+    for (const wait of [loaded, loadedById]) {
+      const error = await wait.then(
+        () => undefined,
+        (e: unknown) => e,
+      )
+      expect(error).toBeInstanceOf(DocumentClosedError)
+      expect((error as DocumentClosedError).reason).toBe("destroyed")
+    }
+    expect(hydrated(doc)).toBe(false)
     expect(await collectAll(store.loadAll("todo-1"))).toEqual([])
     await exchange.shutdown()
   })
@@ -626,7 +637,7 @@ describe("a document destroyed while it loads", () => {
     await exchange.flush()
 
     expect(second).not.toBe(first)
-    await expect(firstLoaded).rejects.toThrow("destroyed while loading")
+    await expect(firstLoaded).rejects.toThrow(DocumentClosedError)
     await expect(whenHydrated(second)).resolves.toBeUndefined()
     expect(exchange.documents.has("todo-1")).toBe(true)
     await exchange.shutdown()
@@ -657,13 +668,15 @@ describe("writing to a stored plain document before it loads", () => {
     const runtime = new Runtime({ store: createInMemoryStore({ sharedData }) })
     const doc = runtime.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
 
-    expect(() => doc.title.set("early")).toThrow("still loading")
-    expect(() => batch(doc, d => d.done.set(true))).toThrow("still loading")
+    expect(() => doc.title.set("early")).toThrow(DocumentLoadingError)
+    expect(() => batch(doc, d => d.done.set(true))).toThrow(
+      DocumentLoadingError,
+    )
     expect(() =>
       applyChanges(doc, [
         { path: RawPath.empty.field("done"), change: replaceChange(true) },
       ]),
-    ).toThrow("still loading")
+    ).toThrow(DocumentLoadingError)
 
     await whenHydrated(doc)
     expect(doc.title()).toBe("stored")
@@ -699,7 +712,9 @@ describe("writing to a stored plain document before it loads", () => {
     })
     const doc = runtime.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
     await expect(whenHydrated(doc)).rejects.toThrow("disk unreadable")
-    expect(() => doc.title.set("over unknown state")).toThrow("still loading")
+    expect(() => doc.title.set("over unknown state")).toThrow(
+      DocumentLoadingError,
+    )
     await runtime.shutdown()
   })
 

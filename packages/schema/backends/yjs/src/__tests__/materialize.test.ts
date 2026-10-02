@@ -242,7 +242,7 @@ describe("createYjsResolver.resolveHasKey", () => {
     batch(doc, (d: any) => d.peers.delete("bob"))
 
     const resolver = createYjsResolver(
-      getYDoc(doc).getMap("root"),
+      () => getYDoc(doc).getMap("root"),
       schema,
       trivialBinding(schema),
     )

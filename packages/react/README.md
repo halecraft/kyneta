@@ -285,12 +285,14 @@ batch(doc, (d) => {
 
 A plain (`json.bind`) document backed by stores refuses writes until it has loaded, so render its write controls once `useDocReady(doc)` is `true`. `useText` handles this itself: its element stays read-only until the document has loaded, then shows the loaded text.
 
-A stored `json` document also refuses writes when another tab of the same store writes it: of the tabs sharing a store, one writes each `json` document, and the others read it. `useText` handles this too: its element is read-only while the document refuses writes, and still shows the writer's edits. For any other editor, `useWriteRefusal(doc)` returns the refusal (a `WriterRefusedError` naming the writer) or `undefined`:
+A stored `json` document also refuses writes when another tab of the same store writes it: of the tabs sharing a store, one writes each `json` document, and the others read it. And every document refuses writes once it is closed (`exchange.destroy`, or its Exchange shut down): it still reads its last value. `useText` handles both: its element is read-only while the document refuses writes, and still shows the writer's edits. For any other editor, `useWriteRefusal(doc)` returns the refusal, a `WriteRefusal`, or `undefined`. Narrow it with `instanceof` to say why: a `WriterRefusedError` names the writer, a `DocumentLoadingError` lasts until the document has loaded, and a `DocumentClosedError` is final.
 
 <!-- ts-docs-verifier:ignore -->
 ```tsx
 const refusal = useWriteRefusal(doc)
-return <input disabled={refusal !== undefined} value={title} onChange={onChange} />
+const why =
+  refusal instanceof WriterRefusedError ? "Another tab is editing this" : undefined
+return <input disabled={refusal !== undefined} title={why} value={title} onChange={onChange} />
 ```
 
 ### Undo in a text field

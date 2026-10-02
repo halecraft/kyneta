@@ -3,40 +3,29 @@
 //
 // With a store, an own write reaches peers only once the store has confirmed
 // it (§"Store-first" in TECHNICAL.md). These functions answer, for any ref
-// within a document, whether that has happened, and why not. A serialized
-// document another seat of the storage writes refuses authored writes
-// (§"Serialized documents: one writer seat per storage"); `writeRefusal` says
-// so.
+// within a document, whether that has happened, and why not. Whether this peer
+// may author the document is its context's refusal (`writeRefusal`): a
+// serialized document another seat of the storage writes refuses authored
+// writes (§"Serialized documents: one writer seat per storage"), and so does a
+// closed one.
 //
 // Not a settle term. `settled` asks whether every source has reported what it
 // holds; a write waiting on the store is not a source, and a document can be
 // settled with writes still unconfirmed.
 
-import { CHANGEFEED, type Feed } from "@kyneta/changefeed"
-import { createDocumentMap } from "./document-key.js"
-import { signalFeed } from "./settle.js"
-import type { WriterRefusedError } from "./store/seats.js"
+import { CHANGEFEED, type Feed, signalFeed } from "@kyneta/changefeed"
+import { hasTransact, TRANSACT, type WriteRefusal } from "@kyneta/schema"
+import { constantFeed, type Persistence, termsOf } from "./document-terms.js"
 
 /** A document's refusal, readable and observable. */
-export type WriteRefusalFeed = Feed<WriterRefusedError | undefined>
+export type WriteRefusalFeed = Feed<WriteRefusal | undefined>
 
-const persistence = createDocumentMap<{
-  readonly term: Feed<boolean>
-  readonly readError: () => unknown | undefined
-}>()
+const CONFIRMED: Persistence = { persisted: true }
 
-/**
- * Register a document's persistence: `term` is whether every own write is
- * confirmed, and `readError` the error of the latest failed store write.
- *
- * @internal Called by `Runtime` as it creates an interpreted document.
- */
-export function registerPersistenceTerm(
-  ref: object,
-  term: Feed<boolean>,
-  readError: () => unknown | undefined,
-): void {
-  persistence.set(ref, { term, readError })
+/** The persistence of the document `ref` belongs to; confirmed when no store
+ *  is behind it. */
+function persistenceOf(ref: object): Persistence {
+  return termsOf(ref)?.local.persistence() ?? CONFIRMED
 }
 
 /**
@@ -46,18 +35,16 @@ export function registerPersistenceTerm(
  * outlive it, so nothing is held back. A plain boolean, safe in an `if`.
  */
 export function persisted(ref: object): boolean {
-  const term = persistence.get(ref)?.term
-  return term ? term() : true
+  return persistenceOf(ref).persisted
 }
 
 /** Observable form of {@link persisted}. A callable, so never put it in an `if`. */
 export function persistedFeed(ref: object): Feed<boolean> {
-  return (
-    persistence.get(ref)?.term ??
-    signalFeed(
-      () => true,
-      () => () => {},
-    )
+  const term = termsOf(ref)?.local.persistence
+  if (term === undefined) return constantFeed(true)
+  return signalFeed(
+    () => term().persisted,
+    onChange => term[CHANGEFEED].subscribe(() => onChange()),
   )
 }
 
@@ -71,71 +58,60 @@ export function persistedFeed(ref: object): Feed<boolean> {
  * `SeatLostError` for every stored document of the Runtime, including one
  * opened afterwards, and it never clears: nothing more is written. The
  * application recovers by opening a new store (in a browser, by reloading).
+ *
+ * A document closed with own writes the store had not confirmed reports its
+ * `DocumentClosedError`: those writes will never be confirmed.
  */
 export function persistenceError(ref: object): unknown | undefined {
-  return persistence.get(ref)?.readError()
+  return persistenceOf(ref).error
 }
 
 /**
  * Checks in this order, as `whenHydrated` does: resolve at once if
  * {@link persisted}; otherwise reject at once if {@link persistenceError} is
  * set; otherwise wait, resolving once persisted and rejecting with the error
- * if a store write fails first.
+ * if a store write fails first, or with its `DocumentClosedError` if the
+ * document closes first.
  *
  * Failed writes are retried automatically, so a rejection may be transient: a
  * caller that wants to wait it out checks `persistenceError(ref)` and calls
- * again. A `SeatLostError` is final.
+ * again. A `SeatLostError` and a `DocumentClosedError` are final.
  */
 export function whenPersisted(ref: object): Promise<void> {
-  const entry = persistence.get(ref)
-  if (!entry || entry.term()) return Promise.resolve()
-
-  const failure = entry.readError()
-  if (failure !== undefined) return Promise.reject(failure)
-
+  const term = termsOf(ref)?.local.persistence
+  if (term === undefined) return Promise.resolve()
   return new Promise<void>((resolve, reject) => {
-    const dispose = entry.term[CHANGEFEED].subscribe(() => {
-      if (entry.term()) {
-        dispose()
-        resolve()
-        return
-      }
-      const error = entry.readError()
-      if (error !== undefined) {
-        dispose()
-        reject(error)
-      }
+    const settle = ({ persisted, error }: Persistence): boolean => {
+      if (persisted) resolve()
+      else if (error !== undefined) reject(error)
+      else return false
+      return true
+    }
+    if (settle(term())) return
+    const stop = term[CHANGEFEED].subscribe(() => {
+      if (settle(term())) stop()
     })
   })
 }
 
-const refusals = createDocumentMap<WriteRefusalFeed>()
-
-/**
- * Register a document's refusal.
- *
- * @internal Called by `Runtime` as it creates an interpreted document.
- */
-export function registerWriteRefusal(
-  ref: object,
-  feed: WriteRefusalFeed,
-): void {
-  refusals.set(ref, feed)
-}
-
 /**
  * Why this document's authored writes are refused, or `undefined` when they
- * are not: another seat of its storage is the recorded writer of this
- * serialized document. Set when the document loads, or when its first own
- * write lost a race to another seat's, and kept for the session: writership
- * moves only with the seat.
+ * are not. Read from the document's context, the one answer the write path
+ * itself throws:
+ * - `DocumentClosedError`: the document was destroyed, unloaded or disposed;
+ * - `DocumentLoadingError`: a serialized document is still loading its own
+ *   history from its store;
+ * - `WriterRefusedError`: another seat of its storage is the recorded writer
+ *   of this serialized document, set when the document loads or when its
+ *   first own write lost a race to another seat's, and kept for the session.
  *
- * Not a {@link persistenceError}: a refused document never failed a write
- * when it was refused at load, and its unauthored writes (what the network
- * sends) still succeed.
+ * Every refusal is a `WriteRefusal`: narrow with `instanceof`. Not a
+ * {@link persistenceError}: a refused document never failed a write when it
+ * was refused at load, and its unauthored writes (what the network sends)
+ * still succeed.
  */
-export function writeRefusal(ref: object): WriterRefusedError | undefined {
-  return refusals.get(ref)?.()
+export function writeRefusal(ref: object): WriteRefusal | undefined {
+  return writeRefusalFeed(ref)()
 }
 
 /**
@@ -143,12 +119,5 @@ export function writeRefusal(ref: object): WriterRefusedError | undefined {
  * callable, so never put it in an `if`.
  */
 export function writeRefusalFeed(ref: object): WriteRefusalFeed {
-  return refusals.get(ref) ?? NEVER_REFUSED
+  return hasTransact(ref) ? ref[TRANSACT].refusal : constantFeed(undefined)
 }
-
-const NEVER_REFUSED: WriteRefusalFeed = signalFeed<
-  WriterRefusedError | undefined
->(
-  () => undefined,
-  () => () => {},
-)

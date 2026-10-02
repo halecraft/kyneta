@@ -24,6 +24,7 @@
 
 import type {
   BindingTarget,
+  HasBackingDoc,
   Replica,
   SchemaBinding,
   Schema as SchemaNode,
@@ -34,7 +35,6 @@ import type {
 import {
   BACKING_DOC,
   createBindingTarget,
-  hasBackingDoc,
   peerNumber,
   SYNC_COLLABORATIVE,
 } from "@kyneta/schema"
@@ -43,19 +43,11 @@ import type { YjsNativeMap } from "./native-map.js"
 import { ensureContainers } from "./populate.js"
 import {
   createYjsReplica,
-  createYjsSubstrate,
+  ownedYjsSubstrate,
+  takeReplicaDoc,
   yjsReplicaFactory,
 } from "./substrate.js"
 import { YjsVersion } from "./version.js"
-
-/**
- * `refuse` for a concurrent substrate. The exchange refuses only serialized
- * documents: concurrent writers each write under their own identity, so there
- * is no single writer to refuse in favour of.
- */
-const CONCURRENT_REFUSE = (): void => {
-  throw new Error("concurrent substrates have no single writer to refuse")
-}
 
 // ---------------------------------------------------------------------------
 // Peer id → Yjs clientID
@@ -101,10 +93,10 @@ function createYjsFactory(
     doc: Y.Doc,
     schema: SchemaNode,
     claimIdentity: boolean,
-  ): Substrate<YjsVersion> => {
+  ): Substrate<YjsVersion> & HasBackingDoc<Y.Doc> => {
     if (claimIdentity) doc.clientID = numericClientId
     ensureContainers(doc, schema, binding)
-    return createYjsSubstrate(doc, schema, binding)
+    return ownedYjsSubstrate(doc, schema, binding)
   }
 
   return {
@@ -123,12 +115,7 @@ function createYjsFactory(
       // Claim identity now: this is the two-phase path, so any import has
       // already happened and the clock for our id is wherever that history
       // left it. Writes continue from there rather than colliding with it.
-      if (!hasBackingDoc<Y.Doc>(replica)) {
-        throw new Error(
-          "upgrade() requires a replica produced by this factory.",
-        )
-      }
-      return buildSubstrate(replica[BACKING_DOC], schema, true)
+      return buildSubstrate(takeReplicaDoc(replica), schema, true)
     },
 
     create(schema: SchemaNode): Substrate<YjsVersion> {
@@ -150,14 +137,13 @@ function createYjsFactory(
       // The cost of deferring: anything written during the import stays
       // attributed to the throwaway id — one extra version-vector entry that
       // never grows again, which is far cheaper than a lost operation.
-      const doc = new Y.Doc()
-      const substrate = buildSubstrate(doc, schema, false)
+      const substrate = buildSubstrate(new Y.Doc(), schema, false)
       return {
         substrate,
+        // Through the substrate, which reads the document through its slot.
         adopt: () => {
-          doc.clientID = numericClientId
+          substrate[BACKING_DOC].clientID = numericClientId
         },
-        refuse: CONCURRENT_REFUSE,
       }
     },
 

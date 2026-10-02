@@ -1,23 +1,26 @@
 // settle — the conjunction over a document's truth sources.
 //
-// The rule under test: a document is settled when every attached term is true,
-// and a document with no terms at all is settled immediately. That second case
+// The rule under test: a document is settled when its hydration has loaded
+// and its peers have answered, and a document with no terms at all is settled
+// immediately. That second case
 // is the one that makes a plain in-memory document and a transportless daemon
 // behave the same way, so it is asserted directly rather than inferred.
 
-import { CHANGEFEED } from "@kyneta/changefeed"
-import { json, Schema } from "@kyneta/schema"
+import { CHANGEFEED, settableFeed } from "@kyneta/changefeed"
+import { json, Schema, SYNC_AUTHORITATIVE } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import { writerModelOf } from "../doc-meta.js"
 import { docStatus } from "../doc-status.js"
 import {
-  hydrated,
-  hydratedFeed,
-  registerSettleTerm,
-  settled,
-  settledFeed,
-  signalFeed,
-} from "../settle.js"
+  type Hydration,
+  type Peer,
+  type Persistence,
+  registerLocalTerms,
+  registerNetworkTerms,
+  type Sync,
+} from "../document-terms.js"
+import type { Authority } from "../governance.js"
+import { hydrated, hydratedFeed, settled, settledFeed } from "../settle.js"
 import { createInMemoryStore } from "../store/in-memory-store.js"
 import { sessionSeat } from "../store/seats.js"
 import type { Store } from "../store/store.js"
@@ -31,22 +34,33 @@ const TestDoc = json.bind(
 
 const createExchange = exchangesPerTest()
 
-/** A term whose value the test drives by hand. */
-function controllableTerm() {
-  let value = false
-  const listeners = new Set<() => void>()
-  const term = signalFeed(
-    () => value,
-    onChange => {
-      listeners.add(onChange)
-      return () => listeners.delete(onChange)
-    },
-  )
+/** Local terms whose hydration the test drives by hand. */
+function localTerms() {
+  const hydration = settableFeed<Hydration>({ status: "pending" })
   return {
-    term,
-    flip() {
-      value = true
-      for (const l of listeners) l()
+    hydration,
+    terms: {
+      syncMode: SYNC_AUTHORITATIVE,
+      hydration,
+      persistence: settableFeed<Persistence>({ persisted: true }),
+    },
+    load() {
+      hydration.set({ status: "loaded" })
+    },
+  }
+}
+
+/** Network terms whose peer term the test drives by hand. */
+function networkTerms() {
+  const peer = settableFeed<Peer>({ settled: false, resolve: () => false })
+  return {
+    terms: {
+      peer,
+      authority: settableFeed<Authority>("any"),
+      sync: settableFeed<Sync>({} as Sync),
+    },
+    answer() {
+      peer.set({ settled: true, resolve: () => true })
     },
   }
 }
@@ -62,26 +76,34 @@ describe("settle — the conjunction", () => {
     expect(settled({})).toBe(true)
   })
 
-  it("is true only when every attached term is true", () => {
+  it("is true only when hydration has loaded and the peers have answered", () => {
     const ref = {}
-    const a = controllableTerm()
-    const b = controllableTerm()
-    registerSettleTerm(ref, a.term)
-    registerSettleTerm(ref, b.term)
+    const local = localTerms()
+    const network = networkTerms()
+    registerLocalTerms(ref, local.terms)
+    registerNetworkTerms(ref, network.terms)
 
     expect(settled(ref)).toBe(false)
-    a.flip()
+    local.load()
     expect(settled(ref)).toBe(false)
-    b.flip()
+    network.answer()
     expect(settled(ref)).toBe(true)
   })
 
-  it("notifies subscribers when any single term moves", () => {
+  it("with no network part, is hydration alone", () => {
     const ref = {}
-    const a = controllableTerm()
-    const b = controllableTerm()
-    registerSettleTerm(ref, a.term)
-    registerSettleTerm(ref, b.term)
+    const local = localTerms()
+    registerLocalTerms(ref, local.terms)
+    expect(settled(ref)).toBe(false)
+    local.load()
+    expect(settled(ref)).toBe(true)
+  })
+
+  it("notifies subscribers when any single term moves, the network part attached afterwards too", () => {
+    const ref = {}
+    const local = localTerms()
+    const network = networkTerms()
+    registerLocalTerms(ref, local.terms)
 
     let fired = 0
     // A term carries the protocol under `[CHANGEFEED]`; it does not promise a
@@ -90,10 +112,12 @@ describe("settle — the conjunction", () => {
       fired++
     })
 
-    a.flip()
+    local.load()
     expect(fired).toBe(1)
-    b.flip()
+    registerNetworkTerms(ref, network.terms)
     expect(fired).toBe(2)
+    network.answer()
+    expect(fired).toBe(3)
   })
 
   it("returns an actual boolean, not a callable", () => {

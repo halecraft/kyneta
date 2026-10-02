@@ -19,11 +19,10 @@
 // absence of evidence is not evidence of absence until every source has been
 // consulted. Hence: populated is disjunctive, empty is conjunctive.
 
-import type { Feed } from "@kyneta/changefeed"
-import { CHANGEFEED } from "@kyneta/changefeed"
+import { CHANGEFEED, type Feed, signalFeed } from "@kyneta/changefeed"
 import { populated, populatedFeed } from "@kyneta/schema"
 import type { Authority } from "./governance.js"
-import { settledFeed, settledWith, signalFeed } from "./settle.js"
+import { settledFeed, settledWith } from "./settle.js"
 
 // ---------------------------------------------------------------------------
 // The type

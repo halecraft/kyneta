@@ -15,6 +15,7 @@
 // Context: jj:wmyomqzw (Phase 0), jj:wqoqzzpp (Phase 2), jj:umtmlpvn (version strategy extraction)
 // Context: jj:oyouvrss (Phase 1 — append-log replica, init ops, batched wire format)
 
+import { type Feed, firstDefined, settableFeed } from "@kyneta/changefeed"
 import { randomHex } from "@kyneta/random"
 import type { ChangeBase } from "../change.js"
 import { replaceChange, trustAsOwned } from "../change.js"
@@ -42,6 +43,12 @@ import {
   type StateCell,
 } from "../reader.js"
 import { planReconcile, reconcileShadow } from "../reconcile-shadow.js"
+import {
+  type ClosedReason,
+  DocumentLoadingError,
+  type WriteRefusal,
+} from "../refusal.js"
+import { releasable } from "../releasable.js"
 import type { Schema as SchemaNode } from "../schema.js"
 import type {
   BatchOutcome,
@@ -279,19 +286,6 @@ export interface PlainHistory {
 
 export const EMPTY_HISTORY: PlainHistory = { log: [], baseOffset: 0 }
 
-/**
- * Why authored writes are refused, or `null` when they are allowed. Read at
- * every authored write.
- */
-export type Authoring = () => string | null
-
-/** For a substrate that may author from the start. */
-export const ALWAYS_AUTHOR: Authoring = () => null
-
-const STILL_LOADING =
-  "This document is still loading from its store. " +
-  "Await whenHydrated(doc) before writing to it."
-
 // ---------------------------------------------------------------------------
 // createPlainSubstrate — full Substrate from a doc, a clock and a history
 // ---------------------------------------------------------------------------
@@ -306,23 +300,31 @@ const STILL_LOADING =
  * announces what it moved by diffing the two states under it.
  * `plainSubstrateFactory` is the schema-aware entry point.
  *
- * `authoring` gives the reason authored writes are refused, if any: while the
- * document's own history is still loading (a plain merge does not commute with
- * a local write, so a write made then has no well-defined result: the loaded
- * state would overwrite it, and it would mint a lineage the store does not
- * know), or once another writer holds the document. Authored writes throw the
- * reason; merges and announcements are unaffected.
+ * `loading`, when given, answers `DocumentLoadingError` while the document's
+ * own history is still loading: a plain merge does not commute with a local
+ * write, so a write made then has no well-defined result (the loaded state
+ * would overwrite it, and it would mint a lineage the store does not know).
+ * It joins the substrate's refusal, after its slot's `closed`; authored
+ * writes throw it, and merges and announcements are unaffected.
+ *
+ * The op log lives in a slot (`Releasable`), which `dispose` empties. σ's
+ * cell stays, so a ref that outlives the substrate still reads.
  */
 export function createPlainSubstrate(
   doc: PlainState,
   schema: SchemaNode,
   clock: PlainClock,
   history: PlainHistory,
-  authoring: Authoring,
+  loading?: Feed<WriteRefusal | undefined>,
 ): Substrate<PlainVersion> {
   const cell: StateCell = { current: doc }
   const reader = plainReader(cell)
-  const core = createPlainCore(() => cell.current, clock, history)
+  const slot = releasable(
+    createPlainCore(() => cell.current, clock, history),
+    null,
+  )
+  const refusal =
+    loading === undefined ? slot.closed : firstDefined(slot.closed, loading)
 
   // Every op this substrate logs locally is authored here, so a batch that
   // logged something is exactly a local update.
@@ -372,10 +374,12 @@ export function createPlainSubstrate(
   })
 
   const revertible = createPlainRevertible({
-    head: () => core.version().serialize(),
+    head: () => slot.get().version().serialize(),
     isPast: position =>
-      core.version().compare(plainReplicaFactory.parseVersion(position)) ===
-      "ahead",
+      slot
+        .get()
+        .version()
+        .compare(plainReplicaFactory.parseVersion(position)) === "ahead",
     context: () => substrate.context(),
   })
 
@@ -391,8 +395,6 @@ export function createPlainSubstrate(
       change: ChangeBase,
       recordInverse: RecordInverseFn | null,
     ): void {
-      const refusal = authoring()
-      if (refusal !== null) throw new Error(refusal)
       if (recordInverse) {
         // Read, don't copy. `invert` owns whatever it retains (`own`): a
         // value a read froze is shared, since no write can change it, and
@@ -408,6 +410,7 @@ export function createPlainSubstrate(
     // as the op was made. An aborted batch did nothing, and logs nothing.
     afterBatch(outcome: BatchOutcome): void {
       if (outcome.ops.length === 0) return
+      const core = slot.get()
       const before = core.version().serialize()
       // Mint a REAL lineage on the first authored flush. Only authored
       // batches reach here: a merge appends to the log directly, so taking
@@ -432,10 +435,13 @@ export function createPlainSubstrate(
       if (!cachedCtx) {
         let nextTreeNodeCounter = 1
         cachedCtx = buildWritableContext(substrate, schema, {
+          refusal,
+          // The root's native value is σ itself; a closed document has none.
           nativeResolver: (
             _schema: unknown,
             path: { segments: readonly unknown[] },
           ) => {
+            slot.get()
             return path.segments.length === 0 ? cell.current : undefined
           },
           positionResolver: (
@@ -462,39 +468,47 @@ export function createPlainSubstrate(
     },
 
     version(): PlainVersion {
-      return core.version()
+      return slot.get().version()
     },
 
     baseVersion(): PlainVersion {
-      return core.baseVersion()
+      return slot.get().baseVersion()
     },
 
     advance(to: Version): void {
       // σ already holds every logged op, so trimming moves only the base
       // offset; there is nothing to project.
-      core.advance(asPlainVersion(to), () => {})
+      slot.get().advance(asPlainVersion(to), () => {})
     },
 
     exportEntirety(): SubstratePayload {
-      return core.exportEntirety()
+      return slot.get().exportEntirety()
     },
 
     exportSince(since: Version): SubstratePayload | null {
-      return core.exportSince(asPlainVersion(since))
+      return slot.get().exportSince(asPlainVersion(since))
     },
 
     merge(payload: SubstratePayload, options?: MergeOptions): void {
-      core.merge(
-        decodePlainPayload(payload, "PlainSubstrate.merge"),
-        docEffects(options),
-      )
+      slot
+        .get()
+        .merge(
+          decodePlainPayload(payload, "PlainSubstrate.merge"),
+          docEffects(options),
+        )
     },
 
     resetFromEntirety(payload: SubstratePayload, options?: MergeOptions): void {
-      core.adopt(
-        decodeEntirety(payload, "PlainSubstrate.resetFromEntirety"),
-        docEffects(options),
-      )
+      slot
+        .get()
+        .adopt(
+          decodeEntirety(payload, "PlainSubstrate.resetFromEntirety"),
+          docEffects(options),
+        )
+    },
+
+    dispose(reason: ClosedReason = "disposed"): void {
+      slot.release(reason)
     },
   }
 
@@ -689,6 +703,63 @@ const replicaHistories = new WeakMap<
  * or writing document fields.
  */
 export function createPlainReplica(clock: PlainClock): Replica<PlainVersion> {
+  // Everything the replica holds lives in its slot, which `dispose` empties.
+  const slot = releasable(plainReplicaState(clock), null)
+
+  const replica: Replica<PlainVersion> & HasBackingDoc<PlainState> = {
+    get [BACKING_DOC](): PlainState {
+      return slot.get().materialize()
+    },
+
+    version(): PlainVersion {
+      return slot.get().core.version()
+    },
+
+    baseVersion(): PlainVersion {
+      return slot.get().core.baseVersion()
+    },
+
+    advance(to: Version): void {
+      const { core, trim } = slot.get()
+      core.advance(asPlainVersion(to), trim)
+    },
+
+    exportEntirety(): SubstratePayload {
+      return slot.get().core.exportEntirety()
+    },
+
+    exportSince(since: Version): SubstratePayload | null {
+      return slot.get().core.exportSince(asPlainVersion(since))
+    },
+
+    merge(payload: SubstratePayload, _options?: MergeOptions): void {
+      const { core, effects } = slot.get()
+      core.merge(decodePlainPayload(payload, "PlainReplica.merge"), effects)
+    },
+
+    resetFromEntirety(
+      payload: SubstratePayload,
+      _options?: MergeOptions,
+    ): void {
+      const { core, effects } = slot.get()
+      core.adopt(
+        decodeEntirety(payload, "PlainReplica.resetFromEntirety"),
+        effects,
+      )
+    },
+
+    dispose(reason: ClosedReason = "disposed"): void {
+      slot.release(reason)
+    },
+  }
+
+  replicaHistories.set(replica, () => slot.get().core.history())
+  return replica
+}
+
+/** What a headless plain replica holds: its log, its base, and the state
+ *  last materialized from them. */
+function plainReplicaState(clock: PlainClock) {
   // The base incorporates every op trimmed by `advance`. It is always frozen,
   // so a replay onto it copies what it writes and leaves the base as it was.
   const base: StateCell = { current: Object.freeze({}) }
@@ -723,63 +794,25 @@ export function createPlainReplica(clock: PlainClock): Replica<PlainVersion> {
 
   const core = createPlainCore(materialize, clock, EMPTY_HISTORY)
 
-  // Appended batches need nothing: the log is the state, replayed on demand.
-  // An adopted document becomes the base, frozen in place: it was decoded
-  // from a payload, so the replica owns it.
-  const baseEffects: PlainEffects = {
-    append() {},
-    adopt(state) {
-      base.current = freezeTree(state)
+  return {
+    core,
+    materialize,
+    // `to` may trim only part of the log, so the base takes the trimmed
+    // batches rather than the materialized state, and is frozen again.
+    trim(batches: readonly (readonly Op[])[]): void {
+      replay(base, batches)
+      freezeTree(base.current)
     },
+    // Appended batches need nothing: the log is the state, replayed on
+    // demand. An adopted document becomes the base, frozen in place: it was
+    // decoded from a payload, so the replica owns it.
+    effects: {
+      append() {},
+      adopt(state) {
+        base.current = freezeTree(state)
+      },
+    } satisfies PlainEffects,
   }
-
-  const replica: Replica<PlainVersion> & HasBackingDoc<PlainState> = {
-    get [BACKING_DOC](): PlainState {
-      return materialize()
-    },
-
-    version(): PlainVersion {
-      return core.version()
-    },
-
-    baseVersion(): PlainVersion {
-      return core.baseVersion()
-    },
-
-    advance(to: Version): void {
-      // `to` may trim only part of the log, so the base takes the trimmed
-      // batches rather than the materialized state, and is frozen again.
-      core.advance(asPlainVersion(to), batches => {
-        replay(base, batches)
-        freezeTree(base.current)
-      })
-    },
-
-    exportEntirety(): SubstratePayload {
-      return core.exportEntirety()
-    },
-
-    exportSince(since: Version): SubstratePayload | null {
-      return core.exportSince(asPlainVersion(since))
-    },
-
-    merge(payload: SubstratePayload, _options?: MergeOptions): void {
-      core.merge(decodePlainPayload(payload, "PlainReplica.merge"), baseEffects)
-    },
-
-    resetFromEntirety(
-      payload: SubstratePayload,
-      _options?: MergeOptions,
-    ): void {
-      core.adopt(
-        decodeEntirety(payload, "PlainReplica.resetFromEntirety"),
-        baseEffects,
-      )
-    },
-  }
-
-  replicaHistories.set(replica, core.history)
-  return replica
 }
 
 // ---------------------------------------------------------------------------
@@ -935,25 +968,20 @@ export function planMerge(
 }
 
 /**
- * A substrate over `replica` whose authored writes wait for `adopt` unless
- * `loaded`, and stop for good at `refuse`.
+ * A substrate over `replica` whose authored writes wait for `adopt`: until
+ * then its refusal answers `DocumentLoadingError`.
  */
-function refusable(
+function adoptable(
   replica: Replica<PlainVersion>,
   schema: SchemaNode,
-  loaded: boolean,
 ): HydrationHandle<PlainVersion> {
-  let adopted = loaded
-  let refusal: string | null = null
+  const loading = settableFeed<WriteRefusal | undefined>(
+    new DocumentLoadingError(),
+  )
   return {
-    substrate: buildUpgrade(replica, schema, () =>
-      refusal !== null ? refusal : adopted ? null : STILL_LOADING,
-    ),
+    substrate: buildUpgrade(replica, schema, loading),
     adopt: () => {
-      adopted = true
-    },
-    refuse: reason => {
-      refusal = reason
+      if (loading() !== undefined) loading.set(undefined)
     },
   }
 }
@@ -974,7 +1002,7 @@ function refusable(
 function buildUpgrade(
   replica: Replica<PlainVersion>,
   schema: SchemaNode,
-  authoring: Authoring,
+  loading?: Feed<WriteRefusal | undefined>,
 ): Substrate<PlainVersion> {
   const history = replicaHistories.get(replica)
   if (history === undefined || !hasBackingDoc<PlainState>(replica)) {
@@ -991,7 +1019,7 @@ function buildUpgrade(
     schema,
     createPlainClock(replica.version().lineage),
     history(),
-    authoring,
+    loading,
   )
 }
 
@@ -1050,10 +1078,9 @@ export const plainReplicaFactory: ReplicaFactory<PlainVersion> = {
  * - `createReplica()` → bare replica (empty doc)
  * - `upgrade(replica, schema)` → full substrate over the replica's state and log
  * - `create(schema)` = `upgrade(createReplica(), schema)`
- * - `createForHydration(schema)` — the same, refusing authored writes until
- *   `adopt()` says the document's stored history has loaded, and from
- *   `refuse(reason)` on
- * - `upgradeForHydration(replica, schema)` — `upgrade`, refusable
+ * - `createForHydration(schema)` — the same, refusing authored writes with
+ *   `DocumentLoadingError` until `adopt()` says the document's stored history
+ *   has loaded
  * - `fromEntirety(payload, schema)` = `upgrade(replica.fromEntirety(payload), schema)`
  * - `parseVersion(serialized)` — deserialize a PlainVersion
  */
@@ -1066,7 +1093,7 @@ export const plainSubstrateFactory: SubstrateFactory<PlainVersion> = {
     replica: Replica<PlainVersion>,
     schema: SchemaNode,
   ): Substrate<PlainVersion> {
-    return buildUpgrade(replica, schema, ALWAYS_AUTHOR)
+    return buildUpgrade(replica, schema)
   },
 
   create(schema: SchemaNode): Substrate<PlainVersion> {
@@ -1075,13 +1102,8 @@ export const plainSubstrateFactory: SubstrateFactory<PlainVersion> = {
 
   createForHydration(schema: SchemaNode) {
     // A plain document's identity is its lineage, and authoring is what mints
-    // it. It may author once its history has loaded (`adopt`), unless the
-    // right to was withdrawn (`refuse`), which wins either way.
-    return refusable(this.createReplica(), schema, false)
-  },
-
-  upgradeForHydration(replica: Replica<PlainVersion>, schema: SchemaNode) {
-    return refusable(replica, schema, true)
+    // it. It may author once its history has loaded (`adopt`).
+    return adoptable(this.createReplica(), schema)
   },
 
   fromEntirety(

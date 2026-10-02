@@ -3,30 +3,16 @@
 // A ref knows its own contents but not the terms it was created under. The
 // `SyncMode` in particular lives on the `BoundSchema`, which only the Runtime
 // sees at creation time — yet `initialize` needs it, because whether
-// concurrent seeds merge or overwrite is decided by `writerModel`.
-//
-// A `DocumentMap`, like `syncRefMap` in `sync.ts` and the settle registry:
-// out-of-band per-document state, reachable from any ref in the document, that
-// must not keep the document alive.
+// concurrent seeds merge or overwrite is decided by `writerModel`. Both facts
+// here are fields of the document's terms (`document-terms.ts`).
 
 import type { SyncMode, WriterModel } from "@kyneta/schema"
-import { createDocumentMap } from "./document-key.js"
+import { termsOf } from "./document-terms.js"
 import type { Authority } from "./governance.js"
-
-const docSyncModes = createDocumentMap<SyncMode>()
-
-/**
- * Record the sync mode a document was created under.
- *
- * @internal Called by `Runtime` as an interpreted document is created.
- */
-export function registerDocSyncMode(ref: object, syncMode: SyncMode): void {
-  docSyncModes.set(ref, syncMode)
-}
 
 /** The sync mode this document was created under, if it is known. */
 export function docSyncMode(ref: object): SyncMode | undefined {
-  return docSyncModes.get(ref)
+  return termsOf(ref)?.local.syncMode
 }
 
 /**
@@ -38,39 +24,19 @@ export function docSyncMode(ref: object): SyncMode | undefined {
  * merge rather than overwrite, instead of being blocked on a guess.
  */
 export function writerModelOf(ref: object): WriterModel {
-  return docSyncModes.get(ref)?.writerModel ?? "concurrent"
-}
-
-// ---------------------------------------------------------------------------
-// Declared authority
-// ---------------------------------------------------------------------------
-
-/** Resolves the Exchange's declared authority, read lazily. */
-const docAuthorities = new WeakMap<object, () => Authority>()
-
-/**
- * Record how to resolve the declared authority for a document.
- *
- * Read lazily rather than captured, because `Policy` is a mutable registry —
- * a policy registered after the document was created still counts.
- *
- * @internal Called by `Exchange` as a document is created.
- */
-export function registerDocAuthority(
-  ref: object,
-  resolve: () => Authority,
-): void {
-  docAuthorities.set(ref, resolve)
+  return docSyncMode(ref)?.writerModel ?? "concurrent"
 }
 
 /**
  * The authority in force for this document.
  *
  * Completes the resolution order — call-site → `Policy.authority` → `"any"` —
- * by supplying the middle and last terms. `"any"` is safe as the fallback
- * because the case where a wrong guess would corrupt data is refused
- * elsewhere: a serialized-writer document may only be seeded by `"self"`.
+ * by supplying the middle and last terms. Read through the authority term,
+ * which reads the Exchange's `Policy` lazily: a policy registered after the
+ * document was created still counts. `"any"` is safe as the fallback because
+ * the case where a wrong guess would corrupt data is refused elsewhere: a
+ * serialized-writer document may only be seeded by `"self"`.
  */
 export function authorityFor(ref: object): Authority {
-  return docAuthorities.get(ref)?.() ?? "any"
+  return termsOf(ref)?.network()?.authority() ?? "any"
 }

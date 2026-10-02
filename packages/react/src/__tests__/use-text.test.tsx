@@ -12,7 +12,7 @@ import {
   WriterRefusedError,
   whenHydrated,
 } from "@kyneta/exchange"
-import { json } from "@kyneta/schema"
+import { DocumentLoadingError, json } from "@kyneta/schema"
 import { batch, createDoc, Schema } from "@kyneta/schema/basic"
 import { act, renderHook } from "@testing-library/react"
 import { describe, expect, it } from "vitest"
@@ -413,12 +413,16 @@ describe("useWriteRefusal", () => {
     })
     const doc = reader.get("doc", StoredDoc)
     const { result } = renderHook(() => useWriteRefusal(doc))
-    expect(result.current).toBeUndefined()
+    // While it loads, a stored json document refuses every write.
+    expect(result.current).toBeInstanceOf(DocumentLoadingError)
     await act(async () => {
       await whenHydrated(doc)
     })
-    expect(result.current).toBeInstanceOf(WriterRefusedError)
-    expect(result.current?.writer).toBe(writer.peerId)
+    const refusal = result.current
+    expect(refusal).toBeInstanceOf(WriterRefusedError)
+    expect(refusal instanceof WriterRefusedError && refusal.writer).toBe(
+      writer.peerId,
+    )
     await reader.shutdown()
     await writer.shutdown()
   })

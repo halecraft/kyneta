@@ -6,6 +6,13 @@
 // locate, complete, advance, the substrate, settle, mark what was populated.
 // The delivery dispatcher plans and fires each sealed batch's notifications.
 
+import {
+  type Feed,
+  firstDefined,
+  type Settable,
+  settableFeed,
+  signalFeed,
+} from "@kyneta/changefeed"
 import type { DispatcherHandle, Lease } from "@kyneta/machine"
 import { createDispatcher } from "@kyneta/machine"
 import type { ChangeBase } from "./change.js"
@@ -26,6 +33,7 @@ import type { Path } from "./path.js"
 import type { PositionCapable } from "./position.js"
 import type { Reader } from "./reader.js"
 import { advance, settle } from "./ref/address.js"
+import type { WriteRefusal } from "./refusal.js"
 import type { RichTextSchema, Schema, TextSchema } from "./schema.js"
 import { SubscriberTrie } from "./subscriber-trie.js"
 import type {
@@ -142,6 +150,19 @@ export interface WritableContext {
    *  `prepare`. Helper methods on refs route through this so multi-helper
    *  blocks collapse into one Changeset. */
   readonly dispatch: (path: Path, change: ChangeBase) => void
+  /**
+   * Why authored writes are refused, or `undefined` when they are not: the
+   * first answer of the substrate's refusal (its slot closed, a plain
+   * document still loading) and the owner's (`ownerRefusal`). `prepare`
+   * throws it for every authored op, before the substrate sees it.
+   */
+  readonly refusal: Feed<WriteRefusal | undefined>
+  /**
+   * The owner's part of `refusal`, attached by `createRef({ refusal })`
+   * before the ref is handed out: who may write is the owner's decision (the
+   * exchange refuses a serialized document another seat writes).
+   */
+  readonly ownerRefusal: Settable<WriteRefusal | undefined>
   /** Shared cascade budget, attached by `createRef({ lease })`. It must be
    *  attached before the context's first write: the delivery dispatcher is
    *  created on first use and keeps the lease it finds then. Without one,
@@ -153,12 +174,19 @@ const ABORTED: BatchOutcome = { ops: [], inverses: [], aborted: true }
 const AUTHOR: PrepareOptions = { ingress: "author" }
 const COMPENSATE: PrepareOptions = { ingress: "compensate" }
 const ANNOUNCE: PrepareOptions = { ingress: "announce" }
+const NEVER_REFUSED: Feed<WriteRefusal | undefined> = signalFeed(
+  () => undefined,
+  () => () => {},
+)
 
 // ---------------------------------------------------------------------------
 // buildWritableContext — shared builder for substrate factories
 // ---------------------------------------------------------------------------
 
 export interface SubstrateCapabilities {
+  /** The substrate's own refusal: its slot's `closed`, and for plain, its
+   *  loading refusal too. */
+  refusal?: Feed<WriteRefusal | undefined>
   nativeResolver?: (schema: Schema, path: Path) => unknown
   positionResolver?: (
     schema: TextSchema | RichTextSchema,
@@ -199,7 +227,14 @@ export function buildWritableContext(
 
   // The context's coordinates and subscribers.
   const subscribers = new SubscriberTrie()
-  const trie = new CoordinateTrie(at => subscribers.holdsAt(at))
+  const trie = new CoordinateTrie(subscribers)
+
+  // Who refuses authored writes: the substrate first, then the owner.
+  const ownerRefusal = settableFeed<WriteRefusal | undefined>(undefined)
+  const refusal = firstDefined(
+    capabilities.refusal ?? NEVER_REFUSED,
+    ownerRefusal,
+  )
 
   // What to deliver: one trace per open batch, every op it prepared. An
   // announcement made while an authored batch is open pushes its own trace,
@@ -244,6 +279,10 @@ export function buildWritableContext(
     const trace = traces.at(-1)
     if (trace === undefined) {
       throw new Error("ctx.prepare called outside runBatch or announce")
+    }
+    if (options.ingress === "author") {
+      const refused = refusal()
+      if (refused !== undefined) throw refused
     }
     const path = trie.locate(rawPath)
     const change =
@@ -386,6 +425,8 @@ export function buildWritableContext(
     schema,
     trie,
     subscribers,
+    refusal,
+    ownerRefusal,
     prepare,
     runBatch,
     announce,

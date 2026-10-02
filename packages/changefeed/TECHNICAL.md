@@ -4,7 +4,7 @@
 > **Role**: The universal reactive contract — a single symbol (`CHANGEFEED`) that any value can carry to expose its current state and a stream of future changes.
 > **Depends on**: *(none — zero runtime dependencies)*
 > **Depended on by**: `@kyneta/schema`, `@kyneta/index`, `@kyneta/exchange`, `@kyneta/react`, `@kyneta/loro-schema`, `@kyneta/yjs-schema`, `@kyneta/compiler`, `@kyneta/cast`
-> **Canonical symbols**: `CHANGEFEED`, `Changefeed<S, C>`, `ChangefeedProtocol<S, C>`, `Changeset<C>`, `HasChangefeed<S, C>`, `Feed<S, C>`, `CallableChangefeed<S, C>`, `ReactiveMap<K, V, C>`, `ReactiveMapHandle<K, V, C>`, `ChangeBase`, `createChangefeed`, `createFeed`, `createCallable`, `createReactiveMap`, `cachedSnapshot`, `changefeed`, `hasChangefeed`, `staticChangefeed`
+> **Canonical symbols**: `CHANGEFEED`, `Changefeed<S, C>`, `ChangefeedProtocol<S, C>`, `Changeset<C>`, `HasChangefeed<S, C>`, `Feed<S, C>`, `CallableChangefeed<S, C>`, `Settable<T>`, `ReactiveMap<K, V, C>`, `ReactiveMapHandle<K, V, C>`, `ChangeBase`, `createChangefeed`, `createFeed`, `createCallable`, `signalFeed`, `firstDefined`, `settableFeed`, `createReactiveMap`, `cachedSnapshot`, `changefeed`, `hasChangefeed`, `staticChangefeed`
 > **Key invariant(s)**: Every reactive value in Kyneta exposes itself through exactly one symbol — `CHANGEFEED`. Accessing `value[CHANGEFEED]` yields `{ current, subscribe }`. Anything else is not a changefeed. `current` obeys the **identity rule**: it returns the same value until the state changes, and a new one once it has.
 
 A shared vocabulary that lets any object — a schema ref, a document, a live map, a function-object — say "here is my current value and here is how you watch it change." Every reactive surface in Kyneta goes through this one symbol.
@@ -214,6 +214,16 @@ See "Where types are lost, and why" in `packages/schema/TECHNICAL.md`.
 - **Not a computation.** Calling `feed()` reads the current value; it does not compute, re-derive, or trigger a subscription.
 - **Not a method.** `feed()` works the same whether bound or unbound — the call signature captures the wrapped feed in a closure.
 
+### Signal feeds: `signalFeed`, `firstDefined`, `settableFeed`
+
+Source: `packages/changefeed/src/combinators.ts`.
+
+A **signal feed** tells a subscriber only that its value may have moved, with an empty changeset; the subscriber reads it by calling the feed. It is the shape of a flag or an answer, where the value is small and what changed is the whole of it.
+
+- `signalFeed(read, subscribe)` is a feed over a getter and a change signal: calling it calls `read`, and every `onChange` reaches subscribers as `{ changes: [] }`.
+- `firstDefined(...feeds)` answers the first feed whose answer is not `undefined`, and notifies when any of them changes. It is how answers with a precedence compose: `@kyneta/schema`'s write refusal is `firstDefined(substrate's, owner's)`.
+- `settableFeed(initial)` holds a value, or follows another feed, until the next `set`. Every `set` notifies, and lets go of what it held: a feed set aside is unsubscribed from and no longer referenced, so whatever it closed over can be collected while the settable lives on. It subscribes to a feed it follows only while it has subscribers itself. `@kyneta/exchange` makes each of a document's terms one, and closes the document by setting each to a constant: a feed or wait obtained before the close follows it with no second notification path. A function value that carries no `[CHANGEFEED]` is a value, not a feed to follow.
+
 ---
 
 ## `ReactiveMap` — callable changefeed over a mutable Map
@@ -269,6 +279,7 @@ A `Map` cannot be frozen, so the snapshot's immutability rests on its `ReadonlyM
 | `ChangeBase` | `src/change.ts` | `{ type: string }` — the open base protocol for changes. |
 | `Feed<S, C>` | `src/callable.ts` | `(() => S) & HasChangefeed<S, C>` — the callable carrier; `createFeed(read, protocol)` builds one. |
 | `CallableChangefeed<S, C>` | `src/callable.ts` | `Changefeed<S, C> & Feed<S, C>` — a callable changefeed with `.current` and `.subscribe`. |
+| `Settable<T>` | `src/combinators.ts` | `Feed<T>` with `set(next: T \| Feed<T>)` — what `settableFeed` returns. |
 | `ReactiveMap<K, V, C>` | `src/reactive-map.ts` | Callable changefeed over `ReadonlyMap<K, V>` with lifted accessors. |
 | `ReactiveMapHandle<K, V, C>` | `src/reactive-map.ts` | Producer-side: `set`, `delete`, `clear`, `emit`. |
 | `cachedSnapshot<T>(build)` | `src/cached-snapshot.ts` | One snapshot of mutable state, rebuilt on the first read after `invalidate()`. |
@@ -281,14 +292,16 @@ A `Map` cannot be frozen, so the snapshot's immutability rests on its `ReadonlyM
 | `src/changefeed.ts` | `CHANGEFEED` symbol, protocol/developer types, `createChangefeed`, `changefeed`, `hasChangefeed`, `staticChangefeed`. |
 | `src/change.ts` | `ChangeBase` — the open change protocol. |
 | `src/callable.ts` | `Feed`, `createFeed`, `CallableChangefeed`, `createCallable`. |
+| `src/combinators.ts` | Signal feeds: `signalFeed`, `firstDefined`, `settableFeed`, `Settable`. |
 | `src/reactive-map.ts` | `ReactiveMap`, `ReactiveMapHandle`, `createReactiveMap`. |
 | `src/cached-snapshot.ts` | `cachedSnapshot` — the producer's half of the identity rule. |
 | `src/__tests__/changefeed.test.ts` | Protocol tests: symbol identity, `createChangefeed`/`changefeed`/`staticChangefeed`, subscribe semantics. |
 | `src/__tests__/reactive-map.test.ts` | `ReactiveMap` tests: one snapshot per state, lifted accessors, handle semantics, batched emit, subscriber fan-out. |
 | `src/__tests__/cached-snapshot.test.ts` | `cachedSnapshot`: lazy build, identity until invalidated. |
+| `src/__tests__/combinators.test.ts` | `signalFeed`, `firstDefined` (first answer, notifies on any), `settableFeed` (notifies on `set`, follows and lets go of a feed). |
 
 ## Testing
 
 Every test is pure — zero external dependencies, no timers, no network. Subscribers are tested by emitting synthetic changesets and inspecting the recorded callback invocations.
 
-**Tests**: 47 passed, 0 skipped across 2 files (`changefeed.test.ts`: 24, `reactive-map.test.ts`: 23). Run with `cd packages/changefeed && pnpm exec vitest run`.
+**Tests**: 60 passed, 0 skipped across 4 files (`changefeed.test.ts`: 26, `reactive-map.test.ts`: 26, `combinators.test.ts`: 6, `cached-snapshot.test.ts`: 2). Run with `cd packages/changefeed && pnpm exec vitest run`.

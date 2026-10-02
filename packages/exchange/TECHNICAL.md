@@ -10,7 +10,7 @@
 > 2. The session program never sees documents. The sync program never sees channels, transports, or connection state. They share a single dispatch queue and communicate exclusively through `sync-event` effects the shell forwards.
 > 3. Every reactive output — `exchange.peers`, `exchange.documents`, per-doc ready state — drains at quiescence in snapshot-then-clear order.
 > 4. **FC/IS boundary:** The `Runtime` is the local imperative shell (document cache, store, hydration, lease, tick clock). The `Exchange` is the network shell (transports, synchronizer, peers). The `Runtime` can be used standalone for local-first apps without any network. Substrates are pure math; the clock (`setInterval`) lives in the Runtime, not in substrates.
-> 5. **Runtime hooks bridge local→network:** The Runtime fires `onDocReady`, `onDocChangeset`, `onDocAdvanced`, `onDocDestroyed`, `onDocSuspended`, `onDocResumed`. The Exchange wires these into the Synchronizer, and `onDocInterpreted` attaches each interpreted ref's network capabilities (`sync()`, its authority, the peer settle term). `setHooks` backfills both for documents that exist already, so a standalone Runtime wrapped later (`new Exchange(runtime, params)`) gives its documents the same capabilities as ones created through `exchange.get()`. A standalone Runtime (no Exchange) leaves them unset — docs work fully without a network. Changesets feed observation only; a local change leaves the process through `onDocAdvanced`, which the Runtime fires from the substrate's local-update signal, and from a compaction that took in records another instance stored. It is named for an advance, not a local write: both are ways the replica moves without the network. `onDocReady` hands the Synchronizer the Runtime's own `DocReadyInfo` record, which the Synchronizer reads and never replaces: it asks the Runtime to rebuild a replica (`rebuildReplica`). Two calls run the other way: `rebuildReplica`, and `Runtime.onStateAdvanced(docId)`, which the Exchange invokes when the network advanced a document's version. That call carries a `docId` and nothing else — the Runtime resolves the document from its own cache, so the network shell never needs to hold local bookkeeping in order to make the call.
+> 5. **Runtime hooks bridge local→network:** The Runtime fires `onDocReady`, `onDocChangeset`, `onDocAdvanced`, `onDocDestroyed`, `onDocSuspended`, `onDocResumed`. The Exchange wires these into the Synchronizer, and `onDocInterpreted` attaches each interpreted ref's network terms (`sync()`, its authority, the peer settle term; see [Document readiness](#document-readiness--a-conjunction-over-layers)). `setHooks` backfills both for documents that exist already, so a standalone Runtime wrapped later (`new Exchange(runtime, params)`) gives its documents the same capabilities as ones created through `exchange.get()`. A standalone Runtime (no Exchange) leaves them unset — docs work fully without a network. Changesets feed observation only; a local change leaves the process through `onDocAdvanced`, which the Runtime fires from the substrate's local-update signal, and from a compaction that took in records another instance stored. It is named for an advance, not a local write: both are ways the replica moves without the network. `onDocReady` hands the Synchronizer the Runtime's own `DocReadyInfo` record, which the Synchronizer reads and never replaces: it asks the Runtime to rebuild a replica (`rebuildReplica`). Two calls run the other way: `rebuildReplica`, and `Runtime.onStateAdvanced(docId)`, which the Exchange invokes when the network advanced a document's version. That call carries a `docId` and nothing else — the Runtime resolves the document from its own cache, so the network shell never needs to hold local bookkeeping in order to make the call.
 
 A document-sync runtime for arbitrary substrates. Hands back an `Exchange` instance that accepts a schema binding (`Todo = loro.bind(...)`), returns typed document refs (`exchange.get("doc1", Todo)`), routes their changes over any registered transport, and exposes `ReactiveMap`s of peers and documents for observation.
 
@@ -390,7 +390,7 @@ exchange.open<S>(docId: DocId, bound: BoundSchema<S>): Promise<Ref<S> | undefine
 
 `get` answers "give me this document" and may create it. `open` answers "give me this document if it is here": open, replicated, or in the Store. It never creates, writes or announces one, and resolves `undefined` instead. An undo stack opens the documents its steps name this way, so an undo never brings a destroyed document back.
 
-**It is `get` with another intent, through the same load**, not a Store read followed by a `get`. `#getImpl` takes the intent's kind; the created entry carries an `Intent` (`create`, or `open` with `wasDeferred`); `#becomeReady` decides from what the load found (`readinessFor`, see [How a document becomes ready](#how-a-document-becomes-ready)). An `open` whose load finds nothing takes the entry out again before anything registers, writes or announces it. There is no gap between a check and a `get` for a destroy to fall into: a destroy while `open` loads is the existing "destroyed while loading" case.
+**It is `get` with another intent, through the same load**, not a Store read followed by a `get`. `#getImpl` takes the intent's kind; the created entry carries an `Intent` (`create`, or `open` with `wasDeferred`); `#becomeReady` decides from what the load found (`readinessFor`, see [How a document becomes ready](#how-a-document-becomes-ready)). An `open` whose load finds nothing takes the entry out again before anything registers, writes or announces it. There is no gap between a check and a `get` for a destroy to fall into: a destroy while `open` loads closes the document like any destroy, and the `open` rejects with its `DocumentClosedError`.
 
 - **A destroyed document is not held**, including while its delete is in flight: the Runtime orders a load after the delete ([One document's store calls, in order](#one-documents-store-calls-in-order)).
 - **A deferred document** opens if the Store holds it. Otherwise it stays deferred: the deferred entry holds nothing, so `wasDeferred` alone puts it back, in the same step as the eviction.
@@ -459,9 +459,16 @@ identity check itself rather than inheriting it.
 | Intention | API | Behaviour |
 |-----------|-----|-----------|
 | Leave sync graph, keep local state | `exchange.suspend(docId)` | Sends `dismiss`. **Stays in `exchange.documents`**, as `{ mode: "interpret", suspended: true }`. State remains in `Store`. `exchange.get(docId)` still returns the ref — **without** resuming. |
-| Permanent removal | `exchange.destroy(docId)` | Sends `dismiss`. Removes from `exchange.documents`, from `Store`, from all peers' views. Fresh `get` constructs a new doc, even while the delete is in flight; `open` resolves `undefined`. |
+| Permanent removal | `exchange.destroy(docId)` | Sends `dismiss`. Closes the document and releases its native document. Removes from `exchange.documents`, from `Store`, from all peers' views. Fresh `get` constructs a new doc, even while the delete is in flight; `open` resolves `undefined`. |
 
 The two exist because "I'm done with this doc" has two distinct flavours — intent to resume (`suspend`) and intent to erase (`destroy`). They differ in what leaves the `Store` and the exchange's document map.
+
+**A destroyed document is closed** (`Runtime.#evict`, in order): its wiring is undone; its terms close ([Closing never invents an answer](#closing-never-invents-an-answer)); its replica is disposed, which releases the native document (`ReplicaLike.dispose`, `@kyneta/schema` TECHNICAL.md §Release); then the cache entry goes. `reset()` and `shutdown()` close every document the same way, with reason `"disposed"` rather than `"destroyed"`. A ref the application still holds afterwards:
+
+- reads its last value: σ is not released;
+- throws `DocumentClosedError` on an authored write, on `unwrap`/`[NATIVE]`, on the sync functions (`version`, `exportEntirety`, `exportSince`, `merge`), and on a position, devtools history or undo record made before the close;
+- reports the `DocumentClosedError` through `writeRefusal`, and `writeRefusalFeed` subscribers hear the close;
+- keeps reachable only σ, its trie and subscribers, and its closed terms: not the native document, the Runtime or the Exchange. Once the application lets go of its refs, the document is collected.
 
 ### What `suspend` is NOT
 
@@ -569,7 +576,8 @@ A serialized document (`writerModel: "serialized"`: every `json.bind` document) 
 
 - **It only takes permission away.** It never makes a Runtime a writer, and decides only between seats that share a storage, which are the same deployment in the same role. A server and its clients never share one. Who may write across the network stays with governance (`canAccept`, `Authority`).
 - **Authorship claims the document, not loading.** The store write carrying a seat's first own operation (`WriteOptions.authored`, set by `#authored` while the document has own writes unconfirmed, `ownHigh`) records the seat as the writer if none is, and is refused (`WriterRefusedError`) if another is. A seat that only reads, or only persists what the network sends, never claims: claiming on load would make a reader tab own a document it never writes, and make a fleet's writer whichever process loaded first.
-- **Loading reads the claim.** `#hydrate` reads `store.writerOf(docId)`. If another seat writes the document, `#becomeReady` calls the substrate's `refuse` after `adopt`, and authored writes throw synchronously from then on. The document still receives and persists what the network sends. A document promoted from a relay is refused the same way: `beginUpgrade` gives it a handle too, and the writer read when the replica loaded stays on the cache entry.
+- **Loading reads the claim.** `#hydrate` reads `store.writerOf(docId)`. If another seat writes the document, `#becomeReady` sets the entry's seat refusal after `adopt` (`#refuse`), and authored writes throw synchronously from then on. The document still receives and persists what the network sends. A document promoted from a relay is refused the same way: the writer read when the replica loaded stays on the cache entry.
+- **The refusal is the Runtime's, not the substrate's.** Each interpreted entry builds its owner refusal as `firstDefined(seat, network)`, two `settableFeed`s, and passes it to `createRef` as `refusal`. The document's context answers `firstDefined(substrate's, owner's)` (`@kyneta/schema` TECHNICAL.md §Refusal), which `prepare` throws for every authored op. `WriterRefusedError` extends `WriteRefusal`. `#authored` asks whether the seat refusal is set. A closed document needs no owner answer: its substrate's slot answers `DocumentClosedError` first, and `#evict` empties the network refusal, letting go of whatever filled it.
 - **A lost race never leaves the process.** When two seats both loaded an unclaimed document and both wrote, the loser's store write is refused. Under [store-first](#store-first) nothing of it was sent. The executor maps `WriterRefusedError` to the store-program input `writer-refused`, never to `write-failed`, which would retry a write that is not this seat's to make. The program stops tracking the document, owed write included, emits `store-error` once and a `rebuild` effect. `#rebuild`:
   1. refuses further authored writes;
   2. reads the store and takes it into a fresh document of the same schema, toward the latest stored lineage. Not into the live replica, which, when both seats extended one lineage from one position, reaches the winner's version and would skip its entries as held. Not into a bare replica, whose entirety omits fields at their defaults, which the reset would then keep;
@@ -580,7 +588,7 @@ A serialized document (`writerModel: "serialized"`: every `json.bind` document) 
   It stops at the read if the document is destroyed meanwhile. The late refusal happens only when both seats wrote before either had claimed; otherwise the loser learns at load.
 - **`sync/doc-reset` voids what we told peers we hold.** A merge that arrived while the rebuild read the store went into the live replica, and the reset discarded it. The sending peer believes we hold it, and our next interest would quote `theirVersionWeHold`, claiming it, so the gap would stay. `sync/doc-reset` clears `theirVersionWeHold` for every peer of the document and sends each synced one an interest quoting only our new version, so each answers with what we lack.
 - **Writership moves only with the seat.** A live Runtime never takes a document over. When the writer seat's holder dies, the seat returns to the pool, and the next Runtime to open takes it (the oldest free seat) and so is the writer. Everything the previous holder sent had been confirmed first, and the fence rejects its late writes, so the new holder's state holds every operation under the lineage.
-- **A refusal is reported by `writeRefusal(doc)`**, and observed through `writeRefusalFeed(doc)`, so a UI can disable editing: `@kyneta/react`'s `useText` keeps its element read-only while it is set, and `useWriteRefusal` gives it to other editors. It is set at load or after a lost race, and kept for the session. It is not a `persistenceError`: a document refused at load never failed a write, and a refused document's unauthored writes succeed.
+- **A refusal is reported by `writeRefusal(doc)`**, and observed through `writeRefusalFeed(doc)`, so a UI can disable editing: `@kyneta/react`'s `useText` keeps its element read-only while it is set, and `useWriteRefusal` gives it to other editors. Both read the document's context (`ref[TRANSACT].refusal`), the one answer the write path throws, so they report every refusal: a seat refusal, plain's `DocumentLoadingError` while a stored `json` document loads, and `DocumentClosedError` once it closes. Narrow with `instanceof`. A seat refusal is set at load or after a lost race, and kept for the session. It is not a `persistenceError`: a document refused at load never failed a write, and a refused document's unauthored writes succeed.
 - **Deleting is authoring.** `delete` is refused when another seat writes the document. A reader's `destroy()` still evicts the document locally and dismisses it from the sync graph; the writer's stored copy stays, and the refusal goes to `onStoreError`. A document nobody claimed, such as a `Line` inbox, stays deletable by any seat.
 - **Only pooled seats are recorded** (in-memory, IndexedDB, Postgres). An `owned` seat (SQLite, LevelDB) is the storage's only one, so the rule holds by construction. A `session` seat (Prisma, IndexedDB without Web Locks) is never held again, so a record naming it would lock the document for good; the rule is not enforced there, and serialized writes must be routed to one process.
 - **`Line`s never contend.** An outbox is written only by the seat its id names, and a later session on that seat is the same writer; an inbox is only persisted, never authored.
@@ -690,7 +698,7 @@ The document may leave the process when `ownHigh` is unset, when the confirmed v
 
 **Announcements need not lag.** `interest` and `present` carry `DocEntry.version`, which includes unconfirmed own operations. A peer's own operations held back, announced, then dropped by a crash, and a new session writing something else under the same identity: Yjs, Loro and plain all converge. No peer ever held the dropped operations, so a version that claimed them misled no peer about what to send.
 
-**Persistence is observable.** `persisted(doc)`, `persistedFeed(doc)`, `whenPersisted(doc)` and `persistenceError(doc)` (`src/persistence.ts`) answer whether every own write is confirmed, and why not. A document with a write the drain has not reached yet is not persisted either. `persistenceError` covers every store write, including one that stores only imported operations, so it can be set while `persisted` is true. `whenPersisted` checks in `whenHydrated`'s order: resolve if persisted, reject if an error is recorded, otherwise wait. It is not a settle term: `settled` asks whether every source has reported, and a write waiting on the store is not a source.
+**Persistence is observable.** `persisted(doc)`, `persistedFeed(doc)`, `whenPersisted(doc)` and `persistenceError(doc)` (`src/persistence.ts`) answer whether every own write is confirmed, and why not. A document with a write the drain has not reached yet is not persisted either. `persistenceError` covers every store write, including one that stores only imported operations, so it can be set while `persisted` is true. `whenPersisted` checks in `whenHydrated`'s order: resolve if persisted, reject if an error is recorded, otherwise wait; a document closed with own writes unconfirmed rejects with its `DocumentClosedError`. It is not a settle term: `settled` asks whether every source has reported, and a write waiting on the store is not a source.
 
 **Costs.**
 
@@ -821,7 +829,7 @@ The `Exchange` exposes two `ReactiveMap` instances:
 | `exchange.peers` | `ReactiveMap<PeerId, PeerIdentityDetails, PeerChange>` | `PeerChange = { type: "joined" \| "left" \| "updated" \| … }` | `sync/peer-available`, `sync/peer-unavailable`, `sync/peer-departed`, identity changes |
 | `exchange.documents` | `ReactiveMap<DocId, DocInfo, DocChange>` | `DocChange.type ∈ { "doc-created", "doc-removed", "doc-deferred", "doc-promoted", "doc-suspended", "doc-resumed" }` | Doc lifecycle transitions |
 
-Both drain at quiescence with batched changesets (one `Changeset` per dispatch cycle per subscription point, not one per individual change). Subscriptions use the standard `@kyneta/changefeed` API: `subscribe(exchange.peers, changeset => { … })`. Calling the map itself returns the current `ReadonlyMap`: `exchange.peers().get("alice")`.
+Both drain at quiescence with batched changesets (one `Changeset` per dispatch cycle per subscription point, not one per individual change). `exchange.documents` updates only the documents a drain's events name (`docInfoChanges`, pure, over `#docs` and the sync model), so its cost is the size of the change, not of every document held. An undo stack follows it the same way (`followChanges`). Subscriptions use the standard `@kyneta/changefeed` API: `subscribe(exchange.peers, changeset => { … })`. Calling the map itself returns the current `ReadonlyMap`: `exchange.peers().get("alice")`.
 
 ### Ready state — two folds of one transition
 
@@ -847,7 +855,7 @@ Note also that `sync(doc).ready` now reports `true` when no transports are confi
 ### Connectivity & settling
 
 - `deriveConnectivity({ establishedPeers, transportCount })` — pure classifier: `online` (≥1 established peer), `offline` (no transports), else `connecting`. `synchronizer.connectivity()` / `sync(doc).connectivity` gather the counts (`TransportManager.size`, session peers with a live channel) and delegate.
-- `awaitReconciliation(docId, isReady, timeoutMs)` (`synchronizer.ts`) — shared listener+timeout+cleanup core whose **resolve predicate is a parameter**, so it stays a pure wait mechanism with no opinion about readiness. `whenSettled` — its only caller — passes the document's settle conjunction, `settledWith(ref, authority)`. It never rejects, resolving `{ via: "local" }` (nothing upstream had to answer: no transports, or `authority: "self"`), `{ via: "peer" }` (the authority answered), or `{ via: "offline" }` (after `offlineAfter` ms).
+- `awaitReconciliation(docId, isReady, timeoutMs, signal?)` (`synchronizer.ts`) — shared listener+timeout+cleanup core whose **resolve predicate is a parameter**, so it stays a pure wait mechanism with no opinion about readiness; an aborted `signal` lets go of the listener. `whenSettled` — its only caller, through the document's narrow `SyncSource` — passes the document's settle conjunction, `settledWith(ref, authority)`. It resolves `{ via: "local" }` (nothing upstream had to answer: no transports, or `authority: "self"`), `{ via: "peer" }` (the authority answered), or `{ via: "offline" }` (after `offlineAfter` ms). It rejects only for a failed load, or for a document closed before its peers answered.
 
 This is the reactive surface for `@kyneta/react`'s `useDocReady` / `useSyncState` and similar hooks.
 
@@ -867,28 +875,52 @@ waiting for:
 | + Runtime | a store configured | the stored data finishing its load |
 | + Exchange | transports configured | the authoritative peer answering |
 
-A ref inherits its document's terms because every per-document registry here
-(the settle terms, the storage term and its error, the peer resolver, the sync
-mode, the sync handle) is a `DocumentMap` (`src/document-key.ts`). It is keyed
-by the document's shared context, which every writable ref carries under
-`[TRANSACT]`, so `docStatus(doc.items)` and `useText(doc.title)` see what the
-root sees. Keyed by the root ref, as they once were, a child ref found nothing
-and reported "nothing to wait for" while its document was still loading.
+**Everything kept per document is one record, `DocumentTerms`** (`src/document-terms.ts`), in one weak registry:
 
-Each registers one **settle term** — a boolean that starts `false` and flips
-when its source reports. `settled(ref)` is the conjunction. Zero terms is the
-empty conjunction, which is `true`, so a standalone document and a
-transportless, storeless daemon are settled by construction. The transportless
-case therefore needs no carve-out anywhere: it falls out of the algebra.
+```ts
+interface LocalTerms   { syncMode; hydration: Settable<Hydration>; persistence: Settable<Persistence> }
+interface NetworkTerms { peer: Settable<Peer>; authority: Settable<Authority>; sync: Settable<Sync> }
+interface DocumentTerms { local: LocalTerms; network: Settable<NetworkTerms | undefined> }
+```
+
+The Runtime attaches `local` as it creates an interpreted document (`registerLocalTerms`), and the Exchange attaches `network` through `onDocInterpreted` (`registerNetworkTerms`); a document no Exchange syncs keeps `network` empty. A term's value carries its own error (`Hydration` is `pending`, `loaded`, or `failed` with its error), so one `set` changes both. The read functions (`settled`, `settledWith`, `hydrated`, `whenHydrated`, `persisted`, `whenPersisted`, `persistenceError`, `docSyncMode`, `writerModelOf`, `authorityFor`, `sync`, `whenSettled`) read fields of `termsOf(ref)`. A new kind of per-document state is a new field, and `closedTerms` must close it, or it does not type-check.
+
+A ref inherits its document's terms because the registry is keyed by the document's shared context, which every writable ref carries under `[TRANSACT]` (`documentKey`), so `docStatus(doc.items)` and `useText(doc.title)` see what the root sees. Keyed by the root ref, as they once were, a child ref found nothing and reported "nothing to wait for" while its document was still loading.
+
+**The registry being weak does not make the document collectable**, and was never what kept one alive. A registration in `@kyneta/schema`'s ref registry whose held value reached the ref was: the held value, a path, reached the context, which keyed these terms, whose live feeds closed over the Runtime's entry and the root ref. Safety comes from two facts: that registry is per trie, so only the document reaches it (`@kyneta/schema` TECHNICAL.md §"How long a ref lives"), and a closed document's terms are constants, so a ref held after the close reaches nothing of the Runtime or the Exchange.
+
+**`settled(ref)` is two named terms**: `local.hydration` loaded, and `network.peer` settled. A document with no terms is the empty conjunction, which is `true`, so a standalone document and a transportless, storeless daemon are settled by construction. One with no network part waits on its hydration alone. The transportless case therefore needs no carve-out anywhere: it falls out of the algebra.
 
 A term is a `[CHANGEFEED]` carrier, not a bespoke interface — the universality
 rule in `packages/changefeed/TECHNICAL.md` ("every reactive surface in Kyneta
 goes through this one symbol"), and the same insight `jj:mltppspx` recorded as
-"The Universality of CHANGEFEED". A term is a `Feed<boolean>`
-(`@kyneta/changefeed`), the same shape as `populatedFeed(ref)`, built by
-`signalFeed` (`src/settle.ts`), and composes with `useChangefeed`, `@kyneta/reactive`,
-and `@kyneta/index` with no new plumbing. That is why the React binding is a
-one-line adapter rather than a store core.
+"The Universality of CHANGEFEED". Every term is a `settableFeed`
+(`@kyneta/changefeed`) following a live `signalFeed` over the Runtime or the
+Exchange, and the public feeds (`hydratedFeed`, `persistedFeed`,
+`settledFeed`) derive from the terms, the same shape as `populatedFeed(ref)`,
+composing with `useChangefeed`, `@kyneta/reactive`, and `@kyneta/index` with no
+new plumbing. That is why the React binding is a one-line adapter rather than a
+store core.
+
+### Closing never invents an answer
+
+Source: `src/document-terms.ts` → `snapshotOf`, `closedTerms`, `closeTerms`; `src/runtime.ts` → `#evict`.
+
+When a document closes (destroyed, reset, shut down), `#evict` reads each term's value (`TermsSnapshot`), computes the closed values with one pure function, `closedTerms(snapshot, error)`, and sets each term. Each term keeps the answer it had; a term still pending closes as failed with the `DocumentClosedError`:
+
+| Term | At the close | Closed |
+|---|---|---|
+| hydration | `loaded` / `failed` | as it was |
+| hydration | `pending` | `failed` with the close error: `hydrated` stays `false`, `whenHydrated` rejects |
+| persistence | confirmed | as it was |
+| persistence | own writes unconfirmed | `persisted: false`, error the close error: `whenPersisted` rejects |
+| peer | settled or not | as it was, by any authority, judged from the peers the document had reconciled with |
+| authority | its value | as it was |
+| sync | live `SyncRef` | its state at the close; its source reports the stored connectivity, and its waits reject with the close error |
+
+`settableFeed` notifies on `set` and drops the live feed, with its closure over the Runtime or the Exchange. So a feed or a wait obtained before the close follows it with no second notification path: a pending `whenHydrated` or `whenPersisted` settles by the table, and a pending `whenSettled` lets go of the Synchronizer's wait and asks the closed source, which rejects. `whenSettled` after the close resolves only if the peer term had settled, with the `via` it would have had; otherwise it rejects. Resolving `{ via: "local" }` instead would let `initialize` conclude "empty" for a document the authority never answered for, the negative verdict the next section forbids. A never-synced, empty, closed document keeps `docStatus` at `"pending"`.
+
+`#evict` also fails the entry's hydration latch with the same error while it is pending, for waiters `Runtime.whenHydrated(docId)` attached to it.
 
 ### One predicate, one wait
 
@@ -1050,7 +1082,7 @@ Source: `src/runtime.ts` → `#hydrate`, `#becomeReady`, `readinessFor`.
 
 A document's ref is returned at once; loading from the store runs afterwards. `#hydrate` only gathers: it reads the store and returns a `LoadOutcome` — `stored` with the version the store holds, `empty`, or `none` when nothing was loaded (no store, a transient document, or a promotion whose replica already loaded). `#becomeReady` is **the one place a document becomes ready**, for every creation path, and runs in a fixed order:
 
-1. If the cache no longer holds this entry (destroyed, or destroyed and created again, while it loaded), the latch fails with "destroyed while loading" and nothing else happens. Otherwise the dismissed document would be registered with the Synchronizer again.
+1. If the cache no longer holds this entry (destroyed, or destroyed and created again, while it loaded), nothing happens: `#evict` already failed the latch with the close error. Otherwise the dismissed document would be registered with the Synchronizer again.
 2. What was loaded decides: `readinessFor(docId, outcome, intent)`, pure.
 
    | outcome | `create` (`get`) | `open` |
@@ -1060,7 +1092,7 @@ A document's ref is returned at once; loading from the store runs afterwards. `#
    | `none` | nothing to tell | absent |
 
    An absent document is taken out again (`#evict`), and marked deferred if it was, in this one step; its latch fails ("not held here"), and nothing is registered, written or announced. With no store, or for a transient document, a document that is not open is not held. See [`exchange.open`](#exchangeopen--get-never-creating).
-3. `adopt()` claims the peer identity (Yjs, Loro) and the right to author (plain), before anyone is told the document has loaded — a listener that writes the moment it is told finds the document writable. A serialized document whose stored writer is another seat of the storage is refused instead (`refuse`), and such a listener's write throws; see [Serialized documents: one writer seat per storage](#serialized-documents-one-writer-seat-per-storage).
+3. `adopt()` claims the peer identity (Yjs, Loro) and lifts plain's loading refusal, before anyone is told the document has loaded — a listener that writes the moment it is told finds the document writable. A serialized document whose stored writer is another seat of the storage is refused instead (its seat refusal is set, `#refuse`), and such a listener's write throws; see [Serialized documents: one writer seat per storage](#serialized-documents-one-writer-seat-per-storage).
 4. The latch resolves `loaded`.
 5. `#register` publishes the document to the sync graph, and an interpreted document is wired (`#wire`): its local-update signal marks it dirty for the drain (see [The local-write path](#the-local-write-path)), and its changesets go to the observation hook. `#evict`, which `destroy`, `shutdown` and `reset` go through, unwires it first, so a ref that outlives its document cannot reach whatever is created under its id next.
 
@@ -1506,7 +1538,11 @@ For durability guarantees, use the `cohort` predicate to prevent compaction past
 | `src/undo/undo-program.ts` | `undoProgram`: an undo stack's decisions, pure. |
 | `src/undo/stack.ts` | `createUndoStack`: the shell; `pushStep` and `moveStep`, the stack's transitions, each kept to `depth` by `bounded`, clearing what builds on a step through `clearDependents`; `topStep`, the step a request takes, the newest that nothing after it overlaps; the regions both read (`regionOf`); and `stackOps`, the ops that write one. |
 | `src/interpret.ts` | Pure phase classifier: `DocPhase`, `InterpretAction`, `planInterpretation`. The one rule all three interpretation doors consult. |
-| `src/sync.ts` | `sync(doc)` helper + `registerSync`. |
+| `src/sync.ts` | `sync(doc)`, `whenSettled`, and `liveSync`, a document's live sync handle and `SyncSource`. |
+| `src/document-terms.ts` | `DocumentTerms`, the one per-document record: `documentKey`, `termsOf`, `registerLocalTerms`, `registerNetworkTerms`, and closing (`snapshotOf`, `closedTerms`, `closeTerms`). |
+| `src/settle.ts` | `settled`, `settledFeed`, `settledWith`, `hydrated`, `hydratedFeed`, `hydrationError`, `whenHydrated`. |
+| `src/persistence.ts` | `persisted`, `persistedFeed`, `persistenceError`, `whenPersisted`, `writeRefusal`, `writeRefusalFeed`. |
+| `src/doc-meta.ts` | `docSyncMode`, `writerModelOf`, `authorityFor`. |
 | `src/types.ts` | `DocChange`, `DocInfo`, `PeerChange`, `PeerDocSyncState`, `PeerState`, `PeerSyncState`, `Connectivity`. |
 | `src/observe.ts` | — | DevTools observation protocol (`ObsEvent`), bus (`createObservationBus`), and pure effect/msg/changeset/frame mappers. Experimental. |
 | `src/utils.ts` | `validatePrincipal`. |

@@ -7,11 +7,12 @@
 //   + Runtime with a store          — the saved data has to finish loading
 //   + Exchange with transports      — the authoritative peer has to answer
 //
-// Each layer registers one **settle term**: a boolean that starts `false` and
-// flips to `true` once that layer's source has reported in. A document is
-// settled when *every* attached term is true.
+// Each layer contributes one **settle term** to the document's terms
+// (`document-terms.ts`): the Runtime its hydration, the Exchange its peer
+// term. A document is settled when both have reported, and a term a layer
+// does not contribute has nothing to report.
 //
-// Zero terms means the conjunction is empty, and an empty conjunction is
+// No terms at all is the empty conjunction, and an empty conjunction is
 // `true` — so a plain in-memory document, or a daemon with no storage and no
 // network, is settled the moment it is created. That is not a special case
 // bolted on; it falls out of the algebra, which is why the transportless case
@@ -23,75 +24,19 @@
 // Positive evidence needs no such gate — see `populated` in @kyneta/schema,
 // which flips as soon as any source delivers data.
 //
-// A term is a `[CHANGEFEED]` carrier rather than a bespoke interface. That is
-// the codebase's universal reactive contract (see packages/changefeed/
-// TECHNICAL.md), so a term has the same shape as `populatedFeed(ref)` and
-// composes with `useChangefeed`, `@kyneta/reactive`, and `@kyneta/index`
-// without any new plumbing.
+// A term is a `Feed`, the codebase's universal reactive contract (see
+// packages/changefeed/TECHNICAL.md), so a term has the same shape as
+// `populatedFeed(ref)` and composes with `useChangefeed`, `@kyneta/reactive`,
+// and `@kyneta/index` without any new plumbing.
 
-import type { Changeset, Feed } from "@kyneta/changefeed"
-import { CHANGEFEED, createFeed } from "@kyneta/changefeed"
-import { createDocumentMap } from "./document-key.js"
+import { CHANGEFEED, type Feed, signalFeed } from "@kyneta/changefeed"
+import {
+  constantFeed,
+  type DocumentTerms,
+  type Hydration,
+  termsOf,
+} from "./document-terms.js"
 import type { Authority } from "./governance.js"
-
-// ---------------------------------------------------------------------------
-// The term protocol
-// ---------------------------------------------------------------------------
-
-/**
- * A feed whose subscribers hear only that it moved: `subscribe` calls back
- * with no change, and each subscriber receives an empty changeset. A settle
- * term is one over a boolean: one layer's answer to "has my truth source
- * reported for this document?". Terms are monotonic in practice (a source
- * that has reported does not un-report), but nothing here depends on that.
- *
- * @internal
- */
-export function signalFeed<T>(
-  read: () => T,
-  subscribe: (onChange: () => void) => () => void,
-): Feed<T> {
-  return createFeed(read, {
-    get current(): T {
-      return read()
-    },
-    subscribe(callback: (changeset: Changeset<never>) => void): () => void {
-      return subscribe(() => callback({ changes: [] }))
-    },
-  })
-}
-
-// ---------------------------------------------------------------------------
-// The registry
-// ---------------------------------------------------------------------------
-
-/**
- * Terms attached to a document. A `DocumentMap`, like every per-document
- * registry in this package, so any ref within the document finds them.
- */
-const settleTerms = createDocumentMap<Feed<boolean>[]>()
-
-/**
- * Attach a settle term to a document.
- *
- * @internal Called by `Runtime` (the storage term) and `Exchange` (the peer
- * term) as a document is created. Applications never call this.
- */
-export function registerSettleTerm(ref: object, term: Feed<boolean>): void {
-  const existing = settleTerms.get(ref)
-  if (existing) existing.push(term)
-  else settleTerms.set(ref, [term])
-}
-
-/**
- * The terms attached to a document. Empty for a document with nothing to
- * await.
- *
- * @internal
- */
-export function termsFor(ref: object): readonly Feed<boolean>[] {
-  return settleTerms.get(ref) ?? []
-}
 
 // ---------------------------------------------------------------------------
 // The conjunction
@@ -109,62 +54,92 @@ export function termsFor(ref: object): readonly Feed<boolean>[] {
  * form, use {@link settledFeed}.
  */
 export function settled(ref: object): boolean {
-  for (const term of termsFor(ref)) {
-    if (!term()) return false
+  const terms = termsOf(ref)
+  if (terms === undefined) return true
+  return (
+    terms.local.hydration().status === "loaded" &&
+    (terms.network()?.peer().settled ?? true)
+  )
+}
+
+/**
+ * The same conjunction as an observable carrier, so callers can react to a
+ * document becoming settled rather than polling it.
+ *
+ * Being a carrier, this is a *callable* — and therefore always truthy. Never
+ * write `if (settledFeed(ref))`; call it, or use {@link settled}.
+ */
+export function settledFeed(ref: object): Feed<boolean> {
+  const terms = termsOf(ref)
+  if (terms === undefined) return constantFeed(true)
+  return signalFeed(
+    () => settled(ref),
+    onChange => {
+      const stopHydration = terms.local.hydration[CHANGEFEED].subscribe(() =>
+        onChange(),
+      )
+      const stopPeer = followPeer(terms, onChange)
+      return () => {
+        stopHydration()
+        stopPeer()
+      }
+    },
+  )
+}
+
+/**
+ * Follow the peer term of `terms`, wherever it is: the Exchange attaches the
+ * network terms after the local ones, so a subscriber that came first
+ * follows the peer term from when it arrives.
+ */
+function followPeer(terms: DocumentTerms, onChange: () => void): () => void {
+  let stopPeer: (() => void) | undefined
+  const follow = (): void => {
+    stopPeer?.()
+    stopPeer = terms.network()?.peer[CHANGEFEED].subscribe(() => onChange())
   }
-  return true
+  follow()
+  const stopNetwork = terms.network[CHANGEFEED].subscribe(() => {
+    follow()
+    onChange()
+  })
+  return () => {
+    stopNetwork()
+    stopPeer?.()
+  }
 }
 
 // ---------------------------------------------------------------------------
 // The storage term, addressable on its own
 // ---------------------------------------------------------------------------
+//
+// "Has my store finished loading?" is a question a server genuinely wants to
+// ask — it is the gate for deciding whether a document is safe to initialise
+// — and answering it through the whole conjunction would also wait on peers,
+// which an authoritative peer has no reason to do.
 
-/**
- * The Runtime's storage term, kept separately so it can be asked about by
- * itself.
- *
- * "Has my store finished loading?" is a question a server genuinely wants to
- * ask — it is the gate for deciding whether a document is safe to initialise —
- * and answering it through the whole conjunction would also wait on peers,
- * which an authoritative peer has no reason to do.
- */
-const storage = createDocumentMap<{
-  readonly term: Feed<boolean>
-  /** The load error, if the load failed. */
-  readonly readError: () => unknown | undefined
-}>()
-
-/**
- * Register the storage term for a document: it joins the conjunction *and*
- * becomes individually addressable via {@link hydrated}.
- *
- * `readError` lets a failed load be *reported* rather than merely waited on
- * forever. Without it a store error would present as a document that is
- * permanently un-settled with nothing said about why — safe, but impossible
- * to debug.
- *
- * @internal Called by `Runtime` as a document is created.
- */
-export function registerHydrationTerm(
-  ref: object,
-  term: Feed<boolean>,
-  readError: () => unknown | undefined,
-): void {
-  storage.set(ref, { term, readError })
-  registerSettleTerm(ref, term)
+/** The hydration of the document `ref` belongs to, `loaded` when nothing
+ *  loads it. */
+function hydrationOf(ref: object): Hydration {
+  return termsOf(ref)?.local.hydration() ?? LOADED
 }
+
+const LOADED: Hydration = { status: "loaded" }
 
 /**
  * The error from this document's failed load, or `undefined` if the load
- * succeeded, is still running, or there was nothing to load.
+ * succeeded, is still running, or there was nothing to load. A document
+ * closed while it loaded failed with its `DocumentClosedError`.
  */
 export function hydrationError(ref: object): unknown | undefined {
-  return storage.get(ref)?.readError()
+  const hydration = hydrationOf(ref)
+  return hydration.status === "failed" ? hydration.error : undefined
 }
 
 /**
  * Resolve once this document's stored data has finished loading; reject if the
- * load failed.
+ * load failed, or if the document closed before it finished (with its
+ * `DocumentClosedError`).
  *
  * Deliberately takes no timeout. A missing peer may genuinely never arrive, so
  * giving up on one is the only option available — but a slow disk is a local
@@ -173,19 +148,18 @@ export function hydrationError(ref: object): unknown | undefined {
  * data we merely failed to read.
  */
 export function whenHydrated(ref: object): Promise<void> {
-  const term = storage.get(ref)?.term
-  if (!term) return Promise.resolve() // nothing to load
-  if (term()) return Promise.resolve()
-
-  const failure = hydrationError(ref)
-  if (failure !== undefined) return Promise.reject(failure)
-
+  const term = termsOf(ref)?.local.hydration
+  if (term === undefined) return Promise.resolve() // nothing to load
   return new Promise<void>((resolve, reject) => {
-    const dispose = term[CHANGEFEED].subscribe(() => {
-      const error = hydrationError(ref)
-      dispose()
-      if (error !== undefined) reject(error)
+    const settle = (hydration: Hydration): boolean => {
+      if (hydration.status === "pending") return false
+      if (hydration.status === "failed") reject(hydration.error)
       else resolve()
+      return true
+    }
+    if (settle(term())) return
+    const stop = term[CHANGEFEED].subscribe(() => {
+      if (settle(term())) stop()
     })
   })
 }
@@ -204,65 +178,22 @@ export function whenHydrated(ref: object): Promise<void> {
  * implementation detail.
  */
 export function hydrated(ref: object): boolean {
-  const term = storage.get(ref)?.term
-  return term ? term() : true
+  return hydrationOf(ref).status === "loaded"
 }
 
 /** Observable form of {@link hydrated}. A callable, so never put it in an `if`. */
 export function hydratedFeed(ref: object): Feed<boolean> {
-  return (
-    storage.get(ref)?.term ??
-    signalFeed(
-      () => true,
-      () => () => {},
-    )
-  )
-}
-
-/**
- * The same conjunction as an observable carrier, so callers can react to a
- * document becoming settled rather than polling it.
- *
- * Being a carrier, this is a *callable* — and therefore always truthy. Never
- * write `if (settledFeed(ref))`; call it, or use {@link settled}.
- */
-export function settledFeed(ref: object): Feed<boolean> {
-  // Read `termsFor` on every access rather than capturing it: a term can be
-  // registered after this feed is created (the Exchange's peer term is added
-  // after the Runtime's storage term), and a captured array would miss it.
+  const term = termsOf(ref)?.local.hydration
+  if (term === undefined) return constantFeed(true)
   return signalFeed(
-    () => settled(ref),
-    onChange => {
-      const disposers = termsFor(ref).map(term =>
-        term[CHANGEFEED].subscribe(() => onChange()),
-      )
-      return () => {
-        for (const dispose of disposers) dispose()
-      }
-    },
+    () => term().status === "loaded",
+    onChange => term[CHANGEFEED].subscribe(() => onChange()),
   )
 }
 
 // ---------------------------------------------------------------------------
 // Authority override
 // ---------------------------------------------------------------------------
-
-/** Re-evaluates the peer term against a caller-supplied authority. */
-const peerResolvers = createDocumentMap<(authority: Authority) => boolean>()
-
-/**
- * Register the peer term's resolver, so a caller can ask "would this be
- * settled if I treated *this* peer as the authority?" without the answer being
- * fixed at document-creation time.
- *
- * @internal Called by `Exchange` alongside the peer term itself.
- */
-export function registerPeerResolver(
-  ref: object,
-  resolve: (authority: Authority) => boolean,
-): void {
-  peerResolvers.set(ref, resolve)
-}
 
 /**
  * {@link settled}, but with the authority decided by the caller rather than by
@@ -273,13 +204,11 @@ export function registerPeerResolver(
  * expressible — a peer can compute who the leader is from the current peer set
  * and pass it in, which a policy fixed at construction could never express.
  *
- * Enumerates the two term kinds rather than iterating the generic term list,
- * because only the peer term is authority-dependent and it has to be evaluated
- * differently from the rest.
+ * Only the peer term depends on the authority, so it is asked through its
+ * `resolve` rather than read.
  */
 export function settledWith(ref: object, authority?: Authority): boolean {
   if (authority === undefined) return settled(ref)
   if (!hydrated(ref)) return false
-  const resolve = peerResolvers.get(ref)
-  return resolve ? resolve(authority) : true
+  return termsOf(ref)?.network()?.peer().resolve(authority) ?? true
 }
