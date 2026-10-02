@@ -7,16 +7,22 @@
 // behave the same way, so it is asserted directly rather than inferred.
 
 import { CHANGEFEED, settableFeed } from "@kyneta/changefeed"
-import { json, Schema, SYNC_AUTHORITATIVE } from "@kyneta/schema"
+import {
+  json,
+  Schema,
+  SYNC_AUTHORITATIVE,
+  type WriteRefusal,
+} from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import { writerModelOf } from "../doc-meta.js"
 import { docStatus } from "../doc-status.js"
 import {
+  buildLocalTerms,
   type Hydration,
   type Peer,
   type Persistence,
-  registerLocalTerms,
   registerNetworkTerms,
+  registerTerms,
   type Sync,
 } from "../document-terms.js"
 import type { Authority } from "../governance.js"
@@ -58,6 +64,7 @@ function networkTerms() {
       peer,
       authority: settableFeed<Authority>("any"),
       sync: settableFeed<Sync>({} as Sync),
+      refusal: settableFeed<WriteRefusal | undefined>(undefined),
     },
     answer() {
       peer.set({ settled: true, resolve: () => true })
@@ -80,7 +87,7 @@ describe("settle — the conjunction", () => {
     const ref = {}
     const local = localTerms()
     const network = networkTerms()
-    registerLocalTerms(ref, local.terms)
+    registerTerms(ref, buildLocalTerms(local.terms))
     registerNetworkTerms(ref, network.terms)
 
     expect(settled(ref)).toBe(false)
@@ -93,7 +100,7 @@ describe("settle — the conjunction", () => {
   it("with no network part, is hydration alone", () => {
     const ref = {}
     const local = localTerms()
-    registerLocalTerms(ref, local.terms)
+    registerTerms(ref, buildLocalTerms(local.terms))
     expect(settled(ref)).toBe(false)
     local.load()
     expect(settled(ref)).toBe(true)
@@ -103,7 +110,7 @@ describe("settle — the conjunction", () => {
     const ref = {}
     const local = localTerms()
     const network = networkTerms()
-    registerLocalTerms(ref, local.terms)
+    registerTerms(ref, buildLocalTerms(local.terms))
 
     let fired = 0
     // A term carries the protocol under `[CHANGEFEED]`; it does not promise a

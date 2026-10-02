@@ -285,7 +285,9 @@ batch(doc, (d) => {
 
 A plain (`json.bind`) document backed by stores refuses writes until it has loaded, so render its write controls once `useDocReady(doc)` is `true`. `useText` handles this itself: its element stays read-only until the document has loaded, then shows the loaded text.
 
-A stored `json` document also refuses writes when another tab of the same store writes it: of the tabs sharing a store, one writes each `json` document, and the others read it. And every document refuses writes once it is closed (`exchange.destroy`, or its Exchange shut down): it still reads its last value. `useText` handles both: its element is read-only while the document refuses writes, and still shows the writer's edits. For any other editor, `useWriteRefusal(doc)` returns the refusal, a `WriteRefusal`, or `undefined`. Narrow it with `instanceof` to say why: a `WriterRefusedError` names the writer, a `DocumentLoadingError` lasts until the document has loaded, and a `DocumentClosedError` is final.
+A stored `json` document also refuses writes when another tab of the same store writes it: of the tabs sharing a store, one writes each `json` document, and the others read it. A document a `canWrite` policy keeps from this peer refuses them too, on any backend: it is read-only here, and another peer writes it. And every document refuses writes once it is closed (`exchange.destroy`, or its Exchange shut down): it still reads its last value. `useText` handles all of these: its element is read-only while the document refuses writes, and still shows the writer's edits. For any other editor, `useWriteRefusal(doc)` returns the refusal, a `WriteRefusal`, or `undefined`. Narrow it with `instanceof` to say why: a `NotAWriterError` names the document and the identity the policy rejected, a `WriterRefusedError` names the writer, a `DocumentLoadingError` lasts until the document has loaded, and a `DocumentClosedError` is final.
+
+A document that refuses writes hands out no native handle either (`unwrap` throws its refusal), so a read-only view renders through Kyneta refs (`useText` and its siblings), not a native editor binding such as y-prosemirror or loro-prosemirror in read-only mode.
 
 <!-- ts-docs-verifier:ignore -->
 ```tsx
@@ -346,7 +348,7 @@ const status = useInitialize(doc, d => d.set({ title: "Untitled" }))
 you only need a gate, and `useDocStatus` when you need to tell an empty
 document from one that already has data.
 
-From `@kyneta/exchange`: `Exchange`, `WriterRefusedError`, `sync`, `whenSettled`, `docStatus`, `initialize`, and types `ExchangeParams`, `SyncRef`, `PeerSyncState`, `Connectivity`, `DocStatus`, `PeerIdentityDetails`, `DocId`.
+From `@kyneta/exchange`: `Exchange`, `WriterRefusedError`, `NotAWriterError`, `sync`, `whenSettled`, `docStatus`, `initialize`, and types `ExchangeParams`, `SyncRef`, `PeerSyncState`, `Connectivity`, `DocStatus`, `PeerIdentityDetails`, `DocId`.
 
 ## Architecture
 

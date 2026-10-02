@@ -32,8 +32,9 @@
 import { CHANGEFEED, type Feed, signalFeed } from "@kyneta/changefeed"
 import {
   constantFeed,
-  type DocumentTerms,
   type Hydration,
+  networkTermFeed,
+  type Peer,
   termsOf,
 } from "./document-terms.js"
 import type { Authority } from "./governance.js"
@@ -72,41 +73,26 @@ export function settled(ref: object): boolean {
 export function settledFeed(ref: object): Feed<boolean> {
   const terms = termsOf(ref)
   if (terms === undefined) return constantFeed(true)
+  // The Exchange attaches the peer term after the local terms, so a
+  // subscriber that came first follows it from when it arrives.
+  const peer = networkTermFeed<Peer | undefined>(
+    terms,
+    network => network.peer,
+    undefined,
+  )
   return signalFeed(
     () => settled(ref),
     onChange => {
       const stopHydration = terms.local.hydration[CHANGEFEED].subscribe(() =>
         onChange(),
       )
-      const stopPeer = followPeer(terms, onChange)
+      const stopPeer = peer[CHANGEFEED].subscribe(() => onChange())
       return () => {
         stopHydration()
         stopPeer()
       }
     },
   )
-}
-
-/**
- * Follow the peer term of `terms`, wherever it is: the Exchange attaches the
- * network terms after the local ones, so a subscriber that came first
- * follows the peer term from when it arrives.
- */
-function followPeer(terms: DocumentTerms, onChange: () => void): () => void {
-  let stopPeer: (() => void) | undefined
-  const follow = (): void => {
-    stopPeer?.()
-    stopPeer = terms.network()?.peer[CHANGEFEED].subscribe(() => onChange())
-  }
-  follow()
-  const stopNetwork = terms.network[CHANGEFEED].subscribe(() => {
-    follow()
-    onChange()
-  })
-  return () => {
-    stopNetwork()
-    stopPeer?.()
-  }
 }
 
 // ---------------------------------------------------------------------------

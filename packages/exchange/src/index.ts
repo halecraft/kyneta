@@ -175,7 +175,7 @@ export type {
   LineageBoundaryPredicate,
   Policy,
 } from "./governance.js"
-export { composeGate, Governance } from "./governance.js"
+export { composeGate, Governance, NotAWriterError } from "./governance.js"
 
 // ---------------------------------------------------------------------------
 // Runtime — the local imperative shell (documents + stores + clock)

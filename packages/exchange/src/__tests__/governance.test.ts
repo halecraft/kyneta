@@ -440,6 +440,118 @@ describe("Governance", () => {
       expect(registry.cohort(doc, alice)).toBe(false)
     })
   })
+
+  describe("canWrite composition", () => {
+    const host = { ...peer("host-seat"), principal: "host" }
+
+    it("defaults to true when no policy has an opinion", () => {
+      const registry = new Governance()
+      registry.register({ canWrite: () => undefined })
+      expect(registry.canWrite(doc, alice)).toBe(true)
+    })
+
+    it("false from any policy vetoes the write", () => {
+      const registry = new Governance()
+      registry.register({ canWrite: () => true })
+      registry.register({ canWrite: () => false })
+      expect(registry.canWrite(doc, alice)).toBe(false)
+    })
+
+    it("true from one policy permits it, judged per document and peer", () => {
+      const registry = new Governance()
+      registry.register({ canWrite: () => undefined })
+      registry.register({
+        canWrite: (docId, p) =>
+          docId === doc ? p.principal === "host" : undefined,
+      })
+      expect(registry.canWrite(doc, host)).toBe(true)
+      expect(registry.canWrite(doc, alice)).toBe(false)
+      expect(registry.canWrite("doc:other", alice)).toBe(true)
+    })
+  })
+
+  // -----------------------------------------------------------------------
+  // subscribe: one notification per change of the policy list
+  // -----------------------------------------------------------------------
+
+  describe("subscribe", () => {
+    const counted = (registry: Governance) => {
+      const heard = { count: 0 }
+      registry.subscribe(() => heard.count++)
+      return heard
+    }
+
+    it("fires once after a register", () => {
+      const registry = new Governance()
+      const heard = counted(registry)
+      registry.register({ canWrite: () => false })
+      expect(heard.count).toBe(1)
+    })
+
+    it("fires after the list has changed", () => {
+      const registry = new Governance()
+      const seen: boolean[] = []
+      registry.subscribe(() => seen.push(registry.canWrite(doc, alice)))
+      const dispose = registry.register({ canWrite: () => false })
+      dispose()
+      expect(seen).toEqual([false, true])
+    })
+
+    it("fires once after a named replacement, which disposes the old policy", () => {
+      const registry = new Governance()
+      const oldDispose = vi.fn()
+      registry.register({
+        name: "p",
+        canWrite: () => false,
+        dispose: oldDispose,
+      })
+      const heard = counted(registry)
+      registry.register({ name: "p", canWrite: () => true })
+      expect(heard.count).toBe(1)
+      expect(oldDispose).toHaveBeenCalledOnce()
+      expect(registry.canWrite(doc, alice)).toBe(true)
+    })
+
+    it("fires once after a dispose, and not after a disposer that already ran", () => {
+      const registry = new Governance()
+      const dispose = registry.register({ canWrite: () => false })
+      const heard = counted(registry)
+      dispose()
+      expect(heard.count).toBe(1)
+      dispose()
+      expect(heard.count).toBe(1)
+    })
+
+    it("a replaced policy's disposer notifies no one", () => {
+      const registry = new Governance()
+      const disposeOld = registry.register({ name: "p", canWrite: () => false })
+      registry.register({ name: "p", canWrite: () => true })
+      const heard = counted(registry)
+      disposeOld()
+      expect(heard.count).toBe(0)
+      expect(registry.names).toEqual(["p"])
+    })
+
+    it("fires once after a clear, however many policies it removes", () => {
+      const registry = new Governance()
+      const dispose = registry.register({ canWrite: () => false })
+      registry.register({ canAccept: () => false })
+      const heard = counted(registry)
+      registry.clear()
+      expect(heard.count).toBe(1)
+      dispose()
+      expect(heard.count).toBe(1)
+    })
+
+    it("stops after its unsubscribe", () => {
+      const registry = new Governance()
+      let heard = 0
+      const stop = registry.subscribe(() => heard++)
+      stop()
+      registry.register({ canWrite: () => false })
+      expect(heard).toBe(0)
+    })
+  })
 })
 
 // ---------------------------------------------------------------------------

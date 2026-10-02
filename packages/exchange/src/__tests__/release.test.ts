@@ -21,6 +21,7 @@ import { yjs } from "@kyneta/yjs-schema"
 import type { LoroDoc } from "loro-crdt"
 import { describe, expect, it } from "vitest"
 import { Exchange } from "../exchange.js"
+import { NotAWriterError } from "../governance.js"
 import { persistedFeed, whenPersisted, writeRefusal } from "../persistence.js"
 import { hydratedFeed, whenHydrated } from "../settle.js"
 import { createInMemoryStore } from "../store/in-memory-store.js"
@@ -121,23 +122,30 @@ describe("a ref held after shutdown", () => {
       backend.name === "json" || backend.name === "ephemeral"
     it(`${backend.name}: reads its last value, refuses writes, and keeps neither the native document, the Runtime nor the Exchange`, async () => {
       const open = async () => {
+        // A `canWrite` policy, which the documents' policy refusals read
+        // until they close: "doc" is writable here, and "read-only" is not.
         const exchange = new Exchange({
           principal: "test",
           store: createInMemoryStore(),
+          canWrite: docId => docId !== "read-only",
         })
         const doc = backend.open(exchange, "doc")
+        const readOnly = backend.open(exchange, "read-only")
         await whenHydrated(doc)
+        await whenHydrated(readOnly)
         batch(doc, (d: any) => d.title.set("last"))
+        expect(writeRefusal(readOnly)).toBeInstanceOf(NotAWriterError)
         const native = new WeakRef(unwrap(doc) as object)
         await exchange.shutdown()
         return {
           doc,
+          readOnly,
           native,
           runtime: new WeakRef(exchange.runtime),
           exchange: new WeakRef(exchange),
         }
       }
-      const { doc, native, runtime, exchange } = await open()
+      const { doc, readOnly, native, runtime, exchange } = await open()
       await collectGarbage()
       if (!nativeIsSigma) expect(native.deref()).toBeUndefined()
       expect(runtime.deref()).toBeUndefined()
@@ -147,6 +155,7 @@ describe("a ref held after shutdown", () => {
       expect(() => doc.title.set("lost")).toThrow(DocumentClosedError)
       expect(writeRefusal(doc)).toBeInstanceOf(DocumentClosedError)
       expect(writeRefusal(doc.title)).toBeInstanceOf(DocumentClosedError)
+      expect(writeRefusal(readOnly)).toBeInstanceOf(DocumentClosedError)
     })
   }
 })

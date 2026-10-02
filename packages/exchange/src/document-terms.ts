@@ -20,6 +20,7 @@
 // reaches its terms' constants, and through them nothing else.
 
 import {
+  CHANGEFEED,
   type Feed,
   type Settable,
   settableFeed,
@@ -30,6 +31,7 @@ import {
   hasTransact,
   type SyncMode,
   TRANSACT,
+  type WriteRefusal,
 } from "@kyneta/schema"
 import type { DocId, PeerId, PeerIdentityDetails } from "@kyneta/transport"
 import type { Authority } from "./governance.js"
@@ -137,11 +139,17 @@ export interface LocalTerms {
   readonly persistence: Settable<Persistence>
 }
 
-/** What the Exchange attaches to a document it syncs. */
+/**
+ * What the Exchange attaches to a document it syncs: whether its peers have
+ * answered, its authority, its sync handle, and the policy's refusal of this
+ * peer's authored writes (`Policy.canWrite`), which the Runtime's owner
+ * refusal follows through {@link networkTermFeed}.
+ */
 export interface NetworkTerms {
   readonly peer: Settable<Peer>
   readonly authority: Settable<Authority>
   readonly sync: Settable<Sync>
+  readonly refusal: Settable<WriteRefusal | undefined>
 }
 
 /**
@@ -176,15 +184,27 @@ export function termsOf(ref: object): DocumentTerms | undefined {
 }
 
 /**
- * Attach a document's local terms.
+ * A document's terms record, as a value: its local terms, and an empty
+ * `network` the Exchange fills later. Built before the document's ref, so
+ * the ref's owner refusal can follow the record's network refusal from the
+ * start; {@link registerTerms} files it once the ref exists.
  *
  * @internal Called by `Runtime` as it creates an interpreted document.
  */
-export function registerLocalTerms(ref: object, local: LocalTerms): void {
-  registry.set(documentKey(ref), {
+export function buildLocalTerms(local: LocalTerms): DocumentTerms {
+  return {
     local,
     network: settableFeed<NetworkTerms | undefined>(undefined),
-  })
+  }
+}
+
+/**
+ * File `terms` under the document `ref` belongs to.
+ *
+ * @internal Called by `Runtime` once it has created the document's ref.
+ */
+export function registerTerms(ref: object, terms: DocumentTerms): void {
+  registry.set(documentKey(ref), terms)
 }
 
 /**
@@ -266,7 +286,10 @@ export function closedHydration(
  *   the document had reconciled with, since no peer can be asked any more;
  * - authority: its value at the close;
  * - sync: a `SyncRef` reporting the state at the close, over a source whose
- *   waits reject with `error`.
+ *   waits reject with `error`;
+ * - refusal: none, which lets go of the policy it followed. The Runtime
+ *   refuses a closed document's writes with the close error, and its
+ *   disposed slot with its own `DocumentClosedError`.
  *
  * Every value closes over nothing but the snapshot and `error`.
  */
@@ -314,6 +337,7 @@ export function closedTerms(
       peer: { settled: settledBy(authority), resolve: settledBy },
       authority,
       sync: { ref, source },
+      refusal: undefined,
     },
   }
 }
@@ -374,6 +398,45 @@ function setEach<R extends object>(terms: R, values: TermValues<R>): void {
 // ---------------------------------------------------------------------------
 // Reading
 // ---------------------------------------------------------------------------
+
+/**
+ * One network term of `terms`, followed from before the Exchange attaches
+ * the network terms: `absent` until then, and `pick(network)`'s answer
+ * after. A subscriber hears the attachment and every change of the picked
+ * term.
+ */
+export function networkTermFeed<T>(
+  terms: DocumentTerms,
+  pick: (network: NetworkTerms) => Feed<T>,
+  absent: T,
+): Feed<T> {
+  const picked = (): Feed<T> | undefined => {
+    const network = terms.network()
+    return network === undefined ? undefined : pick(network)
+  }
+  return signalFeed(
+    () => {
+      const term = picked()
+      return term === undefined ? absent : term()
+    },
+    onChange => {
+      let stopTerm: (() => void) | undefined
+      const follow = (): void => {
+        stopTerm?.()
+        stopTerm = picked()?.[CHANGEFEED].subscribe(() => onChange())
+      }
+      follow()
+      const stopNetwork = terms.network[CHANGEFEED].subscribe(() => {
+        follow()
+        onChange()
+      })
+      return () => {
+        stopNetwork()
+        stopTerm?.()
+      }
+    },
+  )
+}
 
 /** A feed that never moves, for a document with no term to follow. */
 export function constantFeed<T>(value: T): Feed<T> {

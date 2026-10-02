@@ -15,22 +15,34 @@
 // way to merge. Here every write is an ordinary operation with version
 // history, so concurrent seeds merge under the document's normal rules.
 
-import type { WriterModel } from "@kyneta/schema"
+import type { WriteRefusal, WriterModel } from "@kyneta/schema"
 import { batch } from "@kyneta/schema"
 import { authorityFor, writerModelOf } from "./doc-meta.js"
 import { type DocStatus, docStatus } from "./doc-status.js"
 import type { Authority } from "./governance.js"
+import { writeRefusal } from "./persistence.js"
+import { whenHydrated } from "./settle.js"
 import { whenSettled } from "./sync.js"
 
 // ---------------------------------------------------------------------------
 // Functional core
 // ---------------------------------------------------------------------------
 
-/** What `initialize` should do, once everything that can report has. */
+/**
+ * What `initialize` should do, once everything that can report has. The two
+ * failures differ in what they carry: `reject` a reason, which the shell
+ * words as an `Error` (constructing one captures a stack, which keeps it out
+ * of this pure core), and `refuse` the document's own refusal, which arrived
+ * as input and which the shell throws as it is, so a caller can narrow it
+ * with `instanceof`.
+ */
 export type InitAction =
   | { action: "seed" }
   | { action: "skip" }
+  /** The serialized-writer rule: the shell throws `new Error(reason)`. */
   | { action: "reject"; reason: string }
+  /** The document refuses this peer's writes: the shell throws `refusal`. */
+  | { action: "refuse"; refusal: WriteRefusal }
 
 /**
  * Every guard, in one pure function.
@@ -43,14 +55,24 @@ export type InitAction =
 export function planInitialization(input: {
   /** May still be `"pending"` — see `waitOutcome`. */
   status: DocStatus
-  /** Why the wait ended. */
-  waitOutcome: "peer" | "local" | "offline"
+  /** Why the wait ended: `"refused"` when the shell did not wait for peers,
+   *  because `refusal` was set once the document had loaded. */
+  waitOutcome: "peer" | "local" | "offline" | "refused"
   /** Already resolved by the shell: call-site → policy → `"any"`. */
   authority: Authority
   writerModel: WriterModel
+  /** Why the document refuses this peer's writes, read once its load ended. */
+  refusal: WriteRefusal | undefined
 }): InitAction {
   // Data is already there. Nothing to do, whatever else is true.
   if (input.status === "populated") return { action: "skip" }
+
+  // This peer may not write the document at all (a policy's `canWrite`,
+  // another seat of the storage), so it cannot seed it either. Ahead of the
+  // serialized-writer rule: the refusal is what the seed itself would throw.
+  if (input.refusal !== undefined) {
+    return { action: "refuse", refusal: input.refusal }
+  }
 
   // A serialized-writer document (json.bind / SYNC_AUTHORITATIVE) has exactly
   // one writer by construction, so concurrent seeds cannot merge — they
@@ -97,8 +119,10 @@ const inFlight = new WeakMap<object, Promise<"created" | "loaded">>()
  * Write `seed` into the document if — and only if — it is genuinely empty.
  *
  * Waits for every truth source first (stored data finishing its load, the
- * authority answering), then decides. Returns `"created"` if it wrote the
- * defaults and `"loaded"` if the document already had data.
+ * authority answering), then decides. A document that, once loaded, refuses
+ * this peer's writes is decided without waiting for the authority: this peer
+ * could not seed it. Returns `"created"` if it wrote the defaults and
+ * `"loaded"` if the document already had data.
  *
  * With no options this is correct for a CRDT document in the usual
  * hub-and-spoke topology, and for an authoritative document once that peer has
@@ -117,8 +141,10 @@ const inFlight = new WeakMap<object, Promise<"created" | "loaded">>()
  * The seed is an ordinary local write: it broadcasts, persists, and passes the
  * same governance gates as any other mutation.
  *
- * @throws If the document's store could not be read (via `whenSettled`), or if
- *   a non-authoritative peer tries to seed a serialized-writer document.
+ * @throws If the document's store could not be read; with the document's
+ *   `WriteRefusal` if, once loaded, it refuses this peer's writes and holds
+ *   no data; or if a non-authoritative peer tries to seed a serialized-writer
+ *   document.
  */
 // `D` is bound to the *document* rather than declared on the callback alone,
 // and that is load-bearing. TypeScript infers a type parameter from the
@@ -148,15 +174,29 @@ export function initialize<D extends object>(
     // transport hung until some client happened to connect.
     const authority = opts?.authority ?? authorityFor(doc)
 
-    // GATHER — wait for every source, then look. Reading the status *after*
-    // the wait is what makes the answer meaningful; reading it before would
-    // just observe "pending".
-    const { via } = await whenSettled(doc, {
-      authority,
-      ...(opts?.offlineAfter !== undefined
-        ? { offlineAfter: opts.offlineAfter }
-        : {}),
-    })
+    // GATHER, in two steps, then look. Reading the status *after* a wait is
+    // what makes the answer meaningful; reading it before would just observe
+    // "pending".
+    //
+    // 1. The store, with no timeout. Only after the load is the refusal
+    //    worth reading: a loading plain document refuses writes until it has
+    //    loaded, and a seat refusal is known only once the load ends.
+    await whenHydrated(doc)
+    // 2. A document that refuses this peer's writes cannot be seeded by it,
+    //    whatever its peers answer, so it plans at once. Any other waits for
+    //    its peers too.
+    const refusal = writeRefusal(doc)
+    const via =
+      refusal !== undefined
+        ? "refused"
+        : (
+            await whenSettled(doc, {
+              authority,
+              ...(opts?.offlineAfter !== undefined
+                ? { offlineAfter: opts.offlineAfter }
+                : {}),
+            })
+          ).via
 
     // PLAN — all the rules, none of the effects.
     const decision = planInitialization({
@@ -166,9 +206,11 @@ export function initialize<D extends object>(
       waitOutcome: via,
       authority,
       writerModel: writerModelOf(doc),
+      refusal,
     })
 
     // EXECUTE
+    if (decision.action === "refuse") throw decision.refusal
     if (decision.action === "reject") throw new Error(decision.reason)
     if (decision.action === "skip") return "loaded"
 

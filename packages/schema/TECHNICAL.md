@@ -406,11 +406,13 @@ Source: `src/refusal.ts`, `src/writable-context.ts` (`refusal`, `ownerRefusal`),
 Whether a document takes authored writes has one answer, its context's refusal: `ctx.refusal`, a `Feed<WriteRefusal | undefined>`, `firstDefined(substrate's, owner's)`.
 
 - **The substrate's**: its slot's `closed` (`DocumentClosedError`) for Loro, Yjs and ephemeral, and for plain `firstDefined(slot.closed, loading)`, where `loading` answers `DocumentLoadingError` until `adopt`.
-- **The owner's**: `ctx.ownerRefusal`, a settable feed that `createRef(schema, substrate, { refusal })` attaches before the ref is handed out, as it attaches `lease`. `@kyneta/exchange`'s Runtime passes its own feed there: another seat of the storage writes a serialized document (`WriterRefusedError`).
+- **The owner's**: `ctx.ownerRefusal`, a settable feed that `createRef(schema, substrate, { refusal })` attaches before the ref is handed out, as it attaches `lease`. `@kyneta/exchange`'s Runtime passes its own feed there: the document is unloading (`DocumentClosedError`), another seat of the storage writes a serialized document (`WriterRefusedError`), or a policy excludes this peer from writing it (`NotAWriterError`).
 
 `prepare` reads it for every op with `ingress: "author"` and throws it before the substrate sees the change; a batch that hits it aborts and compensates like any batch that throws. Merges and announcements are unaffected. `writeRefusal(ref)` in `@kyneta/exchange` reads the same feed, so what it reports is what the write path throws.
 
-**`WriteRefusal` is the base of every refusal**, in any package: `DocumentClosedError` (with its `ClosedReason`: `"destroyed"`, `"unloaded"` or `"disposed"`), `DocumentLoadingError`, and `@kyneta/exchange`'s `WriterRefusedError`. A caller narrows with `instanceof`. A refusal is a state the document is in, held by the feed for as long as a ref is, so it carries no stack: V8 keeps an error's call sites, with every frame's receiver, until `stack` is read, and a refusal made in a method would keep that method's object alive through every held ref. `WriteRefusal`'s constructor assigns `stack`, which drops them unformatted.
+**`[NATIVE]` throws it too.** A native handle writes below `prepare`, so a document that refuses authored writes hands none out, whoever refuses: `unwrap` on a loading plain document throws `DocumentLoadingError`, and on an owner-refused one the owner's refusal. A handle taken while the document accepted writes is not revoked by a later refusal; the slot's own check still makes it throw once the document closes.
+
+**`WriteRefusal` is the base of every refusal**, in any package: `DocumentClosedError` (with its `ClosedReason`: `"destroyed"`, `"unloaded"` or `"disposed"`), `DocumentLoadingError`, and `@kyneta/exchange`'s `WriterRefusedError` and `NotAWriterError`. A caller narrows with `instanceof`. A refusal is a state the document is in, held by the feed for as long as a ref is, so it carries no stack: V8 keeps an error's call sites, with every frame's receiver, until `stack` is read, and a refusal made in a method would keep that method's object alive through every held ref. `WriteRefusal`'s constructor assigns `stack`, which drops them unformatted.
 
 ### The local-update signal
 
@@ -1177,7 +1179,7 @@ The materialize interpreter is another duplication family — all CRDT backends 
 
 ### `NativeMap` and the escape hatch
 
-`NativeMap<S>` is a type-level mapping from schema kinds to substrate-native types. `ref[NATIVE]` returns the underlying container — `LoroText` for a `text` on Loro, `Y.Map` for a `product` on Yjs, a plain object for the plain substrate. `[NATIVE]` is a getter that asks the substrate's `nativeResolver` on each access, so `unwrap(doc)` on plain is always the current root, though a write that copies a frozen root replaces it. `unwrap(ref)` (`src/unwrap.ts`) is the typed escape hatch that returns `NativeMap<S>`.
+`NativeMap<S>` is a type-level mapping from schema kinds to substrate-native types. `ref[NATIVE]` returns the underlying container — `LoroText` for a `text` on Loro, `Y.Map` for a `product` on Yjs, a plain object for the plain substrate. `[NATIVE]` is a getter that asks the substrate's `nativeResolver` on each access, so `unwrap(doc)` on plain is always the current root, though a write that copies a frozen root replaces it. It first throws the context's refusal, if it has one ([Refusal: one feed per context](#refusal-one-feed-per-context)). `unwrap(ref)` (`src/unwrap.ts`) is the typed escape hatch that returns `NativeMap<S>`.
 
 Application code rarely touches `[NATIVE]`. Backends use it to dispatch to substrate-specific APIs. It is the only path through which substrate-specific behaviour leaks through a ref — and it is explicit at the call site.
 

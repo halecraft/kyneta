@@ -384,7 +384,7 @@ export async function createUndoStack(
    * substrate, and a destroyed one is gone. A part stands only if its
    * document is this when the part is used. A revert writes natively, below
    * the document's refusal, so a document that refuses writes (unloading,
-   * closed, another seat's) is not reached at all.
+   * closed, another seat's, or a policy's) is not reached at all.
    */
   const interpreted = (docId: DocId) => {
     const instance = exchange.runtime.instanceOf(docId)

@@ -7,11 +7,14 @@
 // a live two-peer scenario.
 
 import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
+import { CHANGEFEED } from "@kyneta/changefeed"
 import { json, Schema } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
+import { authorityFor } from "../doc-meta.js"
+import { termsOf } from "../document-terms.js"
 import type { Authority } from "../governance.js"
 import { Governance } from "../governance.js"
-import { settled } from "../settle.js"
+import { settled, settledFeed } from "../settle.js"
 import { whenSettled } from "../sync.js"
 import { derivePeerSettled } from "../synchronizer.js"
 import { exchangesPerTest } from "./exchanges.js"
@@ -134,6 +137,30 @@ describe("Policy.authority", () => {
     ).resolves.toEqual({ via: "local" })
 
     exchange.reset()
+  })
+
+  it("a settledFeed subscriber hears an authority registered after the document opened", () => {
+    // A transport, so the default `"any"` waits for a peer that never comes.
+    const bridge = new Bridge()
+    const exchange = createExchange({
+      principal: "server",
+      transports: [createBridgeTransport({ transportId: "server", bridge })],
+    })
+    const doc = exchange.get("doc-1", TestDoc)
+    expect(settled(doc)).toBe(false)
+    let heard = 0
+    settledFeed(doc)[CHANGEFEED].subscribe(() => heard++)
+    const term = termsOf(doc)?.network()?.authority
+    if (term === undefined) throw new Error("expected an authority term")
+    let termHeard = 0
+    term[CHANGEFEED].subscribe(() => termHeard++)
+    expect(authorityFor(doc)).toBe("any")
+
+    exchange.register({ authority: "self" })
+    expect(heard).toBeGreaterThan(0)
+    expect(termHeard).toBe(1)
+    expect(settled(doc)).toBe(true)
+    expect(authorityFor(doc)).toBe("self")
   })
 
   it("resolves first-non-undefined across registered policies", () => {

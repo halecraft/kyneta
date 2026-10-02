@@ -13,10 +13,12 @@ import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import {
   batch,
   DocumentLoadingError,
+  type HasNativeAny,
   json,
   plainReplicaFactory,
   Schema,
   SYNC_AUTHORITATIVE,
+  unwrap,
 } from "@kyneta/schema"
 import { yjs } from "@kyneta/yjs-schema"
 import { describe, expect, it } from "vitest"
@@ -140,6 +142,22 @@ describe("serialized documents: one writer seat per storage", () => {
     )
     expect(() => batch(doc, d => d.b.set("theirs"))).toThrow(writer.peerId)
     expect(doc.a()).toBe("mine")
+  })
+
+  it("a seat-refused document hands out no native handle", async () => {
+    const storage = createInMemoryStoreData()
+    const writer = open(storage)
+    const written = await loaded(writer)
+    written.a.set("mine")
+    await writer.flush()
+
+    const doc = await loaded(open(storage))
+    expect(() => unwrap(doc as unknown as HasNativeAny)).toThrow(
+      WriterRefusedError,
+    )
+    expect(() => unwrap(doc.a as unknown as HasNativeAny)).toThrow(
+      WriterRefusedError,
+    )
   })
 
   it("nothing of a refused write reaches a peer, and owed offers go out after the rebuild", async () => {

@@ -16,6 +16,7 @@ import {
   DocumentLoadingError,
   Schema,
   TRANSACT,
+  unwrap,
   WriteRefusal,
 } from "../index.js"
 import { beginHydration, createSubstrate } from "../substrate.js"
@@ -87,6 +88,20 @@ describe("the owner's refusal", () => {
     adopt()
     expect(heard).toBe(1)
     expect(() => batch(doc, d => d.title.set("after"))).toThrow(refused)
+  })
+
+  it("[NATIVE] throws the context's refusal, whoever refuses", () => {
+    const { substrate, adopt } = beginHydration(plainSubstrateFactory, schema)
+    const owner = settableFeed<WriteRefusal | undefined>(undefined)
+    const doc = createRef(schema, substrate, { refusal: owner })
+    expect(() => unwrap(doc)).toThrow(DocumentLoadingError)
+    adopt()
+    expect(unwrap(doc)).toEqual({ title: "" })
+    owner.set(refused)
+    expect(() => unwrap(doc)).toThrow(refused)
+    expect(() => unwrap(doc.title)).toThrow(refused)
+    owner.set(undefined)
+    expect(unwrap(doc)).toEqual({ title: "" })
   })
 
   it("merges and resets still reach a refused document", () => {

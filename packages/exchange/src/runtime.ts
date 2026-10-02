@@ -24,6 +24,7 @@
 
 import {
   type Changeset,
+  type Feed,
   firstDefined,
   type Settable,
   settableFeed,
@@ -62,11 +63,14 @@ import {
 } from "@kyneta/schema"
 import type { DocId, PeerId } from "@kyneta/transport"
 import {
+  buildLocalTerms,
   closedHydration,
   closeTerms,
   type Hydration,
+  type NetworkTerms,
+  networkTermFeed,
   type Persistence,
-  registerLocalTerms,
+  registerTerms,
   termsOf,
 } from "./document-terms.js"
 import {
@@ -192,21 +196,30 @@ type Authorship = Omit<HydrationHandle, "substrate">
 const NO_AUTHORSHIP: Authorship = { adopt: () => {} }
 
 /**
- * Who, besides the substrate, refuses an interpreted document's authored
- * writes: its owner's answer, which `createRef` attaches to the context as
- * `firstDefined(unloading, seat, network)`.
+ * The Runtime's part of who, besides the substrate, refuses an interpreted
+ * document's authored writes. `createRef` attaches the owner's answer as
+ * `firstDefined(lifecycle, seat, network refusal)`, where the network
+ * refusal is a network term (`NetworkTerms.refusal`), closed with the other
+ * terms.
  */
 type Refusals = {
   /** Derived from the lifecycle: `DocumentClosedError("unloaded")` while the
-   *  instance unloads. Set to its closing value when the instance closes. */
-  readonly unloading: Settable<WriteRefusal | undefined>
+   *  instance unloads. Set to the close error when the instance closes. */
+  readonly lifecycle: Settable<WriteRefusal | undefined>
   /** Another seat of the storage writes this serialized document. Set once,
    *  at load or after a lost race, and kept for the session. */
   readonly seat: Settable<WriteRefusal | undefined>
-  /** What the network refuses. Emptied when the document closes, so what
-   *  fills it is let go of with it. */
-  readonly network: Settable<WriteRefusal | undefined>
 }
+
+/**
+ * The network term an interpreted document's owner refusal follows. Declared
+ * here rather than inline in `#buildInterpret`: a closure made there would
+ * share that method's scope, which holds the Runtime, and a held ref keeps
+ * its owner refusal after the close.
+ */
+const networkRefusal = (
+  network: NetworkTerms,
+): Feed<WriteRefusal | undefined> => network.refusal
 
 /** What an interpreted document that is not yet wired has wired: nothing. */
 const NOTHING_WIRED = (): void => {}
@@ -383,7 +396,7 @@ type Observed = {
 
 /**
  * Whoever follows an instance's {@link Observed} values: `whenHydrated(docId)`,
- * and the subscribers of its hydration term and its unloading refusal. Each
+ * and the subscribers of its hydration term and its lifecycle refusal. Each
  * is called with the new values when a step changes them, and with the
  * closing values when the instance closes.
  */
@@ -408,8 +421,8 @@ export type Instance =
       readonly refusals: Refusals
       /** Where its own writes stand against the store. */
       readonly publication: Publication
-      /** What its unloading refusal answers: one object, so the refusal
-       *  reads the same each time. */
+      /** What its lifecycle refusal answers while it unloads: one object,
+       *  so the refusal reads the same each time. */
       readonly unloaded: DocumentClosedError
       readonly observers: Observers
       /** Undoes what `wire` attached; a no-op until then. */
@@ -1438,7 +1451,7 @@ export class Runtime {
    *    without being disposed.
    * 5. The remaining effects run in order (`#execute`).
    * 6. The observers of each document whose observed values changed (its
-   *    load, its unloading refusal) are told.
+   *    load, its lifecycle refusal) are told.
    *
    * Synchronous, not on a `@kyneta/machine` runtime: both of those queue a
    * re-entrant dispatch, and a door reached from inside an effect
@@ -1562,60 +1575,20 @@ export class Runtime {
           }
 
     try {
-      // Who refuses its authored writes besides the substrate: its lifecycle,
-      // while it unloads; another seat of the storage, which may write it
-      // (`#refuse`); and the network.
       const observers: Observers = new Set()
-      const unloaded = new DocumentClosedError("unloaded")
-      const refusals: Refusals = {
-        unloading: settableFeed<WriteRefusal | undefined>(
-          signalFeed(
-            () =>
-              unloadingOf(this.#lifecycle, docId, gen) ? unloaded : undefined,
-            onChange => observe(observers, onChange),
-          ),
-        ),
-        seat: settableFeed<WriteRefusal | undefined>(undefined),
-        network: settableFeed<WriteRefusal | undefined>(undefined),
-      }
-      const ref: any = createRef(bound.schema, substrate, {
-        lease: this.lease,
-        refusal: firstDefined(
-          refusals.unloading,
-          refusals.seat,
-          refusals.network,
-        ),
-      })
-      const readyInfo: InterpretReadyInfo = {
-        docId,
-        mode: "interpret",
-        replica: substrate,
-        replicaFactory: factory.replica,
-        syncMode: bound.syncMode,
-        schemaHash: bound.schemaHash,
-        supportedHashes: [...bound.supportedHashes],
-      }
-      const instance: InterpretInstance = {
-        tier: "interpret",
-        ref,
-        bound,
-        readyInfo,
-        authorship,
-        refusals,
-        publication: createPublication(),
-        unloaded,
-        observers,
-        unwire: NOTHING_WIRED,
-      }
+      const publication = createPublication()
 
-      // The local terms: the storage term, which joins this document's settle
-      // conjunction, and the persistence term. They are registered now rather
-      // than once the load finishes, because the point of the storage term is
-      // to be observable *while* still pending — that is what stops a caller
-      // concluding "empty" from a document that simply has not finished
-      // loading. Each follows a live feed over this instance until it closes.
-      const { publication } = instance
-      registerLocalTerms(ref, {
+      // The terms record, built before the ref so that its owner refusal can
+      // follow the record's network refusal, and filed under the ref once
+      // the ref exists. The local terms are the storage term, which joins
+      // this document's settle conjunction, and the persistence term. They
+      // exist from the start rather than once the load finishes, because the
+      // point of the storage term is to be observable *while* still pending:
+      // that is what stops a caller concluding "empty" from a document that
+      // simply has not finished loading. Each follows a live feed over this
+      // instance until it closes; the persistence term reads `instance` only
+      // when read, after it is assigned below.
+      const terms = buildLocalTerms({
         syncMode: bound.syncMode,
         hydration: settableFeed<Hydration>(
           signalFeed(
@@ -1636,6 +1609,52 @@ export class Runtime {
           ),
         ),
       })
+
+      // Who refuses its authored writes besides the substrate, first answer
+      // first: its lifecycle, while it unloads or closes; another seat of the
+      // storage, which may write it (`#refuse`); and the network's policy
+      // refusal, a network term the Exchange attaches (`Policy.canWrite`).
+      const unloaded = new DocumentClosedError("unloaded")
+      const refusals: Refusals = {
+        lifecycle: settableFeed<WriteRefusal | undefined>(
+          signalFeed(
+            () =>
+              unloadingOf(this.#lifecycle, docId, gen) ? unloaded : undefined,
+            onChange => observe(observers, onChange),
+          ),
+        ),
+        seat: settableFeed<WriteRefusal | undefined>(undefined),
+      }
+      const ref: any = createRef(bound.schema, substrate, {
+        lease: this.lease,
+        refusal: firstDefined(
+          refusals.lifecycle,
+          refusals.seat,
+          networkTermFeed(terms, networkRefusal, undefined),
+        ),
+      })
+      const readyInfo: InterpretReadyInfo = {
+        docId,
+        mode: "interpret",
+        replica: substrate,
+        replicaFactory: factory.replica,
+        syncMode: bound.syncMode,
+        schemaHash: bound.schemaHash,
+        supportedHashes: [...bound.supportedHashes],
+      }
+      const instance: InterpretInstance = {
+        tier: "interpret",
+        ref,
+        bound,
+        readyInfo,
+        authorship,
+        refusals,
+        publication,
+        unloaded,
+        observers,
+        unwire: NOTHING_WIRED,
+      }
+      registerTerms(ref, terms)
       return instance
     } catch (error) {
       substrate.dispose("disposed")
@@ -1781,11 +1800,13 @@ export class Runtime {
    *    fails with the close error, and an answer already given stands.
    * 2. Unwire it. Its changeset subscription lives in the context's
    *    subscriber trie, which a held ref keeps, and closes over this Runtime.
-   * 3. Fix its unloading refusal at its closing value, which an unload keeps
-   *    until the replica is disposed; then close its terms (`closeTerms`)
-   *    with that hydration: each keeps the answer it had, and none reaches
-   *    this Runtime any more. The network refusal is emptied, letting go of
-   *    whatever filled it.
+   * 3. Fix its lifecycle refusal at the close error (for an unload, the one
+   *    it already answered), which holds until the replica is disposed and
+   *    its slot refuses; then close its terms (`closeTerms`) with that
+   *    hydration: each keeps the answer it had, and none reaches this
+   *    Runtime or the Exchange any more. The network's policy refusal closes
+   *    to none, which lets go of the Exchange's Governance, and the document
+   *    refuses writes throughout.
    * 4. Tell every observer those values, so `whenHydrated(ref)` and
    *    `whenHydrated(docId)` settle with the same error object.
    *
@@ -1799,11 +1820,10 @@ export class Runtime {
     if (instance.tier === "interpret") {
       instance.unwire()
       // Fixed first: a term's subscriber may write as it hears the close.
-      refusal = reason === "unloaded" ? instance.unloaded : undefined
-      instance.refusals.unloading.set(refusal)
+      refusal = reason === "unloaded" ? instance.unloaded : error
+      instance.refusals.lifecycle.set(refusal)
       const terms = termsOf(instance.ref)
       if (terms !== undefined) closeTerms(terms, error, hydration)
-      instance.refusals.network.set(undefined)
     }
     for (const observer of [...instance.observers]) {
       observer({ hydration, refusal })

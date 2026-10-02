@@ -41,6 +41,7 @@ import type {
   Schema as SchemaNode,
   SyncMode,
   Version,
+  WriteRefusal,
 } from "@kyneta/schema"
 import { metadataOf } from "@kyneta/schema"
 import type {
@@ -55,7 +56,7 @@ import type { Capabilities } from "./capabilities.js"
 import { createCapabilities, DEFAULT_REPLICAS } from "./capabilities.js"
 import { type Peer, registerNetworkTerms, type Sync } from "./document-terms.js"
 import type { Authority, Policy } from "./governance.js"
-import { Governance } from "./governance.js"
+import { Governance, NotAWriterError } from "./governance.js"
 import { planInterpretation } from "./interpret.js"
 import type { Intent } from "./lifecycle-program.js"
 import type { ObsSink } from "./observe.js"
@@ -246,6 +247,11 @@ export class Exchange {
   /** Who this Exchange says it is. */
   readonly principal: string
 
+  /**
+   * The identity this Exchange announces, and the one `Policy.canWrite`
+   * judges for this peer's own writes.
+   */
+  readonly #identity: PeerIdentityDetails
   readonly #governance: Governance
   readonly #capabilities: Capabilities
   readonly #synchronizer: Synchronizer
@@ -311,11 +317,7 @@ export class Exchange {
     this.peerId = this.#runtime.peerId
     this.principal = principal
 
-    const fullIdentity: PeerIdentityDetails = {
-      peerId: this.peerId,
-      principal,
-      type,
-    }
+    this.#identity = { peerId: this.peerId, principal, type }
 
     // Transports start last (`#synchronizer.start()` below), so nothing a
     // transport's first peer reaches is still missing, and a Runtime that
@@ -333,18 +335,22 @@ export class Exchange {
         builder({ peerId: this.peerId, binding: bound.identityBinding }),
     })
 
-    // Create synchronizer — call each factory to produce fresh adapter instances.
-    // The canShare and canAccept predicates delegate to the live Governance,
-    // so dynamically registered policies are visible without recreating the
-    // synchronizer's update function.
+    // The gate predicates read the live Governance at each call, so a policy
+    // registered later counts without recreating the Synchronizer.
+    //
+    // `canAccept` is `canAccept ∧ canWrite`: both decide whether an offer's
+    // sender may bring operations into the document, and the Synchronizer
+    // treats a veto by either the same way.
     //
     // The Synchronizer shares the Runtime's lease so doc-layer dispatchers
     // and the synchronizer cooperate under one cascade budget.
+    const governance = this.#governance
     this.#synchronizer = new Synchronizer({
-      identity: fullIdentity,
+      identity: this.#identity,
       transports,
-      canShare: this.#governance.canShare.bind(this.#governance),
-      canAccept: this.#governance.canAccept.bind(this.#governance),
+      canShare: governance.canShare.bind(governance),
+      canAccept: (docId, peer) =>
+        governance.canAccept(docId, peer) && governance.canWrite(docId, peer),
       canConnect: this.#governance.canConnect.bind(this.#governance),
       canReset: this.#governance.canReset.bind(this.#governance),
       rebuildReplica: (docId, payload) =>
@@ -352,7 +358,7 @@ export class Exchange {
       publishable: docId => this.#runtime.publishable(docId),
       // A peer that serves documents serves the ones it unloaded: a request
       // for one loads it again.
-      servesUnloaded: () => this.#governance.authority() === "self",
+      servesUnloaded: () => this.#authority() === "self",
       onReloadDoc: docId => {
         this.#runtime.request({ type: "reload", docId })
       },
@@ -529,11 +535,12 @@ export class Exchange {
   }
 
   /**
-   * Attach a ref's network terms: `sync(ref)`, its authority, and the peer
-   * half of its settle conjunction. The Runtime calls this through
-   * `onDocInterpreted` for every interpreted document, whether created
-   * through `get()`, loaded, promoted, or created on a standalone Runtime
-   * before it was wrapped; it has already attached the local half.
+   * Attach a ref's network terms: `sync(ref)`, its authority, the peer half
+   * of its settle conjunction, and the policy's refusal of this peer's
+   * writes. The Runtime calls this through `onDocInterpreted` for every
+   * interpreted document, whether created through `get()`, loaded, promoted,
+   * or created on a standalone Runtime before it was wrapped; it has already
+   * attached the local half.
    *
    * The peer term is attached now rather than once sync completes, because
    * it has to be observable *while still false*. That is what stops a caller
@@ -542,6 +549,9 @@ export class Exchange {
    * to its value at the close and so lets go of this Exchange.
    */
   #attachNetwork(docId: DocId, ref: object): void {
+    const governance = this.#governance
+    const identity = this.#identity
+    const notAWriter = new NotAWriterError(docId, identity)
     registerNetworkTerms(ref, {
       peer: settableFeed<Peer>(
         signalFeed(
@@ -549,18 +559,27 @@ export class Exchange {
             settled: this.#peerSettled(docId),
             resolve: authority => this.#peerSettled(docId, authority),
           }),
-          onChange =>
-            this.#synchronizer.onPeerSyncChange(changed => {
+          // `settled` judges by the policy's authority, so a policy change
+          // can move it as a peer's sync can.
+          onChange => {
+            const stopSync = this.#synchronizer.onPeerSyncChange(changed => {
               if (changed === docId) onChange()
-            }),
+            })
+            const stopPolicy = governance.subscribe(onChange)
+            return () => {
+              stopSync()
+              stopPolicy()
+            }
+          },
         ),
       ),
-      // Read lazily: `Policy` is a mutable registry, so a policy registered
-      // after the document was created still counts.
+      // Read at each use, and notified on every policy change: `Policy` is a
+      // mutable registry, so a policy registered after the document was
+      // created counts, for a reader and for an observer.
       authority: settableFeed<Authority>(
         signalFeed(
-          () => this.#governance.authority() ?? "any",
-          () => () => {},
+          () => this.#authority(),
+          onChange => governance.subscribe(onChange),
         ),
       ),
       sync: settableFeed<Sync>(
@@ -570,7 +589,22 @@ export class Exchange {
           synchronizer: this.#synchronizer,
         }),
       ),
+      // The answer of `canWrite` for this peer's own identity, the one the
+      // Synchronizer announces, so a peer refuses its own write exactly when
+      // its peers would refuse its offer. One error object, so successive
+      // reads of a refused document return the same value.
+      refusal: settableFeed<WriteRefusal | undefined>(
+        signalFeed(
+          () => (governance.canWrite(docId, identity) ? undefined : notAWriter),
+          onChange => governance.subscribe(onChange),
+        ),
+      ),
     })
+  }
+
+  /** The declared `Policy.authority`, or `"any"` when no policy declares one. */
+  #authority(): Authority {
+    return this.#governance.authority() ?? "any"
   }
 
   /**
@@ -587,7 +621,7 @@ export class Exchange {
    * that declares `authority: "self"`.
    */
   #peerSettled(docId: DocId, override?: Authority): boolean {
-    const authority = override ?? this.#governance.authority() ?? "any"
+    const authority = override ?? this.#authority()
     return derivePeerSettled({
       authority,
       hasReconciled: this.#synchronizer.hasReconciled(docId),
@@ -1192,15 +1226,18 @@ export class Exchange {
   }
 
   /**
-   * Disconnects all network transports and cleans up resources.
+   * Close every document, clear the policies, and disconnect every
+   * transport, in that order.
    *
    * ⚠️ WARNING: This is synchronous and does NOT wait for pending storage
    * saves to complete. If you need to ensure data persistence, use
    * {@link shutdown} instead.
    */
   reset(): void {
-    const disposeErrors = this.#governance.clear()
+    // Documents close before the policies clear, as in `shutdown`: clearing
+    // first would lift every policy refusal of a document still open.
     this.#runtime.reset()
+    const disposeErrors = this.#governance.clear()
     this.#synchronizer.reset()
     rethrowErrors(disposeErrors)
   }

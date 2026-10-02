@@ -7,12 +7,24 @@
 
 import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import { loro } from "@kyneta/loro-schema"
-import { json, Schema } from "@kyneta/schema"
+import {
+  DocumentLoadingError,
+  json,
+  Schema,
+  WriteRefusal,
+} from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import { docStatus } from "../doc-status.js"
-import type { Authority } from "../governance.js"
+import { type Authority, NotAWriterError } from "../governance.js"
 import { initialize, planInitialization } from "../initialize.js"
-import { createInMemoryStore } from "../store/in-memory-store.js"
+import { writeRefusal } from "../persistence.js"
+import { whenHydrated } from "../settle.js"
+import {
+  createInMemoryStore,
+  createInMemoryStoreData,
+  InMemoryStore,
+} from "../store/in-memory-store.js"
+import { WriterRefusedError } from "../store/seats.js"
 import { exchangesPerTest } from "./exchanges.js"
 import { seedStoredDoc } from "./stored-doc.js"
 
@@ -38,7 +50,9 @@ describe("planInitialization", () => {
     waitOutcome: "peer" as const,
     authority: "any" as Authority,
     writerModel: "concurrent" as const,
+    refusal: undefined,
   }
+  const refusal = new WriteRefusal("this peer may not write")
 
   it("skips a document that already has data", () => {
     expect(planInitialization({ ...base, status: "populated" })).toEqual({
@@ -98,6 +112,33 @@ describe("planInitialization", () => {
         authority: "self",
       }),
     ).toEqual({ action: "seed" })
+  })
+
+  it("refuses a refused document with its refusal, ahead of the serialized-writer rule", () => {
+    for (const writerModel of ["concurrent", "serialized"] as const) {
+      for (const status of ["empty", "pending"] as const) {
+        const result = planInitialization({
+          ...base,
+          status,
+          waitOutcome: "refused",
+          writerModel,
+          refusal,
+        })
+        expect(result).toEqual({ action: "refuse", refusal })
+        if (result.action === "refuse") expect(result.refusal).toBe(refusal)
+      }
+    }
+  })
+
+  it("skips a populated document, refused or not", () => {
+    expect(
+      planInitialization({
+        ...base,
+        status: "populated",
+        waitOutcome: "refused",
+        refusal,
+      }),
+    ).toEqual({ action: "skip" })
   })
 
   it("skips a populated serialized document rather than rejecting", () => {
@@ -279,6 +320,68 @@ describe("initialize", () => {
 
     await clientA.shutdown()
     await clientB.shutdown()
+  })
+
+  it("rejects with the policy's refusal itself, without waiting for an absent authority", async () => {
+    const bridge = new Bridge()
+    const client = createExchange({
+      principal: "client",
+      transports: [createBridgeTransport({ transportId: "client", bridge })],
+      authority: (p: { principal: string }) => p.principal === "host",
+      canWrite: (_docId, p) => p.principal === "host",
+    })
+    const doc = client.get("doc-1", MergeableDoc)
+
+    const outcome = await Promise.race([
+      initialize(doc, d => d.title.insert(0, "Untitled")).catch(
+        (error: unknown) => error,
+      ),
+      new Promise(r => setTimeout(() => r("waiting"), 100)),
+    ])
+
+    expect(outcome).toBeInstanceOf(NotAWriterError)
+    expect(outcome).toBe(writeRefusal(doc))
+    expect(doc.title()).toBe("")
+  })
+
+  it("on a stored json document, called right after get, waits for the load and seeds", async () => {
+    // A stored plain document refuses writes with `DocumentLoadingError`
+    // while it loads, which is when `initialize` is usually called.
+    const exchange = createExchange({
+      store: createInMemoryStore(),
+      authority: "self",
+    })
+    const doc = exchange.get("doc-1", TestDoc)
+    expect(writeRefusal(doc)).toBeInstanceOf(DocumentLoadingError)
+
+    await expect(initialize(doc, d => d.title.set("Untitled"))).resolves.toBe(
+      "created",
+    )
+    expect(doc.title()).toBe("Untitled")
+  })
+
+  it("reads a seat refusal only after the load, and skips the data that refusal implies", async () => {
+    // A seat is refused because another seat wrote the document, so a
+    // seat-refused document always holds data, and `populated` decides.
+    const storage = createInMemoryStoreData()
+    const writer = createExchange({ store: new InMemoryStore(storage) })
+    const written = writer.get("doc-1", TestDoc)
+    await whenHydrated(written)
+    written.title.set("theirs")
+    await writer.flush()
+
+    const reader = createExchange({
+      store: new InMemoryStore(storage),
+      authority: "self",
+    })
+    const doc = reader.get("doc-1", TestDoc)
+    expect(writeRefusal(doc)).toBeInstanceOf(DocumentLoadingError)
+
+    await expect(initialize(doc, d => d.title.set("mine"))).resolves.toBe(
+      "loaded",
+    )
+    expect(writeRefusal(doc)).toBeInstanceOf(WriterRefusedError)
+    expect(doc.title()).toBe("theirs")
   })
 
   it("seeds under the offline escape once the authority is given up on", async () => {

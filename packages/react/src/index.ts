@@ -97,6 +97,7 @@ export {
   isLineDocId,
   Line,
   lineDocId,
+  NotAWriterError,
   parseLineDocId,
   routeLine,
   sync,

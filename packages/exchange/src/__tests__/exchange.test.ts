@@ -5,12 +5,13 @@ import {
   BridgeTransport,
   createBridgeTransport,
 } from "@kyneta/bridge-transport"
-import { hasChangefeed } from "@kyneta/changefeed"
+import { CHANGEFEED, hasChangefeed } from "@kyneta/changefeed"
 import { loro } from "@kyneta/loro-schema"
 import {
   batch,
   bind,
   Defer,
+  DocumentClosedError,
   decodePlainPayload,
   json,
   Migration,
@@ -30,6 +31,8 @@ import type {
 } from "loro-crdt"
 import { describe, expect, it, vi } from "vitest"
 import { docStatus } from "../doc-status.js"
+import { NotAWriterError } from "../governance.js"
+import { writeRefusalFeed } from "../persistence.js"
 import { sync, whenSettled } from "../sync.js"
 import type { DocChange, PeerChange } from "../types.js"
 import { whenPeer } from "../when-peer.js"
@@ -279,6 +282,23 @@ describe("Exchange", () => {
 
       exchange.reset()
       expect(exchange.has("doc-1")).toBe(false)
+    })
+
+    it("reset() closes a read-only document before it clears the policy that refuses it", () => {
+      const exchange = createExchange({
+        principal: "test",
+        canWrite: () => false,
+      })
+      const doc = exchange.get("doc-1", TestDoc)
+      const feed = writeRefusalFeed(doc)
+      expect(feed()).toBeInstanceOf(NotAWriterError)
+      const heard: unknown[] = []
+      feed[CHANGEFEED].subscribe(() => heard.push(feed()))
+
+      exchange.reset()
+      expect(heard.length).toBeGreaterThan(0)
+      for (const refusal of heard) expect(refusal).toBeDefined()
+      expect(feed()).toBeInstanceOf(DocumentClosedError)
     })
 
     it("shutdown() clears doc cache", async () => {

@@ -1,17 +1,38 @@
-// document-terms — what a closed document's terms say. Closing never invents
-// an answer: each term keeps the one it had, and a pending one fails with the
-// close error.
+// document-terms — what a closed document's terms say, and how a term the
+// Exchange attaches later is followed. Closing never invents an answer: each
+// term keeps the one it had, and a pending one fails with the close error.
 
-import { DocumentClosedError } from "@kyneta/schema"
+import { CHANGEFEED, settableFeed } from "@kyneta/changefeed"
+import {
+  batch,
+  createRef,
+  createSubstrate,
+  DocumentClosedError,
+  plainSubstrateFactory,
+  Schema,
+  SYNC_AUTHORITATIVE,
+  WriteRefusal,
+} from "@kyneta/schema"
 import type { PeerIdentityDetails } from "@kyneta/transport"
 import { describe, expect, it } from "vitest"
 import {
+  buildLocalTerms,
   closedHydration,
   closedTerms,
+  closeTerms,
+  type DocumentTerms,
   type Hydration,
+  type NetworkTerms,
+  networkTermFeed,
+  type Peer,
   type Persistence,
+  registerNetworkTerms,
+  registerTerms,
+  type Sync,
   type TermsSnapshot,
+  termsOf,
 } from "../document-terms.js"
+import type { Authority } from "../governance.js"
 
 const error = new DocumentClosedError("destroyed")
 const loaded: Hydration = { status: "loaded" }
@@ -191,5 +212,121 @@ describe("closedTerms: syncMode", () => {
       "hydration",
       "persistence",
     ])
+  })
+})
+
+describe("closedTerms: the network refusal", () => {
+  it("closes to none: the closed substrate refuses first", () => {
+    const closed = closedTerms(
+      { hydration: loaded, persistence: confirmed, network: network() },
+      error,
+    )
+    expect(closed.network?.refusal).toBeUndefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Following a network term from before it is attached
+// ---------------------------------------------------------------------------
+
+const refused = new WriteRefusal("not a writer")
+
+function localTerms(): DocumentTerms {
+  return buildLocalTerms({
+    syncMode: SYNC_AUTHORITATIVE,
+    hydration: settableFeed<Hydration>(loaded),
+    persistence: settableFeed<Persistence>(confirmed),
+  })
+}
+
+function networkTerms(): NetworkTerms {
+  return {
+    peer: settableFeed<Peer>({ settled: true, resolve: () => true }),
+    authority: settableFeed<Authority>("any"),
+    sync: settableFeed<Sync>({
+      ref: {
+        peerId: "me",
+        docId: "doc",
+        peerStates: [],
+        ready: true,
+        readyFor: () => false,
+        connectivity: "offline",
+        onPeerSyncChange: () => () => {},
+      },
+      source: {
+        connectivity: () => "offline",
+        reconciled: () => [],
+        awaitReconciliation: async () => "ready",
+      },
+    }),
+    refusal: settableFeed<WriteRefusal | undefined>(undefined),
+  }
+}
+
+describe("networkTermFeed", () => {
+  it("answers absent before the network terms attach, then follows the picked term", () => {
+    const terms = localTerms()
+    const feed = networkTermFeed(terms, n => n.refusal, undefined)
+    let heard = 0
+    const stop = feed[CHANGEFEED].subscribe(() => heard++)
+    expect(feed()).toBeUndefined()
+
+    const network = networkTerms()
+    terms.network.set(network)
+    expect(heard).toBe(1)
+    expect(feed()).toBeUndefined()
+
+    network.refusal.set(refused)
+    expect(heard).toBe(2)
+    expect(feed()).toBe(refused)
+
+    stop()
+    network.refusal.set(undefined)
+    expect(heard).toBe(2)
+  })
+
+  it("follows the new network terms when they are replaced, and lets go of the old", () => {
+    const terms = localTerms()
+    const first = networkTerms()
+    terms.network.set(first)
+    const feed = networkTermFeed(terms, n => n.refusal, undefined)
+    let heard = 0
+    feed[CHANGEFEED].subscribe(() => heard++)
+
+    const second = networkTerms()
+    terms.network.set(second)
+    expect(heard).toBe(1)
+    first.refusal.set(refused)
+    expect(heard).toBe(1)
+    second.refusal.set(refused)
+    expect(heard).toBe(2)
+    expect(feed()).toBe(refused)
+  })
+})
+
+describe("a terms record built before its ref", () => {
+  const schema = Schema.struct({ title: Schema.string() })
+
+  it("is the record termsOf finds once registered, and its network refusal reaches the owner feed composed before", () => {
+    const terms = localTerms()
+    const doc = createRef(
+      schema,
+      createSubstrate(plainSubstrateFactory, schema),
+      { refusal: networkTermFeed(terms, n => n.refusal, undefined) },
+    )
+    registerTerms(doc, terms)
+    expect(termsOf(doc)).toBe(terms)
+    expect(termsOf(doc.title)).toBe(terms)
+
+    batch(doc, d => d.title.set("before"))
+    const network = networkTerms()
+    registerNetworkTerms(doc, network)
+    network.refusal.set(refused)
+    expect(() => batch(doc, d => d.title.set("after"))).toThrow(refused)
+    expect(doc.title()).toBe("before")
+
+    // Closing sets the refusal to none, letting go of what it followed.
+    closeTerms(terms, error, loaded)
+    expect(network.refusal()).toBeUndefined()
   })
 })

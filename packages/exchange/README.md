@@ -256,8 +256,8 @@ const exchange = new Exchange({
     if (docId.startsWith("input:")) return peer.peerId === docId.slice(6)
     return undefined
   },
-  canAccept: (docId, peer) => {  // ← new: inbound flow control
-    if (docId === "game-state") return false  // only server writes
+  canWrite: (docId, peer) => {  // ← new: who may write; clients register it too
+    if (docId === "game-state") return peer.principal === "server"
     return undefined
   },
 })
@@ -472,17 +472,44 @@ Each document's substrate and sync mode are determined by its BoundSchema. No co
 
 ### Governance Predicates
 
-Four predicates control information flow. All use three-valued logic (`true` / `false` / `undefined`) for composable policy stacking — `false` short-circuits, `undefined` defers to other policies, and the default when all policies abstain is `true`.
+Five predicates control information flow. All use three-valued logic (`true` / `false` / `undefined`) for composable policy stacking — `false` short-circuits, `undefined` defers to other policies, and the default when all policies abstain is `true`.
 
 - **`canShare(docId, peer) → boolean | undefined`** — Outbound. Gates all four ways a document can reach a peer: the `present` that announces it, the push on a local change, the relay of an imported change, and the `offer` answering a peer that asks for it by id. A denied request is answered `vacant` — "I will not serve you this" — which is deliberately the same reply the peer would get for a document that does not exist, so a denial reveals nothing about which ids are real. Also gates `resolve`: if `canShare` returns `false` for the announcing peer, the callback never fires.
 
-- **`canAccept(docId, peer) → boolean | undefined`** — Inbound. Gates offer imports. When rejected, the offer is silently dropped.
+- **`canAccept(docId, peer) → boolean | undefined`** — Inbound. Gates offer imports. When rejected, the offer is silently dropped, and its operations stay with the peer that wrote them. To keep a peer from writing a document at all, use `canWrite`.
+
+- **`canWrite(docId, peer) → boolean | undefined`** — Authorship. May `peer` author operations in this document? Judged twice: against this exchange's own identity for every local write, which throws `NotAWriterError` when rejected, and against the sender of every offer, which is dropped as a `canAccept` veto is. See [A document only one peer writes](#a-document-only-one-peer-writes).
 
 - **`canReset(docId, peer) → boolean | undefined`** — Epoch boundary. Fires when a peer sends an entirety payload for a document that already has local state — meaning the remote peer has compacted history past our known version. Accepting discards local state and adopts the entirety; rejecting keeps local state and diverges from compacted peers.
 
 - **`canConnect(peer) → boolean | undefined`** — Connection. Gates the `establish` handshake. When rejected, the peer's channel is ignored entirely — no documents are exchanged. Unlike the other predicates, this takes only a peer (no docId).
 
 > **Return `undefined` for documents your policy does not govern.** This is what the three-valued logic is for, and with `canShare` it now matters in practice: a `false` blocks *every* path for that document, including a direct request. Features that own documents of their own — `Line`, most visibly, which fetches the remote peer's outbox by id — depend on unrelated policies abstaining rather than vetoing. Both examples above follow this pattern: each governs one id prefix and returns `undefined` for the rest.
+
+### A document only one peer writes
+
+Some documents have one writer by design: a host keeps the authoritative layout, and clients change it by asking the host. Say so once, with one predicate, and register it unchanged on every peer:
+
+<!-- ts-docs-setup
+declare const exchange: Exchange
+-->
+```ts
+import type { PeerIdentityDetails } from "@kyneta/exchange"
+
+const isHost = (p: PeerIdentityDetails) => p.principal === "host"
+exchange.register({
+  canWrite: (docId, p) => (docId === "places" ? isHost(p) : undefined),
+})
+```
+
+- **Every peer evaluates it the same way**, because it is keyed by `principal`, which each peer announces, rather than by "self". On the host it permits the host's own writes; on a client it rejects the client's own writes, and on every peer it rejects an offer of "places" from anyone but the host.
+- **On a client, "places" is read-only.** Every write to it throws `NotAWriterError` before anything is applied, so no operation exists for the host to drop. `writeRefusal(doc)` returns the same error, `writeRefusalFeed(doc)` notifies when a policy change flips it, and `@kyneta/react`'s `useText` keeps its fields read-only. The client still receives every write the host makes.
+- **A client changes it by asking the host**, for example over a [`Line`](#reliable-messaging--line), and the host writes.
+- **A refused write cannot spread.** Even a client that bypasses its own gate is refused by the host and by every other client, since each judges an offer's sender by the same predicate.
+- **The rule is read when it is needed**, at each write and each offer, so a policy registered or disposed later takes effect at once.
+- **The host must pass its own predicate.** A host whose principal the predicate rejects is read-only too, and finds out at its first write.
+
+A read-only document hands out no native handle: `unwrap` throws `NotAWriterError` too (see [Escape Hatches](#escape-hatches)). Render a read-only view through Kyneta refs (`useText` and its siblings), not through a native editor binding in read-only mode.
 
 ### Dynamic Document Creation
 
@@ -755,6 +782,14 @@ text.insert(0, "hello")
 A write made this way is a local write like any other: the exchange pushes it
 to peers and persists it, and subscribers receive it with `replay: false`.
 
+A native handle writes past every check the exchange makes, so a document that
+refuses this peer's writes hands none out: `unwrap` throws whatever
+`writeRefusal(doc)` returns. That includes `DocumentLoadingError` on a stored
+`json` document still loading, so after `get`, await `whenHydrated(doc)` before
+`unwrap`. It also means a read-only document (`canWrite`, or another seat's
+`json` document) cannot drive a native editor binding, not even one in
+read-only mode; render it through Kyneta refs instead.
+
 ---
 
 ## Document Initialization
@@ -903,6 +938,12 @@ document (anything bound with `json.bind`) from a peer that is not the
 authority. Concurrent seeds cannot merge on that document type, so rather than
 lose the race at runtime, it throws with the fix in the message.
 
+And a document that refuses this peer's writes (a `canWrite` policy, another
+seat's `json` document) cannot be seeded by it: once the document has loaded,
+`initialize` rejects with that refusal itself (`NotAWriterError`,
+`WriterRefusedError`), without waiting for peers, unless the document already
+holds data.
+
 ---
 
 ## Complexity Gradient
@@ -911,7 +952,7 @@ lose the race at runtime, it throws with the fix in the message.
 |-------|----------------|--------------|
 | **Trivial** | `exchange.get("doc", MyDoc)` | Typed, syncable, observable document |
 | **Standard** | Add `transports`, `store` | Network sync + persistence |
-| **Intermediate** | Add `canShare`, `canAccept`, `resolve` | Information flow control, dynamic doc creation |
+| **Intermediate** | Add `canShare`, `canAccept`, `canWrite`, `resolve` | Information flow control, read-only documents, dynamic doc creation |
 | **Advanced** | `register()` scopes, `Line`, custom transports | Composable rules, reliable messaging, custom protocols |
 | **Expert** | Custom `Substrate<V>` implementation | New CRDT runtimes, new state models |
 
@@ -956,6 +997,7 @@ You only engage the next level when you need it. Each level is additive — it d
 | `replicas` | `BoundReplica[]` — replication modes for headless participation. E.g. `[loro.replica()]`. |
 | `canShare` | `(docId, peer) → boolean \| undefined` — outbound flow control. Default: allow. |
 | `canAccept` | `(docId, peer) → boolean \| undefined` — inbound flow control. Default: allow. |
+| `canWrite` | `(docId, peer) → boolean \| undefined` — who may author operations: judged against this exchange's own identity for its writes, and against the sender of every offer. Default: allow. |
 | `canReset` | `(docId, peer) → boolean \| undefined` — epoch boundary policy. Default: allow. |
 | `canConnect` | `(peer) → boolean \| undefined` — connection-level gate. Default: allow. |
 | `resolve` | `(docId, peer, replicaType, syncMode, schemaHash) → Disposition` — policy gate for unknown docs. |
@@ -982,7 +1024,7 @@ Standalone functions, not members of `sync(doc)`. They divide by three questions
 | `whenSettled(doc, opts?)` | Resolve once **every** truth source has reported — stored data loaded and the authority answered. Options: `{ authority?, offlineAfter? }` (`peer?` is a deprecated spelling of `authority`). Resolves `{ via: "peer" \| "local" \| "offline" }`: `"local"` when nothing upstream had to answer (no transports, or `authority: "self"`), `"peer"` when the authority answered, `"offline"` when `offlineAfter` elapsed first. Rejects only if the store read failed. |
 | `docStatus(doc, opts?)` | `"pending" \| "empty" \| "populated"` — total, never throws. Options: `{ authority? }`. |
 | `docStatusFeed(doc, opts?)` | Observable form of `docStatus`, carrying `[CHANGEFEED]`. |
-| `initialize(doc, seed, opts?)` | Write defaults exactly once, only if the document is genuinely empty. Options: `{ authority?, offlineAfter? }`. Returns `"created"` or `"loaded"`. |
+| `initialize(doc, seed, opts?)` | Write defaults exactly once, only if the document is genuinely empty. Options: `{ authority?, offlineAfter? }`. Returns `"created"` or `"loaded"`. Rejects with the document's `writeRefusal` if, once loaded, it refuses this peer's writes and holds no data. |
 | `settled(doc)` | `boolean` — has every truth source reported? The synchronous form of `whenSettled`; **not** a promise. |
 | `settledFeed(doc)` | Observable form of `settled`. A callable, so never put it in an `if`. |
 | `hydrated(doc)` / `whenHydrated(doc)` | The storage half alone: has this document's stored data finished loading? `whenHydrated` rejects if the load failed. This — not `flush()` — is the storage gate. |
@@ -990,7 +1032,7 @@ Standalone functions, not members of `sync(doc)`. They divide by three questions
 | `persistedFeed(doc)` | Observable form of `persisted`. A callable, so never put it in an `if`. |
 | `whenPersisted(doc)` | Resolve once `persisted`. Rejects at once if a store write failed and none has succeeded since, and rejects if one fails while waiting. Writes are retried on their own, so a caller can check `persistenceError` and wait again. |
 | `persistenceError(doc)` | The error of the latest failed store write, cleared by the next write that succeeds. Covers every store write, including one that stores only operations imported from peers, so it can be set while `persisted` is true. After the seat is lost, the `SeatLostError`, for good. |
-| `writeRefusal(doc)` | Why this document's writes throw, a `WriteRefusal` (narrow with `instanceof`), or `undefined`: a `WriterRefusedError` when another seat of the store writes this `json` document (kept for the session), a `DocumentLoadingError` while a stored `json` document loads, a `DocumentClosedError` once the document is closed. |
+| `writeRefusal(doc)` | Why this document's writes throw, a `WriteRefusal` (narrow with `instanceof`), or `undefined`: a `NotAWriterError` while a `canWrite` policy rejects this exchange's own identity, a `WriterRefusedError` when another seat of the store writes this `json` document (kept for the session), a `DocumentLoadingError` while a stored `json` document loads, a `DocumentClosedError` once the document is closed. |
 | `writeRefusalFeed(doc)` | Observable form of `writeRefusal`, e.g. to disable an editor. A callable, so never put it in an `if`. |
 
 `whenSettled` and `docStatus` resolve the authority the same way, so they cannot disagree: call-site `opts.authority` → the Exchange's `Policy.authority` → `"any"`.
@@ -1034,14 +1076,14 @@ Each binding target is a fixed `(substrate, sync-mode, supported-laws)` bundle. 
 
 | Function | Package | Description |
 |----------|---------|-------------|
-| `unwrap(ref)` | `@kyneta/schema` | Returns the native document or container behind a ref: a `Y.Doc` or `LoroDoc` for a document, a `Y.Text`, `LoroText`, … for a field. Writes made on it sync and persist. |
+| `unwrap(ref)` | `@kyneta/schema` | Returns the native document or container behind a ref: a `Y.Doc` or `LoroDoc` for a document, a `Y.Text`, `LoroText`, … for a field. Writes made on it sync and persist. Throws the document's `writeRefusal`, if it has one. |
 
 ### Storage
 
 | Export | Description |
 |--------|-------------|
 | `Store` | Interface for persistent storage backends: append, load, and compaction by mark (`StoreMark`). Several instances may open one storage. Writes take `WriteOptions` (`authored`); a pooled store records each serialized document's writer (`writerOf`). |
-| `WriterRefusedError` | Thrown by a write to, or reported for, a `json` document another seat of the store writes. Carries `writer`. A `WriteRefusal` (`@kyneta/schema`), like `DocumentClosedError` and `DocumentLoadingError`. |
+| `WriterRefusedError` | Thrown by a write to, or reported for, a `json` document another seat of the store writes. Carries `writer`. A `WriteRefusal` (`@kyneta/schema`), like `DocumentClosedError`, `DocumentLoadingError` and `NotAWriterError`. |
 | `StoreRecord` | A stored record: `{ kind: "meta", meta }` or `{ kind: "entry", payload, version }`. |
 | `createInMemoryStore(opts?)` | Map-backed store for testing. Pass `{ sharedData }` to open the same storage from several instances. |
 | `createInMemoryStoreData()` | An empty storage to share between in-memory stores. |

@@ -5,9 +5,10 @@
 // it (§"Store-first" in TECHNICAL.md). These functions answer, for any ref
 // within a document, whether that has happened, and why not. Whether this peer
 // may author the document is its context's refusal (`writeRefusal`): a
-// serialized document another seat of the storage writes refuses authored
-// writes (§"Serialized documents: one writer seat per storage"), and so does a
-// closed one.
+// document a `canWrite` policy keeps from this peer refuses authored writes,
+// so does a serialized document another seat of the storage writes
+// (§"Serialized documents: one writer seat per storage"), and so does a closed
+// one.
 //
 // Not a settle term. `settled` asks whether every source has reported what it
 // holds; a write waiting on the store is not a source, and a document can be
@@ -98,7 +99,10 @@ export function whenPersisted(ref: object): Promise<void> {
  * Why this document's authored writes are refused, or `undefined` when they
  * are not. Read from the document's context, the one answer the write path
  * itself throws:
- * - `DocumentClosedError`: the document was destroyed, unloaded or disposed;
+ * - `NotAWriterError`: a `Policy.canWrite` rejects this peer's own identity
+ *   for the document, for as long as the policies say so;
+ * - `DocumentClosedError`: the document was destroyed, unloaded or disposed,
+ *   or is unloading;
  * - `DocumentLoadingError`: a serialized document is still loading its own
  *   history from its store;
  * - `WriterRefusedError`: another seat of its storage is the recorded writer

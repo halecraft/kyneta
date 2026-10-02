@@ -105,11 +105,16 @@ function ownProperties(
  * `[NATIVE]`, which asks the substrate on each access, so it names what backs
  * the node now (a plain document's root is replaced when a write copies it);
  * and `[POSITION]` on a text, made on first access.
+ *
+ * `[NATIVE]` throws the context's refusal when it has one: a native handle
+ * writes past the refusal, so a document that refuses writes hands none out.
  */
 function nativeMembers(schema: SchemaNode): PropertyDescriptorMap {
   const members: PropertyDescriptorMap = {
     [NATIVE]: getter(function (this: unknown): unknown {
       const { ctx, path } = stateOf(this, "[NATIVE]")
+      const refused = ctx.refusal()
+      if (refused !== undefined) throw refused
       return ctx.nativeResolver?.(schema, path)
     }),
   }

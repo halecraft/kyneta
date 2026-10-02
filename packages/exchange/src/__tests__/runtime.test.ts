@@ -860,8 +860,12 @@ describe("the lifecycle shell", () => {
     const advanced = vi.fn()
     runtime.setHooks({ onDocAdvanced: advanced })
     const doc = runtime.get("todo-1", LoroTodo) as DocRef<typeof TodoSchema>
-    hydratedFeed(doc)[CHANGEFEED].subscribe(() => {
-      if (hydrated(doc)) doc.title.set("on load")
+    // Writes once, on load: the close notifies the term again, and a closed
+    // document refuses the write.
+    const stop = hydratedFeed(doc)[CHANGEFEED].subscribe(() => {
+      if (!hydrated(doc)) return
+      stop()
+      doc.title.set("on load")
     })
     await whenHydrated(doc)
     await runtime.flush()

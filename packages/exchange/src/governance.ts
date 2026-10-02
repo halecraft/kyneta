@@ -17,7 +17,7 @@
 // - When every policy returns `undefined`, the gate falls back to
 //   a caller-supplied default.
 
-import type { ReplicaType, SyncMode } from "@kyneta/schema"
+import { type ReplicaType, type SyncMode, WriteRefusal } from "@kyneta/schema"
 import type { DocId, PeerIdentityDetails } from "@kyneta/transport"
 import type { Disposition } from "./exchange.js"
 
@@ -59,11 +59,6 @@ export type LineageBoundaryPredicate = (
 ) => boolean | undefined
 
 /**
- * A Policy is a bundle of gate predicates and handlers governing a
- * region of the document and connection space. All fields are optional
- * — a policy only provides the gates it cares about.
- */
-/**
  * Who is authoritative for a document — i.e. whose answer settles the question
  * "does this document already have data?".
  *
@@ -87,11 +82,23 @@ export type Authority =
   | "any"
   | ((peer: PeerIdentityDetails) => boolean)
 
+/**
+ * A bundle of gate predicates and handlers governing a region of the
+ * document and connection space. Every field is optional: a policy provides
+ * only the gates it cares about. `Governance` composes the gates of every
+ * registered policy, and reads them at each use, so a policy registered or
+ * disposed later takes effect.
+ */
 export interface Policy {
   /** Optional name for debuggability, introspection, and replacement. */
   name?: string
   canShare?: GatePredicate
   canAccept?: GatePredicate
+  /**
+   * May `peer` author operations in `docId`? Judged against this peer's own
+   * identity for local writes, and against the sender of every offer.
+   */
+  canWrite?: GatePredicate
   canReset?: LineageBoundaryPredicate
   cohort?: GatePredicate
   canConnect?: (peer: PeerIdentityDetails) => boolean | undefined
@@ -110,6 +117,25 @@ export interface Policy {
     schemaHash: string,
   ) => Disposition | undefined
   dispose?: () => void
+}
+
+/**
+ * The composed `canWrite` rejects this peer's own identity for `docId`, so
+ * the document refuses its authored writes, and its native handle.
+ */
+export class NotAWriterError extends WriteRefusal {
+  override readonly name = "NotAWriterError"
+
+  constructor(
+    readonly docId: DocId,
+    /** The identity `canWrite` judged: this peer's own. */
+    readonly peer: PeerIdentityDetails,
+  ) {
+    super(
+      `Policy: peer ${peer.peerId} (principal "${peer.principal}") ` +
+        `may not write document '${docId}'`,
+    )
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -154,7 +180,10 @@ export function composeGate(
 export class Governance {
   readonly #policies: Policy[] = []
   readonly #namedPolicies = new Map<string, Policy>()
-  readonly #disposers = new Map<Policy, () => void>()
+  /** Each policy's removal, which reports whether it removed anything and
+   *  notifies no one. */
+  readonly #removals = new Map<Policy, () => boolean>()
+  readonly #listeners = new Set<() => void>()
 
   /**
    * Register a policy. Returns a dispose function that removes the
@@ -165,26 +194,27 @@ export class Governance {
    * in the evaluation order).
    */
   register(policy: Policy): () => void {
-    if (policy.name != null) {
-      const existing = this.#namedPolicies.get(policy.name)
-      if (existing) {
-        const idx = this.#policies.indexOf(existing)
-        if (idx !== -1) this.#policies[idx] = policy // replace in-place
-        this.#namedPolicies.set(policy.name, policy) // point name to new policy
-        this.#disposers.get(existing)?.() // dispose old (no-op removal, fires callback)
-        return this.#createDispose(policy)
-      }
-      this.#namedPolicies.set(policy.name, policy)
+    const existing =
+      policy.name != null ? this.#namedPolicies.get(policy.name) : undefined
+    if (existing !== undefined) {
+      const idx = this.#policies.indexOf(existing)
+      if (idx !== -1) this.#policies[idx] = policy // replace in-place
+    } else {
+      this.#policies.push(policy)
     }
-
-    this.#policies.push(policy)
-    return this.#createDispose(policy)
+    if (policy.name != null) this.#namedPolicies.set(policy.name, policy)
+    const dispose = this.#createDispose(policy)
+    // The old policy is no longer in the list: its removal only marks it
+    // disposed and runs its `dispose` callback.
+    if (existing !== undefined) this.#removals.get(existing)?.()
+    this.#changed()
+    return dispose
   }
 
   #createDispose(policy: Policy): () => void {
     let disposed = false
-    const fn = () => {
-      if (disposed) return
+    const remove = (): boolean => {
+      if (disposed) return false
       disposed = true
       const idx = this.#policies.indexOf(policy)
       if (idx !== -1) this.#policies.splice(idx, 1)
@@ -193,11 +223,31 @@ export class Governance {
           this.#namedPolicies.delete(policy.name)
         }
       }
-      this.#disposers.delete(policy)
+      this.#removals.delete(policy)
       policy.dispose?.()
+      return true
     }
-    this.#disposers.set(policy, fn)
-    return fn
+    this.#removals.set(policy, remove)
+    return () => {
+      if (remove()) this.#changed()
+    }
+  }
+
+  /**
+   * Hear every change of the policy list: after a `register` (a named
+   * replacement included), after a policy's disposal, and after `clear`,
+   * once each. A disposer that already ran changes nothing and notifies no
+   * one. Returns the unsubscribe.
+   */
+  subscribe(listener: () => void): () => void {
+    this.#listeners.add(listener)
+    return () => {
+      this.#listeners.delete(listener)
+    }
+  }
+
+  #changed(): void {
+    for (const listener of [...this.#listeners]) listener()
   }
 
   /**
@@ -218,6 +268,17 @@ export class Governance {
   canAccept(docId: DocId, peer: PeerIdentityDetails): boolean {
     return composeGate(
       this.#policies.map(p => p.canAccept?.(docId, peer)),
+      true,
+    )
+  }
+
+  /**
+   * Composed write gate: may `peer` author operations in `docId`? Defaults
+   * to open (`true`) when all policies return `undefined`.
+   */
+  canWrite(docId: DocId, peer: PeerIdentityDetails): boolean {
+    return composeGate(
+      this.#policies.map(p => p.canWrite?.(docId, peer)),
       true,
     )
   }
@@ -311,18 +372,19 @@ export class Governance {
    * returns them for the caller to handle.
    */
   clear(): unknown[] {
-    const snapshot = [...this.#disposers.values()]
+    const snapshot = [...this.#removals.values()]
     this.#policies.length = 0
     this.#namedPolicies.clear()
-    this.#disposers.clear()
+    this.#removals.clear()
     const errors: unknown[] = []
-    for (const dispose of snapshot) {
+    for (const remove of snapshot) {
       try {
-        dispose()
+        remove()
       } catch (e) {
         errors.push(e)
       }
     }
+    this.#changed()
     return errors
   }
 
