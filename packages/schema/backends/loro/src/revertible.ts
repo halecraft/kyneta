@@ -602,6 +602,86 @@ const decodePosition = (bytes: Uint8Array): Position =>
   JSON.parse(new TextDecoder().decode(bytes)) as Position
 
 // ---------------------------------------------------------------------------
+// Reading containers
+// ---------------------------------------------------------------------------
+
+/** A commit's key, by its last op: what the pre-commit hook and the commit
+ *  event both know it by. */
+const tailKey = (id: OpId): string => `${id.peer}:${id.counter}`
+
+/** The container `cid` names in `source`, unless it is missing or deleted. */
+function containerIn(source: LoroDoc, cid: ContainerID): Container | undefined {
+  if (!source.hasContainer(cid)) return undefined
+  const container = source.getContainerById(cid)
+  const deleted =
+    container !== undefined &&
+    "isDeleted" in container &&
+    (container as { isDeleted(): boolean }).isDeleted()
+  return deleted ? undefined : container
+}
+
+/** What a revert of `diff` decides by, read from the container at
+ *  `after` (`was`) and now. */
+function gatheredState(
+  diff: Diff,
+  was: Container | undefined,
+  now: Container | undefined,
+  aliases: readonly Alias[],
+): GatheredState {
+  if (now === undefined) return { kind: "gone" }
+  if (was === undefined) return { kind: "unknown" }
+  switch (diff.type) {
+    case "text":
+      return {
+        kind: "text",
+        was: (was as unknown as { toString(): string }).toString(),
+        now: (now as unknown as { toString(): string }).toString(),
+        marks: (was as unknown as { toDelta(): Delta<string>[] })
+          .toDelta()
+          .flatMap(d =>
+            Array.from({ length: d.insert?.length ?? 0 }, () => ({
+              ...(d.attributes ?? {}),
+            })),
+          ),
+      }
+    case "list": {
+      const items = (list: Container) =>
+        ((list as unknown as { toArray(): unknown[] }).toArray() ?? []).map(
+          plain,
+        )
+      return { kind: "list", was: items(was), now: items(now) }
+    }
+    case "map": {
+      const get = (map: Container, key: string) =>
+        plain((map as unknown as { get(key: string): unknown }).get(key))
+      const keys = Object.keys(diff.updated)
+      return {
+        kind: "map",
+        was: Object.fromEntries(keys.map(k => [k, get(was, k)])),
+        now: Object.fromEntries(keys.map(k => [k, get(now, k)])),
+      }
+    }
+    case "tree": {
+      const nowTree = now as unknown as TreeLike
+      const thenTree = was as unknown as TreeLike
+      const nodes: Record<string, GatheredNode> = {}
+      for (const item of diff.diff) {
+        // A node an earlier revert re-created answers to its new id.
+        const node = nowTree.getNodeByID(aliasOf(item.target, aliases))
+        nodes[item.target] = {
+          live: node !== undefined && !node.isDeleted(),
+          parent: node?.parent()?.id,
+          placed: thenTree.getNodeByID(item.target)?.parent()?.id,
+        }
+      }
+      return { kind: "tree", nodes }
+    }
+    default:
+      return { kind: "other" }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // The shell
 // ---------------------------------------------------------------------------
 
@@ -635,20 +715,6 @@ export function createLoroRevertible(host: LoroRevertibleHost): LoroRevertible {
   const pending = new Map<string, LoroRecord>()
   let reverting: { record: LoroRecord | null } | undefined
 
-  const tailKey = (id: OpId) => `${id.peer}:${id.counter}`
-  const containerIn = (
-    source: LoroDoc,
-    cid: ContainerID,
-  ): Container | undefined => {
-    if (!source.hasContainer(cid)) return undefined
-    const container = source.getContainerById(cid)
-    const deleted =
-      container !== undefined &&
-      "isDeleted" in container &&
-      (container as { isDeleted(): boolean }).isDeleted()
-    return deleted ? undefined : container
-  }
-
   /**
    * Read what `record` concerns, at `after` and now. Null when `diff`
    * cannot reach it: behind a shallow snapshot's start.
@@ -667,69 +733,8 @@ export function createLoroRevertible(host: LoroRevertibleHost): LoroRevertible {
       const to = aliasOf(cid, record.aliases)
       const now = containerIn(doc, to)
       const was = then.getContainerById(cid)
-      return { to, diff, state: stateOf(diff, was, now, record.aliases) }
+      return { to, diff, state: gatheredState(diff, was, now, record.aliases) }
     })
-  }
-
-  /** What a revert of `diff` decides by, read from the container at
-   *  `after` (`was`) and now. */
-  function stateOf(
-    diff: Diff,
-    was: Container | undefined,
-    now: Container | undefined,
-    aliases: readonly Alias[],
-  ): GatheredState {
-    if (now === undefined) return { kind: "gone" }
-    if (was === undefined) return { kind: "unknown" }
-    switch (diff.type) {
-      case "text":
-        return {
-          kind: "text",
-          was: (was as unknown as { toString(): string }).toString(),
-          now: (now as unknown as { toString(): string }).toString(),
-          marks: (was as unknown as { toDelta(): Delta<string>[] })
-            .toDelta()
-            .flatMap(d =>
-              Array.from({ length: d.insert?.length ?? 0 }, () => ({
-                ...(d.attributes ?? {}),
-              })),
-            ),
-        }
-      case "list": {
-        const items = (list: Container) =>
-          ((list as unknown as { toArray(): unknown[] }).toArray() ?? []).map(
-            plain,
-          )
-        return { kind: "list", was: items(was), now: items(now) }
-      }
-      case "map": {
-        const get = (map: Container, key: string) =>
-          plain((map as unknown as { get(key: string): unknown }).get(key))
-        const keys = Object.keys(diff.updated)
-        return {
-          kind: "map",
-          was: Object.fromEntries(keys.map(k => [k, get(was, k)])),
-          now: Object.fromEntries(keys.map(k => [k, get(now, k)])),
-        }
-      }
-      case "tree": {
-        const nowTree = now as unknown as TreeLike
-        const thenTree = was as unknown as TreeLike
-        const nodes: Record<string, GatheredNode> = {}
-        for (const item of diff.diff) {
-          // A node an earlier revert re-created answers to its new id.
-          const node = nowTree.getNodeByID(aliasOf(item.target, aliases))
-          nodes[item.target] = {
-            live: node !== undefined && !node.isDeleted(),
-            parent: node?.parent()?.id,
-            placed: thenTree.getNodeByID(item.target)?.parent()?.id,
-          }
-        }
-        return { kind: "tree", nodes }
-      }
-      default:
-        return { kind: "other" }
-    }
   }
 
   /** Pair each restored container, and those inside it, with its new id. */
@@ -791,8 +796,9 @@ export function createLoroRevertible(host: LoroRevertibleHost): LoroRevertible {
     },
 
     committed(tail, ops, aborted) {
-      const record = pending.get(tailKey(tail))
-      pending.delete(tailKey(tail))
+      const key = tailKey(tail)
+      const record = pending.get(key)
+      pending.delete(key)
       if (record === undefined) return
       if (reverting !== undefined) {
         reverting.record = record

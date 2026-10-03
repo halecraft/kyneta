@@ -102,7 +102,13 @@ export function textIds(doc: Y.Doc, text: Y.Text): IdRun[] {
   return toRuns(ids)
 }
 
-export function stateOf(doc: Y.Doc, client: number): number {
+/**
+ * The clock `client`'s next item will take in `doc`, which is how many items
+ * `client` has made (`Y.getState`). Next, not last: the runs of ids built
+ * from it, a text insert's from the clocks around it and a crashed revert's
+ * from its noted position, start at the clock itself.
+ */
+export function clockOf(doc: Y.Doc, client: number): number {
   return Y.getState(doc.store, client)
 }
 

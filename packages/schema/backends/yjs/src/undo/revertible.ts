@@ -47,12 +47,12 @@ import {
   valueWrites,
 } from "./capture.js"
 import {
+  clockOf,
   destabilize,
   gapAfter,
   idAt,
   locate,
   stabilize,
-  stateOf,
   type Tree,
   typeAt,
 } from "./document.js"
@@ -222,7 +222,7 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
 
     preparing(path, change) {
       if (!active() || authored === undefined) return
-      clockBefore = stateOf(host.doc, host.doc.clientID)
+      clockBefore = clockOf(host.doc, host.doc.clientID)
       const draft = draftFor(authored)
       // Inside a `.json()` value the whole value is one register, written
       // as a whole when the batch ends: record it as one value.
@@ -286,7 +286,7 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
         }
         ids = toRuns(units)
       } else {
-        const clockAfter = stateOf(host.doc, host.doc.clientID)
+        const clockAfter = clockOf(host.doc, host.doc.clientID)
         if (clockAfter === clockBefore) return
         ids = [
           {
@@ -413,7 +413,7 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
 
     recovered(record, position) {
       const from = decodePosition(position)
-      const now = stateOf(host.doc, from.client)
+      const now = clockOf(host.doc, from.client)
       const fresh: IdRun[] =
         now > from.clock
           ? [
@@ -464,13 +464,13 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
     position() {
       return encodePosition({
         client: host.doc.clientID,
-        clock: stateOf(host.doc, host.doc.clientID),
+        clock: clockOf(host.doc, host.doc.clientID),
       })
     },
 
     authoredSince(position) {
       const from = decodePosition(position)
-      return stateOf(host.doc, from.client) > from.clock
+      return clockOf(host.doc, from.client) > from.clock
     },
 
     codec,

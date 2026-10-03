@@ -137,8 +137,17 @@ function encodePart({ algebra, record, ...part }: OpenPart): Part {
   return { ...part, record: uint8ArrayToBase64(algebra.codec.encode(record)) }
 }
 
-function listOf(stack: StoredStack, direction: Direction): readonly Step[] {
+function stepsIn(stack: StoredStack, direction: Direction): readonly Step[] {
   return direction === "undo" ? stack.undo : stack.redo
+}
+
+/** The step of `direction`'s list with this `id`, if it is still there. */
+function findStep(
+  stack: StoredStack,
+  direction: Direction,
+  id: string,
+): Step | undefined {
+  return stepsIn(stack, direction).find(step => step.id === id)
 }
 
 /** Whether `step` writes any document in `docs`. Every step does when
@@ -265,12 +274,12 @@ export function moveStep(
   const each = (steps: readonly Step[]) =>
     steps.map(s => ({ ...s, parts: s.parts.map(rewrite) }))
   const to: Direction = from === "undo" ? "redo" : "undo"
-  const rest = listOf(stack, from).filter(s => s.id !== step.id)
+  const rest = stepsIn(stack, from).filter(s => s.id !== step.id)
   const left = each(
     from === "redo" && redo === undefined ? clearDependents(rest, step) : rest,
   )
   const right = [
-    ...each(listOf(stack, to)),
+    ...each(stepsIn(stack, to)),
     ...(redo === undefined ? [] : [redo]),
   ]
   const moved =
@@ -363,7 +372,7 @@ export async function createUndoStack(
     }
   }
   const top = (direction: Direction, docs?: readonly DocId[]) =>
-    topStep(listOf(read(), direction), docs)
+    topStep(stepsIn(read(), direction), docs)
   const at = RawPath.empty.field("stacks").entry(key)
   /** Write the stack's move from what it holds to `next`, in one batch. */
   const write = (next: StoredStack) => {
@@ -818,19 +827,22 @@ export async function createUndoStack(
    * note's `whole`, as for a request.
    */
   async function recover(note: Note): Promise<void> {
-    const found = listOf(read(), note.direction).find(s => s.id === note.step)
-    if (found === undefined) {
+    /** The noted step is gone: there is nothing to finish. */
+    const abandon = () => {
       write({ ...read(), pending: null })
       dispatch({ type: "recovered" })
+    }
+    const found = findStep(read(), note.direction, note.step)
+    if (found === undefined) {
+      abandon()
       return
     }
     await openAll(found, true)
     // Read again: a step pushed while the documents opened may have cleared
     // it from the redo list.
-    const step = listOf(read(), note.direction).find(s => s.id === note.step)
+    const step = findStep(read(), note.direction, note.step)
     if (step === undefined) {
-      write({ ...read(), pending: null })
-      dispatch({ type: "recovered" })
+      abandon()
       return
     }
     const notedPosition = (part: Part): Uint8Array | undefined => {

@@ -646,6 +646,36 @@ describe("a stored undo stack", () => {
     ).toBeNull()
   })
 
+  it("a note naming a step no longer in its list is cleared on load", async () => {
+    const data = createInMemoryStoreData()
+    const first = withStore(data)
+    const a = await settled(first)
+    const stack = await stackOn(first)
+    stack.gesture(() => a.card.text.insert(0, "hello"))
+    const kept = stack.top("undo")
+    const undoDoc: any = first.get("undo", UndoDoc)
+    batch(undoDoc, (d: any) =>
+      d.stacks.at("main").pending.set({
+        step: "gone",
+        direction: "undo",
+        whole: false,
+        positions: {},
+      }),
+    )
+    await whenPersisted(undoDoc)
+    await first.shutdown()
+
+    const second = withStore(data)
+    const b = await settled(second)
+    const again = await stackOn(second)
+    await drain()
+    const after: any = second.get("undo", UndoDoc)
+    expect(after.stacks.at("main").pending()).toBeNull()
+    expect(again.top("undo")).toEqual(kept)
+    expect((await again.undo()).kind).toBe("undone")
+    expect(b.card.text()).toBe("")
+  })
+
   it("a crash between the note and the revert reverts on the next load", async () => {
     const data = createInMemoryStoreData()
     const first = withStore(data)
