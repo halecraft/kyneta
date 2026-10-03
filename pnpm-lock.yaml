@@ -444,7 +444,7 @@ importers:
   packages/exchange:
     dependencies:
       '@kyneta/machine':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../machine
       '@kyneta/random':
         specifier: workspace:^

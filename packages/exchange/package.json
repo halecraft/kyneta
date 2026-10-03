@@ -46,7 +46,7 @@
     "@kyneta/schema": "workspace:^"
   },
   "dependencies": {
-    "@kyneta/machine": "workspace:*",
+    "@kyneta/machine": "workspace:^",
     "@kyneta/random": "workspace:^",
     "@kyneta/transport": "workspace:^"
   },
