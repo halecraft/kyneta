@@ -8,7 +8,7 @@
 
 An in-browser visualizer / developer tool for Kyneta apps — so a developer can
 **see, understand, reason about, and debug** sync across its layers: wire
-(frames), protocol (the 7-message vocabulary), sync-engine (the TEA programs),
+(frames), protocol (the 9-message vocabulary), sync-engine (the TEA programs),
 directory (peers × documents), doc (the changeset stream), substrate (CRDT
 version/op history), and diagnostics (silent failures).
 

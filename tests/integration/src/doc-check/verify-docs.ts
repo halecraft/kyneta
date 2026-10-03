@@ -39,6 +39,7 @@ const DOCUMENTS = [
   "packages/react/README.md",
   "packages/index/README.md",
   "docs/upgrading-3.0.md",
+  "docs/upgrading-4.0.md",
 ]
 
 function main(): void {

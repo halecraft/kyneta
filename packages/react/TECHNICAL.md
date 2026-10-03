@@ -100,7 +100,7 @@ A hook's value changes identity only when a tracked read changed or the thunk's 
 
 **Purity.** A thunk must be pure over its captures and its tracked reads. One that reads `useRef().current`, `Date.now()` or a store kyneta does not track returns a stale value once its identity is stable — the contract of `useMemo`, `computed` and React Compiler alike.
 
-**Structural sharing and `React.memo`.** Because a read shares its unchanged subtrees, a `React.memo` child handed part of a `useValue` result skips re-rendering unless its part changed: after an edit to `todos[0]`, `value.todos[1]` is the same object as before. Reads are frozen, so a component cannot corrupt a value another component holds; copy one (`structuredClone`) to mutate it.
+**Structural sharing and `React.memo`.** Because a read shares its unchanged subtrees, a `React.memo` child handed part of a `useValue` result skips re-rendering unless its part changed: after an edit to `todos[0]`, `value.todos[1]` is the same object as before. Reads are frozen, so a component cannot corrupt a value another component holds; to change the document, write through the ref (`todo.done.set(true)`).
 
 ---
 

@@ -78,7 +78,7 @@ export type DepartMsg = {
 }
 
 // ---------------------------------------------------------------------------
-// Sync messages — the seven-message document-exchange vocabulary
+// Sync messages — the seven sync messages of the document-exchange vocabulary
 // ---------------------------------------------------------------------------
 
 /**

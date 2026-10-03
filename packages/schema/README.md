@@ -51,7 +51,7 @@ Zero runtime dependencies.
 
 | Capability | How |
 |---|---|
-| **Typed reads** | `doc.title()` returns `string`, `doc()` returns the full plain snapshot — frozen, and the same object until something in it changes, sharing every subtree that did not. Copy one (`structuredClone`) to mutate it |
+| **Typed reads** | `doc.title()` returns `string`, `doc()` returns the full plain snapshot — frozen, and the same object until something in it changes, sharing every subtree that did not. To change the document, write through the ref (`doc.items.push(item)`) |
 | **Typed writes** | `.set()`, `.insert()`, `.increment()`, `.push()`, `.delete()` — each ref knows its mutation surface |
 | **Batching** | `batch(doc, d => { … })` → `Op[]` — group writes into one atomic commit + one notification (a single write needs no wrapper); returns the captured ops for sync |
 | **Sync** | `applyChanges(docB, ops)` — apply ops from another doc or the network |
@@ -172,7 +172,7 @@ A write that rewrites a subtree reaches the subscribers inside it too: a struct'
 
 Within a changeset, `changes` are in the order they were written. That makes the list a faithful log: a root subscriber's `changes` are exactly the `Op[]` that `batch()` returned, and handing them to `applyChanges()` on another document reproduces the same writes. One exception: when an inner `batch()` threw and an outer one caught it, `batch()` returns only what survived, while the changeset also carries the inner writes and the compensations that undid them. Both replay to the same state. Deeper subscribers are called before shallower ones.
 
-Ops are yours to keep. An op's path names where it wrote when it was made: an insert earlier in a list does not shift it. Its payload is a snapshot taken when the write was dispatched. So you can queue one for a later network send, or forward it to another document, and it will still describe what was written. Neither a later write nor the caller that supplied the value can reach back and alter it. The payload is also frozen, and shared with the document, so copy it (`structuredClone`) to change it. `applyChanges()` never freezes the ops you hand it: it shares a payload that is already frozen and copies anything else.
+Ops are yours to keep. An op's path names where it wrote when it was made: an insert earlier in a list does not shift it. Its payload is a snapshot taken when the write was dispatched. So you can queue one for a later network send, or forward it to another document, and it will still describe what was written. Neither a later write nor the caller that supplied the value can reach back and alter it. The payload is also frozen, and shared with the document, so build a new value from it to change it. `applyChanges()` never freezes the ops you hand it: it shares a payload that is already frozen and copies anything else.
 
 Origin provenance (`{ origin: "sync" }`) flows through from `batch()` and `applyChanges()`.
 

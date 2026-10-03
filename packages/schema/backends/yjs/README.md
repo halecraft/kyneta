@@ -147,7 +147,7 @@ import { yjsClientId } from "@kyneta/yjs-schema"
 const peerByClientId = new Map(knownPeerIds.map(id => [yjsClientId(id), id]))
 ```
 
-*Note for raw Y.Doc consumers:* Subscribers attached directly to the underlying `Y.Doc` will newly see `options.origin` faithfully on `transaction.origin` (where previously it was silently dropped).
+*Note for raw Y.Doc consumers:* subscribers attached directly to the underlying `Y.Doc` see `options.origin` on `transaction.origin`.
 
 ## Yjs Ecosystem Compatibility
 

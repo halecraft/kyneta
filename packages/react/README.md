@@ -253,7 +253,7 @@ const authReady = useDocReady(doc, { authority: (p) => p.principal === "my-serve
 
 ### `useSyncState(doc)`
 
-The raw escape hatch (renamed from `useSyncStatus` in 2.0 — **breaking**). Returns `PeerSyncState[]` (`{ docId, peer, state: "pending" | "synced" | "vacant" }`) and re-renders on any per-peer change. Volatile — an entry can regress `synced → pending` on reconnect; for a stable gate use `useDocReady`.
+The raw escape hatch. Returns `PeerSyncState[]` (`{ docId, peer, state: "pending" | "synced" | "vacant" }`) and re-renders on any per-peer change. Volatile — an entry can regress `synced → pending` on reconnect; for a stable gate use `useDocReady`.
 
 <!-- ts-docs-setup
 const doc = createDoc(TodoDoc)

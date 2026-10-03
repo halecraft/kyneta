@@ -46,7 +46,7 @@ export type PeerSyncState = {
  * - "offline": no transports configured (local-only)
  *
  * The time dimension ("proceed offline after N ms") lives in
- * `sync(doc).settled({ offlineAfter })`, not here.
+ * `whenSettled(doc, { offlineAfter })`, not here.
  */
 export type Connectivity = "online" | "connecting" | "offline"
 

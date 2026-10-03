@@ -93,7 +93,7 @@ loroDoc.commit()
 
 An external edit is a local write: subscribers receive it with `replay: false`, and under an Exchange it is pushed to peers and persisted like any other.
 
-*Note for raw LoroDoc consumers:* Subscribers attached directly to the underlying `LoroDoc` will newly see `options.origin` faithfully on `batch.origin` (where previously it was overwritten by a kyneta sentinel).
+*Note for raw LoroDoc consumers:* subscribers attached directly to the underlying `LoroDoc` see `options.origin` on `batch.origin`.
 
 ### Mapping a `PeerID` back to a peer
 

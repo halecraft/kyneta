@@ -55,8 +55,8 @@ import type {
  * snapshot types, and anywhere you need the "just data" shape of a schema.
  *
  * Readonly throughout: a read is a frozen snapshot shared by every consumer,
- * so mutating one is a type error here and a `TypeError` at runtime. Copy one
- * (`structuredClone`) to get something to mutate. The modifiers sit inside
+ * so mutating one is a type error here and a `TypeError` at runtime. Write
+ * through the ref (`doc.items.push(item)`) to change the document. The modifiers sit inside
  * each clause rather than in a wrapping `DeepReadonly`, which would recurse
  * again through the result and push instantiation depth toward TS2589. A
  * `.json()` scalar keeps its declared type `V` for the same reason, though its
