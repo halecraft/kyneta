@@ -15,7 +15,7 @@
 > 1. **The exchange never inspects `SubstratePayload`.** Transports carry payloads opaquely; only the substrate produces and consumes them (`packages/exchange/src/sync-program.ts`, `packages/schema/src/substrate.ts`).
 > 2. **The session program never sees documents; the sync program never sees channels.** Two pure TEA programs, one serialized dispatch queue, one `sync-event` effect as the only coupling (`packages/exchange/src/session-program.ts`, `sync-program.ts`, `synchronizer.ts`).
 > 3. **`[CHANGEFEED]` is the universal reactive interface.** Every reactive value in Kyneta — schema refs, `LocalRef`, `ReactiveMap`, `Collection`, `SecondaryIndex`, `exchange.peers`, `exchange.documents` — exposes the same two-method protocol (`packages/changefeed/src/changefeed.ts`).
-> 4. **The grammar is closed; composition is open.** `Schema` has ten `[KIND]` values; users compose schemas freely, but do not add kinds (`packages/schema/src/schema.ts`).
+> 4. **The grammar is closed; composition is open.** `Schema` has eleven `[KIND]` values; users compose schemas freely, but do not add kinds (`packages/schema/src/schema.ts`).
 > 5. **Composition-law compatibility is checked at compile time.** `bind()` applies `RestrictLaws<S, AllowedLaws>`; binding a `Schema.counter()` to a substrate without `"additive"` in its `[LAWS]` set fails in the type system (`packages/schema/src/bind.ts`).
 >
 > **Primary substrates**: plain JS (authoritative), ephemeral (transient field-level CvRDT), Loro (collaborative CRDT), Yjs (collaborative CRDT).
@@ -40,16 +40,18 @@ Kyneta is a framework for collaborative, substrate-agnostic documents. You defin
 
 | Term | Means |
 |------|-------|
-| **Substrate** | A backend that stores document state and implements the `Substrate<V>` interface (version, export, merge, reader, writable). Plain JS, Loro, Yjs. |
+| **Substrate** | The store of one document's state, behind `Substrate<V>`: a replica, plus what a ref needs (a reader, the prepare pipeline, a write context, the local-update signal). Plain JS, ephemeral, Loro, Yjs. |
+| **Replica** | The headless half of a substrate (`Replica<V>`): versions, export, merge, digest, dispose. No schema and no ref; what a relay holds (`exchange.replicate`). |
 | **Schema** | A recursive grammar value (`Schema.struct`, `Schema.list`, `Schema.text`, …) describing the shape + capabilities of a document. |
-| **Bound schema** | A `(schema, factory-builder, merge-strategy)` triple captured at module scope via `bind()`. Consumed at runtime by `exchange.get`. |
-| **Ref** | A typed, callable, navigable, reactive, writable reference to a document or a part of one. The interpreter stack's output. |
-| **Changefeed** | The reactive protocol: `{ current, subscribe }` behind the `[CHANGEFEED]` symbol. Every reactive value in Kyneta implements it. |
-| **Exchange** | The top-level sync runtime — one per participant. Holds transports, stores, governance, and `DocRuntime`s. |
+| **Bound schema** | What `bind()` (and `json.bind`, `loro.bind`, …) returns at module scope: a schema, a substrate factory builder and a sync mode, with what follows from them (replica type, schema hash, identity binding, migration chain, supported hashes). Consumed at runtime by `exchange.get` / `open` and the `schemas` option. |
+| **Ref** | A typed, callable, navigable, reactive, writable reference to one coordinate of a document. `createRef` builds the root over a substrate; what a ref does is built once per schema node and position, and each coordinate is one bound function and one state record. |
+| **Changefeed** | The reactive protocol: `{ current, subscribe }` behind the `[CHANGEFEED]` symbol. Every reactive value in Kyneta implements it. A `Feed` is a function that reads a value and carries the protocol, the shape of a document's terms (`settledFeed`, `writeRefusalFeed`, …). |
+| **Exchange** | The network shell, one per participant: transports, governance (`Policy`), and the Synchronizer, over a `Runtime`. |
+| **Runtime** | The local shell: the documents (their lifecycle program), the store (its store program), and the lease. An Exchange wraps one; it also runs standalone, without a network. |
 | **Transport** | The abstract interface between exchange and wire. WebSocket, SSE, WebRTC, Unix socket, in-process bridge — each implements it. |
-| **Session / Sync programs** | Two pure TEA programs inside the exchange — session owns channel topology + peers; sync owns document convergence + sync modes. |
+| **Session / Sync programs** | Two pure TEA programs inside the exchange — session owns channel topology + peers; sync owns document convergence + sync modes. The Runtime's lifecycle and store programs are pure TEA programs too. |
 | **Substrate payload** | Opaque state-transfer blob with `kind: "entirety" \| "since"`. Produced by substrates, carried by transports, consumed by substrates. The exchange never opens it. |
-| **Sync mode** | A structured record with `writerModel`, `delivery`, and `durability` axes. Three named constants — `SYNC_COLLABORATIVE`, `SYNC_AUTHORITATIVE`, `SYNC_EPHEMERAL` — tell the exchange which sync shape to run per document. Each binding target (`json`, `ephemeral`, `loro`, `yjs`) has a fixed sync mode. |
+| **Sync mode** | A structured record with `writerModel` and `durability` axes. Three named constants — `SYNC_COLLABORATIVE`, `SYNC_AUTHORITATIVE`, `SYNC_EPHEMERAL` — tell the exchange which sync shape to run per document. Each binding target (`json`, `ephemeral`, `loro`, `yjs`) has a fixed sync mode. |
 
 ## Package roles
 
@@ -57,7 +59,7 @@ Kyneta is a framework for collaborative, substrate-agnostic documents. You defin
 |---------|------|------------------|
 | `@kyneta/changefeed` | Universal reactive protocol (tier-0, zero deps). | `CHANGEFEED` symbol, `Changefeed<S, C>`, `Changeset<C>`, `ReactiveMap<K, V, C>`, `Callable` |
 | `@kyneta/machine` | Pure Mealy-machine algebra + two runtimes. | `Program<Msg, Model, Fx>`, `runtime`, `createObservableProgram` |
-| `@kyneta/schema` | Schema grammar, substrate/replica contracts, interpreter stack, migrations, position algebra. | `Schema`, `Substrate<V>`, `bind()`, `Ref<S>`, `Migration`, `Position` |
+| `@kyneta/schema` | Schema grammar, substrate/replica contracts, refs and interpreters (folds over the grammar), migrations, position algebra. | `Schema`, `Substrate<V>`, `bind()`, `Ref<S>`, `Migration`, `Position` |
 | `@kyneta/loro-schema` / `@kyneta/yjs-schema` | CRDT substrate implementations — Loro and Yjs respectively. | `loro.bind()`, `yjs.bind()`, `LoroVersion`, `YjsVersion` |
 | `@kyneta/transport` | Abstract transport contract, channel lifecycle, nine-message protocol vocabulary, wire pipeline, alias transformer, frame-stream parser. | `Transport<G>`, `Channel`, `ChannelMsg`, `Pipeline`, `FrameStreamParser` |
 | `@kyneta/wire` | Universal wire format — `Frame<T>`, binary CBOR codec, text JSON codec, generic fragmentation, reassembly, validation. | `Frame<T>`, `BINARY_CODEC`, `TEXT_CODEC`, `Reassembler<T>`, `fragmentGeneric<T>`, `validateWireMessage` |
@@ -115,66 +117,71 @@ Two tier-0 packages carry no Kyneta dependencies: `@kyneta/changefeed` (the reac
 
 ## Vertical slice — the todo example
 
-`examples/todo` exercises the full stack — schema definition through collaborative sync through compiled web UI — in ~280 lines across ~10 packages. The data flow for a single keystroke:
+`examples/todo` exercises the full stack — schema definition through collaborative sync through compiled web UI — in ~280 lines of TypeScript. Each browser tab links to one Bun server over WebSocket; the server holds the document and relays between tabs. The schema is bound with `loro.bind` (swapping in `yjs.bind` changes nothing below). The data flow for adding one todo:
 
 ```
-User types into <input>                                   (1)
+User submits the form; onSubmit calls doc.todos.push(…)   (1)
+     │
+     ├─ a bare helper call opens and closes its own batch
+     ▼
+WritableContext.prepare: locate, complete, then           (2)
+  substrate.prepare
+     │
+     ├─ σ (the shadow) updated; changeToDiff → LoroDoc.applyDiff
+     ├─ one doc.commit() per outermost batch; the pre-commit hook
+     │  marks it ours, so the event bridge does not announce it again
+     ▼
+Sealed batch delivered as a Changeset (replay: false)     (3)
+     │
+     ├──► @kyneta/cast's listRegion inserts one <li>
+     └──► Runtime → Exchange onDocChangeset: observation only
      │
      ▼
-useText(doc.title)'s text-adapter captures `input` event  (2)
+LoroDoc local-update signal (subscribeLocalUpdates)       (4)
      │
-     ├─ diffText(oldValue, newValue, cursorHint) → TextChange
+     ├─ Runtime marks the doc dirty; one microtask drains every dirty doc
      ▼
-batch(doc, d => d.title.insert(...))                     (3)
+Runtime #drainLocal → onDocAdvanced → sync/doc-advanced   (5)
      │
-     ├─ substrate.prepare → applyChangeToYjs → commit inside Y.transact
+     ├─ buildPush: each peer we push to, shared with (canShare) and not
+     │  refusing our operations, from its own baseline
      ▼
-Y.Doc mutates; rootMap.observeDeep fires                  (4)
+send-offers executor                                      (6)
      │
-     ├─ Yjs substrate's event bridge → kyneta Changeset
+     ├─ publish gate (store-first; the todo has no store, so open)
+     ├─ exportSince(baseline) → SubstratePayload, per peer
+     ├─ offer { docId, payload, version } → sync/offers-sent moves baselines
      ▼
-Schema composed changefeed emits Changeset<Op>            (5)
+Pipeline (@kyneta/transport): alias transformer           (7)
+  → @kyneta/wire CBOR encode → binary frame
      │
-     ├──► @kyneta/react's useValue re-renders dependent components
-     ├──► @kyneta/cast regions apply O(k) DOM ops
-     │
-     └──► Exchange's subscriber filters by origin ≠ "sync"
-          │
-          ▼
-     sync program: local-doc-change → send-to-peers       (6)
-          │
-          ├─ substrate.exportSince(peerVersion) → SubstratePayload
-          │
-          └─ for each synced peer:
-               envelope { offer, docId, payload, version }
-               │
-               ▼
-          @kyneta/wire encodes: alias-aware binary pipeline → binary frame   (7)
-               │
-               └─ WebSocket transport: socket.send(frame)
-                     │
-                     ▼   (across the network)
-                  Remote peer's WebSocket onMessage
-                     │
-                     ▼
-               decodeBinaryWires → ChannelMsg[]         (8)
-                     │
-                     ▼
-               remote Synchronizer's sync program:
-                  sync/message-received { offer }
-                     │
-                     ▼
-               substrate.merge(payload, { origin: "sync" }) (9)
-                     │
-                     ├─ Y.applyUpdate → observeDeep fires → σ re-materialized, ops announced
-                     ▼
-               changefeed emits Changeset (origin="sync", replay=true) (10)
-                     │
-                     ├──► remote React useValue re-renders
-                     └──► exchange subscriber: changeset.replay → skip (no re-broadcast)
+     └─ WebSocket client: socket.send(frame)
+           │
+           ▼   (across the network)
+        Server's WebSocket handler → Pipeline decode     (8)
+           │
+           ├─ frame → WireMessage (validated) → inbound alias → ChannelMsg
+           ▼
+        session program → sync/message-received { offer } (9)
+           │
+           ├─ handleOffer: held, not leaving, canAccept ∧ canWrite
+           ▼
+        import-doc-data executor                          (10)
+           │
+           ├─ compare versions → planImport → "merge"
+           ├─ replica.merge(payload, { origin: "sync" }): LoroDoc.import
+           │    └─ event bridge announces the ops (replay: true)
+           ├─ accept { docId, version } back to the tab
+           └─ sync/doc-imported (changed) → buildPush relays to the
+              other tabs, never back to the sender                (11)
+                    │
+                    ▼
+              each other tab: steps (8)–(10) again; its listRegion
+              inserts the <li>, and an import fires no local-update
+              signal, so nothing is sent back
 ```
 
-Ten numbered steps cross eight packages — `@kyneta/react`, `@kyneta/cast`, `@kyneta/schema`, `@kyneta/yjs-schema`, `@kyneta/changefeed`, `@kyneta/exchange`, `@kyneta/wire`, `@kyneta/websocket-transport` — with `@kyneta/transport` and `@kyneta/machine` providing abstract scaffolding underneath. Every boundary is one of the protocols above: a schema `Change`, a substrate `SubstratePayload`, a transport `ChannelMsg`, a wire `Frame`, a changefeed `Changeset`. No package reaches across two boundaries.
+Eleven numbered steps cross nine packages — `@kyneta/cast`, `@kyneta/schema`, `@kyneta/loro-schema`, `@kyneta/changefeed`, `@kyneta/exchange`, `@kyneta/transport`, `@kyneta/wire`, `@kyneta/websocket-transport` and `@kyneta/machine`, whose dispatchers serialize the exchange's programs — with `@kyneta/bun-server` serving the built client. Every boundary is one of the protocols above: a schema `Change`, a substrate `SubstratePayload`, a transport `ChannelMsg`, a wire `Frame`, a changefeed `Changeset`. Two decisions keep the path one-directional: what leaves the process follows the substrate's local-update signal, never a changeset (a native write outside the schema produces none), and only an import that changed something is relayed, and never to its sender.
 
 ## See also
 

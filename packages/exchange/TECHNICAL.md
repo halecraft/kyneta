@@ -66,7 +66,7 @@ Imported by applications to construct the top-level sync graph; by `@kyneta/reac
 | `DEFAULT_REPLICAS` | The default replica-factory bundle: plain (authoritative) and ephemeral (transient CvRDT). Applications extend with Loro / Yjs replica factories as needed. | A per-doc factory |
 | `Disposition` | `Interpret \| Replicate \| Defer \| Reject` — the four outcomes of classifying an unknown doc on `present`. | An HTTP status |
 | `resolve` callback | Application-supplied function on `ExchangeParams`. Receives a peer + doc metadata; returns a `Disposition`. Runs only when auto-resolution (via `Capabilities`) fails. | A React ref, an async resolver |
-| `Interpret(bound)` | Decision: run the full interpreter stack for this doc against `bound`. | `Replicate(replicaBound)` — no schema, no interpreter |
+| `Interpret(bound)` | Decision: hold this doc as a substrate under `bound`'s schema, with a ref. | `Replicate(replicaBound)` — a replica, no schema, no ref |
 | `Replicate(replicaBound)` | Decision: persist and forward without interpretation. For relays / stores. | `Interpret(bound)` |
 | `Defer()` | Decision: accept `present`, don't sync yet. The doc is known but inactive; the app can promote it later. | `Reject()` — defer keeps the peer-doc relationship |
 | `Reject()` | Decision: refuse the doc. The peer's `present` for this doc is silently dropped. | `Defer()` |
@@ -466,8 +466,8 @@ The sweep's own comment refuses to widen for this reason. A named `docId` plus a
 `BoundSchema` is a deliberate act; a sweep is not.
 
 Otherwise the return is always a `Ref<S>` — a typed, callable, navigable,
-observable, writable reference from the interpreter stack. Application code
-reads `doc.title()`, writes `batch(doc, d => d.title("new"))`, subscribes
+observable, writable reference over the document's substrate. Application code
+reads `doc.title()`, writes `batch(doc, d => d.title.set("new"))`, subscribes
 `subscribe(doc, changeset => …)`. Everything downstream of `get` is identical
 regardless of which case fired.
 

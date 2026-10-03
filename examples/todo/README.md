@@ -1,6 +1,6 @@
 # Collaborative Todo
 
-A minimal collaborative todo app demonstrating the full Kyneta stack: real-time sync between browser tabs with ~200 lines of TypeScript.
+A minimal collaborative todo app demonstrating the full Kyneta stack: real-time sync between browser tabs with ~280 lines of TypeScript.
 
 **No Vite. No React. Just Bun + Kyneta.**
 
@@ -22,13 +22,13 @@ Open http://localhost:5173 in two browser tabs and watch todos sync in real-time
 ```
 todo/
 ├── public/
-│   └── index.html       # 13 lines — HTML shell
+│   └── index.html       # 12 lines — HTML shell
 ├── src/
-│   ├── schema.ts        # 32  lines — @kyneta/schema + loro.bind
-│   ├── app.ts           # 123 lines — @kyneta/cast view (compiled by unplugin)
-│   ├── main.ts          # 43  lines — Client (@kyneta/exchange + mount)
-│   ├── server.ts        # 87  lines — Server (@kyneta/exchange + Bun.serve)
-│   └── build.ts         # 37  lines — Build & bundle via Bun
+│   ├── schema.ts        # 35  lines — @kyneta/schema + loro.bind
+│   ├── app.ts           # 119 lines — @kyneta/cast view (compiled by unplugin)
+│   ├── main.ts          # 40  lines — Client (@kyneta/exchange + mount)
+│   ├── server.ts        # 78  lines — Server (@kyneta/exchange + Bun.serve)
+│   └── build.ts         # 11  lines — Build & bundle via Bun
 ├── style.css            # 73  lines — Minimal styling
 ├── package.json
 ├── tsconfig.json

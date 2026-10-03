@@ -37,9 +37,10 @@ const exchange = new Exchange({
   transports: [serverTransport],
 })
 
-// Register the todo document. The server holds the authoritative copy.
-// When clients connect, the Exchange automatically syncs via the
-// three-message protocol (discover → interest → offer).
+// Register the todo document. The server holds a copy and relays each
+// tab's changes to the others. When a client connects, the Exchanges
+// announce what they hold (`present`), ask for each other's state
+// (`interest`), and answer with it (`offer`).
 exchange.get("todos", TodoDoc)
 
 // ─────────────────────────────────────────────────────────────────────────
