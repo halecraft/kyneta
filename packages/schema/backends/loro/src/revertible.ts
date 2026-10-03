@@ -1,8 +1,10 @@
 // revertible — undo for a Loro document, from its own history.
 //
-// A record is one local commit's frontiers: the document's version before it
-// and the commit's last op. Loro keeps every op, so the commit's inverse is
-// `diff(after, before)`, computed at undo time, after a reload as well.
+// A record is the frontiers of a run of back-to-back local commits: the
+// document's version before the first and the last one's last op. Loro keeps
+// every op, so the inverse is `diff(after, before)`, computed at undo time,
+// after a reload as well. Two records compose only when the later was made on
+// the earlier's last op and nothing else (`composeLoroRecords`).
 //
 // What happened since is read by content: the document forked at `after`
 // (`forkAt`) against the document now. A text or list's inverse is rebased
@@ -21,14 +23,19 @@
 // path: `changeToDiff` filters out the create that restores a deleted tree
 // node. The substrate's event bridge announces the commit as a local write.
 //
-// A shallow snapshot cuts `diff` off: a record older than it reverts to null.
+// A shallow snapshot cuts `diff` off: a record older than it stands not at
+// all.
 
 import {
+  addTally,
   type ChangeBase,
   type CommitOptions,
+  changeUnits,
   diffSequence,
   diffString,
+  EMPTY_TALLY,
   footprintOf,
+  howMuchStands,
   isRichTextChange,
   isSequenceChange,
   jsonRecordCodec,
@@ -39,12 +46,14 @@ import {
   type Remap,
   type Revertible,
   type RevertibleCommit,
+  type RevertPlan,
   rebaseChange,
   richTextChange,
   type Schema as SchemaNode,
   type SequenceInstruction,
   samePlainValue,
   sequenceChange,
+  type Tally,
   trustAsOwned,
 } from "@kyneta/schema"
 import type {
@@ -114,6 +123,31 @@ function rewriteLoroRecord(record: LoroRecord, remap: Remap): LoroRecord {
     : { ...record, aliases: [...record.aliases, ...added] }
 }
 
+/** `earlier` then `later` as one record: back to back, `later` made on
+ *  `earlier`'s last op and nothing else, as Loro's own undo manager joins
+ *  commits only while no remote change has arrived. Null otherwise. */
+export function composeLoroRecords(
+  earlier: LoroRecord,
+  later: LoroRecord,
+): LoroRecord | null {
+  const [tail, ...past] = earlier.after
+  const [dep, ...more] = later.before
+  if (
+    tail === undefined ||
+    dep === undefined ||
+    past.length + more.length > 0 ||
+    dep.peer !== tail.peer ||
+    dep.counter !== tail.counter
+  ) {
+    return null
+  }
+  const aliases = [...earlier.aliases]
+  for (const alias of later.aliases) {
+    if (!aliases.some(a => a.from === alias.from)) aliases.push(alias)
+  }
+  return { before: earlier.before, after: later.after, aliases }
+}
+
 /** A text diff as a rich-text change: Loro attributes are Kyneta marks. */
 function textToChange(diff: readonly Delta<string>[]): ChangeBase {
   // Loro builds each diff fresh, so its attributes are unshared.
@@ -143,6 +177,68 @@ function changeToText(change: ChangeBase): Delta<string>[] {
     if ("format" in i) return { retain: i.format, attributes: { ...i.marks } }
     return { retain: i.retain }
   }) as Delta<string>[]
+}
+
+/**
+ * A text diff without the formats that change nothing: a mark set to what
+ * the character already holds at `after`, absent and null alike. Loro
+ * reports one where a deleted mark's anchor outlives its text (unbolding
+ * text never bold), and it names nothing the commit did.
+ */
+function withoutIdleFormats(
+  diff: readonly Delta<string>[],
+  marks: readonly Readonly<Record<string, unknown>>[],
+): Delta<string>[] {
+  const out: Delta<string>[] = []
+  const push = (d: Delta<string>) => {
+    const last = out.at(-1)
+    if (
+      last?.retain !== undefined &&
+      d.retain !== undefined &&
+      JSON.stringify(last.attributes) === JSON.stringify(d.attributes)
+    ) {
+      out[out.length - 1] = { ...last, retain: last.retain + d.retain }
+      return
+    }
+    out.push(d)
+  }
+  let at = 0
+  for (const d of diff) {
+    if (d.insert !== undefined) {
+      push(d)
+      continue
+    }
+    if (d.delete !== undefined) {
+      push(d)
+      at += d.delete
+      continue
+    }
+    const n = d.retain ?? 0
+    const attributes = d.attributes ?? {}
+    if (Object.keys(attributes).length === 0) {
+      push({ retain: n })
+      at += n
+      continue
+    }
+    for (let k = 0; k < n; k++) {
+      const held = marks[at + k] ?? {}
+      const changed = Object.entries(attributes).filter(
+        ([key, value]) => !samePlainValue(held[key] ?? null, value ?? null),
+      )
+      push(
+        changed.length === 0
+          ? { retain: 1 }
+          : { retain: 1, attributes: Object.fromEntries(changed) },
+      )
+    }
+    at += n
+  }
+  while (out.length > 0) {
+    const last = out.at(-1)
+    if (last?.retain === undefined || last.attributes !== undefined) break
+    out.pop()
+  }
+  return out
 }
 
 /** A list diff as a sequence change. Items stay as Loro gave them, so a
@@ -285,7 +381,13 @@ export type GatheredState =
   | { readonly kind: "gone" }
   /** It was not there at `after`. */
   | { readonly kind: "unknown" }
-  | { readonly kind: "text"; readonly was: string; readonly now: string }
+  | {
+      readonly kind: "text"
+      readonly was: string
+      readonly now: string
+      /** Each character's marks at `after`. */
+      readonly marks: readonly Readonly<Record<string, unknown>>[]
+    }
   | {
       readonly kind: "list"
       readonly was: readonly unknown[]
@@ -311,34 +413,77 @@ export interface LoroGathered {
   readonly state: GatheredState
 }
 
-/** The diffs that revert a record, decided from what was gathered of each
- *  container. Null when nothing of the record still stands. */
+/** A revert of a Loro record: the diffs that apply, and how much of what the
+ *  inverse names they keep. */
+export interface LoroPlan {
+  readonly tally: Tally
+  readonly group: readonly (readonly [ContainerID, unknown])[]
+}
+
+/** How many units an inverse diff names: a text or list's inserted, deleted
+ *  and formatted units, a map's keys, a tree's items, one for anything
+ *  else (a counter). */
+function inverseUnits(diff: Diff): number {
+  switch (diff.type) {
+    case "text":
+      return changeUnits(textToChange(diff.diff))
+    case "list":
+      return changeUnits(listToChange(diff.diff))
+    case "map":
+      return Object.keys(diff.updated).length
+    case "tree":
+      return diff.diff.length
+    default:
+      return 1
+  }
+}
+
+/**
+ * The diffs that revert a record, decided from what was gathered of each
+ * container, and its tally: per container, the units of the inverse the
+ * rebased or kept diff still does. A text or list keeps the units its
+ * rebase keeps (`changeUnits`); a map key, a tree item and a counter are one
+ * unit each. A container gone now is re-created only by a restore in this
+ * same group, which `applyDiff` fills from its diff; one gone for good, and
+ * one that was not there at the time, keep nothing. A diff that would only
+ * retain is left out, so a group that keeps anything writes something.
+ */
 export function planLoroRevert(
   aliases: readonly Alias[],
   gathered: readonly LoroGathered[],
-): [ContainerID, unknown][] | null {
+): LoroPlan {
   const group: [ContainerID, unknown][] = []
+  let tally = EMPTY_TALLY
+  const count = (kept: number, total: number) => {
+    tally = addTally(tally, { kept, total })
+  }
   const alias = <I extends string>(id: I | undefined) =>
     id === undefined ? undefined : aliasOf(id, aliases)
 
-  for (const { to, diff, state } of gathered) {
-    // Gone: either re-created by a restore in this same group, which
-    // `applyDiff` fills from these diffs, or gone for good, which a diff to
-    // it leaves as it is.
+  const gone: LoroGathered[] = []
+  for (const entry of gathered) {
+    const { to, diff, state } = entry
     if (state.kind === "gone") {
-      group.push([to, diff])
+      gone.push(entry)
       continue
     }
-    if (state.kind === "unknown") continue
+    if (state.kind === "unknown") {
+      count(0, inverseUnits(diff))
+      continue
+    }
 
     if (diff.type === "text" && state.kind === "text") {
       // Built here, of plain retain/insert/delete instructions.
       const over = richTextChange(
         diffString(state.was, state.now) as OwnedRichTextInstruction[],
       )
-      const change = rebaseChange(textToChange(diff.diff), over)
-      const text = change === null ? [] : changeToText(change)
-      if (text.length > 0) group.push([to, { type: "text", diff: text }])
+      const inverse = textToChange(withoutIdleFormats(diff.diff, state.marks))
+      const change = rebaseChange(inverse, over)
+      const kept = change === null ? 0 : changeUnits(change)
+      count(kept, changeUnits(inverse))
+      if (change !== null && kept > 0) {
+        group.push([to, { type: "text", diff: changeToText(change) }])
+      }
       continue
     }
 
@@ -348,9 +493,13 @@ export function planLoroRevert(
           diffSequence(state.was, state.now, samePlainValue),
         ) as SequenceInstruction<Owned<unknown>>[],
       )
-      const change = rebaseChange(listToChange(diff.diff), over)
-      const list = change === null ? [] : changeToList(change)
-      if (list.length > 0) group.push([to, { type: "list", diff: list }])
+      const inverse = listToChange(diff.diff)
+      const change = rebaseChange(inverse, over)
+      const kept = change === null ? 0 : changeUnits(change)
+      count(kept, changeUnits(inverse))
+      if (change !== null && kept > 0) {
+        group.push([to, { type: "list", diff: changeToList(change) }])
+      }
       continue
     }
 
@@ -363,6 +512,7 @@ export function planLoroRevert(
           current: state.now[key],
         })),
       )
+      count(kept.length, inverseUnits(diff))
       if (kept.length === 0) continue
       group.push([
         to,
@@ -399,15 +549,41 @@ export function planLoroRevert(
           oldParent: alias(item.oldParent),
         })
       }
+      count(items.length, inverseUnits(diff))
       if (items.length > 0) group.push([to, { type: "tree", diff: items }])
       continue
     }
 
     // A counter commutes: its inverse always applies.
+    count(1, 1)
     group.push([to, diff])
   }
 
-  return group.length === 0 ? null : group
+  // A gone container stands when a restore in the group re-creates it, and a
+  // container it re-creates may hold another.
+  const recreated = new Set<string>()
+  for (let found = true; found; ) {
+    found = false
+    for (const restore of restoresOf(group)) {
+      // A tree node's data is the map its id names.
+      const id =
+        restore.kind === "container"
+          ? aliasOf(restore.old.id, aliases)
+          : `cid:${restore.target}:Map`
+      if (recreated.has(id)) continue
+      recreated.add(id)
+      const entry = gone.find(g => g.to === id)
+      if (entry === undefined) continue
+      group.push([entry.to, entry.diff])
+      found = true
+    }
+  }
+  for (const { to, diff } of gone) {
+    const units = inverseUnits(diff)
+    count(recreated.has(to) ? units : 0, units)
+  }
+
+  return { tally, group }
 }
 
 // ---------------------------------------------------------------------------
@@ -511,6 +687,13 @@ export function createLoroRevertible(host: LoroRevertibleHost): LoroRevertible {
           kind: "text",
           was: (was as unknown as { toString(): string }).toString(),
           now: (now as unknown as { toString(): string }).toString(),
+          marks: (was as unknown as { toDelta(): Delta<string>[] })
+            .toDelta()
+            .flatMap(d =>
+              Array.from({ length: d.insert?.length ?? 0 }, () => ({
+                ...(d.attributes ?? {}),
+              })),
+            ),
         }
       case "list": {
         const items = (list: Container) =>
@@ -628,21 +811,33 @@ export function createLoroRevertible(host: LoroRevertibleHost): LoroRevertible {
       }
     },
 
-    revert(record, options) {
+    plan(record): RevertPlan<LoroRecord> {
       const gathered = gather(record)
-      const group =
-        gathered === null ? null : planLoroRevert(record.aliases, gathered)
-      if (group === null) return null
-      reverting = { record: null }
-      try {
-        host.commitNative(() => applyDiffGroup(host.doc, group), options)
-        const redo = reverting.record
-        if (redo === null) return null
-        return { redo, remap: remapOf(restoresOf(group)) }
-      } finally {
-        reverting = undefined
+      // Behind a shallow snapshot's start: a commit, none of it readable.
+      if (gathered === null) {
+        return { tally: { kept: 0, total: 1 }, apply: undefined }
+      }
+      const { tally, group } = planLoroRevert(record.aliases, gathered)
+      if (howMuchStands(tally) === "none") return { tally, apply: undefined }
+      return {
+        tally,
+        apply(options) {
+          if (group.length === 0) return { redo: record, remap: new Map() }
+          reverting = { record: null }
+          try {
+            host.commitNative(() => applyDiffGroup(host.doc, group), options)
+            const redo = reverting.record
+            if (redo === null)
+              throw new Error("a Loro revert committed nothing")
+            return { redo, remap: remapOf(restoresOf(group)) }
+          } finally {
+            reverting = undefined
+          }
+        },
       }
     },
+
+    compose: composeLoroRecords,
 
     recovered(record, position) {
       const doc = host.doc

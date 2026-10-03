@@ -762,15 +762,32 @@ stack.gesture(() => {
   card.text.insert(0, "hello")        // one step, over two documents
   places.place.set("column")
 })
-await stack.undo()                    // both undone; false when nothing stands
+await stack.undo()                    // both undone: { kind: "undone", step, stale, dropped }
 await stack.redo()
 ```
 
+An undo says what it did. `{ kind: "undone", step }` names the step, `stale` its parts that did not stand whole (a peer changed them since, and they were undone as far as they stood), and `dropped` the steps nothing of which stood, removed on the way to it. `{ kind: "none", dropped }` means no step was left.
+
+To undo a step entirely or not at all, ask for `whole`:
+
+<!-- Not compiled: assumes documents the shared prelude does not declare. -->
+<!-- ts-docs-verifier:ignore -->
+```ts
+const result = await stack.undo({ whole: true })
+if (result.kind === "refused") {
+  // A collaborator moved one of the cards since: nothing was undone, the
+  // step is gone, and `result.stale` names the parts that blocked it.
+  showWhyNot(result.step, result.stale)
+}
+```
+
+A refused step is dropped, so the next undo takes the step below it. The result's type follows from the call: `whole` is `true` or absent.
+
 - **Typing** goes through `stack.typing(fn)`, which joins a keystroke to the step before it while the user keeps typing in one place (`useText(ref, { undo: stack })` does this). Direct writes by an editor binding are grouped the same way with `stack.follow(docId)`.
 - **The stack is a document.** With a Store it survives a reload, and a crash in the middle of an undo is finished on the next load without applying anything twice. Without one it lasts the session. The document is serialized, so one runtime writes it: give each tab its own id for per-tab undo, or share one over a device's Store.
-- **Undo by document.** `stack.undo({ docs: [cardId] })` undoes the newest step that wrote that card, even under steps in other cards, and `redo({ docs })` likewise. So one stack per tab serves every card: each editor passes its own card. Steps conflict by what they write: a document, down to its record keys. A step is never taken from under a newer one it conflicts with, so `undo({ docs })` can be `false` while that card has steps, and `top` agrees. A new step clears the redo steps it conflicts with, and those made on them.
+- **Undo by document.** `stack.undo({ docs: [cardId] })` undoes the newest step that wrote that card, even under steps in other cards, and `redo({ docs })` likewise. So one stack per tab serves every card: each editor passes its own card. Steps conflict by what they write: a document, down to its record keys. A step is never taken from under a newer one it conflicts with, so `undo({ docs })` can be `none` while that card has steps, and `top` agrees. A new step clears the redo steps it conflicts with, and those made on them.
 - **What there is to undo** is `stack.top("undo", [cardId])`: the step an undo would try first, or `undefined`. It is a tracked read, so `useSelector(() => stack.top("undo", [cardId]) !== undefined)` re-renders when it changes.
-- **A destroyed document's steps are skipped.** An undo opens a step's documents with `exchange.open`, so it never creates a document; a part whose document is gone does not stand, and the undo goes on to the step below. An unloaded document is opened again, and opening one still unloading cancels its unload.
+- **A destroyed document's steps are skipped, and the result names them.** An undo opens a step's documents with `exchange.open`, so it never creates a document; a part whose document is gone does not stand. It is in `stale` when the rest of its step is undone, and a step with nothing else is in `dropped`, as the undo goes on to the step below; with `whole`, its step is refused. An unloaded document is opened again, and opening one still unloading cancels its unload.
 - Plain, Loro and Yjs documents are undoable; ephemeral ones are not.
 
 ### Escape Hatches

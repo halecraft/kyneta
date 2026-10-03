@@ -1,6 +1,7 @@
 // capture — what one local transaction did, gathered as it happens and
 // built into a record: the values and marks an op wrote, the list runs it
-// deleted, a text's deletions and insertions.
+// deleted, a text's deletions and insertions. Each is kept as it was made;
+// merging and the rest of the normal form are `./normal.js`'s.
 
 import {
   type ChangeBase,
@@ -40,7 +41,7 @@ import {
 export interface Draft {
   inserted: InsertedRun[]
   deleted: DeletedRun[]
-  values: Map<string, ValueWrite>
+  values: ValueWrite[]
   marks: MarkWrite[]
   /** `.json()` values the batch wrote into, with what they held before. */
   boundaries: Map<string, { path: StablePath; at: Path; previous: Slot }>
@@ -52,7 +53,7 @@ export interface Draft {
 export const newDraft = (): Draft => ({
   inserted: [],
   deleted: [],
-  values: new Map(),
+  values: [],
   marks: [],
   boundaries: new Map(),
   texts: new Map(),
@@ -66,16 +67,6 @@ export function itemOf(schema: SchemaNode): SchemaNode | undefined {
 
 export function kindAt(tree: Tree, path: Path): string {
   return pathSchema(tree.schema, path, tree.binding)[KIND]
-}
-
-/** Keep a value write: the first `previous` and the last `wrote`. */
-export function addValue(draft: Draft, write: ValueWrite): void {
-  const key = JSON.stringify(write.path)
-  const earlier = draft.values.get(key)
-  draft.values.set(
-    key,
-    earlier === undefined ? write : { ...write, previous: earlier.previous },
-  )
 }
 
 /**
@@ -185,9 +176,9 @@ export function markWrites(
 
 /**
  * The deleted list runs of a sequence change. Before it applies, each run's
- * ids come in document order from the list; after, the items are gone and
- * their order is not public, so the content restores and the ids do not
- * follow.
+ * ids come in document order from the list, with the ids of every text and
+ * list inside its items; after, the items are gone and their order is not
+ * public, so the content restores and the ids do not follow.
  */
 export function deletedItems(
   tree: Tree,
@@ -217,12 +208,12 @@ export function deletedItems(
           const id = idAt(list, source + i)
           if (id !== null) ids.push(id)
           if (itemSchema === undefined) continue
-          for (const text of nestedTexts(
+          for (const inner of nestedIds(
             tree,
             path.item(source + i),
             itemSchema,
           )) {
-            nested.push({ item: i, ...text })
+            nested.push({ item: i, ...inner })
           }
         }
       }
@@ -244,25 +235,50 @@ export function deletedItems(
   return out
 }
 
-/** The texts inside the list item at `item`, with their ids in document
- *  order. */
-export function nestedTexts(
+/**
+ * The texts and lists inside the list item at `item`, at any depth, each
+ * with its ids in document order: a text's characters, a list's items.
+ */
+export function nestedIds(
   tree: Tree,
   item: Path,
   schema: SchemaNode,
-): { path: StablePath; ids: IdRun[] }[] {
-  const out: { path: StablePath; ids: IdRun[] }[] = []
+): Omit<NestedIds, "item">[] {
+  const out: Omit<NestedIds, "item">[] = []
   const walk = (node: SchemaNode, at: Path, path: StableSegment[]) => {
     const kind = node[KIND]
+    const type = typeAt(tree, at)
     if (kind === "text" || kind === "richtext") {
-      const text = typeAt(tree, at)
-      if (text instanceof Y.Text)
-        out.push({ path, ids: textIds(tree.doc, text) })
+      if (type instanceof Y.Text) {
+        out.push({ path, kind, ids: textIds(tree.doc, type) })
+      }
+    } else if (kind === "sequence") {
+      if (!(type instanceof Y.Array)) return
+      const ids: Id[] = []
+      for (let i = 0; i < type.length; i++) {
+        const id = idAt(type, i)
+        if (id !== null) ids.push(id)
+      }
+      out.push({ path, kind, ids: toRuns(ids) })
+      const inner = itemOf(node)
+      if (inner === undefined) return
+      ids.forEach((id, i) => {
+        walk(inner, at.item(i), [...path, { item: id }])
+      })
     } else if (kind === "product") {
+      // A `.json()` struct is one value, not a map of types.
+      if (!(type instanceof Y.Map)) return
       const fields = (node as unknown as { fields: Record<string, SchemaNode> })
         .fields
       for (const [name, field] of Object.entries(fields)) {
         walk(field, at.field(name), [...path, { field: name }])
+      }
+    } else if (kind === "map") {
+      if (!(type instanceof Y.Map)) return
+      const inner = itemOf(node)
+      if (inner === undefined) return
+      for (const key of [...type.keys()].sort()) {
+        walk(inner, at.entry(key), [...path, { entry: key }])
       }
     }
   }

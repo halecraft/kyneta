@@ -173,7 +173,7 @@ export function disposeConformance(
       expectClosed(() => history.summary(), "destroyed")
     })
 
-    it("an undo record made before the close throws DocumentClosedError", () => {
+    it("planning an undo record made before the close throws DocumentClosedError", () => {
       const { substrate, doc } = written()
       const { revertible } = substrate
       if (revertible === undefined) return
@@ -183,7 +183,7 @@ export function disposeConformance(
       const [commit] = commits
       if (commit === undefined) throw new Error("expected a commit")
       substrate.dispose("destroyed")
-      expectClosed(() => revertible.revert(commit.record, {}), "destroyed")
+      expectClosed(() => revertible.plan(commit.record), "destroyed")
     })
 
     if (env.nativePositions) {

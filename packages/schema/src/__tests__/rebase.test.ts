@@ -7,7 +7,7 @@ import {
   textChange,
   trustAsOwned,
 } from "../change.js"
-import { rebaseChange } from "../rebase.js"
+import { changeUnits, rebaseChange } from "../rebase.js"
 import { step } from "../step.js"
 
 // ---------------------------------------------------------------------------
@@ -160,5 +160,45 @@ describe("rebaseChange: across kinds", () => {
         replaceChange(trustAsOwned("new")),
       ),
     ).toBeNull()
+  })
+})
+
+describe("changeUnits", () => {
+  it("counts what a change inserts, deletes and formats, and nothing it retains", () => {
+    expect(
+      changeUnits(textChange([{ retain: 2 }, { delete: 3 }, { insert: "ab" }])),
+    ).toBe(5)
+    expect(
+      changeUnits(
+        richTextChange([
+          { retain: 1 },
+          { format: 4, marks: trustAsOwned({ bold: true }) },
+        ]),
+      ),
+    ).toBe(4)
+    expect(changeUnits(replaceChange(trustAsOwned(1)))).toBe(0)
+  })
+
+  it("never grows under a rebase, and keeps every insert", () => {
+    for (let seed = 1; seed <= 500; seed++) {
+      const next = rng(seed)
+      const base = "abcdefghij".slice(0, 3 + Math.floor(next() * 8))
+      const a = randomEdit(base, next, "X")
+      const b = randomEdit(base, next, "y")
+      const change = textChange(a)
+      const rebased = rebaseChange(change, textChange(b))
+      if (rebased === null) throw new Error(`seed ${seed}: no rebase`)
+      const inserted = (c: typeof change) =>
+        c.instructions.reduce(
+          (n, i) => n + ("insert" in i ? i.insert.length : 0),
+          0,
+        )
+      expect(changeUnits(rebased), `seed ${seed}`).toBeLessThanOrEqual(
+        changeUnits(change),
+      )
+      expect(inserted(rebased as typeof change), `seed ${seed}`).toBe(
+        inserted(change),
+      )
+    }
   })
 })

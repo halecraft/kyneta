@@ -1,7 +1,7 @@
 // undo/schema — the document an undo stack lives in.
 //
-// A stack is plain data: steps of records, one per document a gesture
-// wrote, each encoded by its substrate. It is kept in a serialized document
+// A stack is plain data: steps of records, one per document a step wrote,
+// each encoded by its substrate. It is kept in a serialized document
 // the app names, so the exchange stores, syncs and compacts it like any
 // other, and the one-writer rule of serialized documents is what keeps two
 // runtimes from popping the same step.
@@ -9,7 +9,8 @@
 import type { Footprint, ReplicaType, SyncMode } from "@kyneta/schema"
 import { json, Schema } from "@kyneta/schema"
 
-/** One document's record in a step. */
+/** One document's record in a step: every commit the step made to it,
+ *  composed into one. */
 export interface Part {
   readonly docId: string
   /** What opens the document again after a reload, through the Exchange's
@@ -24,7 +25,8 @@ export interface Part {
   readonly footprint: Footprint
 }
 
-/** What one gesture did: its parts, in the order they committed. */
+/** What one step did: a part for each document it wrote. The parts commute,
+ *  so their order means nothing. */
 export interface Step {
   readonly id: string
   readonly parts: readonly Part[]
@@ -37,6 +39,8 @@ export type Direction = "undo" | "redo"
 export interface Note {
   readonly step: string
   readonly direction: Direction
+  /** Whether the request was to undo the step entirely or refuse it. */
+  readonly whole: boolean
   /** docId → the substrate's position, as base64. */
   readonly positions: Readonly<Record<string, string>>
 }
@@ -68,6 +72,7 @@ export const UndoSchema = Schema.struct({
         .json({
           step: Schema.string(),
           direction: Schema.string(),
+          whole: Schema.boolean(),
           positions: Schema.record.json(Schema.string()),
         })
         .nullable(),

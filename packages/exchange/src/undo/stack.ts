@@ -3,7 +3,8 @@
 // The imperative shell of `undo-program.ts`. It listens to the local commits
 // of every document in scope, feeds them to the program as parts of steps,
 // and executes what the program decides: write a step, note a revert and
-// wait for the note to be stored, revert a step's parts, record the move.
+// wait for the note to be stored, plan a step's parts, then apply them or
+// drop the step, and record the move.
 //
 // The stack lives in a serialized document the app names (`UndoDoc`), so
 // with a Store it survives a reload, and the Store's one-writer rule keeps
@@ -18,8 +19,9 @@ import type {
   Remap,
   Revertible,
   RevertibleCommit,
-  StepReverted,
+  RevertPlan,
   Substrate,
+  Tally,
   Version,
 } from "@kyneta/schema"
 import {
@@ -33,7 +35,6 @@ import {
   own,
   RawPath,
   replaceChange,
-  revertStep,
   samePlainValue,
   sequenceChange,
   TYPING_GAP,
@@ -52,12 +53,18 @@ import {
   UndoDoc,
 } from "./schema.js"
 import {
+  type OpenPart,
+  shapeResult,
   type UndoEffect,
   type UndoInput,
   type UndoModel,
+  type Undone,
+  type UndoneWhole,
   undoProgram,
   type Via,
 } from "./undo-program.js"
+
+export type { Undone, UndoneWhole } from "./undo-program.js"
 
 export interface UndoStackParams {
   readonly exchange: Exchange
@@ -80,6 +87,12 @@ export interface UndoOptions extends CommitOptions {
    *  steps above it write others, as long as none of those overlaps it
    *  (`topStep`). The newest step when omitted. */
   readonly docs?: readonly DocId[]
+  /** Undo the step entirely, or refuse it and say why: a step that does not
+   *  stand whole is dropped, nothing of it reverted, and the result names
+   *  the parts that did not. Without it, a step is undone as far as it
+   *  stands, and one nothing of which stands is dropped and the next one
+   *  tried. */
+  readonly whole?: true
 }
 
 export interface UndoStack {
@@ -92,14 +105,15 @@ export interface UndoStack {
   /** Direct writes on this document made outside a gesture, grouped by the
    *  typing policy, as an editor binding makes them. */
   follow(docId: DocId): () => void
-  /** Undo the newest step still standing that writes any of
-   *  `options.docs` and that no newer step overlaps. False when there is
-   *  none. A part stands only if its document is held here: an undo never
-   *  creates one. */
-  undo(options?: UndoOptions): Promise<boolean>
-  /** Redo the newest undone step still standing that writes any of
-   *  `options.docs` and that no step redone before it overlaps. */
-  redo(options?: UndoOptions): Promise<boolean>
+  /** Undo the newest step that writes any of `options.docs` and that no
+   *  newer step overlaps, and say what was done. A part stands only if its
+   *  document is held here: an undo never creates one. */
+  undo(options: UndoOptions & { readonly whole: true }): Promise<UndoneWhole>
+  undo(options?: UndoOptions & { readonly whole?: undefined }): Promise<Undone>
+  /** Redo the newest undone step that writes any of `options.docs` and that
+   *  no step redone before it overlaps, as `undo` does. */
+  redo(options: UndoOptions & { readonly whole: true }): Promise<UndoneWhole>
+  redo(options?: UndoOptions & { readonly whole?: undefined }): Promise<Undone>
   /** The step `undo` or `redo` with these `docs` tries first. Whether it
    *  still stands is known only when it is tried. A read of the undo
    *  document, so a reactive thunk that calls it is tracked. */
@@ -118,6 +132,11 @@ export interface StoredStack {
 // Pure transitions of a stored stack
 // ---------------------------------------------------------------------------
 
+/** An open part as the undo document keeps it: its record encoded, once. */
+function encodePart({ algebra, record, ...part }: OpenPart): Part {
+  return { ...part, record: uint8ArrayToBase64(algebra.codec.encode(record)) }
+}
+
 function listOf(stack: StoredStack, direction: Direction): readonly Step[] {
   return direction === "undo" ? stack.undo : stack.redo
 }
@@ -131,21 +150,17 @@ function touches(step: Step, docs: readonly string[] | undefined): boolean {
 /** What a step writes: each document's footprint. */
 type Region = ReadonlyMap<string, Footprint>
 
+/** `step`'s region: a step has one part per document. */
+function regionOf(step: Step): Region {
+  return new Map(step.parts.map(part => [part.docId, part.footprint]))
+}
+
 /** `region` with `footprint` added to `docId`'s. */
 function joined(region: Region, docId: string, footprint: Footprint): Region {
   const known = region.get(docId)
   return new Map(region).set(
     docId,
     known === undefined ? footprint : footprintUnion(known, footprint),
-  )
-}
-
-/** The footprints of `step`'s parts, per document. A typing step of many
- *  keystrokes in one text is one path. */
-function regionOf(step: Step): Region {
-  return step.parts.reduce<Region>(
-    (region, part) => joined(region, part.docId, part.footprint),
-    new Map(),
   )
 }
 
@@ -232,9 +247,9 @@ export function pushStep(
 }
 
 /**
- * `step` moved from `from`'s list, as `redo` onto the other list (dropped
- * when nothing of it applied), every step left rewritten by `rewrite`, the
- * note cleared, and each list kept to `depth`. `redo` is already current:
+ * `step` moved from `from`'s list, as `redo` onto the other list (or dropped,
+ * with no `redo`), every step left rewritten by `rewrite`, the note cleared,
+ * and each list kept to `depth`. `redo` is already current:
  * its revert made it so. A redo step dropped takes the redo steps that build
  * on it (`clearDependents`), which could not be redone without it. An undo
  * step dropped takes nothing: what it did is already gone.
@@ -382,9 +397,10 @@ export async function createUndoStack(
    * A document open here now and accepting writes, with its undo. Read from
    * the Runtime each time: a promoted or reloaded document has a new
    * substrate, and a destroyed one is gone. A part stands only if its
-   * document is this when the part is used. A revert writes natively, below
-   * the document's refusal, so a document that refuses writes (unloading,
-   * closed, another seat's, or a policy's) is not reached at all.
+   * document is this when the part is planned. A revert writes natively,
+   * below the document's refusal, so a document that refuses writes
+   * (unloading, closed, another seat's, or a policy's) is not reached at
+   * all: its part stands not at all.
    */
   const interpreted = (docId: DocId) => {
     const instance = exchange.runtime.instanceOf(docId)
@@ -440,8 +456,9 @@ export async function createUndoStack(
         schemaHash: readyInfo.schemaHash,
         replicaType: readyInfo.replicaFactory.replicaType,
         syncMode: readyInfo.syncMode,
-        record: uint8ArrayToBase64(revertible.codec.encode(commit.record)),
+        record: commit.record,
         footprint: commit.footprint,
+        algebra: { compose: revertible.compose, codec: revertible.codec },
       },
     })
     // A direct write outside a gesture is heard inside its own commit, where
@@ -553,14 +570,15 @@ export async function createUndoStack(
     for (const part of step.parts) await open(part, settle)
   }
 
-  // --- Reverting ----------------------------------------------------------
+  // --- Planning and applying ---------------------------------------------
 
-  /** A part's record, decoded, rewritten and encoded again. `docId` has
-   *  just reverted, so it is open, unless the revert's own writes destroyed
-   *  it; its parts then stand no more, and are left as they are. */
-  const rewritePart = (part: Part, docId: string, remap: Remap): Part => {
-    if (part.docId !== docId || remap.size === 0) return part
-    const revertible = interpreted(docId)?.revertible
+  /** A part's record, decoded, rewritten and encoded again. `remap` comes
+   *  from its document's revert, so the document is open, unless the
+   *  revert's own writes destroyed it; its parts then stand no more, and
+   *  are left as they are. */
+  const rewritePart = (part: Part, remap: Remap | undefined): Part => {
+    if (remap === undefined || remap.size === 0) return part
+    const revertible = interpreted(part.docId)?.revertible
     if (revertible === undefined) return part
     const record = revertible.codec.decode(base64ToUint8Array(part.record))
     return {
@@ -571,65 +589,124 @@ export async function createUndoStack(
     }
   }
 
+  /** A part planned: its plan, and the undo that made it. */
+  interface Planned {
+    readonly plan: RevertPlan<unknown>
+    readonly revertible: Revertible | undefined
+  }
+
+  /** A part whose document is not here to revert: it names something, and
+   *  none of it stands. */
+  const absent: Planned = {
+    plan: { tally: { kept: 0, total: 1 }, apply: undefined },
+    revertible: undefined,
+  }
+
+  /** What reverting `part` would do now. Reads only. */
+  const planPart = (part: Part): Planned => {
+    const revertible = interpreted(part.docId)?.revertible
+    if (revertible === undefined) return absent
+    const record = revertible.codec.decode(base64ToUint8Array(part.record))
+    return { plan: revertible.plan(record), revertible }
+  }
+
+  /** The plans of the step the program is deciding on. They hold only while
+   *  nothing writes its documents, and the program answers `planned` with
+   *  `apply` in the same run of the dispatch loop. */
+  let planned: { readonly step: Step; readonly parts: Planned[] } | undefined
+
+  /** Plan every part of `step`, keep the plans, and say how each tallies. */
+  const planStep = (step: Step): Tally[] => {
+    const parts = step.parts.map(planPart)
+    planned = { step, parts }
+    return parts.map(p => p.plan.tally)
+  }
+
+  /** The plans of `step`, taken: each applies once. */
+  const takePlans = (step: Step): Planned[] => {
+    const held = planned
+    planned = undefined
+    if (held?.step.id !== step.id) {
+      throw new Error(`undo: step "${step.id}" was not planned`)
+    }
+    return held.parts
+  }
+
   /**
-   * Revert `step`'s parts last first, each through `attempt`, and record the
-   * move. Each revert's remap reaches every part still waiting, in this step
-   * and the rest of the stack, before the next one reverts.
+   * Revert each part of `step` through `revertPart` (null for a part that
+   * does not revert), then, in one write, move the step as its redo (one
+   * redo part per reverted part, each keeping its footprint) and rewrite
+   * every step left through its document's remap. The parts commute, so
+   * their order does not matter.
    */
-  const settleStep = (
+  const moveReverted = (
     direction: Direction,
     step: Step,
-    attempt: (
-      revertible: Revertible,
+    revertPart: (
       part: Part,
-      record: unknown,
-    ) => ReturnType<Revertible["revert"]>,
-  ): boolean => {
-    const rewrite = (part: Part, by: Part, remap: Remap) =>
-      rewritePart(part, by.docId, remap)
+      i: number,
+    ) => {
+      readonly redo: unknown
+      readonly remap: Remap
+      readonly revertible: Revertible
+    } | null,
+  ): void => {
+    const redo: Part[] = []
+    const remaps = new Map<string, Remap>()
     reverting = true
-    let reverted: StepReverted<Part>
     try {
-      reverted = revertStep(
-        step.parts,
-        part => {
-          const revertible = interpreted(part.docId)?.revertible
-          if (revertible === undefined) return null
-          const record = revertible.codec.decode(
-            base64ToUint8Array(part.record),
-          )
-          const result = attempt(revertible, part, record)
-          if (result === null) return null
-          const redo = uint8ArrayToBase64(revertible.codec.encode(result.redo))
-          return { redo: { ...part, record: redo }, remap: result.remap }
-        },
-        rewrite,
-      )
+      step.parts.forEach((part, i) => {
+        const result = revertPart(part, i)
+        if (result === null) return
+        redo.push({
+          ...part,
+          record: uint8ArrayToBase64(
+            result.revertible.codec.encode(result.redo),
+          ),
+        })
+        remaps.set(part.docId, result.remap)
+      })
     } finally {
       reverting = false
     }
-    const { remaps } = reverted
-    const redo =
-      reverted.redo.length > 0
-        ? { id: step.id, parts: [...reverted.redo] }
-        : undefined
     write(
       moveStep(
         read(),
         direction,
         step,
-        redo,
-        part =>
-          remaps.reduce((p, { by, remap }) => rewrite(p, by, remap), part),
+        { id: step.id, parts: redo },
+        part => rewritePart(part, remaps.get(part.docId)),
         depth,
       ),
     )
-    return redo !== undefined
+  }
+
+  /** Apply the plans `planStep` kept for `step`. */
+  const applyStep = (
+    direction: Direction,
+    step: Step,
+    options: CommitOptions,
+  ): void => {
+    const parts = takePlans(step)
+    moveReverted(direction, step, (_, i) => {
+      const held = parts[i]
+      if (held?.plan.apply === undefined || held.revertible === undefined) {
+        return null
+      }
+      return { ...held.plan.apply(options), revertible: held.revertible }
+    })
   }
 
   // --- Effects ------------------------------------------------------------
 
-  const resolvers = new Map<number, (done: boolean) => void>()
+  /** Each request waiting for its result, with its mode. */
+  const resolvers = new Map<
+    number,
+    {
+      readonly whole: boolean
+      readonly resolve: (result: Undone | UndoneWhole) => void
+    }
+  >()
   let nextToken = 0
   let timer: ReturnType<typeof setTimeout> | undefined
 
@@ -637,7 +714,11 @@ export async function createUndoStack(
     switch (effect.type) {
       case "push":
         write(
-          pushStep(read(), { id: randomHex(8), parts: effect.parts }, depth),
+          pushStep(
+            read(),
+            { id: randomHex(8), parts: effect.parts.map(encodePart) },
+            depth,
+          ),
         )
         return
       case "set-timer":
@@ -668,13 +749,14 @@ export async function createUndoStack(
         for (const part of effect.step.parts) {
           const revertible = interpreted(part.docId)?.revertible
           if (revertible === undefined) continue
-          positions[part.docId] ??= uint8ArrayToBase64(revertible.position())
+          positions[part.docId] = uint8ArrayToBase64(revertible.position())
         }
         write({
           ...read(),
           pending: {
             step: effect.step.id,
             direction: effect.direction,
+            whole: effect.whole,
             positions,
           },
         })
@@ -684,30 +766,40 @@ export async function createUndoStack(
         )
         return
       }
-      case "revert": {
-        const applied = settleStep(
-          effect.direction,
-          effect.step,
-          (revertible, _part, record) =>
-            revertible.revert(record, effect.options),
-        )
-        dispatch({ type: "reverted", applied })
+      case "plan":
+        dispatch({
+          type: "planned",
+          step: effect.step,
+          tallies: planStep(effect.step),
+        })
         return
-      }
-      case "recover":
-        recover(effect.note).then(
-          () => dispatch({ type: "recovered" }),
-          error => {
-            console.error(error)
-            write({ ...read(), pending: null })
-            dispatch({ type: "recovered" })
-          },
+      case "apply":
+        applyStep(effect.direction, effect.step, effect.options)
+        return
+      case "drop":
+        planned = undefined
+        write(
+          moveStep(
+            read(),
+            effect.direction,
+            effect.step,
+            undefined,
+            p => p,
+            depth,
+          ),
         )
+        return
+      case "recover":
+        recover(effect.note).catch(error => {
+          console.error(error)
+          write({ ...read(), pending: null })
+          dispatch({ type: "recovered" })
+        })
         return
       case "resolve": {
-        const resolve = resolvers.get(effect.token)
+        const waiting = resolvers.get(effect.token)
         resolvers.delete(effect.token)
-        resolve?.(effect.done)
+        waiting?.resolve(effect.result)
         return
       }
       case "compact":
@@ -719,37 +811,93 @@ export async function createUndoStack(
   /**
    * Finish a revert a crash interrupted. A document that has authored
    * anything since its noted position was reverted (nothing else authors
-   * between the note and the revert); one that has not is reverted now.
+   * between the note and the revert). If any was, the revert happened: each
+   * such document's part is taken from `recovered`, and each other part is
+   * applied as far as it stands. If none was, the revert never happened,
+   * and the step is planned again for the program to decide, with the
+   * note's `whole`, as for a request.
    */
   async function recover(note: Note): Promise<void> {
-    const stack = read()
-    const step = listOf(stack, note.direction).find(s => s.id === note.step)
-    if (step === undefined) {
-      write({ ...stack, pending: null })
+    const found = listOf(read(), note.direction).find(s => s.id === note.step)
+    if (found === undefined) {
+      write({ ...read(), pending: null })
+      dispatch({ type: "recovered" })
       return
     }
-    await openAll(step, true)
-    settleStep(note.direction, step, (revertible, part, record) => {
+    await openAll(found, true)
+    // Read again: a step pushed while the documents opened may have cleared
+    // it from the redo list.
+    const step = listOf(read(), note.direction).find(s => s.id === note.step)
+    if (step === undefined) {
+      write({ ...read(), pending: null })
+      dispatch({ type: "recovered" })
+      return
+    }
+    const notedPosition = (part: Part): Uint8Array | undefined => {
       const noted = note.positions[part.docId]
-      const position =
-        noted === undefined ? undefined : base64ToUint8Array(noted)
-      return position !== undefined && revertible.authoredSince(position)
-        ? revertible.recovered(record, position)
-        : revertible.revert(record, {})
+      return noted === undefined ? undefined : base64ToUint8Array(noted)
+    }
+    const authored = (part: Part) => {
+      const position = notedPosition(part)
+      const revertible = interpreted(part.docId)?.revertible
+      return (
+        position !== undefined &&
+        revertible !== undefined &&
+        revertible.authoredSince(position)
+      )
+    }
+    if (!step.parts.some(authored)) {
+      dispatch({ type: "planned", step, tallies: planStep(step) })
+      return
+    }
+    moveReverted(note.direction, step, part => {
+      const revertible = interpreted(part.docId)?.revertible
+      const position = notedPosition(part)
+      if (revertible === undefined) return null
+      const record = revertible.codec.decode(base64ToUint8Array(part.record))
+      if (position !== undefined && revertible.authoredSince(position)) {
+        return { ...revertible.recovered(record, position), revertible }
+      }
+      const { apply } = revertible.plan(record)
+      return apply === undefined ? null : { ...apply({}), revertible }
     })
+    dispatch({ type: "recovered" })
   }
 
   dispatch({ type: "loaded", pending: read().pending ?? undefined })
 
-  const request = (direction: Direction, { docs, ...options }: UndoOptions) =>
-    new Promise<boolean>(resolve => {
+  const request = (
+    direction: Direction,
+    { docs, whole, ...options }: UndoOptions,
+  ) =>
+    new Promise<Undone | UndoneWhole>(resolve => {
       const token = nextToken++
-      resolvers.set(token, resolve)
+      resolvers.set(token, { whole: whole === true, resolve })
       dispatch({
         type: "requested",
-        request: { direction, options, docs, token },
+        request: { direction, options, docs, whole: whole === true, token },
       })
     })
+
+  function undo(
+    options: UndoOptions & { readonly whole: true },
+  ): Promise<UndoneWhole>
+  function undo(
+    options?: UndoOptions & { readonly whole?: undefined },
+  ): Promise<Undone>
+  function undo(options: UndoOptions = {}): Promise<Undone | UndoneWhole> {
+    return request("undo", options)
+  }
+
+  function redo(
+    options: UndoOptions & { readonly whole: true },
+  ): Promise<UndoneWhole>
+  function redo(
+    options?: UndoOptions & { readonly whole?: undefined },
+  ): Promise<Undone>
+  function redo(options: UndoOptions = {}): Promise<Undone | UndoneWhole> {
+    return request("redo", options)
+  }
 
   return {
     top,
@@ -786,8 +934,8 @@ export async function createUndoStack(
       }
     },
 
-    undo: (options = {}) => request("undo", options),
-    redo: (options = {}) => request("redo", options),
+    undo,
+    redo,
 
     dispose() {
       stopScanning()
@@ -795,7 +943,9 @@ export async function createUndoStack(
       attached.clear()
       if (timer !== undefined) clearTimeout(timer)
       // An undo still waiting will not run.
-      for (const resolve of resolvers.values()) resolve(false)
+      for (const { whole, resolve } of resolvers.values()) {
+        resolve(shapeResult(whole, { kind: "none", dropped: [] }))
+      }
       resolvers.clear()
     },
   }

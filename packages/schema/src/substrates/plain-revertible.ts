@@ -1,28 +1,29 @@
 // plain-revertible — undo for a plain (serialized) document.
 //
-// A plain document has one writer, so its undo is a strict stack: a step is
-// reverted exactly when the document is where the step left it, and then its
-// recorded inverses apply as they are. A revert returns the document to the
-// state before the step, at a new log position; the remap names that
-// position, so the step below, which recorded the old one as where it left
-// the document, reverts next. A write outside the stack moves the head
-// somewhere no record names, and ends undo past it.
+// A plain document has one writer, so its undo is a strict stack: a record
+// stands, whole, exactly when the document is where it left it, and then its
+// inverses apply as they are; otherwise none of it does. A revert returns the
+// document to the state before the record, at a new log position; the remap
+// names that position, so the record below, which recorded the old one as
+// where it left the document, reverts next. A write outside the stack moves
+// the head somewhere no record names, and ends undo past it. Two records
+// compose when the second starts where the first ended.
 //
 // Decisions are pure (`planPlainRevert`, `settlePlainRevert`,
-// `rewritePlainRecord`); `createPlainRevertible` is the shell over a
-// substrate's context and log head.
+// `composePlainRecords`, `rewritePlainRecord`); `createPlainRevertible` is
+// the shell over a substrate's context and log head.
 
 import type { Op } from "../changefeed.js"
 import { WHOLE_DOCUMENT } from "../footprint.js"
 import type {
   BatchOutcome,
-  CommitOptions,
   RecordCodec,
   Remap,
   Reverted,
   Revertible,
   RevertibleCommit,
 } from "../substrate.js"
+import type { Tally } from "../undo-step.js"
 import type { WritableContext } from "../writable-context.js"
 import { deserializeOps, type SerializedOp, serializeOps } from "./op-codec.js"
 
@@ -38,16 +39,34 @@ export interface PlainRecord {
   readonly inverses: readonly Op[]
 }
 
-/**
- * The changes that revert `record`, last first, or null when the document is
- * not where the record left it.
- */
-export function planPlainRevert(
-  record: PlainRecord,
-  head: string,
-): readonly Op[] | null {
-  if (head !== record.after) return null
-  return [...record.inverses].reverse()
+/** A plain revert: the record whole or not at all. */
+export interface PlainPlan {
+  readonly tally: Tally
+  /** The changes that revert the record, last first; undefined when the
+   *  document is not where the record left it. */
+  readonly changes: readonly Op[] | undefined
+}
+
+/** The revert of `record` with the log head at `head`. */
+export function planPlainRevert(record: PlainRecord, head: string): PlainPlan {
+  return head === record.after
+    ? { tally: { kept: 1, total: 1 }, changes: [...record.inverses].reverse() }
+    : { tally: { kept: 0, total: 1 }, changes: undefined }
+}
+
+/** `earlier` then `later` as one record, or null when the head moved
+ *  between them. */
+export function composePlainRecords(
+  earlier: PlainRecord,
+  later: PlainRecord,
+): PlainRecord | null {
+  if (later.before !== earlier.after) return null
+  return {
+    before: earlier.before,
+    after: later.after,
+    ops: [...earlier.ops, ...later.ops],
+    inverses: [...earlier.inverses, ...later.inverses],
+  }
 }
 
 /**
@@ -154,21 +173,28 @@ export function createPlainRevertible(
       }
     },
 
-    revert(record: PlainRecord, options: CommitOptions) {
+    plan(record) {
       const headBefore = host.head()
-      const changes = planPlainRevert(record, headBefore)
-      if (changes === null) return null
-      const ctx = host.context()
-      reverting = true
-      try {
-        ctx.runBatch(() => {
-          for (const op of changes) ctx.dispatch(op.path, op.change)
-        }, options)
-      } finally {
-        reverting = false
+      const { tally, changes } = planPlainRevert(record, headBefore)
+      if (changes === undefined) return { tally, apply: undefined }
+      return {
+        tally,
+        apply(options) {
+          const ctx = host.context()
+          reverting = true
+          try {
+            ctx.runBatch(() => {
+              for (const op of changes) ctx.dispatch(op.path, op.change)
+            }, options)
+          } finally {
+            reverting = false
+          }
+          return settlePlainRevert(record, headBefore, host.head())
+        },
       }
-      return settlePlainRevert(record, headBefore, host.head())
     },
+
+    compose: composePlainRecords,
 
     recovered(record, position) {
       return settlePlainRevert(

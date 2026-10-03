@@ -144,6 +144,27 @@ function transform(
 }
 
 /**
+ * The units `change` inserts, deletes or formats: what a revert of it does,
+ * counted. A rebase never adds units and keeps every insert, so the units of
+ * an inverse rebased past what happened since, against its own, say how much
+ * of it still stands. Zero for a change that is not positional.
+ */
+export function changeUnits(change: ChangeBase): number {
+  if (
+    !isTextChange(change) &&
+    !isSequenceChange(change) &&
+    !isRichTextChange(change)
+  ) {
+    return 0
+  }
+  let units = 0
+  for (const c of change.instructions as readonly Component[]) {
+    if (!("retain" in c)) units += length(c)
+  }
+  return units
+}
+
+/**
  * `change`, rebased past `over`: the change to apply after `over` so that
  * what `change` did still happens, to the content it still concerns.
  *

@@ -243,7 +243,7 @@ describe("read-only by policy, over the policy's lifetime", () => {
     expect(doc.card()).toBe("B")
   })
 
-  it("the undo stack skips a read-only document's part, and reverts the rest", async () => {
+  it("the undo stack reverts the rest of a step, and names a read-only document's part stale", async () => {
     const Card = loro.bind(Schema.struct({ text: Schema.text() }))
     const exchange = createExchange({
       principal: "client",
@@ -262,12 +262,25 @@ describe("read-only by policy, over the policy's lifetime", () => {
         card.text.insert(0, "moved")
         doc.card.set("moved")
       })
+      stack.gesture(() => {
+        card.text.insert(0, "again ")
+        doc.card.set("again")
+      })
       await drain()
       exchange.register(onlyTheHostWritesPlaces)
 
-      expect(await stack.undo()).toBe(true)
-      expect(card.text()).toBe("")
-      expect(doc.card()).toBe("moved")
+      // Asked to undo a step whole, the stack refuses it, and drops it.
+      const refused = await stack.undo({ whole: true })
+      expect(refused.kind).toBe("refused")
+      expect(card.text()).toBe("again moved")
+      expect(doc.card()).toBe("again")
+
+      const undone = await stack.undo()
+      expect(undone.kind).toBe("undone")
+      if (undone.kind !== "undone") return
+      expect(undone.stale.map(part => part.docId)).toEqual(["places"])
+      expect(card.text()).toBe("again ")
+      expect(doc.card()).toBe("again")
     } finally {
       stack.dispose()
     }

@@ -196,6 +196,54 @@ undoing a word backspaced a key at a time did the same.
     rewriting that id through the remap makes `o` land after `m'`. Loro and
     plain documents were not affected. The conformance suite now covers it.
 
+## Fifth round: one batch against separate commits, and Loro's merge rule
+
+The conformance suite gained a matrix ("a batch undoes as its commits do"):
+16 scenarios, each made once as one batch and once as one commit per write,
+in one step, on plain, Loro and Yjs, live and after a reload. Undo must give
+the document before the step, redo the document after it, both ways. Measured
+with the step reverted commit by commit, last first (`revertStep`).
+
+29. **Plain is right in every case.** Its record is the batch's own inverses,
+    applied at the head the batch left.
+30. **Loro is right in every case where its record names something.** Two
+    batches have no net effect (set a key then delete it; add an item then
+    delete it): `diff(after, before)` is empty, the revert commits nothing,
+    returns null, and the stack skips the step and undoes the one below. A
+    record that names nothing must count as standing whole, with nothing to
+    apply.
+31. **Yjs is wrong where one transaction writes inside what it inserts or
+    deletes.** As one batch:
+    - add a list item, then delete it: undo **adds** an item (the deleted
+      run is restored; the insert is already dead);
+    - add an item, then write inside it: redo loses the inner writes;
+    - write inside an item, then delete it: undo restores the inner writes'
+      new values (the run's content is the item as the transaction left it);
+    - delete list items right to left: undo restores them reversed (`a d c b`
+      for `a b c d`): each run's anchor is the item another run holds;
+    - mark text inside an item, then delete the item: undo restores it bold.
+
+    The same writes as separate commits are right, except one case.
+32. **Yjs has no remap for a list inside a list item**, as one batch and as
+    separate commits: add to a list inside an item, delete the item, undo,
+    undo: the restored item keeps the addition. Restoring the item re-creates
+    the inner list's items under new ids, and only texts inside a deleted
+    item record theirs (`nested`). A write inside an item, then its delete,
+    fails for the same reason when the write is to an inner list.
+33. **Loro's own manager joins a commit to the entry before only while no
+    remote change has arrived** (`push_with_merge` in
+    `crates/loro-internal/src/undo.rs`: `should_create_new_entry =
+    !last_remote_diff.cid_to_events.is_empty() && !is_disjoint_group`), or
+    inside a group while remote changes touched none of the group's
+    containers. An entry is a counter span of this peer. Its undo of several
+    spans (`undo()`) folds diff transforms that JavaScript cannot reach, and
+    overwrites a peer's later write rather than skipping it.
+34. **Loro and plain commits are back to back exactly when nothing foreign
+    came between them.** A Loro commit's `before` (its `deps`) is
+    `[previous commit's last op]`; after a merge it names the peer's op too.
+    A plain commit's `before` is the previous commit's `after` unless a write
+    outside the stack moved the head.
+
 ## What this settles
 
 - **Yjs:** anchors and ids through the public API for text and sequences. A

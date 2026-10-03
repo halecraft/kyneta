@@ -97,13 +97,14 @@ export function transformSelection(
 
 /**
  * Where undo goes. An `UndoStack` from `@kyneta/exchange` is one; the adapter
- * names only what it calls, and so stays free of the exchange.
+ * names only what it calls, and so stays free of the exchange. It ignores
+ * what an undo or redo resolves with: the caret follows the edit itself.
  */
 export interface UndoTarget {
   /** Run a keystroke's write, joining the typing step before it or not. */
   typing(fn: () => void): void
-  undo(options?: CommitOptions): Promise<boolean>
-  redo(options?: CommitOptions): Promise<boolean>
+  undo(options?: CommitOptions): Promise<unknown>
+  redo(options?: CommitOptions): Promise<unknown>
 }
 
 /** Options for {@link attach}. */

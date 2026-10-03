@@ -80,7 +80,12 @@ describe("planYjsRevert", () => {
     const back = run("zz", 20)
     const plan = planYjsRevert(
       record({
-        inserted: [{ container: [{ field: "title" }], ids: [] }],
+        inserted: [
+          {
+            container: [{ field: "title" }],
+            ids: [{ client: 1, clock: 30, length: 2 }],
+          },
+        ],
         deleted: [deleted, back],
       }),
       gathered({
@@ -92,7 +97,7 @@ describe("planYjsRevert", () => {
         ],
       }),
     )
-    expect(plan?.ops).toEqual([
+    expect(plan.ops).toEqual([
       {
         path: title,
         change: textChange([
@@ -103,7 +108,9 @@ describe("planYjsRevert", () => {
         ]),
       },
     ])
-    expect(plan?.placed.map(p => [p.run, p.at])).toEqual([[deleted, 1]])
+    expect(plan.placed.map(p => [p.run, p.at])).toEqual([[deleted, 1]])
+    // Both inserts, and the run not back; not the run that is.
+    expect(plan.tally).toEqual({ kept: 4, total: 6 })
   })
 
   it("restores a value only while it holds what I wrote", () => {
@@ -118,10 +125,14 @@ describe("planYjsRevert", () => {
         record({ values: [write] }),
         gathered({ values: [{ path: place, current: { value: current } }] }),
       )
-    expect(plan("column")?.ops).toEqual([
-      { path: place, change: replaceChange(trustAsOwned("drawer")) },
-    ])
-    expect(plan("queue")).toBeNull()
+    expect(plan("column")).toMatchObject({
+      tally: { kept: 1, total: 1 },
+      ops: [{ path: place, change: replaceChange(trustAsOwned("drawer")) }],
+    })
+    expect(plan("queue")).toMatchObject({
+      tally: { kept: 0, total: 1 },
+      ops: [],
+    })
   })
 
   it("unmarks only characters that still hold my mark", () => {
@@ -130,7 +141,7 @@ describe("planYjsRevert", () => {
         marks: [
           {
             container: [{ field: "title" }],
-            ids: [],
+            ids: [{ client: 1, clock: 40, length: 3 }],
             key: "bold",
             wrote: true,
             previous: null,
@@ -152,7 +163,8 @@ describe("planYjsRevert", () => {
         marks: [{ container: title.key, indices: [0, 1, 2] }],
       }),
     )
-    const change = plan?.ops[0]?.change
+    expect(plan.tally).toEqual({ kept: 2, total: 3 })
+    const change = plan.ops[0]?.change
     expect(change !== undefined && isRichTextChange(change)).toBe(true)
     expect((change as RichTextChange).instructions).toEqual([
       { format: 1, marks: { bold: null } },
@@ -161,13 +173,21 @@ describe("planYjsRevert", () => {
     ])
   })
 
-  it("is null when nothing of the record still stands", () => {
+  it("keeps nothing when nothing of the record still stands", () => {
     expect(
       planYjsRevert(
         record({ deleted: [run("x")] }),
         gathered({ deleted: [{ container: null, back: false, gap: null }] }),
       ),
-    ).toBeNull()
+    ).toEqual({ tally: { kept: 0, total: 1 }, ops: [], placed: [] })
+  })
+
+  it("names nothing for an empty record", () => {
+    expect(planYjsRevert(record({}), gathered({}))).toEqual({
+      tally: { kept: 0, total: 0 },
+      ops: [],
+      placed: [],
+    })
   })
 })
 

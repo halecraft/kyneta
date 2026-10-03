@@ -2,8 +2,14 @@ import { describe, expect, it } from "vitest"
 import { singleEdit, textChange } from "../change.js"
 import { RawPath } from "../path.js"
 import { planValueRestores } from "../restore.js"
-import { revertStep } from "../revert-step.js"
 import { continuesStep, type Edit, editOf } from "../typing.js"
+import {
+  addTally,
+  EMPTY_TALLY,
+  howMuchStands,
+  settleStep,
+  type Tally,
+} from "../undo-step.js"
 
 describe("singleEdit", () => {
   it.each([
@@ -125,24 +131,35 @@ describe("continuesStep", () => {
   })
 })
 
-describe("revertStep", () => {
-  it("reverts last first, and rewrites what waits and what is done through each remap", () => {
-    const order: string[] = []
-    const { redo, remaps } = revertStep(
-      ["a", "b", "c"],
-      part => {
-        order.push(part)
-        // "b" stands no more; "c" re-creates what "a" names.
-        if (part === "b") return null
-        return {
-          redo: `redo(${part})`,
-          remap: new Map(part === "c" ? [["a", "a'"]] : []),
-        }
-      },
-      (part, _by, remap) => remap.get(part) ?? part,
-    )
-    expect(order).toEqual(["c", "b", "a'"])
-    expect(redo).toEqual(["redo(c)", "redo(a')"])
-    expect(remaps.map(r => r.by)).toEqual(["c", "a'"])
+describe("tallies", () => {
+  const t = (kept: number, total: number): Tally => ({ kept, total })
+
+  it.each([
+    [t(0, 3), "none"],
+    [t(1, 3), "part"],
+    [t(3, 3), "whole"],
+    [EMPTY_TALLY, "whole"],
+  ] as const)("howMuchStands(%j) is %s", (tally, standing) => {
+    expect(howMuchStands(tally)).toBe(standing)
+  })
+
+  it("adds, with EMPTY_TALLY as its identity, so a part naming nothing never lifts a dead step", () => {
+    expect(addTally(EMPTY_TALLY, t(2, 5))).toEqual(t(2, 5))
+    expect(addTally(t(1, 2), t(3, 4))).toEqual(t(4, 6))
+    expect(howMuchStands(addTally(EMPTY_TALLY, t(0, 3)))).toBe("none")
+  })
+
+  it.each([
+    [[t(2, 2), EMPTY_TALLY], false, "undone"],
+    [[t(1, 2), t(0, 1)], false, "undone"],
+    [[t(0, 2), t(0, 1)], false, "dropped"],
+    [[EMPTY_TALLY, t(0, 2)], false, "dropped"],
+    [[EMPTY_TALLY], false, "undone"],
+    [[t(2, 2), EMPTY_TALLY], true, "undone"],
+    [[t(2, 2), t(0, 1)], true, "refused"],
+    [[t(0, 2)], true, "refused"],
+    [[], true, "undone"],
+  ] as const)("settleStep(%j, whole: %s) is %s", (tallies, whole, outcome) => {
+    expect(settleStep(tallies, whole)).toBe(outcome)
   })
 })

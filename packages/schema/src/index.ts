@@ -319,7 +319,7 @@ export type {
 } from "./reader.js"
 // Reader — reading σ, and advancing it by a change
 export { applyChange, freezePayload, plainReader } from "./reader.js"
-export { rebaseChange } from "./rebase.js"
+export { changeUnits, rebaseChange } from "./rebase.js"
 // Reconcile — σ brought up to date from λ where a change touched it
 export type { ReconcileTarget } from "./reconcile-shadow.js"
 export { planReconcile, reconcileShadow } from "./reconcile-shadow.js"
@@ -392,8 +392,6 @@ export {
 export { type Releasable, releasable } from "./releasable.js"
 export type { ValueRestore } from "./restore.js"
 export { planValueRestores } from "./restore.js"
-export type { PartReverted, StepReverted } from "./revert-step.js"
-export { revertStep } from "./revert-step.js"
 export type {
   CounterSchema,
   DiscriminatedSumSchema,
@@ -500,6 +498,7 @@ export type {
   Reverted,
   Revertible,
   RevertibleCommit,
+  RevertPlan,
   Substrate,
   SubstrateFactory,
   SubstratePayload,
@@ -576,6 +575,13 @@ export {
 } from "./tracking.js"
 export type { Edit } from "./typing.js"
 export { continuesStep, editOf, TYPING_GAP } from "./typing.js"
+export type { Settlement, Standing, Tally } from "./undo-step.js"
+export {
+  addTally,
+  EMPTY_TALLY,
+  howMuchStands,
+  settleStep,
+} from "./undo-step.js"
 export type { HasNativeAny } from "./unwrap.js"
 // Unwrap — typed escape hatch for accessing the native container backing a ref
 export { unwrap } from "./unwrap.js"

@@ -43,6 +43,7 @@ import type { Path } from "./interpret.js"
 import type { Reader } from "./reader.js"
 import type { ClosedReason } from "./refusal.js"
 import type { Schema as SchemaNode } from "./schema.js"
+import type { Tally } from "./undo-step.js"
 import type { WritableContext } from "./writable-context.js"
 
 // ---------------------------------------------------------------------------
@@ -878,10 +879,27 @@ export type Remap = ReadonlyMap<string, string>
 
 /** What reverting a record produced. */
 export interface Reverted<R> {
-  /** The record of the revert's own commit: reverting it redoes. */
+  /** The record of the revert's own commit, or the record itself when it
+   *  named nothing: reverting it redoes. */
   readonly redo: R
   readonly remap: Remap
 }
+
+/**
+ * What reverting a record would do now: how much of it still stands, and,
+ * when anything does (or it names nothing), the revert, ready to apply.
+ */
+export type RevertPlan<R> =
+  | { readonly tally: Tally; readonly apply: undefined }
+  | {
+      readonly tally: Tally
+      /**
+       * Apply as one local commit carrying `options`, or commit nothing when
+       * the record names nothing. Valid only while the document is as it
+       * was when planned.
+       */
+      apply(options: CommitOptions): Reverted<R>
+    }
 
 /** A substrate's record type, encoded for storage. */
 export interface RecordCodec<R> {
@@ -898,29 +916,34 @@ export function jsonRecordCodec<R>(): RecordCodec<R> {
 }
 
 /**
- * Undo, as one substrate provides it: a record of every local commit, and
- * the operation that reverses one as it now stands.
+ * Undo, as one substrate provides it: a record of every local commit, a plan
+ * that reverses one as it now stands, and the composition of two.
  *
- * `revert` is its own inverse on records: the record it returns reverts the
- * revert. So one operation serves undo and redo.
+ * The `redo` an applied plan returns is a record like any other: planning
+ * and applying it reverts the revert. So undo and redo are one operation.
  */
 export interface Revertible<R = unknown> {
   /**
    * Call `listener` after every local commit that has an effect. Never for a
-   * merge, an aborted batch, a commit with no effect, or `revert`'s own
+   * merge, an aborted batch, a commit with no effect, or a plan's own
    * commit. Fires synchronously, before the commit's changeset is delivered
    * or after it, depending on the substrate.
    */
   subscribeCommits(listener: (commit: RevertibleCommit<R>) => void): () => void
+  /** What reverting `record` would do now. Reads only. */
+  plan(record: R): RevertPlan<R>
   /**
-   * Reverse `record` as it now stands, as one local commit carrying
-   * `options`. Null when nothing of it still stands.
+   * One record for `earlier` then `later`, or null when something foreign
+   * came between them on what they touch. Pure: reads no document.
+   * Reverting the composition gives the document reverting `later`, then
+   * `earlier`, gives.
    */
-  revert(record: R, options: CommitOptions): Reverted<R> | null
+  compose(earlier: R, later: R): R | null
   /**
-   * What `revert(record)` produced, for a revert this replica applied after
-   * `position` and a crash kept from recording. Nothing else authored in
-   * between, so what this replica authored since `position` is the revert.
+   * What applying `plan(record)` produced, for a revert this replica applied
+   * after `position` and a crash kept from recording. Nothing else authored
+   * in between, so what this replica authored since `position` is the
+   * revert.
    */
   recovered(record: R, position: Uint8Array): Reverted<R>
   /** `record`, naming what `remap` re-created in place of what it named. */

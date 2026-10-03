@@ -10,6 +10,9 @@
 // them); the runs it deleted, with their ids in document order and their
 // content (an undo re-inserts them: Yjs cannot undelete); and the values and
 // marks it wrote, restored only while they still hold what it wrote.
+//
+// A record is kept in normal form (`./normal.js`): it names no id it inserts
+// or deletes anywhere but in its own `inserted` and `deleted` lists.
 
 import { jsonRecordCodec, type Remap, type RichTextSpan } from "@kyneta/schema"
 
@@ -39,7 +42,10 @@ export type StablePath = readonly StableSegment[]
 
 export const idKey = (id: Id): string => `${id.client}:${id.clock}`
 
-export function* unitsOf(runs: readonly IdRun[]): Generator<Id> {
+export const samePath = (a: StablePath, b: StablePath): boolean =>
+  JSON.stringify(a) === JSON.stringify(b)
+
+export function* expandRuns(runs: readonly IdRun[]): Generator<Id> {
   for (const run of runs) {
     for (let i = 0; i < run.length; i++) {
       yield { client: run.client, clock: run.clock + i }
@@ -75,11 +81,15 @@ export type RunContent =
   | { readonly kind: "richtext"; readonly spans: readonly RichTextSpan[] }
   | { readonly kind: "sequence"; readonly items: readonly unknown[] }
 
-/** The ids of a text inside the `item`th item of a deleted list run. */
+/** The ids of a text or list inside the `item`th item of a deleted list
+ *  run, at any depth: a text's characters, a list's items, each in document
+ *  order. */
 export interface NestedIds {
   readonly item: number
-  /** From the item to the text: fields and entries only. */
+  /** From the item to the container; a list index is the list item's id. */
   readonly path: StablePath
+  /** The container's schema kind: `"text"`, `"richtext"` or `"sequence"`. */
+  readonly kind: string
   readonly ids: readonly IdRun[]
 }
 
@@ -131,13 +141,6 @@ export interface YjsRecord {
   readonly marks: readonly MarkWrite[]
 }
 
-export const EMPTY: YjsRecord = {
-  inserted: [],
-  deleted: [],
-  values: [],
-  marks: [],
-}
-
 export function isEmpty(record: YjsRecord): boolean {
   return (
     record.inserted.length === 0 &&
@@ -145,6 +148,35 @@ export function isEmpty(record: YjsRecord): boolean {
     record.values.length === 0 &&
     record.marks.length === 0
   )
+}
+
+/**
+ * Where `path` sits among the containers of one deleted item, `nested`: its
+ * path with each list item's id replaced by its index in that list. Two
+ * copies of one item's content, under different ids, agree on it. Null when
+ * a list on the way is not among `nested`, or does not hold the id.
+ */
+export function positionalPath(
+  nested: readonly NestedIds[],
+  path: StablePath,
+): string | null {
+  const out: (StableSegment | number)[] = []
+  for (let i = 0; i < path.length; i++) {
+    const seg = path[i] as StableSegment
+    if (!("item" in seg)) {
+      out.push(seg)
+      continue
+    }
+    const prefix = path.slice(0, i)
+    const list = nested.find(n => samePath(n.path, prefix))
+    if (list === undefined) return null
+    const index = [...expandRuns(list.ids)].findIndex(
+      id => id.client === seg.item.client && id.clock === seg.item.clock,
+    )
+    if (index < 0) return null
+    out.push(index)
+  }
+  return JSON.stringify(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -159,7 +191,7 @@ function rewriteId(id: Id, remap: Remap): Id {
 }
 
 function rewriteRuns(runs: readonly IdRun[], remap: Remap): IdRun[] {
-  return toRuns([...unitsOf(runs)].map(id => rewriteId(id, remap)))
+  return toRuns([...expandRuns(runs)].map(id => rewriteId(id, remap)))
 }
 
 function rewritePath(path: StablePath, remap: Remap): StablePath {
@@ -181,7 +213,11 @@ export function rewriteYjsRecord(record: YjsRecord, remap: Remap): YjsRecord {
       container: rewritePath(r.container, remap),
       after: r.after === null ? null : rewriteId(r.after, remap),
       ids: rewriteRuns(r.ids, remap),
-      nested: r.nested.map(n => ({ ...n, ids: rewriteRuns(n.ids, remap) })),
+      nested: r.nested.map(n => ({
+        ...n,
+        path: rewritePath(n.path, remap),
+        ids: rewriteRuns(n.ids, remap),
+      })),
     })),
     values: record.values.map(v => ({
       ...v,

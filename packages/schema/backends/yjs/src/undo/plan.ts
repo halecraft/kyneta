@@ -1,10 +1,14 @@
-// plan — a revert's decisions, pure over what was gathered of the document:
-// which of my inserts to delete, which deleted runs to restore where, which
-// marks and values still hold what was written; and the remap of what the
-// revert restored.
+// plan — a revert's decisions, pure over what was gathered: which of my
+// inserts to delete, which deleted runs to restore where, which marks and
+// values still hold what was written, and how much of the record that keeps;
+// and the remap of what the revert restored. What was gathered is the
+// document now, or, for the normal form, a deleted run's content
+// (`./normal.js`).
 
 import {
+  addTally,
   type ChangeBase,
+  EMPTY_TALLY,
   mapChange,
   type OwnedRichTextInstruction,
   own,
@@ -15,19 +19,20 @@ import {
   richTextChange,
   type SequenceInstruction,
   sequenceChange,
+  type Tally,
   type TextInstruction,
   textChange,
   trustAsOwned,
 } from "@kyneta/schema"
 import {
   type DeletedRun,
+  expandRuns,
   type Id,
   type IdRun,
   idKey,
   type NestedIds,
   type RunContent,
   type Slot,
-  unitsOf,
   type YjsRecord,
 } from "./record.js"
 
@@ -160,9 +165,9 @@ export interface GatheredContainer {
 }
 
 /**
- * What a record names, as the document holds it now: everything a revert
- * decides by. Containers are named by their path's key; `null` is one that
- * is gone.
+ * What a record names, as the document holds it now, or as a deleted run's
+ * content holds it (`./normal.js`): everything a revert decides by.
+ * Containers are named by their path's key; `null` is one that is gone.
  */
 export interface YjsGathered {
   readonly containers: ReadonlyMap<string, GatheredContainer>
@@ -191,6 +196,9 @@ export interface YjsGathered {
 }
 
 export interface YjsPlan {
+  /** Of the units the record names (each inserted id, each deleted run's
+   *  units, each marked character, each value), those the revert keeps. */
+  readonly tally: Tally
   /** The revert's changes, a change inside a list item before the list. */
   readonly ops: readonly { path: RawPath; change: ChangeBase }[]
   /** Each restored run, and where in its container it starts. */
@@ -201,12 +209,15 @@ export interface YjsPlan {
   }[]
 }
 
-/** The revert of `record`, decided from what `gathered` says of it. Null
- *  when nothing of it still stands. */
+/** The revert of `record`, decided from what `gathered` says of it. */
 export function planYjsRevert(
   record: YjsRecord,
   gathered: YjsGathered,
-): YjsPlan | null {
+): YjsPlan {
+  let tally = EMPTY_TALLY
+  const count = (kept: number, total: number) => {
+    tally = addTally(tally, { kept, total })
+  }
   const edits = new Map<string, PositionalEdit[]>()
   const editsAt = (key: string) => {
     let list = edits.get(key)
@@ -218,17 +229,33 @@ export function planYjsRevert(
   }
 
   // My inserts that are still there.
-  for (const { container, indices } of gathered.inserted) {
-    if (container === null) continue
-    for (const index of indices)
-      editsAt(container).push({ kind: "delete", index })
-  }
+  record.inserted.forEach((run, i) => {
+    const at = gathered.inserted[i]
+    const total = [...expandRuns(run.ids)].length
+    if (at === undefined || at.container === null) {
+      count(0, total)
+      return
+    }
+    count(at.indices.length, total)
+    for (const index of at.indices) {
+      editsAt(at.container).push({ kind: "delete", index })
+    }
+  })
 
   // What I deleted, unless it is already back.
   record.deleted.forEach((run, i) => {
     const at = gathered.deleted[i]
-    if (at === undefined || at.container === null || at.back || at.gap === null)
+    const units = contentLength(run.content)
+    if (
+      at === undefined ||
+      at.container === null ||
+      at.back ||
+      at.gap === null
+    ) {
+      count(0, units)
       return
+    }
+    count(units, units)
     editsAt(at.container).push({
       kind: "insert",
       gap: at.gap,
@@ -240,13 +267,20 @@ export function planYjsRevert(
   // Marks that still hold what I set.
   record.marks.forEach((mark, i) => {
     const at = gathered.marks[i]
-    if (at === undefined || at.container === null) return
-    const container = gathered.containers.get(at.container)
-    if (container === undefined) return
+    const total = [...expandRuns(mark.ids)].length
+    const container =
+      at === undefined || at.container === null
+        ? undefined
+        : gathered.containers.get(at.container)
+    if (at === undefined || at.container === null || container === undefined) {
+      count(0, total)
+      return
+    }
+    let kept = 0
     for (const index of at.indices) {
       const marks = container.marks[index] ?? {}
       const held = Object.hasOwn(marks, mark.key) ? marks[mark.key] : null
-      const kept = planValueRestores([
+      const holds = planValueRestores([
         {
           key: index,
           wrote: mark.wrote,
@@ -254,7 +288,8 @@ export function planYjsRevert(
           current: held,
         },
       ])
-      if (kept.length === 0) continue
+      if (holds.length === 0) continue
+      kept += 1
       editsAt(at.container).push({
         kind: "format",
         index,
@@ -262,6 +297,7 @@ export function planYjsRevert(
         value: mark.previous,
       })
     }
+    count(kept, total)
   })
 
   const ops: { path: RawPath; change: ChangeBase }[] = []
@@ -270,7 +306,10 @@ export function planYjsRevert(
   // Values that still hold what I wrote.
   record.values.forEach((write, i) => {
     const at = gathered.values[i]
-    if (at === undefined || at.path === null) return
+    if (at === undefined || at.path === null) {
+      count(0, 1)
+      return
+    }
     const kept = planValueRestores([
       {
         key: at.path,
@@ -279,6 +318,7 @@ export function planYjsRevert(
         current: at.current === null ? ABSENT : at.current.value,
       },
     ])
+    count(kept.length, 1)
     if (kept.length > 0) ops.push(restoreValue(at.path, write.previous))
   })
 
@@ -292,14 +332,13 @@ export function planYjsRevert(
     }
   }
 
-  if (ops.length === 0) return null
   // Inside out: a change inside a list item applies before the list moves.
   ops.sort((a, b) => b.path.length - a.path.length)
-  return { ops, placed }
+  return { tally, ops, placed }
 }
 
-/** A restored run, and the ids it now has: its own, and each nested
- *  text's. */
+/** A restored run, and the ids it now has: its own, and those of each text
+ *  and list inside it. */
 export interface Landed {
   readonly run: DeletedRun
   readonly fresh: readonly Id[]
@@ -310,7 +349,8 @@ export interface Landed {
 }
 
 /** The remap of a revert: each restored run's old ids paired, in order,
- *  with the ids it landed with, where the counts agree. */
+ *  with the ids it landed with, and each text's and list's inside it, where
+ *  the counts agree. */
 export function remapOfLanded(landed: readonly Landed[]): Remap {
   const remap = new Map<string, string>()
   const pairAll = (old: readonly Id[], fresh: readonly Id[]) => {
@@ -321,9 +361,9 @@ export function remapOfLanded(landed: readonly Landed[]): Remap {
     })
   }
   for (const { run, fresh, nested } of landed) {
-    pairAll([...unitsOf(run.ids)], fresh)
+    pairAll([...expandRuns(run.ids)], fresh)
     for (const n of nested) {
-      pairAll([...unitsOf(n.nested.ids)], [...unitsOf(n.ids)])
+      pairAll([...expandRuns(n.nested.ids)], [...expandRuns(n.ids)])
     }
   }
   return remap

@@ -1591,48 +1591,56 @@ Kyneta is a translucent layer over the underlying CRDT, and the user-facing orig
 
 ## Undo
 
-Source: `src/substrate.ts` (`Revertible`), `src/footprint.ts`, `src/landing.ts`, `src/rebase.ts`, `src/restore.ts`, `src/diff-sequence.ts`, `src/typing.ts`, `src/substrates/plain-revertible.ts`, `src/testing/undo-conformance.ts`; each backend's `revertible.ts`; the stack in `@kyneta/exchange` (`src/undo/`). The measurements behind it are `docs/findings/undo-probes.md`.
+Source: `src/substrate.ts` (`Revertible`), `src/undo-step.ts`, `src/footprint.ts`, `src/landing.ts`, `src/rebase.ts`, `src/restore.ts`, `src/diff-sequence.ts`, `src/typing.ts`, `src/substrates/plain-revertible.ts`, `src/testing/undo-conformance.ts`; each backend's `revertible.ts`; the stack in `@kyneta/exchange` (`src/undo/`). The measurements behind it are `docs/findings/undo-probes.md`.
 
 Undo is selective: it reverses this runtime's operations as they now stand among everyone's. A stored inverse cannot do that on its own. It is written in the coordinates of the state right after its op, so once a collaborator edits earlier in the same text it deletes the wrong characters.
 
 ### The model
 
-A substrate's `revertible` records every local commit and reverts one:
+A substrate's `revertible` records every local commit, plans the revert of one, and composes two:
 
 ```ts
 interface Revertible<R> {
   subscribeCommits(listener: (commit: { record: R; ops: readonly Op[]; footprint: Footprint }) => void): () => void
-  revert(record: R, options: CommitOptions): { redo: R; remap: Remap } | null
+  plan(record: R): RevertPlan<R>
+  compose(earlier: R, later: R): R | null
   recovered(record: R, position: Uint8Array): { redo: R; remap: Remap }
   rewrite(record: R, remap: Remap): R
   position(): Uint8Array
   authoredSince(position: Uint8Array): boolean
   readonly codec: RecordCodec<R>
 }
+
+type RevertPlan<R> =
+  | { tally: Tally; apply: undefined }
+  | { tally: Tally; apply(options: CommitOptions): { redo: R; remap: Remap } }
 ```
 
 - **A record names content by identity**, and encodes to bytes, so it survives a reload.
-- **`revert` is its own inverse.** It applies the reverse of a record as one local commit, and returns that commit's own record: reverting it redoes. There is no redo logic anywhere.
-- **`revert` returns a remap.** Neither CRDT can undelete, so restoring deleted content creates new items or containers. The remap pairs the old identities with the new ones, and `rewrite` aims every older record at the new ones. Without it, "type, delete, undo, undo" does nothing on the second undo.
-- **`position` and `authoredSince`** let a stack finish a revert a crash interrupted: a replica that has authored anything since the position noted before the revert was reverted, by each CRDT's own causality. `recovered` rebuilds what the revert returned.
-- **A commit's footprint** is the region of the document its record's revert writes and reads, as paths (`Footprint`, each path's `segmentKeys`). Yjs and Loro state `footprintOf(schema, ops)`: where the ops landed at the grain the document is stored (`landed`, shared with reconcile), so a record's keys are apart and a `.json()` or sum value is one region, each path cut to its stable prefix (`Path.stablePrefix`, before its first list index). An index moves when items go in before it, and a field or a key does not, so a cut path names the same region through remote edits, remaps and a reload. Population marks are kept at the same prefix, for the same reason ([Population](#population)). Plain states `WHOLE_DOCUMENT`: its revert applies only at the head the record left, and every write moves the head. A redo keeps the footprint of the record it came from, since a revert writes only what the record wrote. Two records whose footprints do not overlap (`footprintsOverlap`: no path of one is a prefix of a path of the other) commute, so an undo stack across documents orders only steps that overlap, and never reads a schema. Gotcha: a write inside list item 3 overlaps every step in that list.
-- **Never recorded:** a merge, an aborted batch, a commit with no effect (a Yjs delete-clock tick), and `revert`'s own commit.
+- **`plan` judges without changing anything.** It gathers what the record names from the document now, decides purely, and returns a `Tally` (how many of the units the record names still stand) with an `apply` that carries the decision out as one local commit. `apply` holds only while the document is as it was when planned, so whoever plans applies in the same synchronous run. A plan applies when some unit stands, or when the record names nothing.
+- **Tallies add, and the standing is read once.** `howMuchStands(tally)` is `"whole"` when every unit stands (or there are none), `"none"` when none does, and `"part"` otherwise. A step's parts tally separately, and `settleStep(tallies, whole)` reads the standing of their sum: with `whole`, a step is `undone` only when it stands whole and is `refused` otherwise; without it, a step is `undone` unless nothing of it stands, when it is `dropped`. Counts combine, not standings: a part whose commits cancelled out tallies `0 of 0` and adds nothing, where a `"whole"` for it would lift a dead step to `"part"`. The weight of a unit never changes a verdict, which asks only whether all, none or some stand. These live in `src/undo-step.ts`, which the exchange's stack and `undoConformance`'s both decide with.
+- **A redo is a record like any other.** `apply` returns its own commit's record: planning and applying it reverts the revert. There is no redo logic anywhere. A record that names nothing commits nothing, and its redo is the record itself.
+- **`apply` returns a remap.** Neither CRDT can undelete, so restoring deleted content creates new items or containers. The remap pairs the old identities with the new ones, and `rewrite` aims every older record at the new ones. Without it, "type, delete, undo, undo" does nothing on the second undo.
+- **`compose(earlier, later)` is one record for two commits**, or null when something foreign came between them on what they touch. It is pure, and its law is that reverting `compose(a, b)` gives the document reverting `b`, then `a`, gives. `undoConformance` checks the law through a matrix of scenarios, each made as one batch and as one commit per write.
+- **A step holds one record per document.** Its commits to a document compose into one, so a step's parts are in different documents, commute, and can be judged up front: no part's revert changes what another finds. Judging separate commits of one document up front would be wrong, since an earlier commit sees a later one's write and looks stale.
+- **`position` and `authoredSince`** let a stack finish a revert a crash interrupted: a replica that has authored anything since the position noted before the revert was reverted, by each CRDT's own causality. `recovered` rebuilds what `apply` returned.
+- **A commit's footprint** is the region of the document its record's revert writes and reads, as paths (`Footprint`, each path's `segmentKeys`). Yjs and Loro state `footprintOf(schema, ops)`: where the ops landed at the grain the document is stored (`landed`, shared with reconcile), so a record's keys are apart and a `.json()` or sum value is one region, each path cut to its stable prefix (`Path.stablePrefix`, before its first list index). An index moves when items go in before it, and a field or a key does not, so a cut path names the same region through remote edits, remaps and a reload. Population marks are kept at the same prefix, for the same reason ([Population](#population)). Plain states `WHOLE_DOCUMENT`: its revert applies only at the head the record left, and every write moves the head. A redo keeps the footprint of the record it came from, since a revert writes only what the record wrote. A composed record's footprint is the union of its commits'. Two records whose footprints do not overlap (`footprintsOverlap`: no path of one is a prefix of a path of the other) commute, so an undo stack across documents orders only steps that overlap, and never reads a schema. Gotcha: a write inside list item 3 overlaps every step in that list.
+- **Never recorded:** a merge, an aborted batch, a commit with no effect (a Yjs delete-clock tick), and a plan's own commit.
 - **A record that is plain JSON** encodes with `jsonRecordCodec()`; the Yjs and Loro records are.
-- **A step is undone by `revertStep`**: its parts last first, each revert's remap reaching every part still waiting and every redo part already made. The exchange's stack and `undoConformance`'s stack both use it, so the suite tests the algorithm that ships.
 
 ### Positions are rebased; values are compared
 
-- **A text or list edit** is carried past what happened since. `rebaseChange(change, over)` is the operational transform of a text, sequence or rich-text change, with `change` winning insert ties: a restored deletion goes before what a peer typed at its edge, as both CRDTs' own undo managers do. `rebase.test.ts` checks it against an identity model of two concurrent edits.
+- **A text or list edit** is carried past what happened since. `rebaseChange(change, over)` is the operational transform of a text, sequence or rich-text change, with `change` winning insert ties: a restored deletion goes before what a peer typed at its edge, as both CRDTs' own undo managers do. `rebase.test.ts` checks it against an identity model of two concurrent edits. A rebase never adds units and keeps every insert, so `changeUnits` of the rebased change against the original's says how much of it still stands: a step that replaced "abc" with "xyz", where a peer since deleted "xyz", still restores "abc", and stands in part.
 - **A value** (a map key, a scalar, a mark, a tree node's parent) is restored only while it still holds what the undone step wrote: `planValueRestores`, over `samePlainValue`. A peer's later write wins; so does one's own later write, until it is undone in turn, when the value holds the earlier step's again.
 - **A counter** commutes: its inverse always applies.
 
 ### Three substrates, three records
 
-- **Plain** has one writer, so its undo is a strict stack. A record is the batch's ops and inverses, each path as its op was made, and the log heads before and after it. A revert applies exactly when the head is where the step left it. The remap renames the head the revert produced as the position before the step, so the step below reverts next. A write outside the stack moves the head somewhere no record names, and ends undo past it.
-- **Yjs** is identity-based, on Yjs's public API. See its TECHNICAL.md § Undo.
-- **Loro** is history-based: the inverse is `diff(after, before)`, and what happened since is read by content, the document forked at `after` against the document now. See its TECHNICAL.md § Undo.
+- **Plain** has one writer, so its undo is a strict stack. A record is the batch's ops and inverses, each path as its op was made, and the log heads before and after it. It stands whole when the head is where it left the document, and not at all otherwise (`1 of 1` or `0 of 1`). The remap renames the head the revert produced as the position before the step, so the step below reverts next. A write outside the stack moves the head somewhere no record names, and ends undo past it. Two records compose when the later starts at the earlier's `after`: their ops and inverses concatenate.
+- **Yjs** is identity-based, on Yjs's public API. A record is kept in a normal form that names no id it inserts or deletes anywhere but in its own lists, and two compose by bringing their concatenation to it. A unit is an inserted id, a deleted run's character or item, a marked character, a value. See its TECHNICAL.md § Undo.
+- **Loro** is history-based: the inverse is `diff(after, before)`, and what happened since is read by content, the document forked at `after` against the document now. A record is a run of back-to-back commits, and two compose only when the later was made on the earlier's last op and nothing else, as Loro's own undo manager joins commits. A unit is a text or list's inserted, deleted or formatted unit, a map key, a tree item, a counter. See its TECHNICAL.md § Undo.
 
-`undoConformance` (`@kyneta/schema/testing`) runs the same scenarios against all three, live and after a reload.
+`undoConformance` (`@kyneta/schema/testing`) runs the same scenarios against all three, live and after a reload, through a minimal stack on the same step algorithm as the exchange's: commits composed per step, plans tallied, `settleStep`, `apply`.
 
 ### Typing
 
@@ -2423,8 +2431,8 @@ The worked example is `__countKeptRefs` (`src/coordinate-trie.ts`), a backdoor f
 | `src/substrates/plain.ts` | Plain substrate + factories. |
 | `src/substrates/plain-revertible.ts` | The plain substrate's undo: the strict stack. |
 | `src/substrates/op-codec.ts` | Ops as JSON-safe values, for the plain log and plain undo records. |
-| `src/rebase.ts` | `rebaseChange`: a positional change carried past another. |
-| `src/revert-step.ts` | `revertStep`: a step's parts reverted last first, remaps reaching the rest. |
+| `src/rebase.ts` | `rebaseChange`: a positional change carried past another; `changeUnits`, what a change does, counted. |
+| `src/undo-step.ts` | `Tally`, `addTally`, `howMuchStands`, `settleStep`: how much of a step stands, and what an undo does with it. |
 | `src/restore.ts` | `planValueRestores`: which values an undo may put back. |
 | `src/diff-sequence.ts` | `diffString`, `diffSequence`: the shortest edit between two sequences (Myers). |
 | `src/typing.ts` | `editOf`, `continuesStep`: when a keystroke joins the undo step before it. |

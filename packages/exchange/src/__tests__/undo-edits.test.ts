@@ -169,7 +169,7 @@ describe("moveStep", () => {
     const stack: StoredStack = {
       undo: [step("a", part("x", "1")), step("b", part("y", "2")), step("top")],
       redo: [],
-      pending: { step: "top", direction: "undo", positions: {} },
+      pending: { step: "top", direction: "undo", whole: false, positions: {} },
     }
     const rewrite = (p: Part) => (p.docId === "x" ? { ...p, record: "1'" } : p)
     const after = moveStep(

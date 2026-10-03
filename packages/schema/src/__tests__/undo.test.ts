@@ -35,8 +35,29 @@ describe("plain undo is a strict stack", () => {
     batch(peer.doc, (d: any) => d.title.insert(0, "abc"))
     const [record] = records
     batch(peer.doc, (d: any) => d.place.set("elsewhere"))
-    expect(revertible.revert(record, {})).toBeNull()
+    const plan = revertible.plan(record)
+    expect(plan).toEqual({ tally: { kept: 0, total: 1 }, apply: undefined })
     expect(peer.doc.title()).toBe("abc")
+  })
+
+  it("two commits compose only when the second starts where the first ended", () => {
+    const peer = create()
+    const revertible = peer.substrate.revertible
+    if (revertible === undefined) throw new Error("not revertible")
+    const records: unknown[] = []
+    const stop = revertible.subscribeCommits(c => records.push(c.record))
+    batch(peer.doc, (d: any) => d.title.insert(0, "a"))
+    batch(peer.doc, (d: any) => d.title.insert(1, "b"))
+    stop()
+    // Unrecorded: a write outside the stack.
+    batch(peer.doc, (d: any) => d.place.set("elsewhere"))
+    revertible.subscribeCommits(c => records.push(c.record))
+    batch(peer.doc, (d: any) => d.title.insert(2, "c"))
+    const [a, b, c] = records
+    const ab = revertible.compose(a, b)
+    expect(ab).not.toBeNull()
+    expect(revertible.compose(ab, c)).toBeNull()
+    expect(revertible.compose(b, a)).toBeNull()
   })
 })
 

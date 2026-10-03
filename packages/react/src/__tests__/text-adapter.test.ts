@@ -416,14 +416,12 @@ describe("attach", () => {
           batch(doc.title, (t: any) => t.delete(0, 2), {
             source: options?.source,
           })
-          return true
         },
         async redo(options?: { source?: unknown }) {
           calls.push("redo")
           batch(doc.title, (t: any) => t.insert(1, "xy"), {
             source: options?.source,
           })
-          return true
         },
       }
       return { target, calls }

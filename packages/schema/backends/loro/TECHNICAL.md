@@ -449,22 +449,29 @@ Both follow `planAdvance` from `@kyneta/schema`, and throw only for a target bey
 
 Source: `src/revertible.ts` (`createLoroRevertible`), wired in `src/substrate.ts`. The model is `packages/schema/TECHNICAL.md` § Undo; the measurements, `docs/findings/undo-probes.md`.
 
-A record is one local commit's frontiers, taken from the pre-commit hook: the document's version before it (`deps`) and its last op. Loro keeps every op, so everything else is read from history at undo time, after a reload as well:
+A record is the frontiers of a run of back-to-back local commits, taken from the pre-commit hook: the document's version before the first (`deps`) and the last one's last op. Loro keeps every op, so everything else is read from history at undo time, after a reload as well:
 
 - **The inverse** is `diff(after, before)`.
 - **What happened since is read by content**, not by op identity: the document forked at `after` (`forkAt`) against the document now. A text is compared with `diffString`, a list with `diffSequence` (Myers), and the inverse is rebased over the result with `rebaseChange`. By op identity, text a revert restored is new text, and an older step's inverse would miss it: "type, delete, undo, undo" would leave the typing. By content it is back where it was.
 - **A map key or a tree node's parent** is restored only while it still holds what the commit left there (`planValueRestores`). Loro's own manager overwrites a later write by someone else; this does not.
 - **A counter** always reverts.
 - **A commit's footprint is `footprintOf(schema, ops)`** (`LoroRevertibleHost.schema`): the inverse `diff(after, before)` names only what the commit wrote, at the grain it is stored.
-- **A container no longer there** takes its inverse as it is: `applyDiff` fills a container the same group re-creates, and leaves one gone for good alone.
+- **A container no longer there** takes its inverse as it is when a restore in the same group re-creates it (a container a list insert or a map value restores, or a tree node's data map, transitively): `applyDiff` fills it from the diff. One gone for good stands not at all, and its diff is left out.
+- **`compose(earlier, later)`** joins two records when `later.before` is exactly `[earlier.after[0]]`: the later commit was made on the earlier's last op and nothing else. The composition is `{ before: earlier.before, after: later.after }` with both records' aliases. After a merge the next commit's `deps` name the peer's op too, so a step splits there, as Loro's own manager does: it joins a commit to the entry before only while no remote change has arrived (`push_with_merge` in `crates/loro-internal/src/undo.rs`, finding 33). Loro's further rule, joining across a remote change that touched none of a group's containers, would need the record to carry its containers; it can be added inside `compose`.
 
-The revert gathers, then plans. `gather` reads each container of the inverse at `after` and now (`LoroGathered`: its text, its items, the values of the keys the inverse touches, each tree node's liveness and parents); `planLoroRevert(aliases, gathered)` decides the diffs purely, and is tested with no document (`src/__tests__/revert-plan.test.ts`).
+`plan` gathers, then decides. `gather` reads each container of the inverse at `after` and now (`LoroGathered`: its text and its characters' marks, its items, the values of the keys the inverse touches, each tree node's liveness and parents); `planLoroRevert(aliases, gathered)` decides the diffs purely, with their tally, and is tested with no document (`src/__tests__/revert-plan.test.ts`). The tally sums the inverse's entries:
 
-The revert is applied with `applyDiff` in one commit, inside `commitNative`, which carries the caller's `origin` and `source` to the event bridge's local announcement (`AnnounceOptions.source`). It is not written through `changeToDiff`: that filters out the `create` which restores a deleted tree node (see [Tree write path](#tree-write-path)).
+- **a text or list:** `changeUnits` of the rebased inverse against the inverse's own, inserts counted on both sides. A peer deleting "ll" from my "hello" leaves the inverse deleting "heo": `3 of 5`, and "heo" is still reverted. A format that changes nothing at `after` is dropped first: Loro reports one where a deleted mark's anchor outlives its text, unbolding text never bold, and it names nothing the commits did;
+- **a map key, a tree item, a counter:** one unit each; a key or an item is kept unless skipped, a counter always;
+- **a gone container:** its entry's units, kept only when a restore in the group re-creates it; **one not there at `after`:** its units, none kept.
+
+An inverse with no entries (`diff(after, before)` is empty: the commits cancelled out) names nothing: `0 of 0`, and applying it commits nothing. A diff that would only retain is left out, so a plan with anything to apply commits something.
+
+The plan is applied with `applyDiff` in one commit, inside `commitNative`, which carries the caller's `origin` and `source` to the event bridge's local announcement (`AnnounceOptions.source`). It is not written through `changeToDiff`: that filters out the `create` which restores a deleted tree node (see [Tree write path](#tree-write-path)).
 
 - **Remap.** Restoring a deleted container re-creates it with a new id, and so does restoring a deleted tree node, whose data map is a container of its own. A restored value is walked at the place it landed and paired with the old containers the inverse named; a restored node is the one now at the parent and index its `create` named, and its data map pairs with the old node's. `rewrite` adds an alias (`{ from, to }`, a container id or a tree id) to every older record, and its diffs, tree moves included, are aimed at the new container or node.
 - **`position`** is this peer's version-vector entry and the frontiers, so `recovered` can rebuild a crashed revert's record as this peer's first change after it.
-- **A shallow snapshot** cuts `diff` off: a record older than it reverts to null.
+- **A shallow snapshot** cuts `diff` off: a record older than it stands not at all (`0 of 1`).
 
 ### Known limit: movable-list moves
 
@@ -578,7 +585,7 @@ The low 53 bits of the `PeerID` are the same peer id's Yjs `clientID` (`yjsClien
 | `src/loro-guards.ts` | `hasKind` / `isLoroContainer` / `isLoroDoc` runtime guards. |
 | `src/version.ts` | `LoroVersion` (wraps `VersionVector`). |
 | `src/position.ts` | `LoroPosition` (wraps `Cursor`), `fromLoroSide`, `toLoroSide`. |
-| `src/revertible.ts` | Undo: records as frontiers, their revert from history, remap as aliases. |
+| `src/revertible.ts` | Undo: records as the frontiers of back-to-back commits, their plan and tally from history, remap as aliases. |
 | `src/__tests__/revert-plan.test.ts` | `planLoroRevert` on hand-built gathered state, with no document. |
 | `src/__tests__/undo.test.ts` | The shared undo suite (`undoConformance`), a record older than a shallow snapshot, and a tree node renamed, moved and deleted, undone back to where it was. |
 | `src/native-map.ts` | `LoroNativeMap` type-level functor. |

@@ -55,7 +55,7 @@ undoConformance(
 )
 
 describe("loro undo", () => {
-  it("a record older than a shallow snapshot reverts to null", () => {
+  it("a record older than a shallow snapshot stands not at all", () => {
     const peer = build("shallow")
     const revertible = peer.substrate.revertible
     if (revertible === undefined) throw new Error("not revertible")
@@ -74,7 +74,31 @@ describe("loro undo", () => {
       }),
     })
     const [first] = records
-    expect(shallow.substrate.revertible?.revert(first, {})).toBeNull()
+    expect(shallow.substrate.revertible?.plan(first)).toEqual({
+      tally: { kept: 0, total: 1 },
+      apply: undefined,
+    })
+  })
+})
+
+describe("loro undo records compose", () => {
+  it("only back to back: a merge between two commits stops it", () => {
+    const mine = build("compose-mine")
+    const theirs = build("compose-theirs")
+    const revertible = mine.substrate.revertible
+    if (revertible === undefined) throw new Error("not revertible")
+    const records: unknown[] = []
+    revertible.subscribeCommits(c => records.push(c.record))
+    batch(mine.doc, (d: any) => d.title.insert(0, "a"))
+    batch(mine.doc, (d: any) => d.title.insert(1, "b"))
+    batch(theirs.doc, (d: any) => d.place.set("there"))
+    mine.substrate.merge(theirs.substrate.exportEntirety())
+    batch(mine.doc, (d: any) => d.title.insert(2, "c"))
+    const [a, b, c] = records
+    const ab = revertible.compose(a, b)
+    expect(ab).not.toBeNull()
+    expect(revertible.compose(ab, c)).toBeNull()
+    expect(revertible.compose(b, a)).toBeNull()
   })
 })
 
@@ -89,8 +113,9 @@ describe("loro undo of a tree", () => {
     for (let n = 0; n < count; n++) {
       const step = steps.pop() ?? []
       for (let record = step.pop(); record !== undefined; record = step.pop()) {
-        const result = revertible.revert(record, {})
-        if (result === null) continue
+        const { apply } = revertible.plan(record)
+        if (apply === undefined) continue
+        const result = apply({})
         const rewrite = (s: unknown[]) =>
           s.splice(
             0,

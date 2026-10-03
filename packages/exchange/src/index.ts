@@ -334,6 +334,8 @@ export type {
 } from "./undo/schema.js"
 export { UndoDoc, UndoSchema } from "./undo/schema.js"
 export type {
+  Undone,
+  UndoneWhole,
   UndoOptions,
   UndoStack,
   UndoStackParams,

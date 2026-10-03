@@ -1,12 +1,13 @@
 // revertible — undo for a Yjs document, on Yjs's public API: the shell.
 //
 // It keeps a draft of each local transaction as it happens (from `prepare`,
-// `afterBatch` and the event bridge), builds the record when the transaction
-// ends, and reverts one: gather what it names from the document, plan purely
-// (`./plan.js`), apply as one authored batch, and read back what the restores
-// landed with. The record is `./record.js`, capture `./capture.js`, and what
-// is read of the Y.Doc `./document.js`, whose Yjs calls `yjs-surface.test.ts`
-// pins.
+// `afterBatch` and the event bridge), builds the record in normal form when
+// the transaction ends (`./normal.js`), and plans a revert of one: gather
+// what it names from the document, plan purely (`./plan.js`); applied, the
+// plan is one authored batch, and what the restores landed with is read
+// back. Two records compose through the normal form. The record is
+// `./record.js`, capture `./capture.js`, and what is read of the Y.Doc
+// `./document.js`, whose Yjs calls `yjs-surface.test.ts` pins.
 
 import {
   type BatchOutcome,
@@ -14,6 +15,7 @@ import {
   findOpaqueBoundary,
   footprintOf,
   freezeTree,
+  howMuchStands,
   isRichTextChange,
   isSequenceChange,
   isTextChange,
@@ -22,6 +24,7 @@ import {
   pathSchema,
   type Revertible,
   type RevertibleCommit,
+  type RevertPlan,
   type RichTextSpan,
   type SchemaBinding,
   type Schema as SchemaNode,
@@ -31,14 +34,13 @@ import {
 import * as Y from "yjs"
 import { yjsPathToKynetaPath } from "../change-mapping.js"
 import {
-  addValue,
   charMarks,
   type Draft,
   deletedItems,
   itemOf,
   kindAt,
   markWrites,
-  nestedTexts,
+  nestedIds,
   newDraft,
   type Stage,
   textChanges,
@@ -54,6 +56,7 @@ import {
   type Tree,
   typeAt,
 } from "./document.js"
+import { composeYjsRecords, normalizeYjsRecord } from "./normal.js"
 import {
   contentLength,
   type GatheredContainer,
@@ -65,16 +68,17 @@ import {
 } from "./plan.js"
 import {
   codec,
-  EMPTY,
+  expandRuns,
   type Id,
   type IdRun,
   idKey,
   isEmpty,
+  type NestedIds,
+  positionalPath,
   rewriteYjsRecord,
   type Slot,
   type StablePath,
   toRuns,
-  unitsOf,
   type YjsRecord,
 } from "./record.js"
 
@@ -143,13 +147,16 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
     const ops = draftOps.get(tr) ?? []
     draftOps.delete(tr)
     if (!tr.local || draft.aborted) return
-    const record: YjsRecord = {
+    const made: YjsRecord = {
       inserted: draft.inserted,
       deleted: draft.deleted,
-      values: [...draft.values.values()],
+      values: draft.values,
       marks: draft.marks,
     }
-    if (isEmpty(record)) return
+    // A transaction that wrote nothing is not a commit; one whose writes
+    // cancel out is, and its record names nothing.
+    if (isEmpty(made)) return
+    const record = normalizeYjsRecord(made)
     if (reverting !== undefined) {
       reverting.record = record
       return
@@ -176,7 +183,7 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
     for (const w of valueWrites(tree, path, change, pre)) {
       const at = stabilize(tree, w.path)
       if (at !== null) {
-        addValue(draft, { path: at, wrote: w.wrote, previous: w.previous })
+        draft.values.push({ path: at, wrote: w.wrote, previous: w.previous })
       }
     }
     const stable = stabilize(tree, path)
@@ -258,24 +265,26 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
       const stable = stabilize(tree, path)
       if (stable === null) return
       let ids: IdRun[]
-      if (isRichTextChange(change)) {
-        // Marks on an insert are format items of their own, which an undo
-        // must leave for the mark rule: take only the characters.
-        const text = typeAt(tree, path)
-        if (!(text instanceof Y.Text)) return
-        const chars: Id[] = []
+      if (isRichTextChange(change) || isSequenceChange(change)) {
+        // Read the units at the indices the change inserted: a rich text's
+        // marks are format items of their own, which an undo must leave for
+        // the mark rule, and a list item's content has ids of its own, which
+        // the item's id stands for.
+        const type = typeAt(tree, path)
+        if (!(type instanceof Y.Text || type instanceof Y.Array)) return
+        const units: Id[] = []
         let target = 0
         for (const op of change.instructions) {
           if ("insert" in op) {
             for (let k = 0; k < op.insert.length; k++) {
-              const id = idAt(text, target + k)
-              if (id !== null) chars.push(id)
+              const id = idAt(type, target + k)
+              if (id !== null) units.push(id)
             }
             target += op.insert.length
           } else if ("retain" in op) target += op.retain
           else if ("format" in op) target += op.format
         }
-        ids = toRuns(chars)
+        ids = toRuns(units)
       } else {
         const clockAfter = stateOf(host.doc, host.doc.clientID)
         if (clockAfter === clockBefore) return
@@ -304,7 +313,7 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
       }
       draftOps.set(transaction, [...outcome.ops])
       for (const { path, at, previous } of draft.boundaries.values()) {
-        addValue(draft, { path, wrote: readSlot(at), previous })
+        draft.values.push({ path, wrote: readSlot(at), previous })
       }
     },
 
@@ -374,21 +383,33 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
       }
     },
 
-    revert(record, options) {
+    plan(record): RevertPlan<YjsRecord> {
       const plan = planYjsRevert(record, gather(record))
-      if (plan === null) return null
-      const ctx = host.context()
-      reverting = { record: null }
-      try {
-        ctx.runBatch(() => {
-          for (const { path, change } of plan.ops) ctx.dispatch(path, change)
-        }, options)
-        const redo = reverting.record ?? EMPTY
-        return { redo, remap: remapOfLanded(landed(plan)) }
-      } finally {
-        reverting = undefined
+      const { tally } = plan
+      if (howMuchStands(tally) === "none") return { tally, apply: undefined }
+      return {
+        tally,
+        apply(options) {
+          if (plan.ops.length === 0) return { redo: record, remap: new Map() }
+          const ctx = host.context()
+          reverting = { record: null }
+          try {
+            ctx.runBatch(() => {
+              for (const { path, change } of plan.ops) {
+                ctx.dispatch(path, change)
+              }
+            }, options)
+            const redo = reverting.record
+            if (redo === null) throw new Error("a Yjs revert recorded nothing")
+            return { redo, remap: remapOfLanded(landed(plan)) }
+          } finally {
+            reverting = undefined
+          }
+        },
       }
     },
+
+    compose: composeYjsRecords,
 
     recovered(record, position) {
       const from = decodePosition(position)
@@ -408,8 +429,8 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
       // One restored run is the revert's whole insertion: its ids pair up.
       if (restorable.length === 1) {
         const [run] = restorable
-        const old = [...unitsOf(run.ids)]
-        const next = [...unitsOf(fresh)]
+        const old = [...expandRuns(run.ids)]
+        const next = [...expandRuns(fresh)]
         if (old.length > 0 && old.length <= next.length) {
           old.forEach((id, k) => {
             remap.set(idKey(id), idKey(next[k] as Id))
@@ -508,7 +529,7 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
       if (at === undefined) return []
       const type = typeAt(tree, at.path)
       const out: { id: Id; index: number }[] = []
-      for (const id of unitsOf(ids)) {
+      for (const id of expandRuns(ids)) {
         if (!alive(id)) continue
         const where = locate(host.doc, id)
         if (where !== null && where.type === type) {
@@ -528,7 +549,7 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
       }),
       deleted: record.deleted.map(run => ({
         container: container(run.container),
-        back: [...unitsOf(run.ids)].some(alive),
+        back: [...expandRuns(run.ids)].some(alive),
         gap: gapAfter(host.doc, run.after),
       })),
       marks: record.marks.map(mark => {
@@ -560,16 +581,25 @@ export function createYjsRevertible(host: YjsRevertibleHost): YjsRevertible {
         type instanceof Y.Array
           ? itemOf(pathSchema(tree.schema, container, tree.binding))
           : undefined
-      const nested =
-        itemSchema === undefined
-          ? []
-          : run.nested.map(n => ({
-              nested: n,
-              ids:
-                nestedTexts(tree, container.item(at + n.item), itemSchema).find(
-                  t => JSON.stringify(t.path) === JSON.stringify(n.path),
-                )?.ids ?? [],
-            }))
+      // Each text and list inside a restored item, paired with the one the
+      // record named by where it sits among the item's containers.
+      const nested: Landed["nested"][number][] = []
+      if (itemSchema !== undefined) {
+        const items = new Set(run.nested.map(n => n.item))
+        for (const item of items) {
+          const was = run.nested.filter(n => n.item === item)
+          const now: NestedIds[] = nestedIds(
+            tree,
+            container.item(at + item),
+            itemSchema,
+          ).map(n => ({ item, ...n }))
+          for (const n of was) {
+            const where = positionalPath(was, n.path)
+            const fresh = now.find(m => positionalPath(now, m.path) === where)
+            nested.push({ nested: n, ids: fresh?.ids ?? [] })
+          }
+        }
+      }
       return { run, fresh, nested }
     })
   }

@@ -323,6 +323,8 @@ const undo = useMemo(
 <textarea ref={useText(card.text, { undo })} />
 ```
 
+The target's `undo` and `redo` may resolve with anything: `useText` ignores the result. To show what an undo did, or refused (`whole` in `@kyneta/exchange`'s README), call the stack yourself.
+
 ### Re-exports
 
 `@kyneta/react` re-exports a curated subset so most app code only needs one import:

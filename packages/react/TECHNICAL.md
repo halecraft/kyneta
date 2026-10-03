@@ -416,8 +416,8 @@ interface UseTextOptions {
 
 interface UndoTarget {                         // an UndoStack from @kyneta/exchange is one
   typing(fn: () => void): void
-  undo(options?: CommitOptions): Promise<boolean>
-  redo(options?: CommitOptions): Promise<boolean>
+  undo(options?: CommitOptions): Promise<unknown>
+  redo(options?: CommitOptions): Promise<unknown>
 }
 ```
 
@@ -425,7 +425,7 @@ interface UndoTarget {                         // an UndoStack from @kyneta/exch
 - **`"prevent"`** — swallow undo and redo. The browser's own undo works on the element's value, which the document moves under it.
 - **`"browser"`** — let the browser undo, for a text nobody else edits.
 
-`UndoTarget` is structural and declared in the adapter, which stays free of `@kyneta/exchange`. An `UndoStack` is one (`text-adapter.test.ts` checks it); a target that undoes one document wraps the stack and passes `docs` to its `undo` and `redo`.
+`UndoTarget` is structural and declared in the adapter, which stays free of `@kyneta/exchange`. An `UndoStack` is one (`text-adapter.test.ts` checks it); a target that undoes one document wraps the stack and passes `docs` to its `undo` and `redo`. The adapter ignores what `undo` and `redo` resolve with: the caret follows the changeset an undo delivers, and a stack's result (what it undid, refused or dropped) is the app's to show, through its own call.
 
 ### What `useText` is NOT
 
