@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/wire",
-  "version": "3.0.0",
+  "version": "4.0.0",
   "description": "Wire format codecs, framing, and fragmentation for @kyneta/transport",
   "author": "Duane Johnson",
   "license": "MIT",

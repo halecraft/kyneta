@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/postgres-store",
-  "version": "3.0.0",
+  "version": "4.0.0",
   "description": "Postgres storage backend for @kyneta/exchange",
   "author": "Duane Johnson",
   "license": "MIT",

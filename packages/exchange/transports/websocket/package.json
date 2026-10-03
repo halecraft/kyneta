@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/websocket-transport",
-  "version": "3.0.0",
+  "version": "4.0.0",
   "description": "Websocket network adapter for @kyneta/exchange — browser, server, and Bun integration",
   "author": "Duane Johnson",
   "license": "MIT",
