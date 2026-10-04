@@ -23,7 +23,10 @@
   "files": [
     "dist",
     "src",
-    "schema.prisma.example"
+    "schema.prisma.example",
+    "!src/**/__tests__",
+    "!src/**/*.test.ts",
+    "!src/**/*.test.tsx"
   ],
   "exports": {
     ".": {

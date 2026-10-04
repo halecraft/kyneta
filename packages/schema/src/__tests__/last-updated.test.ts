@@ -1,8 +1,8 @@
 import { describe, expect, test } from "vitest"
 import { ephemeral } from "../bind.js"
 import { createDoc } from "../create-doc.js"
+import { lastUpdated } from "../facade/last-updated.js"
 import { Schema } from "../schema.js"
-import { lastUpdated } from "./last-updated.js"
 
 describe("lastUpdated", () => {
   test("returns timestamp for leaf fields and max timestamp for containers", () => {
