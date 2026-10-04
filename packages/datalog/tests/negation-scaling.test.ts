@@ -12,13 +12,15 @@
 // end to end through the public `evaluate`, because the mask is one of several
 // ways to lose the same property.
 //
-// **Every assertion here is a ratio, never a clock.** The failure this catches
-// is a change in *shape* — 4x the facts costing 16x the time instead of 4x —
-// and a shape is the same on a busy CI box as on an idle laptop. Wall-clock
-// ceilings in this package have a history of failing under a loaded machine
-// while the code was fine, which teaches the reader to ignore them.
+// **The measure is work, never time.** Every tuple the evaluator examines
+// passes through `matchAtomWithTuple`, so counting its calls counts the work an
+// evaluation does, exactly and the same on every run. The failure this catches
+// is a change in *shape*, 4x the facts costing 16x the work instead of 4x, and
+// a count shows a shape without the noise a clock picks up from a loaded
+// machine. A clock-based version of this file failed under a full parallel
+// verify while the code was fine.
 
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import type { Fact, Rule } from "../src/index.js"
 import {
   _,
@@ -33,16 +35,21 @@ import {
   varTerm,
 } from "../src/index.js"
 
-/**
- * `performance` is a standard global in every runtime this package targets,
- * but its declaration lives in `lib.dom.d.ts` and `@types/node` — and this
- * package pulls in neither, so that nothing in `src` can reach for a platform
- * API without saying so. Declaring the one member the measurement uses keeps
- * that line where it belongs. `Date.now` is not a substitute: the ratio below
- * floors its denominator at half a millisecond, which needs sub-millisecond
- * resolution to mean anything.
- */
-declare const performance: { now(): number }
+/** Tuples examined: one per `matchAtomWithTuple` call. `work` resets it. */
+const examined = vi.hoisted(() => ({ count: 0 }))
+
+vi.mock("../src/unify.js", async importOriginal => {
+  const actual = await importOriginal<typeof import("../src/unify.js")>()
+  return {
+    ...actual,
+    matchAtomWithTuple: (
+      ...args: Parameters<typeof actual.matchAtomWithTuple>
+    ) => {
+      examined.count++
+      return actual.matchAtomWithTuple(...args)
+    },
+  }
+})
 
 const $ = varTerm
 
@@ -118,39 +125,24 @@ function supersededFacts(total: number): Fact[] {
   return facts
 }
 
-/** Milliseconds one evaluation takes. */
-function timeMs(rules: readonly Rule[], facts: readonly Fact[]): number {
-  const started = performance.now()
+/** Tuples one evaluation examines. */
+function work(rules: readonly Rule[], facts: readonly Fact[]): number {
+  examined.count = 0
   evaluate(rules, facts)
-  return performance.now() - started
+  return examined.count
 }
 
 /**
- * Cost of 4x the facts, as a multiple of the cost of the baseline.
+ * Work for 4x the facts, as a multiple of the work for the baseline.
  *
- * Linear lands near 4, quadratic near 16. The two sizes are timed in
- * alternation, so a load that arrives mid-measurement slows both rather than
- * only the second, and each keeps its fastest run: load only ever adds time.
- * Timing all the small runs first let a busy machine (every package verifying
- * at once) land on the large ones alone and report 10x for linear code. The
- * floor on the denominator keeps a fast machine measuring the small case as ~0
- * from producing a huge ratio.
+ * Linear is exactly 4 here, and the regression this guards exactly 16. The
+ * count is exact, so the bound sits just above linear.
  */
 function growthOver4x(
   rules: readonly Rule[],
   build: (n: number) => Fact[],
 ): number {
-  const smallFacts = build(2000)
-  const largeFacts = build(8000)
-  evaluate(rules, smallFacts)
-  evaluate(rules, largeFacts)
-  let small = Number.POSITIVE_INFINITY
-  let large = Number.POSITIVE_INFINITY
-  for (let i = 0; i < 5; i++) {
-    small = Math.min(small, timeMs(rules, smallFacts))
-    large = Math.min(large, timeMs(rules, largeFacts))
-  }
-  return large / Math.max(small, 0.5)
+  return work(rules, build(8000)) / work(rules, build(2000))
 }
 
 // ---------------------------------------------------------------------------
@@ -197,13 +189,13 @@ describe("LWW through pure Datalog", () => {
       ...supersededFacts(n),
     ])
 
-    expect(growth).toBeLessThan(8)
+    expect(growth).toBeLessThan(5)
   })
 
   it("scales linearly across the whole program", () => {
     // Both strata together — deriving `superseded`, then negating over it.
     const growth = growthOver4x([supersededByLamport, winnerRule], activeValues)
 
-    expect(growth).toBeLessThan(8)
+    expect(growth).toBeLessThan(5)
   })
 })
